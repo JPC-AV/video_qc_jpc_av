@@ -449,6 +449,8 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Set loading flag to True
         self.is_loading = True
 
+        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+
         # Outputs
         self.access_file_cb.setChecked(self.checks_config.outputs.access_file.lower() == 'yes')
         self.report_cb.setChecked(self.checks_config.outputs.report.lower() == 'yes')

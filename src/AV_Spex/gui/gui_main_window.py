@@ -877,8 +877,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
                 config_io.import_configs(file_path)
                 
                 # Reload UI components to reflect new settings
-                if hasattr(self, 'config_widget') and self.config_widget:
-                    self.config_widget.load_config_values()
+                self.config_widget.load_config_values()
                 
                 QMessageBox.information(self, "Success", f"Configuration imported successfully from {file_path}")
             except Exception as e:

@@ -55,7 +55,7 @@ class ConfigIO:
             self.config_mgr.save_last_used_config('spex')
         
         if 'checks' in config_data:
-            checks_config = ChecksConfig(**config_data['checks'])
+            checks_config = self.config_mgr._create_dataclass_instance(ChecksConfig, config_data['checks'])
             self.config_mgr.set_config('checks', checks_config)
             self.config_mgr.save_last_used_config('checks')
 
