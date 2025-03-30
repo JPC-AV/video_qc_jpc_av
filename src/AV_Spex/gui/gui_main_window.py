@@ -738,69 +738,12 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.export_combo.addItem("Spex Config")
         self.export_combo.addItem("All Config")
 
-        # Create a single export button
-        export_config_button = QPushButton("Export")
-        export_config_button.clicked.connect(self.export_selected_config)
+        # Connect the combobox signal to your function
+        self.export_combo.currentIndexChanged.connect(self.export_selected_config)
 
         # Add widgets to layout
         export_button_layout.addWidget(self.export_combo)
-        export_button_layout.addWidget(export_config_button)
         buttons_layout.addLayout(export_button_layout)
-
-        # Style the combo box directly to match the button style
-        palette = self.palette()
-        highlight_color = palette.color(QPalette.ColorRole.Highlight).name()
-        highlight_text_color = palette.color(QPalette.ColorRole.HighlightedText).name()
-        button_color = palette.color(QPalette.ColorRole.Button).name()
-        button_text_color = palette.color(palette.ColorRole.ButtonText).name()
-
-        # Set view to QListView which we can style more effectively
-        self.export_combo.setView(QListView())
-
-        combo_style = f"""
-            QComboBox {{
-                font-weight: bold;
-                padding: 8px;
-                border: 1px solid gray;
-                border-radius: 4px;
-                background-color: {button_color};
-                color: {button_text_color};
-                min-width: 150px;
-            }}
-            QComboBox:hover, QComboBox:focus {{
-                background-color: {highlight_color};
-                color: {highlight_text_color};
-            }}
-            QComboBox::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 20px;
-                border-left: 1px solid gray;
-            }}
-            QComboBox:on {{
-                background-color: {highlight_color};
-                color: {highlight_text_color};
-            }}
-            QListView {{
-                font-weight: bold;
-                border: 1px solid gray;
-                background-color: {button_color};
-                color: {button_text_color};
-            }}
-            QListView::item {{
-                padding: 6px;
-                min-height: 24px;
-            }}
-            QListView::item:hover {{
-                background-color: {highlight_color};
-                color: {highlight_text_color};
-            }}
-            QListView::item:selected {{
-                background-color: {highlight_color};
-                color: {highlight_text_color};
-            }}
-        """
-        self.export_combo.setStyleSheet(combo_style)
 
         # Set the first item as the current item (the placeholder)
         self.export_combo.setCurrentIndex(0)
@@ -939,7 +882,10 @@ class MainWindow(QMainWindow, ThemeableMixin):
 
     def export_selected_config(self):
         selected_option = self.export_combo.currentText()
-        if selected_option == "Checks Config":
+        # Skip export if the placeholder option is selected
+        if selected_option == "Export Config Type...":
+            return
+        elif selected_option == "Checks Config":
             self.export_config('checks')
         elif selected_option == "Spex Config":
             self.export_config('spex')
