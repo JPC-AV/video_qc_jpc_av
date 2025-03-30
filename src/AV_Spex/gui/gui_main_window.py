@@ -726,10 +726,23 @@ class MainWindow(QMainWindow, ThemeableMixin):
         import_config_button.clicked.connect(self.import_config)
         buttons_layout.addWidget(import_config_button)
         
-        # Export Config button
-        export_config_button = QPushButton("Export Config")
-        export_config_button.clicked.connect(self.export_config)
-        buttons_layout.addWidget(export_config_button)
+        # Export Config layout
+        export_button_layouts = QVBoxLayout()
+
+        # Export buttons with lambda functions to pass arguments
+        export_config_button = QPushButton("Export Checks Config")
+        export_config_button.clicked.connect(lambda: self.export_config('checks'))
+        export_button_layouts.addWidget(export_config_button)
+
+        export_config_button = QPushButton("Export Spex Config")
+        export_config_button.clicked.connect(lambda: self.export_config('spex'))
+        export_button_layouts.addWidget(export_config_button)
+
+        export_config_button = QPushButton("Export All Config")
+        export_config_button.clicked.connect(lambda: self.export_config('all'))
+        export_button_layouts.addWidget(export_config_button)
+
+        buttons_layout.addLayout(export_button_layouts)
         
         # Reset to Default Config button
         reset_config_button = QPushButton("Reset to Default")
@@ -907,7 +920,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
                 logger.error(f"Error importing config: {str(e)}")
                 QMessageBox.critical(self, "Error", f"Error importing configuration: {str(e)}")
 
-    def export_config(self):
+    def export_config(self, config_type):
         """Export configuration to a file."""
         file_dialog = QFileDialog(self, "Export Configuration")
         file_dialog.setNameFilter("JSON Files (*.json);;All Files (*)")
@@ -920,7 +933,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
             try:
                 # Use the ConfigIO class to export config
                 config_io = ConfigIO(self.config_mgr)
-                config_io.save_configs(file_path)
+                config_io.save_configs(file_path, config_type)
                 
                 QMessageBox.information(self, "Success", f"Configuration exported successfully to {file_path}")
             except Exception as e:
