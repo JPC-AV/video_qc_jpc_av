@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
 
 from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..utils.config_setup import ChecksConfig
+from ..utils.config_setup import ChecksConfig, SpexConfig
 from ..utils.config_manager import ConfigManager
 
 from ..processing.processing_mgmt import setup_mediaconch_policy

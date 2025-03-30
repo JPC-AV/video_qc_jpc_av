@@ -878,6 +878,29 @@ class MainWindow(QMainWindow, ThemeableMixin):
                 
                 # Reload UI components to reflect new settings
                 self.config_widget.load_config_values()
+
+                # Ensure recent config ref
+                self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+                self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+
+                # Spex dropdowns
+                # file name dropdown
+                if self.spex_config.filename_values.Collection == "JPC":
+                    self.filename_profile_dropdown.setCurrentText("JPC file names")
+                elif self.spex_config.filename_values.Collection == "2012_79":
+                    self.filename_profile_dropdown.setCurrentText("Bowser file names")
+                
+                # Signalflow profile dropdown
+                # Set initial state based on config
+                encoder_settings = self.spex_config.mediatrace_values.ENCODER_SETTINGS
+                if isinstance(encoder_settings, dict):
+                    source_vtr = encoder_settings.get('Source_VTR', [])
+                else:
+                    source_vtr = encoder_settings.Source_VTR
+                if any("SVO5800" in vtr for vtr in source_vtr):
+                    self.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
+                elif any("Sony BVH3100" in vtr for vtr in source_vtr):
+                    self.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
                 
                 QMessageBox.information(self, "Success", f"Configuration imported successfully from {file_path}")
             except Exception as e:
@@ -1132,7 +1155,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         # Open section button
         open_button = QPushButton("Open Section")
         open_button.clicked.connect(
-            lambda: self.open_new_window('Filename Values', asdict(self.spex_config.filename_values))
+            lambda: self.open_new_window('Filename Values', 'filename_values')
         )
         
         # Add widgets to layout
@@ -1154,7 +1177,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         mediainfo_button = QPushButton("Open Section")
         mediainfo_button.clicked.connect(
-            lambda: self.open_new_window('MediaInfo Values', self.spex_config.mediainfo_values)
+            lambda: self.open_new_window('MediaInfo Values', 'mediainfo_values')
         )
         
         mediainfo_layout.addWidget(mediainfo_button)
@@ -1173,7 +1196,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         exiftool_button = QPushButton("Open Section")
         exiftool_button.clicked.connect(
-            lambda: self.open_new_window('Exiftool Values', asdict(self.spex_config.exiftool_values))
+            lambda: self.open_new_window('Exiftool Values', 'exiftool_values')
         )
         
         exiftool_layout.addWidget(exiftool_button)
@@ -1192,7 +1215,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         ffprobe_button = QPushButton("Open Section")
         ffprobe_button.clicked.connect(
-            lambda: self.open_new_window('FFprobe Values', self.spex_config.ffmpeg_values)
+            lambda: self.open_new_window('FFprobe Values', 'ffmpeg_values')
         )
         
         ffprobe_layout.addWidget(ffprobe_button)
@@ -1232,7 +1255,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         mediatrace_button = QPushButton("Open Section")
         mediatrace_button.clicked.connect(
-            lambda: self.open_new_window('Mediatrace Values', asdict(self.spex_config.mediatrace_values))
+            lambda: self.open_new_window('Mediatrace Values', 'mediatrace_values')
         )
         
         mediatrace_layout.addWidget(signalflow_label)
@@ -1253,7 +1276,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         qct_button = QPushButton("Open Section")
         qct_button.clicked.connect(
-            lambda: self.open_new_window('Expected qct-parse options', asdict(self.spex_config.qct_parse_values))
+            lambda: self.open_new_window('Expected qct-parse options', 'qct_parse_values')
         )
         
         qct_layout.addWidget(qct_button)
@@ -1427,25 +1450,57 @@ class MainWindow(QMainWindow, ThemeableMixin):
         if sn_config_changes:
             config_edit.apply_signalflow_profile(sn_config_changes)
 
-    def open_new_window(self, title, nested_dict):
-        """Open a new window to display configuration details."""
-        # Convert any dataclass instances in mediainfo_values to dictionaries
+    def prepare_config_data(self, title, config_data):
+        """
+        Prepare configuration data for display in a new window.
+        Handles conversion from dataclasses to dictionaries based on data type.
+        
+        Args:
+            title (str): The title/type of configuration being displayed
+            config_data: The configuration data object (dataclass or dictionary)
+            
+        Returns:
+            dict: A dictionary representation of the configuration data
+        """
+        
+        # If the input is already a dictionary, return it as is
+        if isinstance(config_data, dict):
+            return config_data
+        
+        # Handle special cases based on title
         if title == 'MediaInfo Values':
-            nested_dict = {
-                'expected_general': nested_dict['expected_general'],
-                'expected_video': nested_dict['expected_video'], 
-                'expected_audio': nested_dict['expected_audio']
+            return {
+                'expected_general': config_data['expected_general'],
+                'expected_video': config_data['expected_video'], 
+                'expected_audio': config_data['expected_audio']
             }
-        # Convert ffmpeg_values dataclass instances
         elif title == 'FFprobe Values':
-            nested_dict = {
-                'video_stream': nested_dict['video_stream'],
-                'audio_stream': nested_dict['audio_stream'],
-                'format': nested_dict['format']
+            return {
+                'video_stream': config_data['video_stream'],
+                'audio_stream': config_data['audio_stream'],
+                'format': config_data['format']
             }
+        
+        # For standard dataclasses, convert to dict
+        from dataclasses import asdict
+        return asdict(config_data)
 
+
+    def open_new_window(self, title, config_attribute_name):
+        """Open a new window to display configuration details."""
+        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+
+        # Get the fresh config data using the attribute name
+        config_data = getattr(self.spex_config, config_attribute_name)
+        
+        # Prepare the data using the helper function
+        nested_dict = self.prepare_config_data(title, config_data)
+        
+        # Convert the dictionary to a string representation
         content_text = self.dict_to_string(nested_dict)
-    
+
+        # Create and configure the window
         self.new_window = QWidget()
         self.new_window.setWindowTitle(title)
         self.new_window.setLayout(QVBoxLayout())
