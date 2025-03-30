@@ -63,6 +63,9 @@ class MainWindow(QMainWindow, ThemeableMixin):
         # Update the tabs
         if hasattr(self, 'tabs'):
             self.tabs.setStyleSheet(theme_manager.get_tab_style())
+
+        if hasattr(self, 'export_config_dropdown'):
+            theme_manager.style_combobox(self.export_config_dropdown)
         
         # Update all groupboxes in both tabs
         for group_box in self.checks_tab_group_boxes + self.spex_tab_group_boxes + self.import_tab_group_boxes:
@@ -730,23 +733,25 @@ class MainWindow(QMainWindow, ThemeableMixin):
         export_button_layout = QHBoxLayout()
 
         # Create the dropdown for export options
-        self.export_combo = QComboBox()
+        self.export_config_dropdown = QComboBox()
 
         # Add the default placeholder option first
-        self.export_combo.addItem("Export Config Type...")  
-        self.export_combo.addItem("Checks Config")
-        self.export_combo.addItem("Spex Config")
-        self.export_combo.addItem("All Config")
+        self.export_config_dropdown.addItem("Export Config Type...")  
+        self.export_config_dropdown.addItem("Export Checks Config")
+        self.export_config_dropdown.addItem("Export Spex Config")
+        self.export_config_dropdown.addItem("Export All Config")
 
         # Connect the combobox signal to your function
-        self.export_combo.currentIndexChanged.connect(self.export_selected_config)
+        self.export_config_dropdown.currentIndexChanged.connect(self.export_selected_config)
 
+        theme_manager.style_combobox(self.export_config_dropdown)
+        
         # Add widgets to layout
-        export_button_layout.addWidget(self.export_combo)
+        export_button_layout.addWidget(self.export_config_dropdown)
         buttons_layout.addLayout(export_button_layout)
 
         # Set the first item as the current item (the placeholder)
-        self.export_combo.setCurrentIndex(0)
+        self.export_config_dropdown.setCurrentIndex(0)
         
         # Reset to Default Config button
         reset_config_button = QPushButton("Reset to Default")
@@ -881,15 +886,15 @@ class MainWindow(QMainWindow, ThemeableMixin):
         import_layout.addLayout(bottom_row)
 
     def export_selected_config(self):
-        selected_option = self.export_combo.currentText()
+        selected_option = self.export_config_dropdown.currentText()
         # Skip export if the placeholder option is selected
         if selected_option == "Export Config Type...":
             return
-        elif selected_option == "Checks Config":
+        elif selected_option == "Export Checks Config":
             self.export_config('checks')
-        elif selected_option == "Spex Config":
+        elif selected_option == "Export Spex Config":
             self.export_config('spex')
-        elif selected_option == "All Config":
+        elif selected_option == "Export All Config":
             self.export_config('all')
 
     def import_config(self):
