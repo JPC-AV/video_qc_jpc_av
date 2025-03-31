@@ -980,14 +980,6 @@ class MainWindow(QMainWindow, ThemeableMixin):
                     os.remove(os.path.join(user_config_dir, "last_used_checks_config.json"))
                     os.remove(os.path.join(user_config_dir, "last_used_spex_config.json"))
                     
-                    # Reinitialize configs from default
-                    self.config_mgr.configs['checks'] = ChecksConfig()
-                    self.config_mgr.configs['spex'] = SpexConfig()
-                    
-                    # Reload UI components to reflect new settings
-                    if hasattr(self, 'config_widget') and self.config_widget:
-                        self.config_widget.load_config_values()
-                    
                     QMessageBox.information(self, "Success", "Configuration has been reset to default values")
                 except FileNotFoundError:
                     # It's okay if the files don't exist
@@ -995,6 +987,35 @@ class MainWindow(QMainWindow, ThemeableMixin):
             except Exception as e:
                 logger.error(f"Error resetting config: {str(e)}")
                 QMessageBox.critical(self, "Error", f"Error resetting configuration: {str(e)}")
+
+            self.config_mgr._configs = {}
+            self.config_mgr = ConfigManager()
+            self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+            self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+            self.config_mgr.save_last_used_config('checks')
+
+            # Reload UI components to reflect new settings
+            self.config_widget.load_config_values()
+
+            # Spex dropdowns
+            # file name dropdown
+            if self.spex_config.filename_values.Collection == "JPC":
+                self.filename_profile_dropdown.setCurrentText("JPC file names")
+            elif self.spex_config.filename_values.Collection == "2012_79":
+                self.filename_profile_dropdown.setCurrentText("Bowser file names")
+            
+            # Signalflow profile dropdown
+            # Set initial state based on config
+            encoder_settings = self.spex_config.mediatrace_values.ENCODER_SETTINGS
+            if isinstance(encoder_settings, dict):
+                source_vtr = encoder_settings.get('Source_VTR', [])
+            else:
+                source_vtr = encoder_settings.Source_VTR
+            if any("SVO5800" in vtr for vtr in source_vtr):
+                self.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
+            elif any("Sony BVH3100" in vtr for vtr in source_vtr):
+                self.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
+
 
     def setup_checks_tab(self):
         """Set up or update the Checks tab with theme-aware styling"""
