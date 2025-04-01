@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QApplication, QGroupBox, QPushButton
-from PyQt6.QtGui import QPalette
+from PyQt6.QtGui import QPalette, QFont
 from PyQt6.QtCore import QObject, pyqtSignal, Qt
 
 class ThemeManager(QObject):
@@ -125,6 +125,72 @@ class ThemeManager(QObject):
         buttons = parent_widget.findChildren(QPushButton)
         for button in buttons:
             button.setStyleSheet(button_style)
+
+    def style_combobox(self, combo_box):
+        """
+        Apply consistent styling to a combo box based on current theme.
+        
+        Args:
+            combo_box: The QComboBox to style
+        """
+        
+        # Get the current palette
+        palette = self.app.palette()
+        
+        # Get colors from palette using ColorRoles
+        highlight_color = palette.color(palette.ColorRole.Highlight).name()
+        highlight_text_color = palette.color(palette.ColorRole.HighlightedText).name()
+        highlight_dropdown_text_color = palette.color(palette.ColorRole.Shadow).name()
+        button_color = palette.color(palette.ColorRole.Button).name()
+        button_text_color = palette.color(palette.ColorRole.ButtonText).name()
+        
+        # Border color from shadow or mid
+        border_color = palette.color(palette.ColorRole.Mid).name()
+        
+        # Apply style based on current palette
+        combo_box.setStyleSheet(f"""
+            QComboBox {{
+                font-weight: bold;
+                padding: 8px;
+                border: 1px solid gray;
+                border-radius: 4px;
+                background-color: {button_color};
+                color: {button_text_color};
+            }}
+            QComboBox:hover {{
+                background-color: {highlight_color};
+                color: {highlight_text_color};
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: right;
+                width: 20px;
+                border-left: 1px solid {border_color};
+                border-top-right-radius: 3px;
+                border-bottom-right-radius: 3px;
+            }}
+            QComboBox QAbstractItemView, QComboBox QListView {{
+                background-color: #E8F5E9;
+            }}
+            QComboBox::item:selected {{
+                background-color: {highlight_color};
+                color: #4CAF50;
+            }}
+        """)
+        
+
+    def style_comboboxes(self, parent_widget):
+        """Apply consistent styling to all comboboxes under a parent widget."""
+        if not self.app:
+            return
+        
+        # Get QComboBox class
+        from PyQt6.QtWidgets import QComboBox
+        
+        # Apply to all comboboxes in the widget
+        comboboxes = parent_widget.findChildren(QComboBox)
+        for combobox in comboboxes:
+            self.style_combobox(combobox)
 
     def get_tab_style(self):
         """

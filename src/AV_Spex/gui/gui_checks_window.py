@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
 
 from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..utils.config_setup import ChecksConfig
+from ..utils.config_setup import ChecksConfig, SpexConfig
 from ..utils.config_manager import ConfigManager
 
 from ..processing.processing_mgmt import setup_mediaconch_policy
@@ -448,6 +448,8 @@ class ChecksWindow(QWidget, ThemeableMixin):
         """Load current config values into UI elements"""
         # Set loading flag to True
         self.is_loading = True
+
+        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
 
         # Outputs
         self.access_file_cb.setChecked(self.checks_config.outputs.access_file.lower() == 'yes')

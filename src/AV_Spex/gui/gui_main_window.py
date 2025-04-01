@@ -2,10 +2,10 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
     QLabel, QScrollArea, QFileDialog, QMenuBar, QListWidget, QPushButton, QFrame, 
     QComboBox, QTabWidget, QTextEdit, QMessageBox, QDialog, QProgressBar, 
-    QSizePolicy
+    QSizePolicy, QStyle, QTextBrowser
 )
-from PyQt6.QtCore import Qt, QSettings, QDir, QTimer, QSize
-from PyQt6.QtGui import QPixmap, QPalette
+from PyQt6.QtCore import Qt, QSettings, QDir, QTimer, QSize, QUrl
+from PyQt6.QtGui import QPixmap, QPalette, QDesktopServices
 
 import os
 import sys
@@ -17,8 +17,10 @@ from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
 
 from ..utils.config_setup import SpexConfig, ChecksConfig
 from ..utils.config_manager import ConfigManager
-from ..utils.log_setup import logger
+from ..utils.config_io import ConfigIO
 from ..utils import config_edit
+
+from ..utils.log_setup import logger
 
 from ..processing.worker_thread import ProcessingWorker
 from ..processing.avspex_processor import AVSpexProcessor
@@ -37,6 +39,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.processing_window = None
 
         # Initialize collections for theme-aware components
+        self.import_tab_group_boxes = [] 
         self.spex_tab_group_boxes = []
         self.checks_tab_group_boxes = []
 
@@ -60,9 +63,12 @@ class MainWindow(QMainWindow, ThemeableMixin):
         # Update the tabs
         if hasattr(self, 'tabs'):
             self.tabs.setStyleSheet(theme_manager.get_tab_style())
+
+        if hasattr(self, 'export_config_dropdown'):
+            theme_manager.style_combobox(self.export_config_dropdown)
         
         # Update all groupboxes in both tabs
-        for group_box in self.checks_tab_group_boxes + self.spex_tab_group_boxes:
+        for group_box in self.checks_tab_group_boxes + self.spex_tab_group_boxes + self.import_tab_group_boxes:
             theme_manager.style_groupbox(group_box)
             # Style buttons inside the group box
             theme_manager.style_buttons(group_box)
@@ -199,6 +205,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
 
         self.main_layout.addWidget(self.tabs)
 
+        self.setup_import_tab()
         self.setup_checks_tab()
         self.setup_spex_tab()
 
@@ -639,6 +646,447 @@ class MainWindow(QMainWindow, ThemeableMixin):
         image_layout = self.add_image_to_top(logo_path)
         self.main_layout.insertLayout(0, image_layout)  # Insert at index 0 (top)
 
+    def setup_import_tab(self):
+        """Set up the Import tab for directory selection"""
+        # Get the theme manager instance
+        theme_manager = ThemeManager.instance()
+        
+        # Initialize the group boxes collection for this tab
+        self.import_tab_group_boxes = []
+        
+        # Create the tab
+        import_tab = QWidget()
+        import_layout = QVBoxLayout(import_tab)
+        self.tabs.addTab(import_tab, "Import")
+        
+        # Main scroll area
+        main_scroll_area = QScrollArea(self)
+        main_scroll_area.setWidgetResizable(True)
+        main_widget = QWidget(self)
+        main_scroll_area.setWidget(main_widget)
+        
+        # Vertical layout for the content
+        vertical_layout = QVBoxLayout(main_widget)
+        
+        # Import directory section
+        self.import_group = QGroupBox("Import Directories")
+        theme_manager.style_groupbox(self.import_group, "top center")
+        self.import_tab_group_boxes.append(self.import_group)
+        
+        import_layout_section = QVBoxLayout()
+        
+        # Import directory button
+        import_directories_button = QPushButton("Import Directory...")
+        import_directories_button.clicked.connect(self.import_directories)
+        
+        # Directory section
+        directory_label = QLabel("Selected Directories:")
+        directory_label.setStyleSheet("font-weight: bold;")
+        self.directory_list = DirectoryListWidget(self)
+        self.directory_list.setStyleSheet("""
+            QListWidget {
+                border: 1px solid gray;
+                border-radius: 3px;
+            }
+        """)
+        
+        # Delete button
+        delete_button = QPushButton("Delete Selected")
+        delete_button.clicked.connect(self.delete_selected_directory)
+        
+        # Add widgets to layout
+        import_layout_section.addWidget(import_directories_button)
+        import_layout_section.addWidget(directory_label)
+        import_layout_section.addWidget(self.directory_list)
+        import_layout_section.addWidget(delete_button)
+        
+        self.import_group.setLayout(import_layout_section)
+        vertical_layout.addWidget(self.import_group)
+        
+        # Style all buttons in the section
+        theme_manager.style_buttons(self.import_group)
+
+        # Config Import section
+        self.config_import_group = QGroupBox("Config Import")
+        theme_manager.style_groupbox(self.config_import_group, "top center")
+        self.import_tab_group_boxes.append(self.config_import_group)
+        
+        config_import_layout = QVBoxLayout()
+
+        # Create a horizontal layout for the header row
+        header_layout = QHBoxLayout()
+
+        # Create the config info button
+        info_button = QPushButton()
+        info_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
+        info_button.setFixedSize(24, 24)
+        info_button.setToolTip("Click for more info about config options")
+        info_button.setFlat(True)  # Make it look like just an icon
+        info_button.clicked.connect(self.show_config_info)
+        header_layout.addWidget(info_button)
+
+        # Description label
+        config_desc_label = QLabel("Import, export, or reset Checks/Spex configuration:")
+        config_desc_label.setStyleSheet("font-weight: bold;")
+        header_layout.addWidget(config_desc_label)
+
+        # Add a stretch to push the info button to the right
+        header_layout.addStretch(1)
+
+        # Add the header layout to the main vertical layout
+        config_import_layout.addLayout(header_layout)
+
+        # Add some spacing
+        config_import_layout.addSpacing(10)
+        
+        # Create buttons layout
+        buttons_layout = QHBoxLayout()
+        
+        # Import Config button
+        import_config_button = QPushButton("Import Config")
+        import_config_button.clicked.connect(self.import_config)
+        buttons_layout.addWidget(import_config_button)
+        
+        # Export Config layout
+        export_button_layout = QHBoxLayout()
+
+        # Create the dropdown for export options
+        self.export_config_dropdown = QComboBox()
+
+        # Add the default placeholder option first
+        self.export_config_dropdown.addItem("Export Config Type...")  
+        self.export_config_dropdown.addItem("Export Checks Config")
+        self.export_config_dropdown.addItem("Export Spex Config")
+        self.export_config_dropdown.addItem("Export All Config")
+
+        # Connect the combobox signal to your function
+        self.export_config_dropdown.currentIndexChanged.connect(self.export_selected_config)
+
+        theme_manager.style_combobox(self.export_config_dropdown)
+        
+        # Add widgets to layout
+        export_button_layout.addWidget(self.export_config_dropdown)
+        buttons_layout.addLayout(export_button_layout)
+
+        # Set the first item as the current item (the placeholder)
+        self.export_config_dropdown.setCurrentIndex(0)
+        
+        # Reset to Default Config button
+        reset_config_button = QPushButton("Reset to Default")
+        reset_config_button.clicked.connect(self.reset_config)
+        buttons_layout.addWidget(reset_config_button)
+        
+        config_import_layout.addLayout(buttons_layout)
+        
+        self.config_import_group.setLayout(config_import_layout)
+        vertical_layout.addWidget(self.config_import_group)
+        
+        # Style all buttons in the config section
+        theme_manager.style_buttons(self.config_import_group)
+        
+        # Add scroll area to main layout
+        import_layout.addWidget(main_scroll_area)
+        
+        # Bottom section with processing controls
+        # Similar to what you have in checks_tab but just the processing-related buttons
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 10, 0, 10)  # Add some vertical padding
+        
+        # Open Processing Window button
+        self.open_processing_button = QPushButton("Show Processing Window")
+        self.open_processing_button.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                padding: 8px 16px;
+                font-size: 14px;
+                background-color: white;
+                color: #4CAF50;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #d2ffed;
+            }
+            QPushButton:disabled {
+                background-color: #E8F5E9; 
+                color: #A5D6A7;             
+                opacity: 0.8;               
+            }
+        """)
+        self.open_processing_button.clicked.connect(self.on_open_processing_clicked)
+        # Initially disable the button since no processing is running
+        self.open_processing_button.setEnabled(False)
+        bottom_row.addWidget(self.open_processing_button)
+        
+        # Cancel button
+        self.cancel_processing_button = QPushButton("Cancel Processing")
+        self.cancel_processing_button.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                padding: 8px 16px;
+                font-size: 14px;
+                background-color: #ff9999;
+                color: #4d2b12;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #ff8080;
+            }
+            QPushButton:disabled {
+                background-color: #f5e9e3; 
+                color: #cd9e7f;             
+                opacity: 0.8;               
+            }
+        """)
+        self.cancel_processing_button.clicked.connect(self.cancel_processing)
+        self.cancel_processing_button.setEnabled(False)
+        bottom_row.addWidget(self.cancel_processing_button)
+        
+        # create layout for current processing
+        self.now_processing_layout = QVBoxLayout()
+        
+        # Add a status label that shows current file being processed
+        self.main_status_label = QLabel("Not processing")
+        self.main_status_label.setWordWrap(True)
+        self.main_status_label.setMaximumWidth(300)  # Limit width to prevent stretching
+        self.main_status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)  # Minimize height
+        self.main_status_label.setVisible(False)  # initially hidden 
+        self.now_processing_layout.addWidget(self.main_status_label)
+        
+        # Add a small indeterminate progress bar
+        self.processing_indicator = QProgressBar(self)
+        self.processing_indicator.setMaximumWidth(100)  # Make it small
+        self.processing_indicator.setMaximumHeight(10)  # Make it shorter
+        self.processing_indicator.setRange(0, 0)
+        self.processing_indicator.setTextVisible(False)  # No percentage text
+        self.processing_indicator.setStyleSheet("""
+            QProgressBar {
+                background-color: palette(Base);
+                text-align: center;
+                padding: 1px;
+            }
+        """)
+        self.processing_indicator.setVisible(False)  # Initially hidden
+        self.now_processing_layout.addWidget(self.processing_indicator)
+        
+        # Add the processing button layout to the bottom row
+        # Use a stretch factor of 0 to keep it from expanding
+        bottom_row.addLayout(self.now_processing_layout, 0)
+        
+        # Add a stretch to push the Check Spex button to the right
+        bottom_row.addStretch(1)
+        
+        # Check Spex button
+        self.check_spex_button = QPushButton("Check Spex!")
+        self.check_spex_button.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                padding: 8px 16px;
+                font-size: 14px;
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #A5D6A7; 
+                color: #E8F5E9;             
+                opacity: 0.8;               
+            }
+        """)
+        self.check_spex_button.clicked.connect(self.on_check_spex_clicked)
+        bottom_row.addWidget(self.check_spex_button, 0)
+        
+        import_layout.addLayout(bottom_row)
+
+    # Define the information dialog method
+    def show_config_info(self):
+        # Create a custom dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Configuration Management Help")
+        dialog.setMinimumWidth(500)
+        
+        # Create layout
+        layout = QVBoxLayout(dialog)
+        
+        # Title
+        title = QLabel("<h2>Configuration Management</h2>")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        
+        # Content
+        content = QTextBrowser()
+        content.setOpenExternalLinks(True)
+        content.setHtml("""
+        <p>This section allows you to save, load, or reset AV Spex configuration settings.</p>
+        
+        <p><b>Import Config</b><br>
+        • Loads previously saved configuration settings from a JSON file<br>
+        • Import file can be Checks Config, Spex Config, or All Config<br>
+        • Compatible with files created using the Export feature</p>
+        
+        <p><b>Export Config</b><br>
+        • Saves your current configuration settings to a JSON file<br>
+        • Options:<br>
+        - <i>Checks Config</i>: Exports only which tools run and how (fixity settings, 
+            which tools run/check, etc.)<br>
+        - <i>Spex Config</i>: Exports only the expected values for file validation
+            (codecs, formats, naming conventions, etc.)<br>
+        - <i>Complete Config</i>: Exports all settings (both Checks Config and Soex Config)</p>
+        
+        <p><b>Reset to Default</b><br>
+        • Restores all settings to the application's built-in defaults<br>
+        • Use this if settings have been changed and you want to start fresh<br>
+        • Note: This action cannot be undone</p>
+        """)
+        
+        layout.addWidget(content)
+    
+        # Close button
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        
+        # Show dialog
+        dialog.exec()
+        
+
+    def export_selected_config(self):
+        selected_option = self.export_config_dropdown.currentText()
+        # Skip export if the placeholder option is selected
+        if selected_option == "Export Config Type...":
+            return
+        elif selected_option == "Export Checks Config":
+            self.export_config('checks')
+        elif selected_option == "Export Spex Config":
+            self.export_config('spex')
+        elif selected_option == "Export All Config":
+            self.export_config('all')
+
+    def import_config(self):
+        """Import configuration from a file."""
+        file_dialog = QFileDialog(self, "Import Configuration")
+        file_dialog.setNameFilter("Config Files (*.json);;All Files (*)")
+        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        
+        if file_dialog.exec():
+            file_path = file_dialog.selectedFiles()[0]
+            try:
+                # Use the ConfigIO class to import config
+                config_io = ConfigIO(self.config_mgr)
+                config_io.import_configs(file_path)
+                
+                # Reload UI components to reflect new settings
+                self.config_widget.load_config_values()
+
+                # Ensure recent config ref
+                self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+                self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+
+                # Spex dropdowns
+                # file name dropdown
+                if self.spex_config.filename_values.Collection == "JPC":
+                    self.filename_profile_dropdown.setCurrentText("JPC file names")
+                elif self.spex_config.filename_values.Collection == "2012_79":
+                    self.filename_profile_dropdown.setCurrentText("Bowser file names")
+                
+                # Signalflow profile dropdown
+                # Set initial state based on config
+                encoder_settings = self.spex_config.mediatrace_values.ENCODER_SETTINGS
+                if isinstance(encoder_settings, dict):
+                    source_vtr = encoder_settings.get('Source_VTR', [])
+                else:
+                    source_vtr = encoder_settings.Source_VTR
+                if any("SVO5800" in vtr for vtr in source_vtr):
+                    self.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
+                elif any("Sony BVH3100" in vtr for vtr in source_vtr):
+                    self.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
+                
+                QMessageBox.information(self, "Success", f"Configuration imported successfully from {file_path}")
+            except Exception as e:
+                logger.error(f"Error importing config: {str(e)}")
+                QMessageBox.critical(self, "Error", f"Error importing configuration: {str(e)}")
+
+    def export_config(self, config_type):
+        """Export configuration to a file."""
+        file_dialog = QFileDialog(self, "Export Configuration")
+        file_dialog.setNameFilter("JSON Files (*.json);;All Files (*)")
+        file_dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        file_dialog.setDefaultSuffix("json")
+        
+        if file_dialog.exec():
+            file_path = file_dialog.selectedFiles()[0]
+            try:
+                # Use the ConfigIO class to export config
+                config_io = ConfigIO(self.config_mgr)
+                config_io.save_configs(file_path, config_type)
+                
+                QMessageBox.information(self, "Success", f"Configuration exported successfully to {file_path}")
+            except Exception as e:
+                logger.error(f"Error exporting config: {str(e)}")
+                QMessageBox.critical(self, "Error", f"Error exporting configuration: {str(e)}")
+
+    def reset_config(self):
+        """Reset configuration to default values."""
+        # Ask for confirmation
+        result = QMessageBox.question(
+            self,
+            "Confirm Reset",
+            "Are you sure you want to reset all configuration to default values? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if result == QMessageBox.StandardButton.Yes:
+            try:
+                # Reset config by removing user config files
+                user_config_dir = self.config_mgr._user_config_dir
+                try:
+                    # Remove the user config files
+                    os.remove(os.path.join(user_config_dir, "last_used_checks_config.json"))
+                    os.remove(os.path.join(user_config_dir, "last_used_spex_config.json"))
+                    
+                    QMessageBox.information(self, "Success", "Configuration has been reset to default values")
+                except FileNotFoundError:
+                    # It's okay if the files don't exist
+                    QMessageBox.information(self, "Information", "Already using default configuration")
+            except Exception as e:
+                logger.error(f"Error resetting config: {str(e)}")
+                QMessageBox.critical(self, "Error", f"Error resetting configuration: {str(e)}")
+
+            self.config_mgr._configs = {}
+            self.config_mgr = ConfigManager()
+            self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+            self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+            self.config_mgr.save_last_used_config('checks')
+
+            # Reload UI components to reflect new settings
+            self.config_widget.load_config_values()
+
+            # Spex dropdowns
+            # file name dropdown
+            if self.spex_config.filename_values.Collection == "JPC":
+                self.filename_profile_dropdown.setCurrentText("JPC file names")
+            elif self.spex_config.filename_values.Collection == "2012_79":
+                self.filename_profile_dropdown.setCurrentText("Bowser file names")
+            
+            # Signalflow profile dropdown
+            # Set initial state based on config
+            encoder_settings = self.spex_config.mediatrace_values.ENCODER_SETTINGS
+            if isinstance(encoder_settings, dict):
+                source_vtr = encoder_settings.get('Source_VTR', [])
+            else:
+                source_vtr = encoder_settings.Source_VTR
+            if any("SVO5800" in vtr for vtr in source_vtr):
+                self.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
+            elif any("Sony BVH3100" in vtr for vtr in source_vtr):
+                self.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
+
+
     def setup_checks_tab(self):
         """Set up or update the Checks tab with theme-aware styling"""
         # Get the theme manager instance
@@ -662,45 +1110,8 @@ class MainWindow(QMainWindow, ThemeableMixin):
         # Vertical layout for the main content in "Checks"
         vertical_layout = QVBoxLayout(main_widget)
 
-        # 1. Import directory section
-        self.import_group = QGroupBox("Import")
-        theme_manager.style_groupbox(self.import_group, "top center")
-        self.checks_tab_group_boxes.append(self.import_group)
-        
-        import_layout = QVBoxLayout()
 
-        # Import directory button
-        import_directories_button = QPushButton("Import Directory...")
-        import_directories_button.clicked.connect(self.import_directories)
-        
-        # Directory section
-        directory_label = QLabel("Selected Directories:")
-        directory_label.setStyleSheet("font-weight: bold;")
-        self.directory_list = DirectoryListWidget(self)
-        self.directory_list.setStyleSheet("""
-            QListWidget {
-                border: 1px solid gray;
-                border-radius: 3px;
-            }
-        """)
-        
-        # Delete button
-        delete_button = QPushButton("Delete Selected")
-        delete_button.clicked.connect(self.delete_selected_directory)
-        
-        # Add widgets to layout
-        import_layout.addWidget(import_directories_button)
-        import_layout.addWidget(directory_label)
-        import_layout.addWidget(self.directory_list)
-        import_layout.addWidget(delete_button)
-        
-        self.import_group.setLayout(import_layout)
-        vertical_layout.addWidget(self.import_group)
-        
-        # Style all buttons in the section
-        theme_manager.style_buttons(self.import_group)
-
-        # 2. Command Profile section
+        # 1. Checks Profile section
         self.profile_group = QGroupBox("Checks Profiles")
         theme_manager.style_groupbox(self.profile_group, "top center")
         self.checks_tab_group_boxes.append(self.profile_group)
@@ -758,121 +1169,6 @@ class MainWindow(QMainWindow, ThemeableMixin):
 
         # Add scroll area to main layout
         checks_layout.addWidget(main_scroll_area)
-
-        # Bottom button section
-        bottom_row = QHBoxLayout()
-        bottom_row.setContentsMargins(0, 10, 0, 10)  # Add some vertical padding
-
-        # Open Processing Window button
-        self.open_processing_button = QPushButton("Show Processing Window")
-        self.open_processing_button.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                padding: 8px 16px;
-                font-size: 14px;
-                background-color: white;
-                color: #4CAF50;
-                border: none;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #d2ffed;
-            }
-            QPushButton:disabled {
-                background-color: #E8F5E9; 
-                color: #A5D6A7;             
-                opacity: 0.8;               
-            }
-        """)
-        self.open_processing_button.clicked.connect(self.on_open_processing_clicked)
-        # Initially disable the button since no processing is running
-        self.open_processing_button.setEnabled(False)
-        bottom_row.addWidget(self.open_processing_button)
-
-        # Cancel button
-        self.cancel_processing_button = QPushButton("Cancel Processing")
-        self.cancel_processing_button.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                padding: 8px 16px;
-                font-size: 14px;
-                background-color: #ff9999;
-                color: #4d2b12;
-                border: none;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #ff8080;
-            }
-            QPushButton:disabled {
-                background-color: #f5e9e3; 
-                color: #cd9e7f;             
-                opacity: 0.8;               
-            }
-        """)
-
-        self.cancel_processing_button.clicked.connect(self.cancel_processing)
-        self.cancel_processing_button.setEnabled(False)
-        bottom_row.addWidget(self.cancel_processing_button)
-
-        # create layout for current processing
-        self.now_processing_layout = QVBoxLayout()
-
-        # Add a status label that shows current file being processed
-        self.main_status_label = QLabel("Not processing")
-        self.main_status_label.setWordWrap(True)
-        self.main_status_label.setMaximumWidth(300)  # Limit width to prevent stretching
-        self.main_status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)  # Minimize height
-        self.main_status_label.setVisible(False) # initially hidden 
-        self.now_processing_layout.addWidget(self.main_status_label)
-        
-        # Add a small indeterminate progress bar
-        self.processing_indicator = QProgressBar(self)
-        self.processing_indicator.setMaximumWidth(100)  # Make it small
-        self.processing_indicator.setMaximumHeight(10)  # Make it shorter
-        self.processing_indicator.setRange(0, 0)
-        self.processing_indicator.setTextVisible(False)  # No percentage text
-        self.processing_indicator.setStyleSheet("""
-            QProgressBar {
-                background-color: palette(Base);
-                text-align: center;
-                padding: 1px;
-            }
-        """)
-        self.processing_indicator.setVisible(False)  # Initially hidden
-        self.now_processing_layout.addWidget(self.processing_indicator)
-
-        # Add the processing button layout to the bottom row
-        # Use a stretch factor of 0 to keep it from expanding
-        bottom_row.addLayout(self.now_processing_layout, 0)  
-
-        # Add a stretch to push the Check Spex button to the right
-        bottom_row.addStretch(1)
-
-        # Check Spex button
-        self.check_spex_button = QPushButton("Check Spex!")
-        self.check_spex_button.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                padding: 8px 16px;
-                font-size: 14px;
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #A5D6A7; 
-                color: #E8F5E9;             
-                opacity: 0.8;               
-            }
-        """)
-        self.check_spex_button.clicked.connect(self.on_check_spex_clicked)
-        bottom_row.addWidget(self.check_spex_button, 0)
-        checks_layout.addLayout(bottom_row)
 
     def update_main_status_label(self, filename, current_index=None, total_files=None):
         """Update the status label in the main window."""
@@ -984,7 +1280,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         # Open section button
         open_button = QPushButton("Open Section")
         open_button.clicked.connect(
-            lambda: self.open_new_window('Filename Values', asdict(self.spex_config.filename_values))
+            lambda: self.open_new_window('Filename Values', 'filename_values')
         )
         
         # Add widgets to layout
@@ -1006,7 +1302,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         mediainfo_button = QPushButton("Open Section")
         mediainfo_button.clicked.connect(
-            lambda: self.open_new_window('MediaInfo Values', self.spex_config.mediainfo_values)
+            lambda: self.open_new_window('MediaInfo Values', 'mediainfo_values')
         )
         
         mediainfo_layout.addWidget(mediainfo_button)
@@ -1025,7 +1321,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         exiftool_button = QPushButton("Open Section")
         exiftool_button.clicked.connect(
-            lambda: self.open_new_window('Exiftool Values', asdict(self.spex_config.exiftool_values))
+            lambda: self.open_new_window('Exiftool Values', 'exiftool_values')
         )
         
         exiftool_layout.addWidget(exiftool_button)
@@ -1044,7 +1340,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         ffprobe_button = QPushButton("Open Section")
         ffprobe_button.clicked.connect(
-            lambda: self.open_new_window('FFprobe Values', self.spex_config.ffmpeg_values)
+            lambda: self.open_new_window('FFprobe Values', 'ffmpeg_values')
         )
         
         ffprobe_layout.addWidget(ffprobe_button)
@@ -1084,7 +1380,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         mediatrace_button = QPushButton("Open Section")
         mediatrace_button.clicked.connect(
-            lambda: self.open_new_window('Mediatrace Values', asdict(self.spex_config.mediatrace_values))
+            lambda: self.open_new_window('Mediatrace Values', 'mediatrace_values')
         )
         
         mediatrace_layout.addWidget(signalflow_label)
@@ -1105,7 +1401,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         qct_button = QPushButton("Open Section")
         qct_button.clicked.connect(
-            lambda: self.open_new_window('Expected qct-parse options', asdict(self.spex_config.qct_parse_values))
+            lambda: self.open_new_window('Expected qct-parse options', 'qct_parse_values')
         )
         
         qct_layout.addWidget(qct_button)
@@ -1279,25 +1575,57 @@ class MainWindow(QMainWindow, ThemeableMixin):
         if sn_config_changes:
             config_edit.apply_signalflow_profile(sn_config_changes)
 
-    def open_new_window(self, title, nested_dict):
-        """Open a new window to display configuration details."""
-        # Convert any dataclass instances in mediainfo_values to dictionaries
+    def prepare_config_data(self, title, config_data):
+        """
+        Prepare configuration data for display in a new window.
+        Handles conversion from dataclasses to dictionaries based on data type.
+        
+        Args:
+            title (str): The title/type of configuration being displayed
+            config_data: The configuration data object (dataclass or dictionary)
+            
+        Returns:
+            dict: A dictionary representation of the configuration data
+        """
+        
+        # If the input is already a dictionary, return it as is
+        if isinstance(config_data, dict):
+            return config_data
+        
+        # Handle special cases based on title
         if title == 'MediaInfo Values':
-            nested_dict = {
-                'expected_general': nested_dict['expected_general'],
-                'expected_video': nested_dict['expected_video'], 
-                'expected_audio': nested_dict['expected_audio']
+            return {
+                'expected_general': config_data['expected_general'],
+                'expected_video': config_data['expected_video'], 
+                'expected_audio': config_data['expected_audio']
             }
-        # Convert ffmpeg_values dataclass instances
         elif title == 'FFprobe Values':
-            nested_dict = {
-                'video_stream': nested_dict['video_stream'],
-                'audio_stream': nested_dict['audio_stream'],
-                'format': nested_dict['format']
+            return {
+                'video_stream': config_data['video_stream'],
+                'audio_stream': config_data['audio_stream'],
+                'format': config_data['format']
             }
+        
+        # For standard dataclasses, convert to dict
+        from dataclasses import asdict
+        return asdict(config_data)
 
+
+    def open_new_window(self, title, config_attribute_name):
+        """Open a new window to display configuration details."""
+        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+
+        # Get the fresh config data using the attribute name
+        config_data = getattr(self.spex_config, config_attribute_name)
+        
+        # Prepare the data using the helper function
+        nested_dict = self.prepare_config_data(title, config_data)
+        
+        # Convert the dictionary to a string representation
         content_text = self.dict_to_string(nested_dict)
-    
+
+        # Create and configure the window
         self.new_window = QWidget()
         self.new_window.setWindowTitle(title)
         self.new_window.setLayout(QVBoxLayout())
