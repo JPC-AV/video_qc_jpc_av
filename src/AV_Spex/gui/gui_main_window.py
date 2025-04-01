@@ -2,10 +2,10 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
     QLabel, QScrollArea, QFileDialog, QMenuBar, QListWidget, QPushButton, QFrame, 
     QComboBox, QTabWidget, QTextEdit, QMessageBox, QDialog, QProgressBar, 
-    QSizePolicy, QListView
+    QSizePolicy, QStyle, QTextBrowser
 )
-from PyQt6.QtCore import Qt, QSettings, QDir, QTimer, QSize
-from PyQt6.QtGui import QPixmap, QPalette
+from PyQt6.QtCore import Qt, QSettings, QDir, QTimer, QSize, QUrl
+from PyQt6.QtGui import QPixmap, QPalette, QDesktopServices
 
 import os
 import sys
@@ -712,12 +712,30 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.import_tab_group_boxes.append(self.config_import_group)
         
         config_import_layout = QVBoxLayout()
-        
+
+        # Create a horizontal layout for the header row
+        header_layout = QHBoxLayout()
+
+        # Create the config info button
+        info_button = QPushButton()
+        info_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
+        info_button.setFixedSize(24, 24)
+        info_button.setToolTip("Click for more info about config options")
+        info_button.setFlat(True)  # Make it look like just an icon
+        info_button.clicked.connect(self.show_config_info)
+        header_layout.addWidget(info_button)
+
         # Description label
         config_desc_label = QLabel("Import, export, or reset Checks/Spex configuration:")
         config_desc_label.setStyleSheet("font-weight: bold;")
-        config_import_layout.addWidget(config_desc_label)
-        
+        header_layout.addWidget(config_desc_label)
+
+        # Add a stretch to push the info button to the right
+        header_layout.addStretch(1)
+
+        # Add the header layout to the main vertical layout
+        config_import_layout.addLayout(header_layout)
+
         # Add some spacing
         config_import_layout.addSpacing(10)
         
@@ -884,6 +902,58 @@ class MainWindow(QMainWindow, ThemeableMixin):
         bottom_row.addWidget(self.check_spex_button, 0)
         
         import_layout.addLayout(bottom_row)
+
+    # Define the information dialog method
+    def show_config_info(self):
+        # Create a custom dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Configuration Management Help")
+        dialog.setMinimumWidth(500)
+        
+        # Create layout
+        layout = QVBoxLayout(dialog)
+        
+        # Title
+        title = QLabel("<h2>Configuration Management</h2>")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        
+        # Content
+        content = QTextBrowser()
+        content.setOpenExternalLinks(True)
+        content.setHtml("""
+        <p>This section allows you to save, load, or reset AV Spex configuration settings.</p>
+        
+        <p><b>Import Config</b><br>
+        • Loads previously saved configuration settings from a JSON file<br>
+        • Import file can be Checks Config, Spex Config, or All Config<br>
+        • Compatible with files created using the Export feature</p>
+        
+        <p><b>Export Config</b><br>
+        • Saves your current configuration settings to a JSON file<br>
+        • Options:<br>
+        - <i>Checks Config</i>: Exports only which tools run and how (fixity settings, 
+            which tools run/check, etc.)<br>
+        - <i>Spex Config</i>: Exports only the expected values for file validation
+            (codecs, formats, naming conventions, etc.)<br>
+        - <i>Complete Config</i>: Exports all settings (both Checks Config and Soex Config)</p>
+        
+        <p><b>Reset to Default</b><br>
+        • Restores all settings to the application's built-in defaults<br>
+        • Use this if settings have been changed and you want to start fresh<br>
+        • Note: This action cannot be undone</p>
+        """)
+        
+        layout.addWidget(content)
+    
+        # Close button
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        
+        # Show dialog
+        dialog.exec()
+        
 
     def export_selected_config(self):
         selected_option = self.export_config_dropdown.currentText()
