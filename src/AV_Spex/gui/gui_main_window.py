@@ -26,7 +26,7 @@ from ..gui.gui_main_window_theme import MainWindowTheme
 from ..gui.gui_tab_import import ImportTabSetup
 from ..gui.gui_tab_checks import ChecksTabSetup
 from ..gui.gui_tab_spex import SpexTabSetup
-from ..gui.gui_tab_import_config_box import ConfigHandlers
+from ..gui.gui_tab_import_config_box import GuiConfigHandlers
 from ..gui.gui_tab_checks_profiles import ChecksProfileHandlers
 from ..gui.gui_tab_spex_profiles import SpexProfileHandlers
 from ..gui.gui_tab_import_dialog_handlers import DialogHandlers
@@ -64,7 +64,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.import_tab = ImportTabSetup(self)
         self.checks_tab = ChecksTabSetup(self)
         self.spex_tab = SpexTabSetup(self)
-        self.config_handlers = ConfigHandlers(self)
+        self.guiconfig_handlers = GuiConfigHandlers(self)
         self.checks_profile_handlers = ChecksProfileHandlers(self)
         self.spex_profile_handlers = SpexProfileHandlers(self)
         self.dialog_handlers = DialogHandlers(self)

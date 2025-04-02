@@ -9,7 +9,7 @@ from ..utils.log_setup import logger
 
 from ..gui.gui_checks_window import ChecksWindow
 
-class ConfigHandlers:
+class GuiConfigHandlers:
     """Configuration import/export/reset handlers"""
     
     def __init__(self, parent):

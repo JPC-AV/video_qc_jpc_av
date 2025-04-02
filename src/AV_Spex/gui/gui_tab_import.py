@@ -9,7 +9,7 @@ import os
 
 from ..gui.gui_theme_manager import ThemeManager
 from ..gui.gui_processing_gui import DirectoryListWidget
-from ..gui.gui_tab_import_config_box import ConfigHandlers
+from ..gui.gui_tab_import_config_box import GuiConfigHandlers
 from ..gui.gui_tab_import_dialog_handlers import DialogHandlers 
 
 class ImportTabSetup:
@@ -17,7 +17,7 @@ class ImportTabSetup:
     
     def __init__(self, parent):
         self.parent = parent
-        self.config_handlers = ConfigHandlers(parent)
+        self.guiconfig_handlers = GuiConfigHandlers(parent)
         self.dialog_handlers = DialogHandlers(parent)
     
     def setup_import_tab(self):
@@ -118,7 +118,7 @@ class ImportTabSetup:
         
         # Import Config button
         import_config_button = QPushButton("Import Config")
-        import_config_button.clicked.connect(self.config_handlers.import_config)
+        import_config_button.clicked.connect(self.guiconfig_handlers.import_config)
         buttons_layout.addWidget(import_config_button)
         
         # Export Config layout
@@ -134,7 +134,7 @@ class ImportTabSetup:
         self.parent.export_config_dropdown.addItem("Export All Config")
 
         # Connect the combobox signal to your function
-        self.parent.export_config_dropdown.currentIndexChanged.connect(self.config_handlers.export_selected_config)
+        self.parent.export_config_dropdown.currentIndexChanged.connect(self.guiconfig_handlers.export_selected_config)
 
         theme_manager.style_combobox(self.parent.export_config_dropdown)
         
@@ -147,7 +147,7 @@ class ImportTabSetup:
         
         # Reset to Default Config button
         reset_config_button = QPushButton("Reset to Default")
-        reset_config_button.clicked.connect(self.config_handlers.reset_config)
+        reset_config_button.clicked.connect(self.guiconfig_handlers.reset_config)
         buttons_layout.addWidget(reset_config_button)
         
         config_import_layout.addLayout(buttons_layout)
