@@ -140,7 +140,7 @@ class ThemeManager(QObject):
         # Get colors from palette using ColorRoles
         highlight_color = palette.color(palette.ColorRole.Highlight).name()
         highlight_text_color = palette.color(palette.ColorRole.HighlightedText).name()
-        highlight_dropdown_text_color = palette.color(palette.ColorRole.Shadow).name()
+        dropdown_bg_color = palette.color(palette.ColorRole.AlternateBase).name()
         button_color = palette.color(palette.ColorRole.Button).name()
         button_text_color = palette.color(palette.ColorRole.ButtonText).name()
         
@@ -170,7 +170,7 @@ class ThemeManager(QObject):
                 border-bottom-right-radius: 3px;
             }}
             QComboBox QAbstractItemView, QComboBox QListView {{
-                background-color: #E8F5E9;
+                background-color: {dropdown_bg_color};
             }}
             QComboBox::item:selected {{
                 background-color: {highlight_color};
