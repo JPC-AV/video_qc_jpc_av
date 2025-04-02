@@ -8,7 +8,7 @@ from PyQt6.QtGui import QPalette, QFont
 
 import os
 from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..gui.gui_console_textbox import ConsoleTextEdit, MessageType
+from ..gui.gui_processing_window_console import ConsoleTextEdit, MessageType
 
 from ..utils.config_manager import ConfigManager
 from ..utils.config_setup import ChecksConfig

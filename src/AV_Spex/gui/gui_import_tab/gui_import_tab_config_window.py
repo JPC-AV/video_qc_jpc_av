@@ -1,13 +1,13 @@
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 import os
 
-from ..utils.config_io import ConfigIO
-from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import ChecksConfig, SpexConfig
+from ...utils.config_io import ConfigIO
+from ...utils.config_manager import ConfigManager
+from ...utils.config_setup import ChecksConfig, SpexConfig
 
-from ..utils.log_setup import logger
+from ...utils.log_setup import logger
 
-from ..gui.gui_checks_window import ChecksWindow
+from ...gui.gui_checks_tab.gui_checks_window import ChecksWindow
 
 class GuiConfigHandlers:
     """Configuration import/export/reset handlers"""

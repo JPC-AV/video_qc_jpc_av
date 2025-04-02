@@ -7,10 +7,10 @@ from PyQt6.QtCore import Qt, QDir
 
 import os
 
-from ..gui.gui_theme_manager import ThemeManager
-from ..gui.gui_processing_gui import DirectoryListWidget
-from ..gui.gui_tab_import_config_box import GuiConfigHandlers
-from ..gui.gui_tab_import_dialog_handlers import DialogHandlers 
+from ...gui.gui_theme_manager import ThemeManager
+from ...gui.gui_processing_window import DirectoryListWidget
+from ...gui.gui_import_tab.gui_import_tab_config_window import GuiConfigHandlers
+from ...gui.gui_import_tab.gui_import_tab_dialog_handler import DialogHandlers 
 
 class ImportTabSetup:
     """Setup and handlers for the Import tab"""

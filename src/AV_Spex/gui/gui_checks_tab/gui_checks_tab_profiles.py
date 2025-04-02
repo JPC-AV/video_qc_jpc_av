@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QMessageBox
-from ..utils import config_edit
-from ..utils.log_setup import logger
+from ...utils import config_edit
+from ...utils.log_setup import logger
 
 class ChecksProfileHandlers:
     """Profile selection handlers for the Checks tab"""

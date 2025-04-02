@@ -8,10 +8,10 @@ from PyQt6.QtGui import QPixmap
 import os
 import sys
 
-from ..gui.gui_theme_manager import ThemeManager
-from ..gui.gui_main_window_signals import MainWindowSignals
-from ..gui.gui_tab_import_dialog_handlers import DialogHandlers
-from ..gui.gui_tab_import import ImportTabSetup
+from ...gui.gui_theme_manager import ThemeManager
+from ...gui.gui_main_window.gui_main_window_signals import MainWindowSignals
+from ...gui.gui_import_tab.gui_import_tab_dialog_handler import DialogHandlers
+from ...gui.gui_import_tab.gui_import_tab import ImportTabSetup
 
 class MainWindowUI:
     """UI components and setup for the main window"""

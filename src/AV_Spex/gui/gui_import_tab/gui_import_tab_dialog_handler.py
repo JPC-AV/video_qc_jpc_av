@@ -5,8 +5,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QPixmap
 
-from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import SpexConfig, ChecksConfig
+from ...utils.config_manager import ConfigManager
+from ...utils.config_setup import SpexConfig, ChecksConfig
 
 from AV_Spex import __version__
 version_string = __version__

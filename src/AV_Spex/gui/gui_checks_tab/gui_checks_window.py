@@ -5,11 +5,11 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
 
-from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..utils.config_setup import ChecksConfig, SpexConfig
-from ..utils.config_manager import ConfigManager
+from ...gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from ...utils.config_setup import ChecksConfig, SpexConfig
+from ...utils.config_manager import ConfigManager
 
-from ..processing.processing_mgmt import setup_mediaconch_policy
+from ...processing.processing_mgmt import setup_mediaconch_policy
 
 class ChecksWindow(QWidget, ThemeableMixin):
     """Configuration window for managing application settings."""

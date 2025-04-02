@@ -7,29 +7,30 @@ from PyQt6.QtGui import QPalette
 import os
 import sys
 
-from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..utils.config_setup import SpexConfig, ChecksConfig
-from ..utils.config_manager import ConfigManager
-from ..utils.log_setup import logger
+from ...gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from ...utils.config_setup import SpexConfig, ChecksConfig
+from ...utils.config_manager import ConfigManager
+from ...utils.log_setup import logger
 
-from ..processing.worker_thread import ProcessingWorker
-from ..processing.avspex_processor import AVSpexProcessor
-from ..gui.gui_signals import ProcessingSignals
+from ...processing.worker_thread import ProcessingWorker
+from ...processing.avspex_processor import AVSpexProcessor
+from ...gui.gui_signals import ProcessingSignals
 
 from AV_Spex import __version__
 version_string = __version__
 
-from ..gui.gui_main_window_ui import MainWindowUI
-from ..gui.gui_main_window_signals import MainWindowSignals
-from ..gui.gui_main_window_processing import MainWindowProcessing
-from ..gui.gui_main_window_theme import MainWindowTheme
-from ..gui.gui_tab_import import ImportTabSetup
-from ..gui.gui_tab_checks import ChecksTabSetup
-from ..gui.gui_tab_spex import SpexTabSetup
-from ..gui.gui_tab_import_config_box import GuiConfigHandlers
-from ..gui.gui_tab_checks_profiles import ChecksProfileHandlers
-from ..gui.gui_tab_spex_profiles import SpexProfileHandlers
-from ..gui.gui_tab_import_dialog_handlers import DialogHandlers
+from ...gui.gui_main_window.gui_main_window_ui import MainWindowUI
+from ...gui.gui_main_window.gui_main_window_signals import MainWindowSignals
+from ...gui.gui_main_window.gui_main_window_processing import MainWindowProcessing
+from ...gui.gui_main_window.gui_main_window_theme import MainWindowTheme
+from ...gui.gui_import_tab.gui_import_tab import ImportTabSetup
+from ...gui.gui_import_tab.gui_import_tab_dialog_handler import DialogHandlers
+from ...gui.gui_import_tab.gui_import_tab_config_window import GuiConfigHandlers
+from ...gui.gui_checks_tab.gui_checks_tab import ChecksTabSetup
+from ...gui.gui_checks_tab.gui_checks_tab_profiles import ChecksProfileHandlers
+from ...gui.gui_spex_tab.gui_spex_tab import SpexTabSetup
+from ...gui.gui_spex_tab.gui_spex_tab_profiles import SpexProfileHandlers
+
 
 class MainWindow(QMainWindow, ThemeableMixin):
     """Main application window with tabs for configuration and settings."""

@@ -6,10 +6,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
 
-from ..gui.gui_theme_manager import ThemeManager
+from ...gui.gui_theme_manager import ThemeManager
 
-from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import SpexConfig, ChecksConfig
+from ...utils.config_manager import ConfigManager
+from ...utils.config_setup import SpexConfig, ChecksConfig
 
 config_mgr = ConfigManager()
 

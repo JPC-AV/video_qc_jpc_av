@@ -4,7 +4,7 @@ from PyQt6.QtGui import QPixmap
 
 import os
 
-from ..gui.gui_theme_manager import ThemeManager
+from ...gui.gui_theme_manager import ThemeManager
 
 class MainWindowTheme:
     """Theme handling helper methods for the main window"""

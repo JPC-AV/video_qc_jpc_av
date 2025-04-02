@@ -4,8 +4,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from ..gui.gui_theme_manager import ThemeManager
-from ..gui.gui_checks_window import ChecksWindow
+from ...gui.gui_theme_manager import ThemeManager
+from ...gui.gui_checks_tab.gui_checks_window import ChecksWindow
 
 class ChecksTabSetup:
     """Setup and handlers for the Checks tab"""

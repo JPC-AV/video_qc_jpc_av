@@ -1,5 +1,5 @@
-from ..utils import config_edit
-from ..utils.log_setup import logger
+from ...utils import config_edit
+from ...utils.log_setup import logger
 
 class SpexProfileHandlers:
     """Profile selection handlers for the Spex tab"""
