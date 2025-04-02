@@ -2,13 +2,21 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox
 import os
 
 from ..utils.config_io import ConfigIO
+from ..utils.config_manager import ConfigManager
+from ..utils.config_setup import ChecksConfig, SpexConfig
+
 from ..utils.log_setup import logger
+
+from ..gui.gui_checks_window import ChecksWindow
 
 class ConfigHandlers:
     """Configuration import/export/reset handlers"""
     
     def __init__(self, parent):
         self.parent = parent
+        self.config_mgr = ConfigManager()
+        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
     
     def export_selected_config(self):
         selected_option = self.parent.export_config_dropdown.currentText()
@@ -16,11 +24,11 @@ class ConfigHandlers:
         if selected_option == "Export Config Type...":
             return
         elif selected_option == "Export Checks Config":
-            self.export_config('checks')
+            self.export_config_dialog('checks')
         elif selected_option == "Export Spex Config":
-            self.export_config('spex')
+            self.export_config_dialog('spex')
         elif selected_option == "Export All Config":
-            self.export_config('all')
+            self.export_config_dialog('all')
 
     def import_config(self):
         """Import configuration from a file."""
@@ -39,19 +47,19 @@ class ConfigHandlers:
                 self.parent.config_widget.load_config_values()
 
                 # Ensure recent config ref
-                self.parent.checks_config = self.parent.config_mgr.get_config('checks', ChecksConfig)
-                self.parent.spex_config = self.parent.config_mgr.get_config('spex', SpexConfig)
+                self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+                self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
 
                 # Spex dropdowns
                 # file name dropdown
-                if self.parent.spex_config.filename_values.Collection == "JPC":
+                if self.spex_config.filename_values.Collection == "JPC":
                     self.parent.filename_profile_dropdown.setCurrentText("JPC file names")
-                elif self.parent.spex_config.filename_values.Collection == "2012_79":
+                elif self.spex_config.filename_values.Collection == "2012_79":
                     self.parent.filename_profile_dropdown.setCurrentText("Bowser file names")
                 
                 # Signalflow profile dropdown
                 # Set initial state based on config
-                encoder_settings = self.parent.spex_config.mediatrace_values.ENCODER_SETTINGS
+                encoder_settings = self.spex_config.mediatrace_values.ENCODER_SETTINGS
                 if isinstance(encoder_settings, dict):
                     source_vtr = encoder_settings.get('Source_VTR', [])
                 else:
@@ -66,7 +74,8 @@ class ConfigHandlers:
                 logger.error(f"Error importing config: {str(e)}")
                 QMessageBox.critical(self.parent, "Error", f"Error importing configuration: {str(e)}")
 
-    def export_config(self, config_type):
+    def export_config_dialog(self, config_type):
+        print(f"DEBUGGING - received config type is {config_type}")
         """Export configuration to a file."""
         file_dialog = QFileDialog(self.parent, "Export Configuration")
         file_dialog.setNameFilter("JSON Files (*.json);;All Files (*)")
@@ -78,7 +87,8 @@ class ConfigHandlers:
             file_path = file_dialog.selectedFiles()[0]
             try:
                 # Use the ConfigIO class to export config
-                config_io = ConfigIO(self.parent.config_mgr)
+                config_io = ConfigIO(self.config_mgr)
+                # Needs to deliver config_type as a list
                 config_io.save_configs(file_path, config_type)
                 
                 QMessageBox.information(self.parent, "Success", f"Configuration exported successfully to {file_path}")

@@ -12,12 +12,15 @@ class ConfigIO:
 
     def export_configs(self, config_types: Optional[List[str]] = None) -> dict:
         """Export specified configs or all configs if none specified"""
+        print(f"DEBUGGING - received var is {config_types}")
         if not config_types:
             config_types = ['spex', 'checks']
         
         export_data = {}
         for config_type in config_types:
+            print(f"DEBUGGING - inside for look config typ = {config_type}")
             if config_type == 'spex':
+                print(f"DEBUGGING - inside spex conditional")
                 config = self.config_mgr.get_config('spex', SpexConfig)
             elif config_type == 'checks':
                 config = self.config_mgr.get_config('checks', ChecksConfig)

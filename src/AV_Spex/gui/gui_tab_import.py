@@ -134,7 +134,7 @@ class ImportTabSetup:
         self.parent.export_config_dropdown.addItem("Export All Config")
 
         # Connect the combobox signal to your function
-        self.parent.export_config_dropdown.currentIndexChanged.connect(self.parent.config_handlers.export_selected_config)
+        self.parent.export_config_dropdown.currentIndexChanged.connect(self.config_handlers.export_selected_config)
 
         theme_manager.style_combobox(self.parent.export_config_dropdown)
         
@@ -147,7 +147,7 @@ class ImportTabSetup:
         
         # Reset to Default Config button
         reset_config_button = QPushButton("Reset to Default")
-        reset_config_button.clicked.connect(self.parent.config_handlers.reset_config)
+        reset_config_button.clicked.connect(self.config_handlers.reset_config)
         buttons_layout.addWidget(reset_config_button)
         
         config_import_layout.addLayout(buttons_layout)
