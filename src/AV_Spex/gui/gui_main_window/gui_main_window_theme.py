@@ -9,33 +9,34 @@ from ...gui.gui_theme_manager import ThemeManager
 class MainWindowTheme:
     """Theme handling helper methods for the main window"""
     
-    def __init__(self, parent):
-        self.parent = parent
+    def __init__(self, main_window):
+        self.main_window = main_window
     
     def on_theme_changed(self, palette):
         """Handle theme changes across the application."""
+        
         # Apply palette to main window
-        self.parent.setPalette(palette)
+        self.main_window.setPalette(palette)
         
         # Get the theme manager
         theme_manager = ThemeManager.instance()
         
         # Update the tabs
-        if hasattr(self.parent, 'tabs'):
-            self.parent.tabs.setStyleSheet(theme_manager.get_tab_style())
+        if hasattr(self.main_window, 'tabs'):
+            self.main_window.tabs.setStyleSheet(theme_manager.get_tab_style())
 
-        if hasattr(self.parent, 'export_config_dropdown'):
-            theme_manager.style_combobox(self.parent.export_config_dropdown)
+        if hasattr(self.main_window, 'export_config_dropdown'):
+            theme_manager.style_combobox(self.main_window.export_config_dropdown)
         
         # Update all groupboxes in both tabs
-        for group_box in self.parent.checks_tab_group_boxes + self.parent.spex_tab_group_boxes + self.parent.import_tab_group_boxes:
+        for group_box in self.main_window.checks_tab_group_boxes + self.main_window.spex_tab_group_boxes + self.main_window.import_tab_group_boxes:
             theme_manager.style_groupbox(group_box)
             # Style buttons inside the group box
             theme_manager.style_buttons(group_box)
         
         # Special styling for green button
-        if hasattr(self.parent, 'check_spex_button'):
-            self.parent.check_spex_button.setStyleSheet("""
+        if hasattr(self.main_window, 'check_spex_button'):
+            self.main_window.check_spex_button.setStyleSheet("""
                 QPushButton {
                     font-weight: bold;
                     padding: 8px 16px;
@@ -56,8 +57,8 @@ class MainWindowTheme:
             """)
         
         # Special styling for open processing window button
-        if hasattr(self.parent, 'open_processing_button'):
-            self.parent.open_processing_button.setStyleSheet("""
+        if hasattr(self.main_window, 'open_processing_button'):
+            self.main_window.open_processing_button.setStyleSheet("""
                 QPushButton {
                     font-weight: bold;
                     padding: 8px 16px;
@@ -79,13 +80,13 @@ class MainWindowTheme:
 
         # Update child windows
         for child_name in ['config_widget', 'processing_window']:
-            child = getattr(self.parent, child_name, None)
+            child = getattr(self.main_window, child_name, None)
             if child and hasattr(child, 'on_theme_changed'):
                 child.on_theme_changed(palette)
 
         # Special styling for open processing window button
-        if hasattr(self.parent, 'processing_indicator'):
-            self.parent.processing_indicator.setStyleSheet("""
+        if hasattr(self.main_window, 'processing_indicator'):
+            self.main_window.processing_indicator.setStyleSheet("""
                 QProgressBar {
                     background-color: palette(Base);
                     text-align: center;
@@ -100,19 +101,19 @@ class MainWindowTheme:
         self._refresh_logo()
         
         # Force repaint
-        self.parent.update()
+        self.main_window.update()
 
     def _refresh_logo(self):
         """Refresh the logo when theme changes"""
         # First, find and remove the existing logo layout
-        for i in range(self.parent.main_layout.count()):
-            item = self.parent.main_layout.itemAt(i)
+        for i in range(self.main_window.main_layout.count()):
+            item = self.main_window.main_layout.itemAt(i)
             # Check if this layout item contains our logo (you might need to adapt this check)
             if item and item.layout() and item.layout().count() > 0:
                 widget = item.layout().itemAt(0).widget()
                 if isinstance(widget, QLabel) and widget.pixmap() is not None:
                     # Remove the existing logo layout
-                    self._remove_layout_item(self.parent.main_layout, i)
+                    self._remove_layout_item(self.main_window.main_layout, i)
                     break
         
         # Now load the new theme-appropriate logo
@@ -145,15 +146,15 @@ class MainWindowTheme:
         theme_manager = ThemeManager.instance()
         
         # Define light and dark logo paths
-        light_logo_path = self.parent.config_mgr.get_logo_path('Branding_avspex_noJPC_030725.png')
-        dark_logo_path = self.parent.config_mgr.get_logo_path('Branding_avspex_noJPC_inverted_032325.png')
+        light_logo_path = self.main_window.config_mgr.get_logo_path('Branding_avspex_noJPC_030725.png')
+        dark_logo_path = self.main_window.config_mgr.get_logo_path('Branding_avspex_noJPC_inverted_032325.png')
         
         # Get appropriate logo for current theme
         logo_path = theme_manager.get_theme_appropriate_logo(light_logo_path, dark_logo_path)
         
         # Create and add image layout
         image_layout = self.add_image_to_top(logo_path)
-        self.parent.main_layout.insertLayout(0, image_layout)  # Insert at index 0 (top)
+        self.main_window.main_layout.insertLayout(0, image_layout)  # Insert at index 0 (top)
     
     def add_image_to_top(self, logo_path):
         """Add image to the top of the main layout."""
@@ -166,7 +167,7 @@ class MainWindowTheme:
             pixmap = QPixmap(logo_path)
             if not pixmap.isNull():
                 # Scale pixmap to window width while keeping aspect ratio
-                scaled_pixmap = pixmap.scaledToWidth(self.parent.width(), Qt.TransformationMode.SmoothTransformation)
+                scaled_pixmap = pixmap.scaledToWidth(self.main_window.width(), Qt.TransformationMode.SmoothTransformation)
                 label.setPixmap(scaled_pixmap)
             else:
                 print(f"Failed to load image at path: {logo_path}")

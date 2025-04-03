@@ -23,13 +23,10 @@ from ..gui.gui_main_window.gui_main_window_ui import MainWindowUI
 from ..gui.gui_main_window.gui_main_window_signals import MainWindowSignals
 from ..gui.gui_main_window.gui_main_window_processing import MainWindowProcessing
 from ..gui.gui_main_window.gui_main_window_theme import MainWindowTheme
-from ..gui.gui_import_tab.gui_import_tab import ImportTabSetup
-from ..gui.gui_import_tab.gui_import_tab_dialog_handler import DialogHandlers
-from ..gui.gui_import_tab.gui_import_tab_config_window import GuiConfigHandlers
-from ..gui.gui_checks_tab.gui_checks_tab import ChecksTabSetup
-from ..gui.gui_checks_tab.gui_checks_tab_profiles import ChecksProfileHandlers
-from ..gui.gui_spex_tab.gui_spex_tab import SpexTabSetup
-from ..gui.gui_spex_tab.gui_spex_tab_profiles import SpexProfileHandlers
+
+from ..gui.gui_import_tab import ImportTab
+from ..gui.gui_checks_tab.gui_checks_tab import ChecksTab
+from ..gui.gui_spex_tab import SpexTab
 
 
 class MainWindow(QMainWindow, ThemeableMixin):
@@ -57,18 +54,16 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.check_spex_clicked = False
         self.source_directories = []
 
-        # Initialize components
+        # Initialize MainWindow
         self.ui = MainWindowUI(self)
         self.signals_handler = MainWindowSignals(self)
         self.processing = MainWindowProcessing(self)
         self.theme = MainWindowTheme(self)
-        self.import_tab = ImportTabSetup(self)
-        self.checks_tab = ChecksTabSetup(self)
-        self.spex_tab = SpexTabSetup(self)
-        self.guiconfig_handlers = GuiConfigHandlers(self)
-        self.checks_profile_handlers = ChecksProfileHandlers(self)
-        self.spex_profile_handlers = SpexProfileHandlers(self)
-        self.dialog_handlers = DialogHandlers(self)
+
+        #Initialize Tabs
+        self.import_tab = ImportTab(self)
+        self.checks_tab = ChecksTab(self)
+        self.spex_tab = SpexTab(self)
 
         # Connect all signals
         self.signals_handler.setup_signal_connections()

@@ -9,49 +9,43 @@ import os
 import sys
 
 from ...gui.gui_theme_manager import ThemeManager
-from ...gui.gui_main_window.gui_main_window_signals import MainWindowSignals
-from ...gui.gui_import_tab.gui_import_tab_dialog_handler import DialogHandlers
-from ...gui.gui_import_tab.gui_import_tab import ImportTabSetup
 
 class MainWindowUI:
     """UI components and setup for the main window"""
     
-    def __init__(self, parent):
-        self.parent = parent
-        self.signals_handler = MainWindowSignals
-        self.dialog_handlers = DialogHandlers
-        self.import_tab = ImportTabSetup
+    def __init__(self, main_window):
+        self.main_window = main_window
     
     def setup_ui(self):
         """Set up the main UI components"""
-        self.parent.setMinimumSize(700, 800)
+        self.main_window.setMinimumSize(700, 800)
 
-        ## self.parent.windowFlags() retrieves the current window flags
+        ## self.main_window.windowFlags() retrieves the current window flags
         ## Qt.WindowType.WindowMaximizeButtonHint enables the maximize button in the window's title bar.
-        self.parent.setWindowFlags(self.parent.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
+        self.main_window.setWindowFlags(self.main_window.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
         
-        self.parent.setWindowTitle("AV Spex")
+        self.main_window.setWindowTitle("AV Spex")
         
         # Set up menu bar
-        self.menu_bar = QMenuBar(self.parent)
-        self.parent.setMenuBar(self.menu_bar)
+        self.menu_bar = QMenuBar(self.main_window)
+        self.main_window.setMenuBar(self.menu_bar)
         
         # App menu 
         self.app_menu = self.menu_bar.addMenu("AV Spex")
         self.about_action = self.app_menu.addAction("About AV Spex")
-        self.about_action.triggered.connect(self.dialog_handlers.show_about_dialog)
+        self.about_action.triggered.connect(self.main_window.import_tab.dialog_handlers.show_about_dialog)
         
         # Add a separator
         self.app_menu.addSeparator()
         
         # Add Quit action to the app menu
         self.quit_action = self.app_menu.addAction("Quit")
-        self.quit_action.triggered.connect(self.signals_handler.on_quit_clicked)
+        self.quit_action.triggered.connect(self.main_window.signals_handler.on_quit_clicked)
         
         # File menu (comes after the app menu)
         self.file_menu = self.menu_bar.addMenu("File")
         self.import_action = self.file_menu.addAction("Import Directory")
-        self.import_action.triggered.connect(self.import_tab.import_directories)
+        self.import_action.triggered.connect(self.main_window.import_tab.import_directories)
 
         self.setup_main_layout()
         
@@ -62,34 +56,34 @@ class MainWindowUI:
     def setup_main_layout(self):
         """Set up the main window layout structure"""
         # Create and set central widget
-        self.parent.central_widget = QWidget()
-        self.parent.setCentralWidget(self.parent.central_widget)
+        self.main_window.central_widget = QWidget()
+        self.main_window.setCentralWidget(self.main_window.central_widget)
 
         # Create main vertical layout
-        self.parent.main_layout = QVBoxLayout(self.parent.central_widget)
+        self.main_window.main_layout = QVBoxLayout(self.main_window.central_widget)
 
         # Set layout margins and spacing
-        self.parent.main_layout.setContentsMargins(10, 10, 10, 10)
-        self.parent.main_layout.setSpacing(10)
+        self.main_window.main_layout.setContentsMargins(10, 10, 10, 10)
+        self.main_window.main_layout.setSpacing(10)
     
     def logo_setup(self):
         """Set up the logo display"""
         if getattr(sys, 'frozen', False):
-            QTimer.singleShot(0, self.parent.theme._delayed_logo_setup)
+            QTimer.singleShot(0, self.main_window.theme._delayed_logo_setup)
         else:
-            self.parent.theme._load_logo()
+            self.main_window.theme._load_logo()
     
     def setup_tabs(self):
         """Set up tab styling"""
         theme_manager = ThemeManager.instance()
         
         # Create new tabs
-        self.parent.tabs = QTabWidget()
-        self.parent.tabs.setStyleSheet(theme_manager.get_tab_style())
+        self.main_window.tabs = QTabWidget()
+        self.main_window.tabs.setStyleSheet(theme_manager.get_tab_style())
 
-        self.parent.main_layout.addWidget(self.parent.tabs)
+        self.main_window.main_layout.addWidget(self.main_window.tabs)
 
         # Set up individual tabs
-        self.parent.import_tab.setup_import_tab()
-        self.parent.checks_tab.setup_checks_tab()
-        self.parent.spex_tab.setup_spex_tab()
+        self.main_window.import_tab.setup_import_tab()
+        self.main_window.checks_tab.setup_checks_tab()
+        self.main_window.spex_tab.setup_spex_tab()
