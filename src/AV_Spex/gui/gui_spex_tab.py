@@ -6,13 +6,13 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
 
-from ..gui.gui_theme_manager import ThemeManager
+from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from ..utils.config_manager import ConfigManager
 from ..utils.config_setup import SpexConfig, ChecksConfig
 from ..utils import config_edit
 from ..utils.log_setup import logger
 
-class SpexTab:
+class SpexTab(ThemeableMixin):
     """Spex tab with nested handler classes for hierarchical organization"""
     
     class ProfileHandlers:
@@ -73,6 +73,9 @@ class SpexTab:
         
         # Initialize nested handler classes
         self.profile_handlers = self.ProfileHandlers(self)
+
+        # Initialize theme handling 
+        self.setup_theme_handling()
     
     def setup_spex_tab(self):
         """Set up or update the Spex tab with theme-aware styling"""
@@ -352,3 +355,27 @@ class SpexTab:
                 content_lines.append(f"{indent}{key}: {value}")
 
         return "\n".join(content_lines)
+    
+    def on_theme_changed(self, palette):
+        """Handle theme changes for this tab"""
+        theme_manager = ThemeManager.instance()
+        
+        # Update all group boxes
+        for group_box in self.main_window.spex_tab_group_boxes:
+            if group_box is not None:
+                theme_manager.style_groupbox(group_box)
+        
+        # Update any buttons within the tab
+        if hasattr(self, 'filename_group'):
+            theme_manager.style_buttons(self.filename_group)
+        if hasattr(self, 'mediainfo_group'):
+            theme_manager.style_buttons(self.mediainfo_group)
+        if hasattr(self, 'exiftool_group'):
+            theme_manager.style_buttons(self.exiftool_group)
+        if hasattr(self, 'ffprobe_group'):
+            theme_manager.style_buttons(self.ffprobe_group)
+        if hasattr(self, 'mediatrace_group'):
+            theme_manager.style_buttons(self.mediatrace_group)
+        if hasattr(self, 'qct_group'):
+            theme_manager.style_buttons(self.qct_group)
+    

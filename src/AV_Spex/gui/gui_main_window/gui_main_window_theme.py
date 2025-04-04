@@ -28,13 +28,18 @@ class MainWindowTheme:
         if hasattr(self.main_window, 'export_config_dropdown'):
             theme_manager.style_combobox(self.main_window.export_config_dropdown)
         
-        # Update all groupboxes in both tabs
-        for group_box in self.main_window.checks_tab_group_boxes + self.main_window.spex_tab_group_boxes + self.main_window.import_tab_group_boxes:
-            theme_manager.style_groupbox(group_box)
-            # Style buttons inside the group box
-            theme_manager.style_buttons(group_box)
+        # Style the special buttons
+        self._style_special_buttons()
         
-        # Special styling for green button
+        # Refresh the logo
+        self._refresh_logo()
+        
+        # Force repaint
+        self.main_window.update()
+    
+    def _style_special_buttons(self):
+        """Apply special styling to buttons that need it"""
+        # Style the 'Check Spex' button
         if hasattr(self.main_window, 'check_spex_button'):
             self.main_window.check_spex_button.setStyleSheet("""
                 QPushButton {
@@ -56,7 +61,7 @@ class MainWindowTheme:
                 }
             """)
         
-        # Special styling for open processing window button
+        # Style the 'Show Processing Window' button
         if hasattr(self.main_window, 'open_processing_button'):
             self.main_window.open_processing_button.setStyleSheet("""
                 QPushButton {
@@ -77,14 +82,8 @@ class MainWindowTheme:
                     opacity: 0.8;               
                 }
             """)
-
-        # Update child windows
-        for child_name in ['config_widget', 'processing_window']:
-            child = getattr(self.main_window, child_name, None)
-            if child and hasattr(child, 'on_theme_changed'):
-                child.on_theme_changed(palette)
-
-        # Special styling for open processing window button
+        
+        # Style the progress indicator
         if hasattr(self.main_window, 'processing_indicator'):
             self.main_window.processing_indicator.setStyleSheet("""
                 QProgressBar {

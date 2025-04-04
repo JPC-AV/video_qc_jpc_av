@@ -20,11 +20,11 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
         self.is_loading = False
 
+        # Initialize themed_group_boxes before setup_theme_handling
+        self.themed_group_boxes = {}
+        
         # Setup theme handling
         self.setup_theme_handling()
-        
-        # Track theme-aware components
-        self.themed_group_boxes = {}
         
         # Setup UI and load config
         self.setup_ui()
@@ -348,6 +348,8 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Style all buttons
         theme_manager.style_buttons(self)
 
+    # This function modifies just the on_theme_changed method of the ChecksWindow class
+
     def on_theme_changed(self, palette):
         """Handle theme changes for ChecksWindow"""
         # Apply the palette directly
@@ -356,17 +358,29 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Get the theme manager
         theme_manager = ThemeManager.instance()
         
-        # Update all tracked group boxes
+        # Update all tracked group boxes with their specific title positions
         for key, group_box in self.themed_group_boxes.items():
-            # Main tools group has center-aligned title
             if key == 'tools':
                 theme_manager.style_groupbox(group_box, "top center")
             else:
-                theme_manager.style_groupbox(group_box, "top left")
+                # Preserve the title position if set
+                position = group_box.property("title_position") or "top left"
+                theme_manager.style_groupbox(group_box, position)
         
         # Style all buttons
         theme_manager.style_buttons(self)
         
+        # Style all comboboxes
+        theme_manager.style_comboboxes(self)
+        
+        # Style specific comboboxes that might need extra attention
+        if hasattr(self, 'policy_combo'):
+            theme_manager.style_combobox(self.policy_combo)
+        if hasattr(self, 'content_filter_combo'):
+            theme_manager.style_combobox(self.content_filter_combo)
+        if hasattr(self, 'profile_combo'):
+            theme_manager.style_combobox(self.profile_combo)
+            
         # Force repaint
         self.update()
 

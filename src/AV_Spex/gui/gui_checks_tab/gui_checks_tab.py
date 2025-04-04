@@ -5,12 +5,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from ...gui.gui_theme_manager import ThemeManager
+from ...gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from ...gui.gui_checks_tab.gui_checks_window import ChecksWindow
 from ...utils import config_edit
 from ...utils.log_setup import logger
 
-class ChecksTab:
+class ChecksTab(ThemeableMixin):
     """Checks tab with nested handler classes for hierarchical organization"""
     
     class ProfileHandlers:
@@ -42,8 +42,36 @@ class ChecksTab:
     def __init__(self, main_window):
         self.main_window = main_window
         
+        # Initialize tab UI elements as instance attributes
+        self.profile_group = None
+        self.config_group = None
+        
         # Initialize nested handler classes
         self.profile_handlers = self.ProfileHandlers(self)
+        
+        # Initialize theme handling
+        self.setup_theme_handling()
+
+    def on_theme_changed(self, palette):
+        """Handle theme changes for this tab"""
+        theme_manager = ThemeManager.instance()
+        
+        # Update all group boxes
+        for group_box in self.main_window.checks_tab_group_boxes:
+            if group_box is not None:
+                # Preserve the title position when refreshing style
+                group_box_title_pos = group_box.property("title_position") or "top center"
+                theme_manager.style_groupbox(group_box, group_box_title_pos)
+        
+        # Update combobox styling
+        if hasattr(self.main_window, 'command_profile_dropdown'):
+            theme_manager.style_combobox(self.main_window.command_profile_dropdown)
+        
+        # Update the config widget if it exists
+        if hasattr(self.main_window, 'config_widget') and self.main_window.config_widget:
+            # If the config widget has its own theme handling, let it handle the change
+            if hasattr(self.main_window.config_widget, 'on_theme_changed'):
+                self.main_window.config_widget.on_theme_changed(palette)
     
     def setup_checks_tab(self):
         """Set up or update the Checks tab with theme-aware styling"""
@@ -83,6 +111,9 @@ class ChecksTab:
         self.main_window.command_profile_dropdown.addItem("Step 1")
         self.main_window.command_profile_dropdown.addItem("Step 2")
         self.main_window.command_profile_dropdown.addItem("All Off")
+        
+        # Style the combobox using theme manager
+        theme_manager.style_combobox(self.main_window.command_profile_dropdown)
         
         # Set initial dropdown state
         if self.main_window.checks_config.tools.exiftool.run_tool == "yes":

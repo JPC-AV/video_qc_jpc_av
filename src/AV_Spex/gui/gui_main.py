@@ -60,6 +60,9 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.processing = MainWindowProcessing(self)
         self.theme = MainWindowTheme(self)
 
+        # Initialize main window theme handling first
+        self.setup_theme_handling()
+
         #Initialize Tabs
         self.import_tab = ImportTab(self)
         self.checks_tab = ChecksTab(self)
@@ -75,14 +78,21 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.setup_theme_handling()
     
     def closeEvent(self, event):
-        # Clean up theme connections
-        self.cleanup_theme_handling()
-        
-        # Clean up child windows
-        for child_name in ['config_widget', 'processing_window']:
+        """Handle application shutdown and clean up resources."""
+        # Clean up any child windows first
+        for child_name in ['config_widget', 'processing_window', 'new_window']:
             child = getattr(self, child_name, None)
-            if child and hasattr(child, 'cleanup_theme_handling'):
-                child.cleanup_theme_handling()
+            if child and isinstance(child, QWidget):
+                # If it has theme handling, clean it up
+                if hasattr(child, 'cleanup_theme_handling'):
+                    child.cleanup_theme_handling()
+                child.close()
+        
+        # Clean up tab theme connections
+        for tab_name in ['import_tab', 'checks_tab', 'spex_tab']:
+            tab = getattr(self, tab_name, None)
+            if tab and hasattr(tab, 'cleanup_theme_handling'):
+                tab.cleanup_theme_handling()
         
         # Stop worker if running
         if self.worker and self.worker.isRunning():
@@ -91,4 +101,10 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         # Call quit handling method
         self.signals_handler.on_quit_clicked()
+        
+        # Clean up main window theme connections last
+        self.cleanup_theme_handling()
+        
+        # Call parent implementation
         super().closeEvent(event)
+    

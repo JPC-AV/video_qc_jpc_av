@@ -8,7 +8,7 @@ from PyQt6.QtGui import QPixmap
 
 import os
 
-from ..gui.gui_theme_manager import ThemeManager
+from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from ..gui.gui_processing_window import DirectoryListWidget
 from ..utils.config_io import ConfigIO
 from ..utils.config_manager import ConfigManager
@@ -18,7 +18,7 @@ from ..utils.log_setup import logger
 from AV_Spex import __version__
 version_string = __version__
 
-class ImportTab:
+class ImportTab(ThemeableMixin):
     """Import tab with nested handler classes for more hierarchical organization"""
     
     class ConfigHandlers:
@@ -274,6 +274,29 @@ class ImportTab:
         # Initialize nested handler classes
         self.config_handlers = self.ConfigHandlers(self)
         self.dialog_handlers = self.DialogHandlers(self)
+    
+        # Initialize theme handling
+        self.setup_theme_handling()
+
+    def on_theme_changed(self, palette):
+        """Handle theme changes for this tab"""
+        theme_manager = ThemeManager.instance()
+        
+        # Update all group boxes
+        for group_box in self.main_window.import_tab_group_boxes:
+            if group_box is not None:
+                # Preserve the title position when refreshing style
+                group_box_title_pos = group_box.property("title_position") or "top center"
+                theme_manager.style_groupbox(group_box, group_box_title_pos)
+        
+        # Update buttons in all groups
+        for group_attr in ['import_group', 'config_import_group']:  # Add other groups as needed
+            group = getattr(self, group_attr, None)
+            if group:
+                theme_manager.style_buttons(group)
+
+        if hasattr(self, 'export_config_dropdown'):
+            theme_manager.style_combobox(self.export_config_dropdown)
         
     def setup_import_tab(self):
         """Set up the Import tab for directory selection"""

@@ -325,52 +325,55 @@ class ThemeManager(QObject):
         
         # Return appropriate logo path
         return dark_logo_path if is_dark else light_logo_path
-
+    
+    def get_current_palette(self):
+        """Return the current application palette"""
+        return QApplication.palette()
+    
 
 class ThemeableMixin:
-    """
-    Mixin class for widgets that need theme support.
-    
-    Add this to any QWidget class that needs to respond to theme changes.
-    """
+    """Mixin class for objects that need theme support"""
     
     def setup_theme_handling(self):
-        """Set up theme change handling for this widget."""
-        # Skip if already set up
-        if hasattr(self, '_theme_handling_setup') and self._theme_handling_setup:
-            return
+        """Connect to theme change notifications"""
+        theme_manager = ThemeManager.instance()
         
-        # Get theme manager and connect to signal with direct connection
-        self._theme_manager = ThemeManager.instance()
-        self._theme_manager.themeChanged.connect(
-            self.on_theme_changed, 
-            type=Qt.ConnectionType.QueuedConnection
-        )
+        # Connect to the theme changed signal
+        if hasattr(theme_manager, 'themeChanged'):
+            theme_manager.themeChanged.connect(self.on_theme_changed)
         
-        # Mark as set up
-        self._theme_handling_setup = True
-
+        # Apply current theme immediately using QApplication's palette
+        self.on_theme_changed(QApplication.palette())
+        
+    def cleanup_theme_handling(self):
+        """Disconnect from theme change notifications"""
+        theme_manager = ThemeManager.instance()
+        try:
+            # Disconnect from whichever signal exists
+            if hasattr(theme_manager, 'themeChanged'):
+                theme_manager.themeChanged.disconnect(self.on_theme_changed)
+        except TypeError:
+            # Already disconnected or never connected
+            pass
+            
     def on_theme_changed(self, palette):
-        """
-        Handle theme changes. Override this in subclasses to customize behavior.
-        
-        Default implementation just applies the palette to this widget.
-        """
-        # Apply palette to this widget
+        """Override this method to handle theme changes"""
+        # Apply the palette to this widget
         if hasattr(self, 'setPalette'):
             self.setPalette(palette)
         
-        # Force repaint
-        self.update()
-        
-    def cleanup_theme_handling(self):
-        """
-        Clean up theme connections before widget destruction.
-        Call this in closeEvent or similar.
-        """
-        if hasattr(self, '_theme_manager') and hasattr(self, '_theme_handling_setup') and self._theme_handling_setup:
+        # Propagate theme change to child components that have their own handlers
+        for attr_name in dir(self):
+            # Skip special methods and avoid potential recursive calls
+            if attr_name.startswith('__') or attr_name == 'on_theme_changed':
+                continue
+                
             try:
-                self._theme_manager.themeChanged.disconnect(self.on_theme_changed)
-            except:
-                pass  # Already disconnected or error
-            self._theme_handling_setup = False
+                attr = getattr(self, attr_name)
+                # Check if this attribute has an on_theme_changed method
+                if hasattr(attr, 'on_theme_changed') and callable(attr.on_theme_changed):
+                    # Call the method with the palette argument
+                    attr.on_theme_changed(palette)
+            except (AttributeError, TypeError) as e:
+                # Safely handle any errors in propagation
+                print(f"Error propagating theme to {attr_name}: {e}")
