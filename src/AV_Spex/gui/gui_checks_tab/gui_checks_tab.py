@@ -63,10 +63,6 @@ class ChecksTab(ThemeableMixin):
                 group_box_title_pos = group_box.property("title_position") or "top center"
                 theme_manager.style_groupbox(group_box, group_box_title_pos)
         
-        # Update combobox styling
-        if hasattr(self.main_window, 'command_profile_dropdown'):
-            theme_manager.style_combobox(self.main_window.command_profile_dropdown)
-        
         # Update the config widget if it exists
         if hasattr(self.main_window, 'config_widget') and self.main_window.config_widget:
             # If the config widget has its own theme handling, let it handle the change
@@ -111,9 +107,6 @@ class ChecksTab(ThemeableMixin):
         self.main_window.command_profile_dropdown.addItem("Step 1")
         self.main_window.command_profile_dropdown.addItem("Step 2")
         self.main_window.command_profile_dropdown.addItem("All Off")
-        
-        # Style the combobox using theme manager
-        theme_manager.style_combobox(self.main_window.command_profile_dropdown)
         
         # Set initial dropdown state
         if self.main_window.checks_config.tools.exiftool.run_tool == "yes":

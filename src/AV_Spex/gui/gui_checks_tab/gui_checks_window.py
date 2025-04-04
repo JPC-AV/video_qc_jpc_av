@@ -232,9 +232,13 @@ class ChecksWindow(QWidget, ThemeableMixin):
         current_policy_layout.addStretch()
 
         self.policy_combo = QComboBox()
+        
         policies_label = QLabel("Available policies:")
         policies_label.setStyleSheet("font-weight: bold;")
+        
         self.import_policy_btn = QPushButton("Import New MediaConch Policy")
+        theme_manager.style_button(self.import_policy_btn)
+        
         import_policy_desc = QLabel("Import a custom policy file for MediaConch validation")
 
         policy_layout.addWidget(current_policy_widget)
@@ -345,11 +349,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.tools_group.setLayout(tools_layout)
         main_layout.addWidget(self.tools_group)
 
-        # Style all buttons
-        theme_manager.style_buttons(self)
-
-    # This function modifies just the on_theme_changed method of the ChecksWindow class
-
     def on_theme_changed(self, palette):
         """Handle theme changes for ChecksWindow"""
         # Apply the palette directly
@@ -369,17 +368,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         # Style all buttons
         theme_manager.style_buttons(self)
-        
-        # Style all comboboxes
-        theme_manager.style_comboboxes(self)
-        
-        # Style specific comboboxes that might need extra attention
-        if hasattr(self, 'policy_combo'):
-            theme_manager.style_combobox(self.policy_combo)
-        if hasattr(self, 'content_filter_combo'):
-            theme_manager.style_combobox(self.content_filter_combo)
-        if hasattr(self, 'profile_combo'):
-            theme_manager.style_combobox(self.profile_combo)
             
         # Force repaint
         self.update()
@@ -426,9 +414,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
                 )
         
         # MediaConch
-        mediaconch = self.checks_config.tools.mediaconch
-        self.run_mediaconch_cb.setChecked(mediaconch.run_mediaconch.lower() == 'yes')
-        
         self.run_mediaconch_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['tools', 'mediaconch', 'run_mediaconch'])
         )
@@ -500,7 +485,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         # Temporarily block signals while setting the current text
         self.policy_combo.blockSignals(True)
-        mediaconch = self.checks_config.tools.mediaconch
         if mediaconch.mediaconch_policy in available_policies:
             self.policy_combo.setCurrentText(mediaconch.mediaconch_policy)
         self.policy_combo.blockSignals(False)

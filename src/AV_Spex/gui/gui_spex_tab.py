@@ -133,7 +133,7 @@ class SpexTab(ThemeableMixin):
         vertical_layout.addWidget(self.filename_group)
         
         # Style the button using theme manager
-        theme_manager.style_buttons(self.filename_group)
+        theme_manager.style_buttons(open_button)
         
         # 2. MediaInfo section
         self.mediainfo_group = QGroupBox("MediaInfo Values")
@@ -152,7 +152,7 @@ class SpexTab(ThemeableMixin):
         vertical_layout.addWidget(self.mediainfo_group)
         
         # Style the button
-        theme_manager.style_buttons(self.mediainfo_group)
+        theme_manager.style_buttons(mediainfo_button)
         
         # 3. Exiftool section
         self.exiftool_group = QGroupBox("Exiftool Values")
@@ -171,7 +171,7 @@ class SpexTab(ThemeableMixin):
         vertical_layout.addWidget(self.exiftool_group)
         
         # Style the button
-        theme_manager.style_buttons(self.exiftool_group)
+        theme_manager.style_buttons(exiftool_button)
         
         # 4. FFprobe section
         self.ffprobe_group = QGroupBox("FFprobe Values")
@@ -190,7 +190,7 @@ class SpexTab(ThemeableMixin):
         vertical_layout.addWidget(self.ffprobe_group)
         
         # Style the button
-        theme_manager.style_buttons(self.ffprobe_group)
+        theme_manager.style_buttons(ffprobe_button)
         
         # 5. Mediatrace section
         self.mediatrace_group = QGroupBox("Mediatrace Values")
@@ -251,7 +251,7 @@ class SpexTab(ThemeableMixin):
         vertical_layout.addWidget(self.qct_group)
         
         # Style the button
-        theme_manager.style_buttons(self.qct_group)
+        theme_manager.style_buttons(qct_button)
         
         # Add scroll area to main layout
         spex_layout.addWidget(main_scroll_area)
@@ -282,15 +282,10 @@ class SpexTab(ThemeableMixin):
         content_widget.setPlainText(content_text)
         content_widget.setReadOnly(True)
         content_widget.setFrameStyle(QFrame.Shape.Panel | QFrame.Shadow.Sunken)
-        
-        # Remove the hardcoded background color and use system palette instead
-        content_widget.setStyleSheet("padding: 5px;")
-        
-        # Explicitly set the text color to follow system palette
-        palette = content_widget.palette()
-        palette.setColor(QPalette.ColorRole.Base, palette.color(QPalette.ColorRole.Window))
-        palette.setColor(QPalette.ColorRole.Text, palette.color(QPalette.ColorRole.WindowText))
-        content_widget.setPalette(palette)
+
+        # Let the theme manager style the text edit
+        theme_manager = ThemeManager.instance()
+        theme_manager.style_console_text(content_widget)
         
         scroll_area.setWidget(content_widget)
         
@@ -365,7 +360,7 @@ class SpexTab(ThemeableMixin):
             if group_box is not None:
                 theme_manager.style_groupbox(group_box)
         
-        # Update any buttons within the tab
+        # Update any buttons within the tab groups
         if hasattr(self, 'filename_group'):
             theme_manager.style_buttons(self.filename_group)
         if hasattr(self, 'mediainfo_group'):

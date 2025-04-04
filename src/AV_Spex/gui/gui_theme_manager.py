@@ -1,10 +1,13 @@
-from PyQt6.QtWidgets import QApplication, QGroupBox, QPushButton
-from PyQt6.QtGui import QPalette, QFont
-from PyQt6.QtCore import QObject, pyqtSignal, Qt
+from PyQt6.QtWidgets import QApplication, QGroupBox, QPushButton, QComboBox, QTextEdit
+from PyQt6.QtGui import QPalette, QFont, QPixmap
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
+
+import os
 
 class ThemeManager(QObject):
     """
     Singleton manager for handling theme changes in a PyQt6 application.
+    Provides centralized styling for all UI components.
     """
     
     # Signal emitted when theme changes
@@ -47,6 +50,8 @@ class ThemeManager(QObject):
         """Handle system palette changes and propagate to connected widgets."""
         self.themeChanged.emit(palette)
     
+    # === GROUPBOX STYLING ===
+    
     def style_groupbox(self, group_box, title_position=None):
         """
         Apply consistent styling to a group box based on current theme.
@@ -64,7 +69,7 @@ class ThemeManager(QObject):
         midlight_color = palette.color(palette.ColorRole.Midlight).name()
         text_color = palette.color(palette.ColorRole.Text).name()
         
-         # If title_position is None, use a simpler approach
+        # If title_position is None, use a simpler approach
         if title_position is None:
             # Store the group title position in the widget property if not already set
             title_pos = group_box.property("title_position")
@@ -95,37 +100,116 @@ class ThemeManager(QObject):
             }}
         """)
 
-    def style_buttons(self, parent_widget):
-        """Apply consistent styling to all buttons under a parent widget."""
-        if not self.app:
-            return
+    # === BUTTON STYLING ===
+    
+    def style_button(self, button, special_style=None):
+        """
+        Apply styling to a single button.
         
+        Args:
+            button: The QPushButton to style
+            special_style: Optional special style identifier for custom buttons
+        """
+        if not isinstance(button, QPushButton) or not self.app:
+            return
+            
+        # Get palette colors
         palette = self.app.palette()
         highlight_color = palette.color(palette.ColorRole.Highlight).name()
         highlight_text_color = palette.color(palette.ColorRole.HighlightedText).name()
         button_color = palette.color(palette.ColorRole.Button).name()
         button_text_color = palette.color(palette.ColorRole.ButtonText).name()
         
-        button_style = f"""
-            QPushButton {{
-                font-weight: bold;
-                padding: 8px;
-                border: 1px solid gray;
-                border-radius: 4px;
-                background-color: {button_color};
-                color: {button_text_color};
-            }}
-            QPushButton:hover {{
-                background-color: {highlight_color};
-                color: {highlight_text_color};
-            }}
-        """
+        # Apply special styling if requested
+        if special_style == "check_spex":
+            button.setStyleSheet("""
+                QPushButton {
+                    font-weight: bold;
+                    padding: 8px 16px;
+                    font-size: 14px;
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #45a049;
+                }
+                QPushButton:disabled {
+                    background-color: #A5D6A7; 
+                    color: #E8F5E9;             
+                    opacity: 0.8;               
+                }
+            """)
+        elif special_style == "processing_window":
+            button.setStyleSheet("""
+                QPushButton {
+                    font-weight: bold;
+                    padding: 8px 16px;
+                    font-size: 14px;
+                    background-color: white;
+                    color: #4CAF50;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #d2ffed;
+                }
+                QPushButton:disabled {
+                    background-color: #E8F5E9; 
+                    color: #A5D6A7;             
+                    opacity: 0.8;               
+                }
+            """)
+        elif special_style == "cancel_processing":
+            button.setStyleSheet("""
+                QPushButton {
+                    font-weight: bold;
+                    padding: 8px 16px;
+                    font-size: 14px;
+                    background-color: #ff9999;
+                    color: #4d2b12;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #ff8080;
+                }
+                QPushButton:disabled {
+                    background-color: #f5e9e3; 
+                    color: #cd9e7f;             
+                    opacity: 0.8;               
+                }
+            """)
+        else:
+            # Apply standard button styling
+            button.setStyleSheet(f"""
+                QPushButton {{
+                    font-weight: bold;
+                    padding: 8px;
+                    border: 1px solid gray;
+                    border-radius: 4px;
+                    background-color: {button_color};
+                    color: {button_text_color};
+                }}
+                QPushButton:hover {{
+                    background-color: {highlight_color};
+                    color: {highlight_text_color};
+                }}
+            """)
+    
+    def style_buttons(self, parent_widget):
+        """Apply consistent styling to all buttons under a parent widget."""
+        if not self.app:
+            return
         
         # Apply to all buttons in the widget
         buttons = parent_widget.findChildren(QPushButton)
         for button in buttons:
-            button.setStyleSheet(button_style)
-
+            self.style_button(button)
+    
+    # === COMBOBOX STYLING ===
+    
     def style_combobox(self, combo_box):
         """
         Apply consistent styling to a combo box based on current theme.
@@ -133,6 +217,8 @@ class ThemeManager(QObject):
         Args:
             combo_box: The QComboBox to style
         """
+        if not isinstance(combo_box, QComboBox) or not self.app:
+            return
         
         # Get the current palette
         palette = self.app.palette()
@@ -178,20 +264,30 @@ class ThemeManager(QObject):
             }}
         """)
         
-
     def style_comboboxes(self, parent_widget):
         """Apply consistent styling to all comboboxes under a parent widget."""
         if not self.app:
             return
         
-        # Get QComboBox class
-        from PyQt6.QtWidgets import QComboBox
-        
         # Apply to all comboboxes in the widget
         comboboxes = parent_widget.findChildren(QComboBox)
         for combobox in comboboxes:
             self.style_combobox(combobox)
-
+    
+    # === TAB STYLING ===
+    
+    def style_tabs(self, tab_widget):
+        """
+        Apply styling to a tab widget.
+        
+        Args:
+            tab_widget: The QTabWidget to style
+        """
+        if not self.app or not tab_widget:
+            return
+            
+        tab_widget.setStyleSheet(self.get_tab_style())
+    
     def get_tab_style(self):
         """
         Generate style for tab widgets based on current palette.
@@ -232,14 +328,17 @@ class ThemeManager(QObject):
             }}
         """
     
-    # Add method to style console text edit
+    # === TEXT STYLING ===
+    
     def style_console_text(self, text_edit):
         """
         Apply consistent styling to a ConsoleTextEdit based on current theme.
         
         Args:
-            text_edit: The ConsoleTextEdit to style
+            text_edit: The ConsoleTextEdit or QTextEdit to style
         """
+        if not isinstance(text_edit, QTextEdit) or not self.app:
+            return
             
         # Get the current palette
         palette = self.app.palette()
@@ -301,10 +400,35 @@ class ThemeManager(QObject):
             }}
         """)
         
-        # Clear format cache so they'll be recreated with new theme colors
+        # Clear format cache if the method exists
         if hasattr(text_edit, 'clear_formats'):
             text_edit.clear_formats()
-
+    
+    # === PROGRESS BAR STYLING ===
+    
+    def style_progress_bar(self, progress_bar):
+        """
+        Apply styling to a progress bar.
+        
+        Args:
+            progress_bar: The QProgressBar to style
+        """
+        if not self.app or not progress_bar:
+            return
+            
+        progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: palette(Base);
+                text-align: center;
+                padding: 1px;
+            }
+            QProgressBar::chunk {
+                background-color: palette(Highlight);
+            }
+        """)
+    
+    # === LOGO & BRANDING ===
+    
     def get_theme_appropriate_logo(self, light_logo_path, dark_logo_path):
         """
         Returns the appropriate logo path based on the current theme.
@@ -326,13 +450,78 @@ class ThemeManager(QObject):
         # Return appropriate logo path
         return dark_logo_path if is_dark else light_logo_path
     
+    def load_logo(self, label, logo_path, width=None, height=None):
+        """
+        Load a logo image into a QLabel.
+        
+        Args:
+            label: QLabel to place the logo into
+            logo_path: Path to the logo image file
+            width: Optional width to scale to (maintains aspect ratio if height is None)
+            height: Optional height to scale to (maintains aspect ratio if width is None)
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not os.path.exists(logo_path):
+            return False
+            
+        pixmap = QPixmap(logo_path)
+        if pixmap.isNull():
+            return False
+            
+        # Scale the pixmap if requested
+        if width is not None and height is not None:
+            scaled_pixmap = pixmap.scaled(QSize(width, height), 
+                                         Qt.AspectRatioMode.KeepAspectRatio, 
+                                         Qt.TransformationMode.SmoothTransformation)
+        elif width is not None:
+            scaled_pixmap = pixmap.scaledToWidth(width, Qt.TransformationMode.SmoothTransformation)
+        elif height is not None:
+            scaled_pixmap = pixmap.scaledToHeight(height, Qt.TransformationMode.SmoothTransformation)
+        else:
+            scaled_pixmap = pixmap
+            
+        label.setPixmap(scaled_pixmap)
+        return True
+    
+    # === UTILITY METHODS ===
+    
     def get_current_palette(self):
         """Return the current application palette"""
-        return QApplication.palette()
-    
+        return self.app.palette() if self.app else None
+        
+    def apply_theme_to_all(self, widget):
+        """
+        Apply theming to all appropriate widgets under a parent widget.
+        This is a utility method that combines multiple styling methods.
+        
+        Args:
+            widget: Parent widget containing elements to style
+        """
+        if not widget:
+            return
+            
+        # Style groups
+        for group in widget.findChildren(QGroupBox):
+            self.style_groupbox(group)
+        
+        # Style buttons
+        self.style_buttons(widget)
+        
+        # Style comboboxes
+        self.style_comboboxes(widget)
+        
+        # Find and style text edits
+        for text_edit in widget.findChildren(QTextEdit):
+            self.style_console_text(text_edit)
+
 
 class ThemeableMixin:
-    """Mixin class for objects that need theme support"""
+    """
+    Mixin class for objects that need theme support.
+    Provides automatic connection to theme change signals.
+    """
     
     def setup_theme_handling(self):
         """Connect to theme change notifications"""
@@ -357,7 +546,14 @@ class ThemeableMixin:
             pass
             
     def on_theme_changed(self, palette):
-        """Override this method to handle theme changes"""
+        """
+        Override this method to handle theme changes.
+        
+        This default implementation will:
+        1. Apply palette to self if it has setPalette method
+        2. Propagate theme change to child components with their own handlers
+        3. Apply standard theming to known components
+        """
         # Apply the palette to this widget
         if hasattr(self, 'setPalette'):
             self.setPalette(palette)
@@ -376,4 +572,21 @@ class ThemeableMixin:
                     attr.on_theme_changed(palette)
             except (AttributeError, TypeError) as e:
                 # Safely handle any errors in propagation
-                print(f"Error propagating theme to {attr_name}: {e}")
+                pass
+        
+        # Apply any common styling for known component types
+        # Call theme-specific styling implementations if defined
+        theme_specific_methods = [
+            '_style_groupboxes', 
+            '_style_buttons',
+            '_style_comboboxes',
+            '_style_tabs', 
+            '_style_text_edits',
+            '_style_progress_bars',
+            '_refresh_logo'
+        ]
+        
+        for method_name in theme_specific_methods:
+            method = getattr(self, method_name, None)
+            if callable(method):
+                method()

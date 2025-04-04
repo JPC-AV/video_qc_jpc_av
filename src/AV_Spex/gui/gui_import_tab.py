@@ -239,14 +239,9 @@ class ImportTab(ThemeableMixin):
             # Get the logo path
             logo_path = self.config_mgr.get_logo_path('av_spex_the_logo.png')
             
-            if logo_path and os.path.exists(logo_path):
-                pixmap = QPixmap(logo_path)
-                if not pixmap.isNull():
-                    # Scale pixmap to a reasonable size for the dialog
-                    scaled_pixmap = pixmap.scaled(QSize(300, 150), 
-                                                Qt.AspectRatioMode.KeepAspectRatio, 
-                                                Qt.TransformationMode.SmoothTransformation)
-                    logo_label.setPixmap(scaled_pixmap)
+            # Use ThemeManager to load logo
+            theme_manager = ThemeManager.instance()
+            theme_manager.load_logo(logo_label, logo_path, width=300)
             
             layout.addWidget(logo_label)
             
@@ -285,19 +280,19 @@ class ImportTab(ThemeableMixin):
         # Update all group boxes
         for group_box in self.main_window.import_tab_group_boxes:
             if group_box is not None:
-                # Preserve the title position when refreshing style
-                group_box_title_pos = group_box.property("title_position") or "top center"
-                theme_manager.style_groupbox(group_box, group_box_title_pos)
+                theme_manager.style_groupbox(group_box)
         
-        # Update buttons in all groups
-        for group_attr in ['import_group', 'config_import_group']:  # Add other groups as needed
-            group = getattr(self, group_attr, None)
-            if group:
-                theme_manager.style_buttons(group)
-
-        if hasattr(self, 'export_config_dropdown'):
-            theme_manager.style_combobox(self.export_config_dropdown)
-        
+        # Style combobox
+        if hasattr(self.main_window, 'export_config_dropdown'):
+            theme_manager.style_combobox(self.main_window.export_config_dropdown)
+            
+        # Update buttons in groups
+        if hasattr(self, 'import_group'):
+            theme_manager.style_buttons(self.import_group)
+            
+        if hasattr(self, 'config_import_group'):
+            theme_manager.style_buttons(self.config_import_group)
+    
     def setup_import_tab(self):
         """Set up the Import tab for directory selection"""
         # Get the theme manager instance
@@ -330,6 +325,7 @@ class ImportTab(ThemeableMixin):
         # Import directory button
         import_directories_button = QPushButton("Import Directory...")
         import_directories_button.clicked.connect(self.import_directories)
+        theme_manager.style_button(import_directories_button)
         
         # Directory section
         directory_label = QLabel("Selected Directories:")
@@ -345,6 +341,7 @@ class ImportTab(ThemeableMixin):
         # Delete button
         delete_button = QPushButton("Delete Selected")
         delete_button.clicked.connect(self.delete_selected_directory)
+        theme_manager.style_button(delete_button)
         
         # Add widgets to layout
         import_layout_section.addWidget(import_directories_button)
@@ -355,9 +352,6 @@ class ImportTab(ThemeableMixin):
         self.import_group.setLayout(import_layout_section)
         vertical_layout.addWidget(self.import_group)
         
-        # Style all buttons in the section
-        theme_manager.style_buttons(self.import_group)
-
         # Config Import section
         self.config_import_group = QGroupBox("Config Import")
         theme_manager.style_groupbox(self.config_import_group, "top center")
@@ -397,6 +391,7 @@ class ImportTab(ThemeableMixin):
         # Import Config button
         import_config_button = QPushButton("Import Config")
         import_config_button.clicked.connect(self.config_handlers.import_config)
+        theme_manager.style_button(import_config_button)
         buttons_layout.addWidget(import_config_button)
         
         # Export Config layout
@@ -426,6 +421,7 @@ class ImportTab(ThemeableMixin):
         # Reset to Default Config button
         reset_config_button = QPushButton("Reset to Default")
         reset_config_button.clicked.connect(self.config_handlers.reset_config)
+        theme_manager.style_button(reset_config_button)
         buttons_layout.addWidget(reset_config_button)
         
         config_import_layout.addLayout(buttons_layout)
@@ -433,38 +429,16 @@ class ImportTab(ThemeableMixin):
         self.config_import_group.setLayout(config_import_layout)
         vertical_layout.addWidget(self.config_import_group)
         
-        # Style all buttons in the config section
-        theme_manager.style_buttons(self.config_import_group)
-        
         # Add scroll area to main layout
         import_layout.addWidget(main_scroll_area)
         
         # Bottom section with processing controls
-        # Similar to what you have in checks_tab but just the processing-related buttons
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 10, 0, 10)  # Add some vertical padding
         
         # Open Processing Window button
         self.main_window.open_processing_button = QPushButton("Show Processing Window")
-        self.main_window.open_processing_button.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                padding: 8px 16px;
-                font-size: 14px;
-                background-color: white;
-                color: #4CAF50;
-                border: none;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #d2ffed;
-            }
-            QPushButton:disabled {
-                background-color: #E8F5E9; 
-                color: #A5D6A7;             
-                opacity: 0.8;               
-            }
-        """)
+        theme_manager.style_button(self.main_window.open_processing_button, special_style="processing_window")
         self.main_window.open_processing_button.clicked.connect(self.main_window.signals_handler.on_open_processing_clicked)
         # Initially disable the button since no processing is running
         self.main_window.open_processing_button.setEnabled(False)
@@ -472,25 +446,7 @@ class ImportTab(ThemeableMixin):
         
         # Cancel button
         self.main_window.cancel_processing_button = QPushButton("Cancel Processing")
-        self.main_window.cancel_processing_button.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                padding: 8px 16px;
-                font-size: 14px;
-                background-color: #ff9999;
-                color: #4d2b12;
-                border: none;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #ff8080;
-            }
-            QPushButton:disabled {
-                background-color: #f5e9e3; 
-                color: #cd9e7f;             
-                opacity: 0.8;               
-            }
-        """)
+        theme_manager.style_button(self.main_window.cancel_processing_button, special_style="cancel_processing")
         self.main_window.cancel_processing_button.clicked.connect(self.main_window.processing.cancel_processing)
         self.main_window.cancel_processing_button.setEnabled(False)
         bottom_row.addWidget(self.main_window.cancel_processing_button)
@@ -512,13 +468,7 @@ class ImportTab(ThemeableMixin):
         self.main_window.processing_indicator.setMaximumHeight(10)  # Make it shorter
         self.main_window.processing_indicator.setRange(0, 0)
         self.main_window.processing_indicator.setTextVisible(False)  # No percentage text
-        self.main_window.processing_indicator.setStyleSheet("""
-            QProgressBar {
-                background-color: palette(Base);
-                text-align: center;
-                padding: 1px;
-            }
-        """)
+        theme_manager.style_progress_bar(self.main_window.processing_indicator)
         self.main_window.processing_indicator.setVisible(False)  # Initially hidden
         self.now_processing_layout.addWidget(self.main_window.processing_indicator)
         
@@ -531,25 +481,7 @@ class ImportTab(ThemeableMixin):
         
         # Check Spex button
         self.main_window.check_spex_button = QPushButton("Check Spex!")
-        self.main_window.check_spex_button.setStyleSheet("""
-            QPushButton {
-                font-weight: bold;
-                padding: 8px 16px;
-                font-size: 14px;
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #A5D6A7; 
-                color: #E8F5E9;             
-                opacity: 0.8;               
-            }
-        """)
+        theme_manager.style_button(self.main_window.check_spex_button, special_style="check_spex")
         self.main_window.check_spex_button.clicked.connect(self.on_check_spex_clicked)
         bottom_row.addWidget(self.main_window.check_spex_button, 0)
         

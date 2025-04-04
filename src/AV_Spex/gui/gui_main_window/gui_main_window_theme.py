@@ -1,6 +1,5 @@
 from PyQt6.QtWidgets import QLabel, QHBoxLayout
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import Qt
 
 import os
 
@@ -14,17 +13,17 @@ class MainWindowTheme:
     
     def on_theme_changed(self, palette):
         """Handle theme changes across the application."""
+        # Get the theme manager
+        theme_manager = ThemeManager.instance()
         
         # Apply palette to main window
         self.main_window.setPalette(palette)
         
-        # Get the theme manager
-        theme_manager = ThemeManager.instance()
-        
         # Update the tabs
         if hasattr(self.main_window, 'tabs'):
-            self.main_window.tabs.setStyleSheet(theme_manager.get_tab_style())
+            theme_manager.style_tabs(self.main_window.tabs)
 
+        # Style comboboxes
         if hasattr(self.main_window, 'export_config_dropdown'):
             theme_manager.style_combobox(self.main_window.export_config_dropdown)
         
@@ -38,76 +37,31 @@ class MainWindowTheme:
         self.main_window.update()
     
     def _style_special_buttons(self):
-        """Apply special styling to buttons that need it"""
+        """Apply special styling to buttons that need custom styling"""
+        theme_manager = ThemeManager.instance()
+        
         # Style the 'Check Spex' button
         if hasattr(self.main_window, 'check_spex_button'):
-            self.main_window.check_spex_button.setStyleSheet("""
-                QPushButton {
-                    font-weight: bold;
-                    padding: 8px 16px;
-                    font-size: 14px;
-                    background-color: #4CAF50;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                }
-                QPushButton:hover {
-                    background-color: #45a049;
-                }
-                QPushButton:disabled {
-                    background-color: #A5D6A7; 
-                    color: #E8F5E9;             
-                    opacity: 0.8;               
-                }
-            """)
+            theme_manager.style_button(self.main_window.check_spex_button, special_style="check_spex")
         
         # Style the 'Show Processing Window' button
         if hasattr(self.main_window, 'open_processing_button'):
-            self.main_window.open_processing_button.setStyleSheet("""
-                QPushButton {
-                    font-weight: bold;
-                    padding: 8px 16px;
-                    font-size: 14px;
-                    background-color: white;
-                    color: #4CAF50;
-                    border: none;
-                    border-radius: 4px;
-                }
-                QPushButton:hover {
-                    background-color: #d2ffed;
-                }
-                QPushButton:disabled {
-                    background-color: #E8F5E9; 
-                    color: #A5D6A7;             
-                    opacity: 0.8;               
-                }
-            """)
+            theme_manager.style_button(self.main_window.open_processing_button, special_style="processing_window")
+            
+        # Style the 'Cancel Processing' button
+        if hasattr(self.main_window, 'cancel_processing_button'):
+            theme_manager.style_button(self.main_window.cancel_processing_button, special_style="cancel_processing")
         
         # Style the progress indicator
         if hasattr(self.main_window, 'processing_indicator'):
-            self.main_window.processing_indicator.setStyleSheet("""
-                QProgressBar {
-                    background-color: palette(Base);
-                    text-align: center;
-                    padding: 1px;
-                }
-                QProgressBar::chunk {
-                    background-color: palette(Highlight);
-                }
-            """)
-        
-        # Refresh the logo
-        self._refresh_logo()
-        
-        # Force repaint
-        self.main_window.update()
-
+            theme_manager.style_progress_bar(self.main_window.processing_indicator)
+    
     def _refresh_logo(self):
         """Refresh the logo when theme changes"""
         # First, find and remove the existing logo layout
         for i in range(self.main_window.main_layout.count()):
             item = self.main_window.main_layout.itemAt(i)
-            # Check if this layout item contains our logo (you might need to adapt this check)
+            # Check if this layout item contains our logo
             if item and item.layout() and item.layout().count() > 0:
                 widget = item.layout().itemAt(0).widget()
                 if isinstance(widget, QLabel) and widget.pixmap() is not None:
@@ -135,10 +89,6 @@ class MainWindowTheme:
                 # Delete the item itself
                 del item
     
-    def _delayed_logo_setup(self):
-        """Delayed logo setup for frozen applications"""
-        self._load_logo()
-
     def _load_logo(self):
         """Load and display the logo based on current theme"""
         # Get ThemeManager instance
@@ -162,16 +112,9 @@ class MainWindowTheme:
         label = QLabel()
         label.setMinimumHeight(100)
         
-        if logo_path and os.path.exists(logo_path):
-            pixmap = QPixmap(logo_path)
-            if not pixmap.isNull():
-                # Scale pixmap to window width while keeping aspect ratio
-                scaled_pixmap = pixmap.scaledToWidth(self.main_window.width(), Qt.TransformationMode.SmoothTransformation)
-                label.setPixmap(scaled_pixmap)
-            else:
-                print(f"Failed to load image at path: {logo_path}")
-        else:
-            print(f"Invalid logo path: {logo_path}")
+        # Use the ThemeManager to load the logo
+        theme_manager = ThemeManager.instance()
+        theme_manager.load_logo(label, logo_path, width=self.main_window.width())
         
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         image_layout.addWidget(label)
