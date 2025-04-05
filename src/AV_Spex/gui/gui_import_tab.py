@@ -140,6 +140,7 @@ class ImportTab(ThemeableMixin):
                 self.main_window.checks_config = self.main_window.config_mgr.get_config('checks', ChecksConfig)
                 self.main_window.spex_config = self.main_window.config_mgr.get_config('spex', SpexConfig)
                 self.main_window.config_mgr.save_last_used_config('checks')
+                self.main_window.config_mgr.save_last_used_config('spex')
 
                 # Reload UI components to reflect new settings
                 self.main_window.config_widget.load_config_values()

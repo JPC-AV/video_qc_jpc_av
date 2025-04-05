@@ -22,7 +22,7 @@ class ChecksTab(ThemeableMixin):
         
         def on_profile_selected(self, index):
             """Handle profile selection from dropdown."""
-            selected_profile = self.main_window.command_profile_dropdown.currentText()
+            selected_profile = self.main_window.checks_profile_dropdown.currentText()
             if selected_profile == "Step 1":
                 profile = config_edit.profile_step1
             elif selected_profile == "Step 2":
@@ -99,27 +99,27 @@ class ChecksTab(ThemeableMixin):
         
         profile_layout = QVBoxLayout()
         
-        command_profile_label = QLabel("Select a Checks profile:")
-        command_profile_label.setStyleSheet("font-weight: bold;")
-        command_profile_desc = QLabel("Choose from a preset Checks profile to apply a set of Checks to run on your Spex")
+        checks_profile_label = QLabel("Select a Checks profile:")
+        checks_profile_label.setStyleSheet("font-weight: bold;")
+        checks_profile_desc = QLabel("Choose from a preset Checks profile to apply a set of Checks to run on your Spex")
         
-        self.main_window.command_profile_dropdown = QComboBox()
-        self.main_window.command_profile_dropdown.addItem("Step 1")
-        self.main_window.command_profile_dropdown.addItem("Step 2")
-        self.main_window.command_profile_dropdown.addItem("All Off")
+        self.main_window.checks_profile_dropdown = QComboBox()
+        self.main_window.checks_profile_dropdown.addItem("Step 1")
+        self.main_window.checks_profile_dropdown.addItem("Step 2")
+        self.main_window.checks_profile_dropdown.addItem("All Off")
         
         # Set initial dropdown state
         if self.main_window.checks_config.tools.exiftool.run_tool == "yes":
-            self.main_window.command_profile_dropdown.setCurrentText("Step 1")
+            self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
         elif self.main_window.checks_config.tools.exiftool.run_tool == "no":
-            self.main_window.command_profile_dropdown.setCurrentText("Step 2")
+            self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
 
-        self.main_window.command_profile_dropdown.currentIndexChanged.connect(self.profile_handlers.on_profile_selected)
+        self.main_window.checks_profile_dropdown.currentIndexChanged.connect(self.profile_handlers.on_profile_selected)
 
         # Add widgets to layout
-        profile_layout.addWidget(command_profile_label)
-        profile_layout.addWidget(command_profile_desc)
-        profile_layout.addWidget(self.main_window.command_profile_dropdown)
+        profile_layout.addWidget(checks_profile_label)
+        profile_layout.addWidget(checks_profile_desc)
+        profile_layout.addWidget(self.main_window.checks_profile_dropdown)
         
         self.profile_group.setLayout(profile_layout)
         vertical_layout.addWidget(self.profile_group)
