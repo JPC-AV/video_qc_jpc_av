@@ -18,6 +18,10 @@ from ..utils.log_setup import logger
 from AV_Spex import __version__
 version_string = __version__
 
+config_mgr = ConfigManager()
+checks_config = config_mgr.get_config('checks', ChecksConfig)
+spex_config = config_mgr.get_config('spex', SpexConfig)
+
 class ImportTab(ThemeableMixin):
     """Import tab with nested handler classes for more hierarchical organization"""
     
@@ -27,9 +31,6 @@ class ImportTab(ThemeableMixin):
         def __init__(self, parent_tab):
             self.parent_tab = parent_tab
             self.main_window = parent_tab.main_window
-            self.config_mgr = ConfigManager()
-            self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
-            self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
         
         def export_selected_config(self):
             selected_option = self.main_window.export_config_dropdown.currentText()
@@ -41,7 +42,7 @@ class ImportTab(ThemeableMixin):
             elif selected_option == "Export Spex Config":
                 self.export_config_dialog('spex')
             elif selected_option == "Export All Config":
-                self.export_config_dialog('all')
+                self.export_config_dialog(['checks','spex'])
 
         def import_config(self):
             """Import configuration from a file."""
@@ -53,26 +54,26 @@ class ImportTab(ThemeableMixin):
                 file_path = file_dialog.selectedFiles()[0]
                 try:
                     # Use the ConfigIO class to import config
-                    config_io = ConfigIO(self.main_window.config_mgr)
+                    config_io = ConfigIO(config_mgr)
                     config_io.import_configs(file_path)
                     
                     # Reload UI components to reflect new settings
                     self.main_window.config_widget.load_config_values()
 
                     # Ensure recent config ref
-                    self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
-                    self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+                    checks_config = config_mgr.get_config('checks', ChecksConfig)
+                    spex_config = config_mgr.get_config('spex', SpexConfig)
 
                     # Spex dropdowns
                     # file name dropdown
-                    if self.spex_config.filename_values.Collection == "JPC":
+                    if spex_config.filename_values.Collection == "JPC":
                         self.main_window.filename_profile_dropdown.setCurrentText("JPC file names")
-                    elif self.spex_config.filename_values.Collection == "2012_79":
+                    elif spex_config.filename_values.Collection == "2012_79":
                         self.main_window.filename_profile_dropdown.setCurrentText("Bowser file names")
                     
                     # Signalflow profile dropdown
                     # Set initial state based on config
-                    encoder_settings = self.spex_config.mediatrace_values.ENCODER_SETTINGS
+                    encoder_settings = spex_config.mediatrace_values.ENCODER_SETTINGS
                     if isinstance(encoder_settings, dict):
                         source_vtr = encoder_settings.get('Source_VTR', [])
                     else:
@@ -99,7 +100,7 @@ class ImportTab(ThemeableMixin):
                 file_path = file_dialog.selectedFiles()[0]
                 try:
                     # Use the ConfigIO class to export config
-                    config_io = ConfigIO(self.config_mgr)
+                    config_io = ConfigIO(config_mgr)
                     # Needs to deliver config_type as a list
                     config_io.save_configs(file_path, config_type)
                     
@@ -121,7 +122,7 @@ class ImportTab(ThemeableMixin):
             if result == QMessageBox.StandardButton.Yes:
                 try:
                     # Reset config by removing user config files
-                    user_config_dir = self.main_window.config_mgr._user_config_dir
+                    user_config_dir = config_mgr._user_config_dir
                     try:
                         # Remove the user config files
                         os.remove(os.path.join(user_config_dir, "last_used_checks_config.json"))
@@ -135,12 +136,12 @@ class ImportTab(ThemeableMixin):
                     logger.error(f"Error resetting config: {str(e)}")
                     QMessageBox.critical(self.main_window, "Error", f"Error resetting configuration: {str(e)}")
 
-                self.main_window.config_mgr._configs = {}
-                self.main_window.config_mgr = ConfigManager()
-                self.main_window.checks_config = self.main_window.config_mgr.get_config('checks', ChecksConfig)
-                self.main_window.spex_config = self.main_window.config_mgr.get_config('spex', SpexConfig)
-                self.main_window.config_mgr.save_last_used_config('checks')
-                self.main_window.config_mgr.save_last_used_config('spex')
+                config_mgr._configs = {}
+                config_mgr = ConfigManager()
+                self.main_window.checks_config = config_mgr.get_config('checks', ChecksConfig)
+                self.main_window.spex_config = config_mgr.get_config('spex', SpexConfig)
+                config_mgr.save_last_used_config('checks')
+                config_mgr.save_last_used_config('spex')
 
                 # Reload UI components to reflect new settings
                 self.main_window.config_widget.load_config_values()
@@ -170,7 +171,6 @@ class ImportTab(ThemeableMixin):
         def __init__(self, parent_tab):
             self.parent_tab = parent_tab
             self.main_window = parent_tab.main_window
-            self.config_mgr = ConfigManager()
         
         def show_config_info(self):
             """Define the information dialog method"""
@@ -238,7 +238,7 @@ class ImportTab(ThemeableMixin):
             logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
             # Get the logo path
-            logo_path = self.config_mgr.get_logo_path('av_spex_the_logo.png')
+            logo_path = config_mgr.get_logo_path('av_spex_the_logo.png')
             
             # Use ThemeManager to load logo
             theme_manager = ThemeManager.instance()
@@ -551,8 +551,8 @@ class ImportTab(ThemeableMixin):
         """Handle the Check Spex button click."""
         self.update_selected_directories()
         self.main_window.check_spex_clicked = True  # Mark that the button was clicked
-        self.main_window.config_mgr.save_last_used_config('checks')
-        self.main_window.config_mgr.save_last_used_config('spex')
+        config_mgr.save_last_used_config('checks')
+        config_mgr.save_last_used_config('spex')
         # Make sure the processing window is visible before starting the process
         if hasattr(self.main_window, 'processing_window') and self.main_window.processing_window:
             # If it exists but might be hidden, show it

@@ -7,8 +7,13 @@ from PyQt6.QtCore import Qt
 
 from ...gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from ...gui.gui_checks_tab.gui_checks_window import ChecksWindow
+from ...utils.config_manager import ConfigManager
+from ...utils.config_setup import SpexConfig, ChecksConfig
 from ...utils import config_edit
 from ...utils.log_setup import logger
+
+config_mgr = ConfigManager()
+checks_config = config_mgr.get_config('checks', ChecksConfig)
 
 class ChecksTab(ThemeableMixin):
     """Checks tab with nested handler classes for hierarchical organization"""
@@ -33,7 +38,7 @@ class ChecksTab(ThemeableMixin):
                 # Call the backend function to apply the selected profile
                 config_edit.apply_profile(profile)
                 logger.debug(f"Profile '{selected_profile}' applied successfully.")
-                self.main_window.config_mgr.save_last_used_config('checks')
+                config_mgr.save_last_used_config('checks')
             except ValueError as e:
                 logger.critical(f"Error: {e}")
 
@@ -109,9 +114,9 @@ class ChecksTab(ThemeableMixin):
         self.main_window.checks_profile_dropdown.addItem("All Off")
         
         # Set initial dropdown state
-        if self.main_window.checks_config.tools.exiftool.run_tool == "yes":
+        if checks_config.tools.exiftool.run_tool == "yes":
             self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
-        elif self.main_window.checks_config.tools.exiftool.run_tool == "no":
+        elif checks_config.tools.exiftool.run_tool == "no":
             self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
 
         self.main_window.checks_profile_dropdown.currentIndexChanged.connect(self.profile_handlers.on_profile_selected)
@@ -137,7 +142,7 @@ class ChecksTab(ThemeableMixin):
                 border: none;
             }
         """)
-        self.main_window.config_widget = ChecksWindow(config_mgr=self.main_window.config_mgr)
+        self.main_window.config_widget = ChecksWindow(config_mgr=config_mgr)
         config_scroll_area.setWidgetResizable(True)
         config_scroll_area.setWidget(self.main_window.config_widget)
 

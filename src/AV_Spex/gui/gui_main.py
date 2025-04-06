@@ -28,6 +28,11 @@ from ..gui.gui_import_tab import ImportTab
 from ..gui.gui_checks_tab.gui_checks_tab import ChecksTab
 from ..gui.gui_spex_tab import SpexTab
 
+# Get configuration manager
+config_mgr = ConfigManager()
+checks_Config = config_mgr.get_config('checks', ChecksConfig)
+spex_config = config_mgr.get_config('spex', SpexConfig)
+
 
 class MainWindow(QMainWindow, ThemeableMixin):
     """Main application window with tabs for configuration and settings."""
@@ -42,11 +47,6 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.import_tab_group_boxes = [] 
         self.spex_tab_group_boxes = []
         self.checks_tab_group_boxes = []
-
-        # Initialize configuration manager
-        self.config_mgr = ConfigManager()
-        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
-        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
         
         # Initialize settings
         self.settings = QSettings('NMAAHC', 'AVSpex')

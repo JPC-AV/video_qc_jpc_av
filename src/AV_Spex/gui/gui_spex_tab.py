@@ -12,6 +12,9 @@ from ..utils.config_setup import SpexConfig, ChecksConfig
 from ..utils import config_edit
 from ..utils.log_setup import logger
 
+config_mgr = ConfigManager()
+spex_config = config_mgr.get_config('spex', SpexConfig)
+
 class SpexTab(ThemeableMixin):
     """Spex tab with nested handler classes for hierarchical organization"""
     
@@ -48,8 +51,8 @@ class SpexTab(ThemeableMixin):
                     }
                 }
             
-            self.main_window.config_mgr.update_config('spex', updates)
-            self.main_window.config_mgr.save_last_used_config('spex')
+            config_mgr.update_config('spex', updates)
+            config_mgr.save_last_used_config('spex')
 
         def on_signalflow_profile_changed(self, index):
             """Handle signal flow profile selection change."""
@@ -69,7 +72,6 @@ class SpexTab(ThemeableMixin):
     
     def __init__(self, main_window):
         self.main_window = main_window
-        self.config_mgr = ConfigManager()
         
         # Initialize nested handler classes
         self.profile_handlers = self.ProfileHandlers(self)
@@ -112,9 +114,9 @@ class SpexTab(ThemeableMixin):
         self.main_window.filename_profile_dropdown.addItem("JPC file names")
         
         # Set initial state based on config
-        if self.main_window.spex_config.filename_values.Collection == "JPC":
+        if spex_config.filename_values.Collection == "JPC":
             self.main_window.filename_profile_dropdown.setCurrentText("JPC file names")
-        elif self.main_window.spex_config.filename_values.Collection == "2012_79":
+        elif spex_config.filename_values.Collection == "2012_79":
             self.main_window.filename_profile_dropdown.setCurrentText("Bowser file names")
         
         self.main_window.filename_profile_dropdown.currentIndexChanged.connect(self.profile_handlers.on_filename_profile_changed)
@@ -207,7 +209,7 @@ class SpexTab(ThemeableMixin):
         self.main_window.signalflow_profile_dropdown.addItem("BVH3100 Signal Flow")
         
         # Set initial state based on config
-        encoder_settings = self.main_window.spex_config.mediatrace_values.ENCODER_SETTINGS
+        encoder_settings = spex_config.mediatrace_values.ENCODER_SETTINGS
         if isinstance(encoder_settings, dict):
             source_vtr = encoder_settings.get('Source_VTR', [])
         else:
@@ -258,8 +260,8 @@ class SpexTab(ThemeableMixin):
 
     def open_new_window(self, title, config_attribute_name):
         """Open a new window to display configuration details."""
-        checks_config = self.config_mgr.get_config('checks', ChecksConfig)
-        spex_config = self.config_mgr.get_config('spex', SpexConfig)
+        checks_config = config_mgr.get_config('checks', ChecksConfig)
+        spex_config = config_mgr.get_config('spex', SpexConfig)
 
         # Get the fresh config data using the attribute name
         config_data = getattr(spex_config, config_attribute_name)

@@ -4,6 +4,9 @@ from PyQt6.QtCore import Qt
 import os
 
 from ...gui.gui_theme_manager import ThemeManager
+from ...utils.config_manager import ConfigManager
+
+config_mgr = ConfigManager()
 
 class MainWindowTheme:
     """Theme handling helper methods for the main window"""
@@ -95,8 +98,8 @@ class MainWindowTheme:
         theme_manager = ThemeManager.instance()
         
         # Define light and dark logo paths
-        light_logo_path = self.main_window.config_mgr.get_logo_path('Branding_avspex_noJPC_030725.png')
-        dark_logo_path = self.main_window.config_mgr.get_logo_path('Branding_avspex_noJPC_inverted_032325.png')
+        light_logo_path = config_mgr.get_logo_path('Branding_avspex_noJPC_030725.png')
+        dark_logo_path = config_mgr.get_logo_path('Branding_avspex_noJPC_inverted_032325.png')
         
         # Get appropriate logo for current theme
         logo_path = theme_manager.get_theme_appropriate_logo(light_logo_path, dark_logo_path)
