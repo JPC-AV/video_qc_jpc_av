@@ -36,7 +36,7 @@
       "run_tool": "no"
     },
     "qct_parse": {
-      "run_tool": "yes",
+      "run_tool": "no",
       "barsDetection": true,
       "evaluateBars": true,
       "contentFilter": [],
