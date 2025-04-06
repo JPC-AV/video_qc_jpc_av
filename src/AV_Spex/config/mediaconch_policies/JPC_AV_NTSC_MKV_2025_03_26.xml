@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<policy type="and" name="JPC_AV_NTSC_MKV">
+  <rule name="General/VideoCount is 1" value="VideoCount" tracktype="General" occurrence="*" operator="=">1</rule>
+  <rule name="General/AudioCount is 1" value="AudioCount" tracktype="General" occurrence="*" operator="=">1</rule>
+  <rule name="General/FileExtension is mkv" value="FileExtension" tracktype="General" occurrence="*" operator="=">mkv</rule>
+  <rule name="General/Format is Matroska" value="Format" tracktype="General" occurrence="*" operator="=">Matroska</rule>
+  <rule name="General/Format_Version is 4" value="Format_Version" tracktype="General" occurrence="*" operator="=">4</rule>
+  <rule name="General/OverallBitRate_Mode is VBR" value="OverallBitRate_Mode" tracktype="General" occurrence="*" operator="=">VBR</rule>
+  <rule name="General/FrameRate is 29.970" value="FrameRate" tracktype="General" occurrence="*" operator="=">29.970</rule>
+  <rule name="General/IsStreamable is Yes" value="IsStreamable" tracktype="General" occurrence="*" operator="=">Yes</rule>
+  <rule name="General/Encoded_Date Exists" value="Encoded_Date" tracktype="General" occurrence="*" operator="exists">UTC 2023-09-20 18:58:36</rule>
+  <rule name="General/File_Modified_Date Exists" value="File_Modified_Date" tracktype="General" occurrence="*" operator="exists">UTC 2023-09-22 20:10:21</rule>
+  <rule name="General/File_Modified_Date_Local Exists" value="File_Modified_Date_Local" tracktype="General" occurrence="*" operator="exists">2023-09-22 14:10:21</rule>
+  <rule name="Video/StreamOrder is 0" value="StreamOrder" tracktype="Video" occurrence="*" operator="=">0</rule>
+  <rule name="Video/ID is 1" value="ID" tracktype="Video" occurrence="*" operator="=">1</rule>
+  <rule name="Video/Format is FFV1" value="Format" tracktype="Video" occurrence="*" operator="=">FFV1</rule>
+  <rule name="Video/Format_Version is 3.4" value="Format_Version" tracktype="Video" occurrence="*" operator="=">3.4</rule>
+  <rule name="Video/Format_Settings_GOP is N=1" value="Format_Settings_GOP" tracktype="Video" occurrence="*" operator="=">N=1</rule>
+  <rule name="Video/CodecID is V_MS/VFW/FOURCC / FFV1" value="CodecID" tracktype="Video" occurrence="*" operator="=">V_MS/VFW/FOURCC / FFV1</rule>
+  <rule name="Video/Width is 720" value="Width" tracktype="Video" occurrence="*" operator="=">720</rule>
+  <rule name="Video/Height is 486" value="Height" tracktype="Video" occurrence="*" operator="=">486</rule>
+  <rule name="Video/PixelAspectRatio is 0.909" value="PixelAspectRatio" tracktype="Video" occurrence="*" operator="=">0.909</rule>
+  <rule name="Video/DisplayAspectRatio is 1.347" value="DisplayAspectRatio" tracktype="Video" occurrence="*" operator="=">1.347</rule>
+  <rule name="Video/FrameRate_Mode is CFR" value="FrameRate_Mode" tracktype="Video" occurrence="*" operator="=">CFR</rule>
+  <rule name="Video/FrameRate is 29.970" value="FrameRate" tracktype="Video" occurrence="*" operator="=">29.970</rule>
+  <rule name="Video/Standard is NTSC" value="Standard" tracktype="Video" occurrence="*" operator="=">NTSC</rule>
+  <rule name="Video/ColorSpace is YUV" value="ColorSpace" tracktype="Video" occurrence="*" operator="=">YUV</rule>
+  <rule name="Video/ChromaSubsampling is 4:2:2" value="ChromaSubsampling" tracktype="Video" occurrence="*" operator="=">4:2:2</rule>
+  <rule name="Video/BitDepth is 10" value="BitDepth" tracktype="Video" occurrence="*" operator="=">10</rule>
+  <rule name="Video/ScanType is Interlaced" value="ScanType" tracktype="Video" occurrence="*" operator="=">Interlaced</rule>
+  <rule name="Video/ScanOrder is BFF" value="ScanOrder" tracktype="Video" occurrence="*" operator="=">BFF</rule>
+  <rule name="Video/Compression_Mode is Lossless" value="Compression_Mode" tracktype="Video" occurrence="*" operator="=">Lossless</rule>
+  <rule name="Video/colour_primaries is BT.601 NTSC" value="colour_primaries" tracktype="Video" occurrence="*" operator="=">BT.601 NTSC</rule>
+  <rule name="Video/transfer_characteristics is BT.709" value="transfer_characteristics" tracktype="Video" occurrence="*" operator="=">BT.709</rule>
+  <rule name="Video/matrix_coefficients is BT.601" value="matrix_coefficients" tracktype="Video" occurrence="*" operator="=">BT.601</rule>
+  <rule name="Audio/StreamOrder is 1" value="StreamOrder" tracktype="Audio" occurrence="*" operator="=">1</rule>
+  <rule name="Audio/ID is 2" value="ID" tracktype="Audio" occurrence="*" operator="=">2</rule>
+  <rule name="Audio/Format is PCM" value="Format" tracktype="Audio" occurrence="*" operator="=">PCM</rule>
+  <rule name="Audio/CodecID is A_PCM" value="CodecID" tracktype="Audio" occurrence="*" operator="=">A_PCM/INT/LIT</rule>
+  <rule name="Audio/BitRate_Mode is CBR" value="BitRate_Mode" tracktype="Audio" occurrence="*" operator="=">CBR</rule>
+  <rule name="Audio/Channels is 2" value="Channels" tracktype="Audio" occurrence="*" operator="=">2</rule>
+  <rule name="Audio/SamplingRate is 48000" value="SamplingRate" tracktype="Audio" occurrence="*" operator="=">48000</rule>
+  <rule name="Audio/BitDepth is 24" value="BitDepth" tracktype="Audio" occurrence="*" operator="=">24</rule>
+</policy>

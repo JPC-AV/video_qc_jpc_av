@@ -30,8 +30,8 @@ class LazyGUILoader:
         if cls._QApplication is None:
             from PyQt6.QtWidgets import QApplication
             # Update imports to use the new UI modules
-            from .gui.gui_checks_window import ChecksWindow
-            from .gui.gui_main_window import MainWindow
+            from .gui.gui_checks_tab.gui_checks_tab import ChecksWindow
+            from .gui.gui_main import MainWindow
             cls._QApplication = QApplication
             cls._ChecksWindow = ChecksWindow
             cls._MainWindow = MainWindow

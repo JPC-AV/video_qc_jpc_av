@@ -5,26 +5,27 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
 
-from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..utils.config_setup import ChecksConfig
-from ..utils.config_manager import ConfigManager
+from ...gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from ...utils.config_setup import ChecksConfig, SpexConfig
+from ...utils.config_manager import ConfigManager
 
-from ..processing.processing_mgmt import setup_mediaconch_policy
+from ...processing.processing_mgmt import setup_mediaconch_policy
+
+config_mgr= ConfigManager()
+checks_config = config_mgr.get_config('checks', ChecksConfig)
 
 class ChecksWindow(QWidget, ThemeableMixin):
     """Configuration window for managing application settings."""
     
     def __init__(self, config_mgr=None):
         super().__init__()
-        self.config_mgr = config_mgr or ConfigManager()
-        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
         self.is_loading = False
 
+        # Initialize themed_group_boxes before setup_theme_handling
+        self.themed_group_boxes = {}
+        
         # Setup theme handling
         self.setup_theme_handling()
-        
-        # Track theme-aware components
-        self.themed_group_boxes = {}
         
         # Setup UI and load config
         self.setup_ui()
@@ -232,9 +233,13 @@ class ChecksWindow(QWidget, ThemeableMixin):
         current_policy_layout.addStretch()
 
         self.policy_combo = QComboBox()
+        
         policies_label = QLabel("Available policies:")
         policies_label.setStyleSheet("font-weight: bold;")
+        
         self.import_policy_btn = QPushButton("Import New MediaConch Policy")
+        theme_manager.style_button(self.import_policy_btn)
+        
         import_policy_desc = QLabel("Import a custom policy file for MediaConch validation")
 
         policy_layout.addWidget(current_policy_widget)
@@ -345,9 +350,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.tools_group.setLayout(tools_layout)
         main_layout.addWidget(self.tools_group)
 
-        # Style all buttons
-        theme_manager.style_buttons(self)
-
     def on_theme_changed(self, palette):
         """Handle theme changes for ChecksWindow"""
         # Apply the palette directly
@@ -356,17 +358,18 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Get the theme manager
         theme_manager = ThemeManager.instance()
         
-        # Update all tracked group boxes
+        # Update all tracked group boxes with their specific title positions
         for key, group_box in self.themed_group_boxes.items():
-            # Main tools group has center-aligned title
             if key == 'tools':
                 theme_manager.style_groupbox(group_box, "top center")
             else:
-                theme_manager.style_groupbox(group_box, "top left")
+                # Preserve the title position if set
+                position = group_box.property("title_position") or "top left"
+                theme_manager.style_groupbox(group_box, position)
         
         # Style all buttons
         theme_manager.style_buttons(self)
-        
+            
         # Force repaint
         self.update()
 
@@ -412,9 +415,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
                 )
         
         # MediaConch
-        mediaconch = self.checks_config.tools.mediaconch
-        self.run_mediaconch_cb.setChecked(mediaconch.run_mediaconch.lower() == 'yes')
-        
         self.run_mediaconch_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['tools', 'mediaconch', 'run_mediaconch'])
         )
@@ -449,21 +449,23 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Set loading flag to True
         self.is_loading = True
 
+        checks_config = config_mgr.get_config('checks', ChecksConfig)
+
         # Outputs
-        self.access_file_cb.setChecked(self.checks_config.outputs.access_file.lower() == 'yes')
-        self.report_cb.setChecked(self.checks_config.outputs.report.lower() == 'yes')
-        self.qctools_ext_input.setText(self.checks_config.outputs.qctools_ext)
+        self.access_file_cb.setChecked(checks_config.outputs.access_file.lower() == 'yes')
+        self.report_cb.setChecked(checks_config.outputs.report.lower() == 'yes')
+        self.qctools_ext_input.setText(checks_config.outputs.qctools_ext)
         
         # Fixity
-        self.check_fixity_cb.setChecked(self.checks_config.fixity.check_fixity.lower() == 'yes')
-        self.validate_stream_cb.setChecked(self.checks_config.fixity.validate_stream_fixity.lower() == 'yes')
-        self.embed_stream_cb.setChecked(self.checks_config.fixity.embed_stream_fixity.lower() == 'yes')
-        self.output_fixity_cb.setChecked(self.checks_config.fixity.output_fixity.lower() == 'yes')
-        self.overwrite_stream_cb.setChecked(self.checks_config.fixity.overwrite_stream_fixity.lower() == 'yes')
+        self.check_fixity_cb.setChecked(checks_config.fixity.check_fixity.lower() == 'yes')
+        self.validate_stream_cb.setChecked(checks_config.fixity.validate_stream_fixity.lower() == 'yes')
+        self.embed_stream_cb.setChecked(checks_config.fixity.embed_stream_fixity.lower() == 'yes')
+        self.output_fixity_cb.setChecked(checks_config.fixity.output_fixity.lower() == 'yes')
+        self.overwrite_stream_cb.setChecked(checks_config.fixity.overwrite_stream_fixity.lower() == 'yes')
         
         # Tools
         for tool, widgets in self.tool_widgets.items():
-            tool_config = getattr(self.checks_config.tools, tool)
+            tool_config = getattr(checks_config.tools, tool)
             if tool == 'qctools':
                 widgets['run'].setChecked(tool_config.run_tool.lower() == 'yes')
             else:
@@ -471,26 +473,25 @@ class ChecksWindow(QWidget, ThemeableMixin):
                 widgets['run'].setChecked(tool_config.run_tool.lower() == 'yes')
         
         # MediaConch
-        mediaconch = self.checks_config.tools.mediaconch
+        mediaconch = checks_config.tools.mediaconch
         self.run_mediaconch_cb.setChecked(mediaconch.run_mediaconch.lower() == 'yes')
         
         # Update current policy display
         self.update_current_policy_display(mediaconch.mediaconch_policy)
         
         # Load available policies
-        available_policies = self.config_mgr.get_available_policies()
+        available_policies = config_mgr.get_available_policies()
         self.policy_combo.clear()
         self.policy_combo.addItems(available_policies)
         
         # Temporarily block signals while setting the current text
         self.policy_combo.blockSignals(True)
-        mediaconch = self.checks_config.tools.mediaconch
         if mediaconch.mediaconch_policy in available_policies:
             self.policy_combo.setCurrentText(mediaconch.mediaconch_policy)
         self.policy_combo.blockSignals(False)
         
         # QCT Parse
-        qct = self.checks_config.tools.qct_parse
+        qct = checks_config.tools.qct_parse
         self.run_qctparse_cb.setChecked(qct.run_tool.lower() == 'yes')
         self.bars_detection_cb.setChecked(qct.barsDetection)
         self.evaluate_bars_cb.setChecked(qct.evaluateBars)
@@ -519,7 +520,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
             field = path[1]
             updates = {section: {field: new_value}}
             
-        self.config_mgr.update_config('checks', updates)
+        config_mgr.update_config('checks', updates)
 
     def on_boolean_changed(self, state, path):
         """Handle changes in boolean checkboxes"""
@@ -527,28 +528,28 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         if path[0] == "tools" and path[1] == "qct_parse":
             updates = {'tools': {'qct_parse': {path[2]: new_value}}}
-            self.config_mgr.update_config('checks', updates)
+            config_mgr.update_config('checks', updates)
 
     def on_text_changed(self, path, text):
         """Handle changes in text inputs"""
         updates = {path[0]: {path[1]: text}}
-        self.config_mgr.update_config('checks', updates)
+        config_mgr.update_config('checks', updates)
 
     def on_qct_combo_changed(self, value, field):
         """Handle changes in QCT Parse combo boxes"""
         values = [value] if value is not None else []
         updates = {'tools': {'qct_parse': {field: values}}}
-        self.config_mgr.update_config('checks', updates)
+        config_mgr.update_config('checks', updates)
 
     def on_tagname_changed(self, text):
         """Handle changes in tagname field"""
         updates = {'tools': {'qct_parse': {'tagname': text if text else None}}}
-        self.config_mgr.update_config('checks', updates)
+        config_mgr.update_config('checks', updates)
 
     def on_mediaconch_policy_changed(self, policy_name):
         """Handle selection of MediaConch policy"""
         if not self.is_loading and policy_name:
-            self.config_mgr.update_config('checks', {
+            config_mgr.update_config('checks', {
                 'tools': {
                     'mediaconch': {
                         'mediaconch_policy': policy_name

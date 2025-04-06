@@ -14,60 +14,60 @@ class FilenameValues:
 
 @dataclass
 class MediainfoGeneralValues:
-    file_extension: str
-    format: str
-    overall_bit_rate_mode: str
+    FileExtension: str
+    Format: str
+    OverallBitRate_Mode: str
 
 @dataclass
 class MediainfoVideoValues:
-    format: str
-    format_settings_gop: str
-    codec_id: str
-    width: str
-    height: str
-    pixel_aspect_ratio: str
-    display_aspect_ratio: str
-    frame_rate_mode: str
-    frame_rate: str
-    standard: str
-    color_space: str
-    chroma_subsampling: str
-    bit_depth: str
-    scan_type: str
-    scan_order: str
-    compression_mode: str
-    color_primaries: str
-    colour_primaries_source: str
+    Format: str
+    Format_Settings_GOP: str
+    CodecID: str
+    Width: str
+    Height: str
+    PixelAspectRatio: str
+    DisplayAspectRatio: str
+    FrameRate_Mode_String: str
+    FrameRate: str
+    Standard: str
+    ColorSpace: str
+    ChromaSubsampling: str
+    BitDepth: str
+    ScanType: str
+    ScanOrder: str
+    Compression_Mode: str
+    colour_primaries: str
+    colour_primaries_Source: str
     transfer_characteristics: str
-    transfer_characteristics_source: str
+    transfer_characteristics_Source: str
     matrix_coefficients: str
-    max_slices_count: str
-    error_detection_type: str
+    MaxSlicesCount: str
+    ErrorDetectionType: str
 
 @dataclass
 class MediainfoAudioValues:
-    format: List[str]
-    channels: str
-    sampling_rate: str
-    bit_depth: str
-    compression_mode: str
+    Format: List[str]
+    Channels: str
+    SamplingRate: str
+    BitDepth: str
+    Compression_Mode: str
 
 @dataclass
 class ExiftoolValues:
-    file_type: str
-    file_type_extension: str
-    mime_type: str
-    video_frame_rate: str
-    image_width: str
-    image_height: str
-    video_scan_type: str
-    display_width: str
-    display_height: str
-    display_unit: str
-    codec_id: List[str]
-    audio_channels: str
-    audio_sample_rate: str
-    audio_bits_per_sample: str
+    FileType: str
+    FileTypeExtension: str
+    MIMEType: str
+    VideoFrameRate: str
+    ImageWidth: str
+    ImageHeight: str
+    VideoScanType: str
+    DisplayWidth: str
+    DisplayHeight: str
+    DisplayUnit: str
+    CodecID: List[str]
+    AudioChannels: str
+    AudioSampleRate: str
+    AudioBitsPerSample: str
 
 @dataclass
 class FFmpegVideoStream:

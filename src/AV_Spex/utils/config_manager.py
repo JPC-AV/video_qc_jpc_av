@@ -370,3 +370,41 @@ class ConfigManager:
         
         # Save the updated config
         self.save_last_used_config(config_name)
+
+    def reset_config(self, config_name: str, config_class: Type[T]) -> T:
+        """
+        Reset config to default values by removing the last used config 
+        and reloading from bundled defaults.
+        
+        Args:
+            config_name: Name of the config to reset
+            config_class: Type of the config class
+            
+        Returns:
+            T: The reset config instance
+        """
+        # Remove last used config if it exists
+        last_used_path = os.path.join(
+            self._user_config_dir,
+            f"last_used_{config_name}_config.json"
+        )
+        if os.path.exists(last_used_path):
+            try:
+                os.remove(last_used_path)
+            except Exception as e:
+                logger.error(f"Failed to remove last used config file: {str(e)}")
+        
+        # Clear the cached config
+        if config_name in self._configs:
+            del self._configs[config_name]
+        
+        # Load default config from bundled configs
+        default_config = self._load_json_config(config_name, last_used=False)
+        
+        # Create and cache dataclass instance
+        self._configs[config_name] = self._create_dataclass_instance(
+            config_class, default_config
+        )
+        
+        logger.info(f"Reset {config_name} config to default values")
+        return self._configs[config_name]

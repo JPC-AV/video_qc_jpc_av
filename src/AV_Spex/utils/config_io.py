@@ -12,7 +12,9 @@ class ConfigIO:
 
     def export_configs(self, config_types: Optional[List[str]] = None) -> dict:
         """Export specified configs or all configs if none specified"""
-        if not config_types:
+        if isinstance(config_types, str):
+            config_types = [config_types]
+        elif not config_types:
             config_types = ['spex', 'checks']
         
         export_data = {}
@@ -55,7 +57,7 @@ class ConfigIO:
             self.config_mgr.save_last_used_config('spex')
         
         if 'checks' in config_data:
-            checks_config = ChecksConfig(**config_data['checks'])
+            checks_config = self.config_mgr._create_dataclass_instance(ChecksConfig, config_data['checks'])
             self.config_mgr.set_config('checks', checks_config)
             self.config_mgr.save_last_used_config('checks')
 
