@@ -271,7 +271,7 @@ profile_step1 = {
             "run_tool": "yes"
         },
         "mediaconch": {
-            "mediaconch_policy": "JPC_AV_NTSC_MKV_2024-09-20.xml",
+            "mediaconch_policy": "JPC_AV_NTSC_MKV_2025_03_26.xml",
             "run_mediaconch": "yes"
         },
         "mediainfo": {

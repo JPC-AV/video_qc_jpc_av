@@ -17,7 +17,7 @@
       "run_tool": "yes"
     },
     "ffprobe": {
-      "check_tool": "no",
+      "check_tool": "yes",
       "run_tool": "yes"
     },
     "mediaconch": {
@@ -36,7 +36,7 @@
       "run_tool": "no"
     },
     "qct_parse": {
-      "run_tool": "yes",
+      "run_tool": "no",
       "barsDetection": true,
       "evaluateBars": true,
       "contentFilter": [],

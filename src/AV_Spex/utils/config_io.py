@@ -12,7 +12,9 @@ class ConfigIO:
 
     def export_configs(self, config_types: Optional[List[str]] = None) -> dict:
         """Export specified configs or all configs if none specified"""
-        if not config_types:
+        if isinstance(config_types, str):
+            config_types = [config_types]
+        elif not config_types:
             config_types = ['spex', 'checks']
         
         export_data = {}

@@ -8,11 +8,14 @@ from PyQt6.QtGui import QPalette, QFont
 
 import os
 from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..gui.gui_console_textbox import ConsoleTextEdit, MessageType
+from ..gui.gui_processing_window_console import ConsoleTextEdit, MessageType
 
 from ..utils.config_manager import ConfigManager
 from ..utils.config_setup import ChecksConfig
 from ..utils.log_setup import connect_logger_to_ui
+
+config_mgr = ConfigManager()
+checks_config = config_mgr.get_config('checks', ChecksConfig)
 
 class ProcessingWindow(QMainWindow, ThemeableMixin):
     """Window to display processing status and progress."""
@@ -75,7 +78,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         main_layout.addWidget(self.cancel_button)
 
         # Load the configuration and populate steps
-        self.config_mgr = ConfigManager()
+        checks_config = config_mgr.get_config('checks', ChecksConfig)
         self.populate_steps_list()
         
         # Setup theme handling (only once)
@@ -165,7 +168,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         """Populate the steps list with enabled checks from config."""
         try:
             # Get checks config
-            checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+            checks_config = config_mgr.get_config('checks', ChecksConfig)
             if not checks_config:
                 self.update_status("Warning: Could not load checks configuration")
                 return
