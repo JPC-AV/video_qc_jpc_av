@@ -70,7 +70,7 @@
       "codec_tag": "0x31564646",
       "width": "720",
       "height": "486",
-      "display_aspect_ratio": "4:3",
+      "display_aspect_ratio": "400:297",
       "pix_fmt": "yuv422p10le",
       "color_space": "smpte170m",
       "color_transfer": "bt709",
