@@ -121,25 +121,13 @@ class ImportTab(ThemeableMixin):
             
             if result == QMessageBox.StandardButton.Yes:
                 try:
-                    # Reset config by removing user config files
-                    user_config_dir = config_mgr._user_config_dir
-                    try:
-                        # Remove the user config files
-                        os.remove(os.path.join(user_config_dir, "last_used_checks_config.json"))
-                        os.remove(os.path.join(user_config_dir, "last_used_spex_config.json"))
-                        
-                        QMessageBox.information(self.main_window, "Success", "Configuration has been reset to default values")
-                    except FileNotFoundError:
-                        # It's okay if the files don't exist
-                        QMessageBox.information(self.main_window, "Information", "Already using default configuration")
+                    config_mgr.reset_config('checks', ChecksConfig)
+                    config_mgr.reset_config('spex', SpexConfig)
+                    QMessageBox.information(self.main_window, "Success", "Configuration has been reset to default values")
                 except Exception as e:
                     logger.error(f"Error resetting config: {str(e)}")
                     QMessageBox.critical(self.main_window, "Error", f"Error resetting configuration: {str(e)}")
-
-                config_mgr._configs = {}
-                config_mgr = ConfigManager()
-                self.main_window.checks_config = config_mgr.get_config('checks', ChecksConfig)
-                self.main_window.spex_config = config_mgr.get_config('spex', SpexConfig)
+            
                 config_mgr.save_last_used_config('checks')
                 config_mgr.save_last_used_config('spex')
 
@@ -148,14 +136,14 @@ class ImportTab(ThemeableMixin):
 
                 # Spex dropdowns
                 # file name dropdown
-                if self.main_window.spex_config.filename_values.Collection == "JPC":
+                if spex_config.filename_values.Collection == "JPC":
                     self.main_window.filename_profile_dropdown.setCurrentText("JPC file names")
-                elif self.main_window.spex_config.filename_values.Collection == "2012_79":
+                elif spex_config.filename_values.Collection == "2012_79":
                     self.main_window.filename_profile_dropdown.setCurrentText("Bowser file names")
                 
                 # Signalflow profile dropdown
                 # Set initial state based on config
-                encoder_settings = self.main_window.spex_config.mediatrace_values.ENCODER_SETTINGS
+                encoder_settings = spex_config.mediatrace_values.ENCODER_SETTINGS
                 if isinstance(encoder_settings, dict):
                     source_vtr = encoder_settings.get('Source_VTR', [])
                 else:
