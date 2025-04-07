@@ -7,14 +7,14 @@
   "fixity": {
     "check_fixity": "no",
     "validate_stream_fixity": "no",
-    "embed_stream_fixity": "no",
-    "output_fixity": "no",
+    "embed_stream_fixity": "yes",
+    "output_fixity": "yes",
     "overwrite_stream_fixity": "no"
   },
   "tools": {
     "exiftool": {
-      "check_tool": "no",
-      "run_tool": "no"
+      "check_tool": "yes",
+      "run_tool": "yes"
     },
     "ffprobe": {
       "check_tool": "yes",
@@ -29,8 +29,8 @@
       "run_tool": "yes"
     },
     "mediatrace": {
-      "check_tool": "no",
-      "run_tool": "no"
+      "check_tool": "yes",
+      "run_tool": "yes"
     },
     "qctools": {
       "run_tool": "no"
