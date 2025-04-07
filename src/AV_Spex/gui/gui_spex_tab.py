@@ -1,16 +1,25 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
-    QLabel, QScrollArea, QComboBox, QPushButton,
-    QFrame, QTextEdit
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, QLineEdit, QLabel, 
+    QScrollArea, QFileDialog, QMenuBar, QListWidget, QPushButton, QFrame, QComboBox, QTabWidget,
+    QTextEdit, QAbstractItemView, QInputDialog, QMessageBox, QProgressBar, QDialog
 )
+from PyQt6.QtCore import Qt, QSettings, QDir, QTimer
+from PyQt6.QtGui import QPixmap, QPalette
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
 
+from dataclasses import asdict
+
 from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from ..gui.gui_custom_filename import CustomFilenameDialog
+
 from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import SpexConfig, ChecksConfig
-from ..utils import config_edit
+from ..utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig
+
 from ..utils.log_setup import logger
+
+from ..utils import config_edit
 
 config_mgr = ConfigManager()
 spex_config = config_mgr.get_config('spex', SpexConfig)
@@ -26,33 +35,24 @@ class SpexTab(ThemeableMixin):
             self.main_window = parent_tab.main_window
         
         def on_filename_profile_changed(self, index):
-            """Handle filename profile selection change."""
+            filename_config = config_mgr.get_config("filename", FilenameConfig)
+            jpc_filename_profile = filename_config.filename_profiles["JPC Filename Profile"]
+            bowser_filename_profile = filename_config.filename_profiles["Bowser Filename Profile"]
+
             selected_option = self.main_window.filename_profile_dropdown.itemText(index)
-            updates = {}
             
-            if selected_option == "JPC file names":
-                updates = {
-                    "filename_values": {
-                        "Collection": "JPC",
-                        "MediaType": "AV",
-                        "ObjectID": r"\d{5}",
-                        "DigitalGeneration": None,
-                        "FileExtension": "mkv"
-                    }
-                }
-            elif selected_option == "Bowser file names":
-                updates = {
-                    "filename_values": {
-                        "Collection": "2012_79",
-                        "MediaType": "2",
-                        "ObjectID": r"\d{3}_\d{1}[a-zA-Z]",
-                        "DigitalGeneration": "PM",
-                        "FileExtension": "mkv"
-                    }
-                }
-            
-            config_mgr.update_config('spex', updates)
-            config_mgr.save_last_used_config('spex')
+            if selected_option == "JPC Filename Profile":
+                config_edit.apply_filename_profile(jpc_filename_profile)
+                config_mgr.save_last_used_config('spex')
+            elif selected_option == "Bowser Filename Profile":
+                config_edit.apply_filename_profile(bowser_filename_profile)
+                config_mgr.save_last_used_config('spex')
+            elif selected_option.startswith("Custom ("):
+                for profile_name in filename_config.filename_profiles.keys():
+                    if selected_option == profile_name:
+                        profile_class = filename_config.filename_profiles[profile_name]
+                        config_edit.apply_filename_profile(profile_class)
+                        config_mgr.save_last_used_config('spex')
 
         def on_signalflow_profile_changed(self, index):
             """Handle signal flow profile selection change."""
@@ -98,44 +98,9 @@ class SpexTab(ThemeableMixin):
         main_widget = QWidget(self.main_window)
         main_scroll_area.setWidget(main_widget)
         vertical_layout = QVBoxLayout(main_widget)
-        
-        # 1. Filename section
-        self.filename_group = QGroupBox("Filename Values")
-        theme_manager.style_groupbox(self.filename_group, "top center")
-        self.main_window.spex_tab_group_boxes.append(self.filename_group)
-        
-        filename_layout = QVBoxLayout()
-        
-        # Profile dropdown
-        profile_label = QLabel("Expected filename profiles:")
-        profile_label.setStyleSheet("font-weight: bold;")
-        self.main_window.filename_profile_dropdown = QComboBox()
-        self.main_window.filename_profile_dropdown.addItem("Bowser file names")
-        self.main_window.filename_profile_dropdown.addItem("JPC file names")
-        
-        # Set initial state based on config
-        if spex_config.filename_values.Collection == "JPC":
-            self.main_window.filename_profile_dropdown.setCurrentText("JPC file names")
-        elif spex_config.filename_values.Collection == "2012_79":
-            self.main_window.filename_profile_dropdown.setCurrentText("Bowser file names")
-        
-        self.main_window.filename_profile_dropdown.currentIndexChanged.connect(self.profile_handlers.on_filename_profile_changed)
-        
-        # Open section button
-        open_button = QPushButton("Open Section")
-        open_button.clicked.connect(
-            lambda: self.open_new_window('Filename Values', 'filename_values')
-        )
-        
-        # Add widgets to layout
-        filename_layout.addWidget(profile_label)
-        filename_layout.addWidget(self.main_window.filename_profile_dropdown)
-        filename_layout.addWidget(open_button)
-        self.filename_group.setLayout(filename_layout)
-        vertical_layout.addWidget(self.filename_group)
-        
-        # Style the button using theme manager
-        theme_manager.style_buttons(open_button)
+
+        self.filename_section_group = self.setup_filename_section()
+        spex_layout.addWidget(self.filename_section_group)
         
         # 2. MediaInfo section
         self.mediainfo_group = QGroupBox("MediaInfo Values")
@@ -353,6 +318,120 @@ class SpexTab(ThemeableMixin):
 
         return "\n".join(content_lines)
     
+    def setup_filename_section(self):
+        self.filename_config = config_mgr.get_config("filename", FilenameConfig)
+
+        # Filename section
+        filename_section_group = QGroupBox("Filename Values")
+        theme_manager = ThemeManager.instance()
+        theme_manager.style_groupbox(filename_section_group, "top center")
+        self.main_window.spex_tab_group_boxes.append(filename_section_group)
+        
+        filename_section_layout = QVBoxLayout()
+        
+        # Add a dropdown menu for command profiles
+        filenames_profile_label = QLabel("Expected filename profiles:")
+        filenames_profile_label.setStyleSheet("font-weight: bold;")
+        filename_section_layout.addWidget(filenames_profile_label)
+
+        self.filename_profile_dropdown = QComboBox()
+        self.filename_profile_dropdown.addItem("Select a profile...")
+        self.filename_profile_dropdown.addItem("JPC file names")
+        self.filename_profile_dropdown.addItem("Bowser file names")
+        
+        # Add any custom filename profiles from the config
+        if hasattr(self.filename_config, 'filename_profiles') and self.filename_config.filename_profiles:
+            for profile_name in self.filename_config.filename_profiles.keys():
+                self.filename_profile_dropdown.addItem(profile_name)
+
+        # Set initial state
+        if spex_config.filename_values.fn_sections["section1"].value == "JPC":
+            self.filename_profile_dropdown.setCurrentText("JPC Filename Profile")
+        elif spex_config.filename_values.fn_sections["section1"].value == "2012":
+            self.filename_profile_dropdown.setCurrentText("Bowser Filename Profile")
+        else:
+             self.filename_profile_dropdown.setCurrentText("Select a profile...")
+            
+        self.filename_profile_dropdown.currentIndexChanged.connect(self.profile_handlers.on_filename_profile_changed)
+        filename_section_layout.addWidget(self.filename_profile_dropdown)
+
+        # Store the layout as an instance variable so it can be accessed by add_custom_filename_button
+        self.filename_section_layout = filename_section_layout
+        
+        # Add the custom filename button
+        self.add_custom_filename_button()
+        
+        # Open section button
+        button = QPushButton("Open Section")
+        button.clicked.connect(
+            lambda: self.open_new_window('Filename Values', 'filename_values')
+        )
+        filename_section_layout.addWidget(button)
+        
+        filename_section_group.setLayout(filename_section_layout)
+        filename_section_group.setMinimumHeight(200)
+        
+        # Style the button using theme manager
+        theme_manager = ThemeManager.instance()
+        theme_manager.style_buttons(self.filename_section_layout)
+
+        return filename_section_group
+    
+    def add_custom_filename_button(self):
+        custom_button = QPushButton("Create Custom Pattern...")
+        custom_button.clicked.connect(self.show_custom_filename_dialog)
+        # Add to the filename section layout that's already defined
+        self.filename_section_layout.addWidget(custom_button)
+
+    def show_custom_filename_dialog(self):
+        dialog = CustomFilenameDialog(self.main_window)
+        result = dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted:
+            pattern = dialog.get_filename_pattern()
+            if pattern:
+                try:
+                    # Use the first section's value for the custom name
+                    first_section_key = next(iter(pattern.fn_sections))
+                    first_section = pattern.fn_sections[first_section_key]
+                    custom_name = f"Custom ({first_section.value})"
+                    
+                    # Check if this custom pattern already exists in the dropdown
+                    found = False
+                    for i in range(self.filename_profile_dropdown.count()):
+                        if self.filename_profile_dropdown.itemText(i) == custom_name:
+                            found = True
+                            break
+                    
+                    # Only add if it's not already in the dropdown
+                    if not found:
+                        self.filename_profile_dropdown.addItem(custom_name)
+                        self.filename_profile_dropdown.setCurrentText(custom_name)
+                        
+                        # Get the ConfigManager instance
+                        config_manager = ConfigManager()
+                        
+                        # Get the current filename configuration
+                        filename_config = config_manager.get_config('filename', FilenameConfig)
+                        
+                        # Create an updated dictionary of profiles
+                        updated_profiles = dict(filename_config.filename_profiles)
+                        updated_profiles[custom_name] = pattern
+                        
+                        # Create a new FilenameConfig with the updated profiles
+                        new_config = FilenameConfig(
+                            filename_profiles=updated_profiles
+                        )
+                        
+                        # Set the config with the complete new object
+                        config_manager.set_config('filename', new_config)
+                        
+                        # Save the last used configuration
+                        config_manager.save_last_used_config('filename')
+                        
+                except Exception as e:
+                    QMessageBox.warning(self, "Error", f"Error adding custom pattern to dropdown: {str(e)}")          
+    
     def on_theme_changed(self, palette):
         """Handle theme changes for this tab"""
         theme_manager = ThemeManager.instance()
@@ -363,8 +442,8 @@ class SpexTab(ThemeableMixin):
                 theme_manager.style_groupbox(group_box)
         
         # Update any buttons within the tab groups
-        if hasattr(self, 'filename_group'):
-            theme_manager.style_buttons(self.filename_group)
+        if hasattr(self, 'filename_section_group'):
+            theme_manager.style_buttons(self.filename_section_group)
         if hasattr(self, 'mediainfo_group'):
             theme_manager.style_buttons(self.mediainfo_group)
         if hasattr(self, 'exiftool_group'):
