@@ -39,7 +39,7 @@ class SpexTab(ThemeableMixin):
             jpc_filename_profile = filename_config.filename_profiles["JPC Filename Profile"]
             bowser_filename_profile = filename_config.filename_profiles["Bowser Filename Profile"]
 
-            selected_option = self.main_window.filename_profile_dropdown.itemText(index)
+            selected_option = self.parent_tab.filename_profile_dropdown.itemText(index)
             
             if selected_option == "JPC Filename Profile":
                 config_edit.apply_filename_profile(jpc_filename_profile)
