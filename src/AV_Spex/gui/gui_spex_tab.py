@@ -100,7 +100,7 @@ class SpexTab(ThemeableMixin):
         vertical_layout = QVBoxLayout(main_widget)
 
         self.filename_section_group = self.setup_filename_section()
-        spex_layout.addWidget(self.filename_section_group)
+        vertical_layout.addWidget(self.filename_section_group)
         
         # 2. MediaInfo section
         self.mediainfo_group = QGroupBox("MediaInfo Values")
