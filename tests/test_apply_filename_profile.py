@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from typing import Dict
 
 # Import the necessary classes and the function under test
-from AV_Spex.utils.edit_config import apply_filename_profile
-from AV_Spex.utils.setup_config import FilenameProfile, FilenameSection, SpexConfig, FilenameValues
+from AV_Spex.utils.config_edit import apply_filename_profile
+from AV_Spex.utils.config_setup import FilenameProfile, FilenameSection, SpexConfig, FilenameValues
 from AV_Spex.utils.config_manager import ConfigManager
 
 # Create mock classes for testing
@@ -48,7 +48,7 @@ def test_apply_filename_profile(mock_config_mgr, sample_profile, has_sections, h
         sample_profile.FileExtension = ""
     
     # Apply the patch to replace config_mgr
-    with patch('AV_Spex.utils.edit_config.config_mgr', mock_config_mgr):
+    with patch('AV_Spex.utils.config_edit.config_mgr', mock_config_mgr):
         # Call the function under test
         apply_filename_profile(sample_profile)
         
@@ -79,7 +79,7 @@ def test_apply_filename_profile_error(mock_config_mgr, sample_profile):
     mock_config_mgr.get_config.side_effect = Exception("Configuration error")
     
     # Apply the patch to replace config_mgr
-    with patch('AV_Spex.utils.edit_config.config_mgr', mock_config_mgr):
+    with patch('AV_Spex.utils.config_edit.config_mgr', mock_config_mgr):
         # Expect an exception to be raised
         with pytest.raises(Exception) as exc_info:
             apply_filename_profile(sample_profile)
