@@ -336,8 +336,8 @@ class SpexTab(ThemeableMixin):
 
         self.filename_profile_dropdown = QComboBox()
         self.filename_profile_dropdown.addItem("Select a profile...")
-        self.filename_profile_dropdown.addItem("JPC file names")
-        self.filename_profile_dropdown.addItem("Bowser file names")
+        self.filename_profile_dropdown.addItem("JPC Filename Profile")
+        self.filename_profile_dropdown.addItem("Bowser Filename Profile")
         
         # Add any custom filename profiles from the config
         if hasattr(self.filename_config, 'filename_profiles') and self.filename_config.filename_profiles:

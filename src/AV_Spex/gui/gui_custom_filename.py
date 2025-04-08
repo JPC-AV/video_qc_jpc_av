@@ -7,12 +7,17 @@ from PyQt6.QtWidgets import (
 from ..utils import config_edit
 from ..utils.config_setup import FilenameSection, FilenameProfile
 
-class CustomFilenameDialog(QDialog):
+from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
+
+class CustomFilenameDialog(QDialog, ThemeableMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.pattern = None
         self.setWindowTitle("Custom Filename Pattern")
         self.setModal(True)
+
+        # Add theme handling
+        self.setup_theme_handling()
 
         # Set minimum size for the dialog
         self.setMinimumSize(500, 600)  # Width: 500px, Height: 600px
@@ -235,3 +240,13 @@ class CustomFilenameDialog(QDialog):
             self.extension_input.setText(pattern['FileExtension'])
             
         self.update_preview()
+
+    def on_theme_changed(self, palette):
+        # Apply the theme changes to this dialog only
+        self.setPalette(palette)
+        
+
+    def closeEvent(self, event):
+        # Clean up theme connections before closing
+        self.cleanup_theme_handling()
+        super().closeEvent(event)

@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QLabel, QHBoxLayout
+from PyQt6.QtWidgets import QLabel, QHBoxLayout, QMainWindow
 from PyQt6.QtCore import Qt
 
 import os
@@ -13,6 +13,8 @@ class MainWindowTheme:
     
     def __init__(self, main_window):
         self.main_window = main_window
+        # Keep track of the logo label to avoid duplicates
+        self.logo_widget = None
     
     def on_theme_changed(self, palette):
         """Handle theme changes across the application."""
@@ -33,11 +35,84 @@ class MainWindowTheme:
         # Style the special buttons
         self._style_special_buttons()
         
-        # Refresh the logo
-        self._refresh_logo()
+        # Only refresh logo if we're in the main window, not a dialog
+        if isinstance(self.main_window, QMainWindow) and hasattr(self.main_window, 'main_layout'):
+            self._refresh_logo()
         
         # Force repaint
         self.main_window.update()
+    
+    def _refresh_logo(self):
+        """Refresh the logo when theme changes"""
+        # First check if we have a main layout
+        if not hasattr(self.main_window, 'main_layout'):
+            return
+            
+        # First remove any existing logo
+        self._remove_existing_logo()
+        
+        # Now load the new theme-appropriate logo
+        self._load_logo()
+    
+    def _remove_existing_logo(self):
+        """Find and remove any existing logo"""
+        # First try to remove our tracked logo widget if it exists
+        if self.logo_widget is not None:
+            # Remove tracked widget
+            if self.logo_widget.parent():
+                self.logo_widget.setParent(None)
+                self.logo_widget.deleteLater()
+            self.logo_widget = None
+            
+        # Scan through main layout items to find any other logo layouts
+        for i in range(self.main_window.main_layout.count()):
+            item = self.main_window.main_layout.itemAt(i)
+            if item and item.layout():
+                layout = item.layout()
+                # Look for any QLabel with a pixmap in the layout
+                for j in range(layout.count()):
+                    inner_item = layout.itemAt(j)
+                    if inner_item and inner_item.widget() and isinstance(inner_item.widget(), QLabel) and inner_item.widget().pixmap() is not None:
+                        # Found a logo widget, remove the entire layout
+                        self._remove_layout_item(self.main_window.main_layout, i)
+                        return  # Stop after removing one
+
+    def _load_logo(self):
+        """Load and display the logo based on current theme"""
+        # Get ThemeManager instance
+        theme_manager = ThemeManager.instance()
+        
+        # Define light and dark logo paths
+        light_logo_path = config_mgr.get_logo_path('Branding_avspex_noJPC_030725.png')
+        dark_logo_path = config_mgr.get_logo_path('Branding_avspex_noJPC_inverted_032325.png')
+        
+        # Get appropriate logo for current theme
+        logo_path = theme_manager.get_theme_appropriate_logo(light_logo_path, dark_logo_path)
+        
+        # Verify logo path exists
+        if not os.path.exists(logo_path):
+            print(f"Logo file not found: {logo_path}")
+            return
+            
+        # Create and add image layout
+        image_layout = QHBoxLayout()
+        
+        # Create a new label with explicit parent
+        self.logo_widget = QLabel(self.main_window)
+        self.logo_widget.setMinimumHeight(100)
+        
+        # Use the ThemeManager to load the logo
+        success = theme_manager.load_logo(self.logo_widget, logo_path, width=self.main_window.width())
+        if not success:
+            print(f"Failed to load logo: {logo_path}")
+            return
+            
+        self.logo_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image_layout.addWidget(self.logo_widget)
+        
+        # Insert at the top of the main layout
+        self.main_window.main_layout.insertLayout(0, image_layout)
+    
     
     def _style_special_buttons(self):
         """Apply special styling to buttons that need custom styling"""
@@ -58,22 +133,7 @@ class MainWindowTheme:
         # Style the progress indicator
         if hasattr(self.main_window, 'processing_indicator'):
             theme_manager.style_progress_bar(self.main_window.processing_indicator)
-    
-    def _refresh_logo(self):
-        """Refresh the logo when theme changes"""
-        # First, find and remove the existing logo layout
-        for i in range(self.main_window.main_layout.count()):
-            item = self.main_window.main_layout.itemAt(i)
-            # Check if this layout item contains our logo
-            if item and item.layout() and item.layout().count() > 0:
-                widget = item.layout().itemAt(0).widget()
-                if isinstance(widget, QLabel) and widget.pixmap() is not None:
-                    # Remove the existing logo layout
-                    self._remove_layout_item(self.main_window.main_layout, i)
-                    break
-        
-        # Now load the new theme-appropriate logo
-        self._load_logo()
+
 
     def _remove_layout_item(self, layout, index):
         """Helper method to remove an item from a layout"""
@@ -92,33 +152,3 @@ class MainWindowTheme:
                 # Delete the item itself
                 del item
     
-    def _load_logo(self):
-        """Load and display the logo based on current theme"""
-        # Get ThemeManager instance
-        theme_manager = ThemeManager.instance()
-        
-        # Define light and dark logo paths
-        light_logo_path = config_mgr.get_logo_path('Branding_avspex_noJPC_030725.png')
-        dark_logo_path = config_mgr.get_logo_path('Branding_avspex_noJPC_inverted_032325.png')
-        
-        # Get appropriate logo for current theme
-        logo_path = theme_manager.get_theme_appropriate_logo(light_logo_path, dark_logo_path)
-        
-        # Create and add image layout
-        image_layout = self.add_image_to_top(logo_path)
-        self.main_window.main_layout.insertLayout(0, image_layout)  # Insert at index 0 (top)
-    
-    def add_image_to_top(self, logo_path):
-        """Add image to the top of the main layout."""
-        image_layout = QHBoxLayout()
-        
-        label = QLabel()
-        label.setMinimumHeight(100)
-        
-        # Use the ThemeManager to load the logo
-        theme_manager = ThemeManager.instance()
-        theme_manager.load_logo(label, logo_path, width=self.main_window.width())
-        
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        image_layout.addWidget(label)
-        return image_layout
