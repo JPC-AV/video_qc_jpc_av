@@ -67,10 +67,12 @@ class ImportTab(ThemeableMixin):
 
                     # Spex dropdowns
                     # file name dropdown
-                    if spex_config.filename_values.Collection == "JPC":
-                        self.spex_tab.filename_profile_dropdown.setCurrentText("JPC file names")
-                    elif spex_config.filename_values.Collection == "2012_79":
-                        self.spex_tab.filename_profile_dropdown.setCurrentText("Bowser file names")
+                    if spex_config.filename_values.fn_sections["section1"].value == "JPC":
+                        self.spex_tab.filename_profile_dropdown.setCurrentText("JPC Filename Profile")
+                    elif spex_config.filename_values.fn_sections["section1"].value == "2012":
+                        self.spex_tab.filename_profile_dropdown.setCurrentText("Bowser Filename Profile")
+                    else:
+                        self.spex_tab.filename_profile_dropdown.setCurrentText("Select a profile...")
                     
                     # Signalflow profile dropdown
                     # Set initial state based on config
@@ -80,9 +82,9 @@ class ImportTab(ThemeableMixin):
                     else:
                         source_vtr = encoder_settings.Source_VTR
                     if any("SVO5800" in vtr for vtr in source_vtr):
-                        self.spex_tab.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
+                        self.main_window.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
                     elif any("Sony BVH3100" in vtr for vtr in source_vtr):
-                        self.spex_tab.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
+                        self.main_window.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
                     
                     QMessageBox.information(self.main_window, "Success", f"Configuration imported successfully from {file_path}")
                 except Exception as e:
