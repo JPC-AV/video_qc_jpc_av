@@ -59,6 +59,9 @@ class MainWindowUI:
         self.main_window.central_widget = QWidget()
         self.main_window.setCentralWidget(self.main_window.central_widget)
 
+        # Set minimum size for the main window
+        self.main_window.setMinimumSize(500, 800)  # Width: 500px, Height: 800px
+
         # Create main vertical layout
         self.main_window.main_layout = QVBoxLayout(self.main_window.central_widget)
 

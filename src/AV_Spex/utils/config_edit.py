@@ -2,7 +2,7 @@ from dataclasses import asdict
 from typing import List
 
 from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig, SpexConfig
+from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, FilenameSection
 from ..utils.config_manager import ConfigManager
 
 
@@ -113,6 +113,33 @@ def validate_config_spec(config_spec: str) -> bool:
 def resolve_config(args, config_mapping):
     return config_mapping.get(args, None)
 
+
+def apply_filename_profile(selected_profile: FilenameProfile):
+    """Apply a FilenameProfile dataclass to the current configuration"""
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+    
+    # Completely replace the fn_sections with just one empty section
+    spex_config.filename_values.fn_sections = {
+        "section1": FilenameSection(
+            value="",
+            section_type="literal"
+        )
+    }
+    
+    # Use set_config instead of update_config to ensure complete replacement
+    config_mgr.set_config("spex", spex_config)
+    
+    # Create a new dict with the sections from the profile
+    if selected_profile.fn_sections:
+        # Replace the entire sections dict with the one from the profile
+        spex_config.filename_values.fn_sections = selected_profile.fn_sections
+    
+    # Set the file extension if it exists in the profile
+    if hasattr(selected_profile, 'FileExtension') and selected_profile.FileExtension:
+        spex_config.filename_values.FileExtension = selected_profile.FileExtension
+    
+    # Use set_config to ensure complete replacement
+    config_mgr.set_config('spex', spex_config)
 
 def apply_signalflow_profile(selected_profile: dict):
     """Apply signalflow profile changes to spex_config.
@@ -415,20 +442,4 @@ BVH3100 = {
     "ADC": ["Leitch DPS575 with flash firmware h2.16", "SN 15230", "SDI", "embedded"],
     "Capture_Device": ["Blackmagic Design UltraStudio 4K Extreme", "SN B022159", "Thunderbolt"],
     "Computer": ["2023 Mac Mini", "Apple M2 Pro chip", "SN H9HDW53JMV", "OS 14.5", "vrecord v2023-08-07", "ffmpeg"]
-}
-
-bowser_filename = {
-    "Collection": "2012_79",
-    "MediaType": "2",
-    "ObjectID": r"\d{3}_\d{1}[a-zA-Z]",
-    "DigitalGeneration": "PM",
-    "FileExtension": "mkv"
-}
-
-JPCAV_filename = {
-    "Collection": "JPC",
-    "MediaType": "AV",
-    "ObjectID": r"\d{5}",
-    "DigitalGeneration": None,
-    "FileExtension": "mkv"
 }

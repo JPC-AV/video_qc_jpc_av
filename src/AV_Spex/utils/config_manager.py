@@ -11,13 +11,17 @@ from ..utils.log_setup import logger
 T = TypeVar('T')
 
 class ConfigManager:
-    _instance = None
-    _configs: Dict[str, Any] = {}
+    _instance = None  # Class-level variable to hold single instance
+    _configs: Dict[str, Any] = {}  # Shared configuration cache
     
+    # The __new__(cls) insures only one instance is ever created
     def __new__(cls):
         if cls._instance is None:
+            # If no config class instance exists, create a instance of ConfigManager.
+            # super() calls the parent class to get ConfigManager's __new__ from within ConfigManager
             cls._instance = super(ConfigManager, cls).__new__(cls)
             
+            # One-time initialization of paths and directories
             if getattr(sys, 'frozen', False):
                 cls._instance._bundle_dir = os.path.join(sys._MEIPASS, 'AV_Spex')
             else:
@@ -281,6 +285,7 @@ class ConfigManager:
         """
         Get config, ensuring it's always returned as a proper dataclass instance.
         """
+        # If not in cache, load the default config:
         if config_name not in self._configs:
             # Load default config first
             default_config = self._load_json_config(config_name, last_used=False)
@@ -294,12 +299,14 @@ class ConfigManager:
                 try:
                     last_used_data = self._load_json_config(config_name, last_used=True)
                     self._deep_merge_dict(default_config, last_used_data)
+                    # logger.debug(f"using config from {last_used_path}")
                 except (FileNotFoundError, json.JSONDecodeError):
                     logger.debug(f"No valid last used config found for {config_name}")
                 
             # Create dataclass instance
             self._configs[config_name] = self._create_dataclass_instance(
-                config_class, default_config
+                config_class, # This is either SpexConfig or ChecksConfig from setup_config.py
+                default_config
             )
             
         return self._configs[config_name]
@@ -311,7 +318,11 @@ class ConfigManager:
         for key, value in source.items():
             if key in target:
                 if isinstance(value, dict) and isinstance(target[key], dict):
-                    self._deep_merge_dict(target[key], value)
+                    # Special handling for fn_sections - replace entirely
+                    if key == 'fn_sections' or key == 'filename_profiles':
+                        target[key] = value.copy()
+                    else:
+                        self._deep_merge_dict(target[key], value)
                 else:
                     target[key] = value
 

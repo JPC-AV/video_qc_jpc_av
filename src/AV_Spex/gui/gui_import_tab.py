@@ -12,7 +12,7 @@ from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from ..gui.gui_processing_window import DirectoryListWidget
 from ..utils.config_io import ConfigIO
 from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import ChecksConfig, SpexConfig
+from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameConfig
 from ..utils.log_setup import logger
 
 from AV_Spex import __version__
@@ -31,6 +31,7 @@ class ImportTab(ThemeableMixin):
         def __init__(self, parent_tab):
             self.parent_tab = parent_tab
             self.main_window = parent_tab.main_window
+            self.spex_tab = self.main_window.spex_tab
         
         def export_selected_config(self):
             selected_option = self.main_window.export_config_dropdown.currentText()
@@ -66,10 +67,12 @@ class ImportTab(ThemeableMixin):
 
                     # Spex dropdowns
                     # file name dropdown
-                    if spex_config.filename_values.Collection == "JPC":
-                        self.main_window.filename_profile_dropdown.setCurrentText("JPC file names")
-                    elif spex_config.filename_values.Collection == "2012_79":
-                        self.main_window.filename_profile_dropdown.setCurrentText("Bowser file names")
+                    if spex_config.filename_values.fn_sections["section1"].value == "JPC":
+                        self.spex_tab.filename_profile_dropdown.setCurrentText("JPC Filename Profile")
+                    elif spex_config.filename_values.fn_sections["section1"].value == "2012":
+                        self.spex_tab.filename_profile_dropdown.setCurrentText("Bowser Filename Profile")
+                    else:
+                        self.spex_tab.filename_profile_dropdown.setCurrentText("Select a profile...")
                     
                     # Signalflow profile dropdown
                     # Set initial state based on config
@@ -123,6 +126,7 @@ class ImportTab(ThemeableMixin):
                 try:
                     config_mgr.reset_config('checks', ChecksConfig)
                     config_mgr.reset_config('spex', SpexConfig)
+                    config_mgr.reset_config('filename', FilenameConfig)
                     QMessageBox.information(self.main_window, "Success", "Configuration has been reset to default values")
                 except Exception as e:
                     logger.error(f"Error resetting config: {str(e)}")
@@ -136,10 +140,12 @@ class ImportTab(ThemeableMixin):
 
                 # Spex dropdowns
                 # file name dropdown
-                if spex_config.filename_values.Collection == "JPC":
-                    self.main_window.filename_profile_dropdown.setCurrentText("JPC file names")
-                elif spex_config.filename_values.Collection == "2012_79":
-                    self.main_window.filename_profile_dropdown.setCurrentText("Bowser file names")
+                if spex_config.filename_values.fn_sections["section1"].value == "JPC":
+                    self.spex_tab.filename_profile_dropdown.setCurrentText("JPC Filename Profile")
+                elif spex_config.filename_values.fn_sections["section1"].value == "2012":
+                    self.spex_tab.filename_profile_dropdown.setCurrentText("Bowser Filename Profile")
+                else:
+                    self.spex_tab.filename_profile_dropdown.setCurrentText("Select a profile...")
                 
                 # Signalflow profile dropdown
                 # Set initial state based on config

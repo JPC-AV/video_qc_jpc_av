@@ -60,13 +60,10 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.processing = MainWindowProcessing(self)
         self.theme = MainWindowTheme(self)
 
-        # Initialize main window theme handling first
-        self.setup_theme_handling()
-
         #Initialize Tabs
-        self.import_tab = ImportTab(self)
         self.checks_tab = ChecksTab(self)
         self.spex_tab = SpexTab(self)
+        self.import_tab = ImportTab(self)
 
         # Connect all signals
         self.signals_handler.setup_signal_connections()

@@ -1,0 +1,23 @@
+{
+    "filename_profiles": {
+        "Bowser Filename Profile" : {
+            "fn_sections": {
+                "section1": {"value": "2012", "section_type": "literal"},
+                "section2": {"value": "79", "section_type": "literal"},
+                "section3": {"value": "2", "section_type": "literal"},
+                "section4": {"value": "###", "section_type": "wildcard"},
+                "section5": {"value": "#@", "section_type": "wildcard"},
+                "section6": {"value": "PM", "section_type": "literal"}
+            },
+            "FileExtension": "mkv"
+        },
+        "JPC Filename Profile" : {
+            "fn_sections": {
+                "section1": {"value": "JPC", "section_type": "literal"},
+                "section2": {"value": "AV", "section_type": "literal"},
+                "section3": {"value": "#####", "section_type": "wildcard"}
+            },
+            "FileExtension": "mkv"
+        }
+    }
+}

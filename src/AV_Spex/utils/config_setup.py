@@ -1,13 +1,16 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Union, Optional
+from enum import Enum
+
+@dataclass
+class FilenameSection:
+    value: str
+    section_type: str = field(default="literal") 
 
 @dataclass
 class FilenameValues:
-    Collection: str
-    MediaType: str
-    ObjectID: str
+    fn_sections: Dict[str, FilenameSection]
     FileExtension: str
-    DigitalGeneration: Optional[str] = None
 
 @dataclass
 class MediainfoGeneralValues:
@@ -342,3 +345,12 @@ class ChecksConfig:
     outputs: OutputsConfig
     fixity: FixityConfig
     tools: ToolsConfig
+
+@dataclass
+class FilenameProfile:
+    fn_sections: Dict[str, FilenameSection]
+    FileExtension: str
+
+@dataclass
+class FilenameConfig:
+    filename_profiles: Dict[str, FilenameProfile]
