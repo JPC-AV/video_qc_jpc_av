@@ -19,11 +19,125 @@ jobs:
           python-version: '3.9'
           cache: 'pip'
           
-      - name: Configure Python for Universal Binary
+      - name: Prepare environment
         run: |
-          # Set environment variables to build universal binaries when compiling
-          echo "ARCHFLAGS=-arch x86_64 -arch arm64" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
+          # Display repository structure to understand the path issue
+          echo "Repository structure:"
+          find . -type d -name "AV_Spex" | sort
+          
+          # Create a modified spec file for GitHub Actions
+          cat > github_avspex.spec << EOF
+import os
+from pathlib import Path
+
+# Get the directory where this spec file is located
+spec_dir = os.path.abspath('.')
+# Get the project root directory (same as spec_dir in GitHub Actions)
+root_dir = spec_dir
+
+# Find the AV_Spex directory (search in common locations)
+av_spex_locations = [
+    os.path.join(root_dir, 'src/AV_Spex'),
+    os.path.join(root_dir, 'AV_Spex'),
+    os.path.join(root_dir, 'src')
+]
+
+for loc in av_spex_locations:
+    if os.path.exists(loc):
+        if os.path.basename(loc) == 'AV_Spex':
+            av_spex_dir = loc
+            break
+        elif os.path.exists(os.path.join(loc, 'AV_Spex')):
+            av_spex_dir = os.path.join(loc, 'AV_Spex')
+            break
+else:
+    av_spex_dir = os.path.join(root_dir, 'src/AV_Spex')  # Default fallback
+
+# Print paths for debugging
+print(f"spec_dir: {spec_dir}")
+print(f"root_dir: {root_dir}")
+print(f"av_spex_dir: {av_spex_dir}")
+
+block_cipher = None
+
+datas = []
+# Only add paths that exist
+config_path = os.path.join(av_spex_dir, 'config')
+if os.path.exists(config_path):
+    datas.append((config_path, 'AV_Spex/config'))
+else:
+    print(f"Warning: Config path not found: {config_path}")
+
+logo_path = os.path.join(av_spex_dir, 'logo_image_files')
+if os.path.exists(logo_path):
+    datas.append((logo_path, 'AV_Spex/logo_image_files'))
+else:
+    print(f"Warning: Logo path not found: {logo_path}")
+
+pyproject_path = os.path.join(root_dir, 'pyproject.toml')
+if os.path.exists(pyproject_path):
+    datas.append((pyproject_path, '.'))
+else:
+    print(f"Warning: pyproject.toml not found: {pyproject_path}")
+
+a = Analysis(['gui_launcher.py'],
+    pathex=[],
+    binaries=[],
+    datas=datas,
+    hiddenimports=[
+        'AV_Spex.processing',
+        'AV_Spex.utils',
+        'AV_Spex.checks'
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[
+        'PyQt6.QtDBus', 'PyQt6.QtPdf', 'PyQt6.QtSvg', 'PyQt6.QtNetwork',
+        'plotly.matplotlylib', 'plotly.figure_factory'
+    ],
+    noarchive=False,
+    cipher=block_cipher
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='AV-Spex',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    runtime_tmpdir=None,
+    console=False,
+    codesign_identity=None,
+    entitlements_file=None, 
+    target_arch=None,  # Build for the current architecture
+    universal2=True,   # Build a universal binary (both Intel and Apple Silicon)
+    icon='av_spex_the_logo.icns'
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=True,
+    upx=True,
+    upx_exclude=[],
+    name='AV-Spex'
+)
+
+app = BUNDLE(coll,
+    name='AV-Spex.app',
+    icon=os.path.join(spec_dir, 'av_spex_the_logo.icns'),
+    bundle_identifier='com.jpc.avspex'
+)
+EOF
 
       - name: Install dependencies
         run: |
@@ -36,17 +150,32 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          # Ensure we're building a universal binary
+          # Set environment variables to build universal binaries when compiling
           export ARCHFLAGS="-arch x86_64 -arch arm64"
+          export MACOSX_DEPLOYMENT_TARGET=10.13
           
-          # Check if PyInstaller is properly recognizing universal2 option
-          echo "Building with PyInstaller using universal2 option for Intel and Apple Silicon compatibility"
-          pyinstaller avspex.spec
+          # Find gui_launcher.py
+          echo "Looking for gui_launcher.py:"
+          find . -name "gui_launcher.py" | sort
           
-          # Verify the built app is universal
-          echo "Verifying the app is a universal binary:"
-          lipo -info dist/AV-Spex.app/Contents/MacOS/AV-Spex || echo "Main executable not found, checking alternatives..."
-          find dist/AV-Spex.app -name "*.so" -or -name "*.dylib" | head -n 3 | xargs lipo -info
+          # Copy icon file to root if needed
+          if [ ! -f "av_spex_the_logo.icns" ]; then
+            find . -name "*.icns" -exec cp {} . \; || echo "No icon file found"
+          fi
+          
+          # Ensure we're building a universal binary
+          echo "Building with PyInstaller using the modified spec file"
+          pyinstaller github_avspex.spec
+          
+          # Verify the built app
+          if [ -d "dist/AV-Spex.app" ]; then
+            echo "PyInstaller build successful"
+            find dist/AV-Spex.app -name "*.so" -or -name "*.dylib" | head -n 3 | xargs lipo -info || echo "No binary files found to check"
+          else
+            echo "PyInstaller build failed - checking directory contents:"
+            ls -la dist/ || echo "dist directory not found"
+            exit 1
+          fi
 
       - name: Import Apple Developer Certificate
         # Only run this step if this is a tag push and secrets are available
