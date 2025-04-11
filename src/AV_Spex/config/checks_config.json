@@ -17,11 +17,11 @@
       "run_tool": "yes"
     },
     "ffprobe": {
-      "check_tool": "no",
+      "check_tool": "yes",
       "run_tool": "yes"
     },
     "mediaconch": {
-      "mediaconch_policy": "JPC_AV_NTSC_MKV_2024-09-20.xml",
+      "mediaconch_policy": "JPC_AV_NTSC_MKV_2025_03_26.xml",
       "run_mediaconch": "yes"
     },
     "mediainfo": {
@@ -36,7 +36,7 @@
       "run_tool": "no"
     },
     "qct_parse": {
-      "run_tool": "yes",
+      "run_tool": "no",
       "barsDetection": true,
       "evaluateBars": true,
       "contentFilter": [],

@@ -38,8 +38,8 @@ def run_tool_command(tool_name, video_path, destination_directory, video_id):
     """
     # Define tool-specific commands
     tool_commands = {
-        'exiftool': 'exiftool',
-        'mediainfo': 'mediainfo -f',
+        'exiftool': 'exiftool -j',
+        'mediainfo': 'mediainfo -f --Output=JSON',
         'mediatrace': 'mediainfo --Details=1 --Output=XML',
         'ffprobe': 'ffprobe -v error -hide_banner -show_format -show_streams -print_format json'
     }
@@ -75,8 +75,8 @@ def _get_file_extension(tool_name):
         str: File extension for the tool's output
     """
     extension_map = {
-        'exiftool': 'txt',
-        'mediainfo': 'txt',
+        'exiftool': 'json',
+        'mediainfo': 'json',
         'mediatrace': 'xml',
         'ffprobe': 'txt'
     }

@@ -11,13 +11,17 @@ from ..utils.log_setup import logger
 T = TypeVar('T')
 
 class ConfigManager:
-    _instance = None
-    _configs: Dict[str, Any] = {}
+    _instance = None  # Class-level variable to hold single instance
+    _configs: Dict[str, Any] = {}  # Shared configuration cache
     
+    # The __new__(cls) insures only one instance is ever created
     def __new__(cls):
         if cls._instance is None:
+            # If no config class instance exists, create a instance of ConfigManager.
+            # super() calls the parent class to get ConfigManager's __new__ from within ConfigManager
             cls._instance = super(ConfigManager, cls).__new__(cls)
             
+            # One-time initialization of paths and directories
             if getattr(sys, 'frozen', False):
                 cls._instance._bundle_dir = os.path.join(sys._MEIPASS, 'AV_Spex')
             else:
@@ -281,6 +285,7 @@ class ConfigManager:
         """
         Get config, ensuring it's always returned as a proper dataclass instance.
         """
+        # If not in cache, load the default config:
         if config_name not in self._configs:
             # Load default config first
             default_config = self._load_json_config(config_name, last_used=False)
@@ -294,12 +299,14 @@ class ConfigManager:
                 try:
                     last_used_data = self._load_json_config(config_name, last_used=True)
                     self._deep_merge_dict(default_config, last_used_data)
+                    # logger.debug(f"using config from {last_used_path}")
                 except (FileNotFoundError, json.JSONDecodeError):
                     logger.debug(f"No valid last used config found for {config_name}")
                 
             # Create dataclass instance
             self._configs[config_name] = self._create_dataclass_instance(
-                config_class, default_config
+                config_class, # This is either SpexConfig or ChecksConfig from setup_config.py
+                default_config
             )
             
         return self._configs[config_name]
@@ -311,7 +318,11 @@ class ConfigManager:
         for key, value in source.items():
             if key in target:
                 if isinstance(value, dict) and isinstance(target[key], dict):
-                    self._deep_merge_dict(target[key], value)
+                    # Special handling for fn_sections - replace entirely
+                    if key == 'fn_sections' or key == 'filename_profiles':
+                        target[key] = value.copy()
+                    else:
+                        self._deep_merge_dict(target[key], value)
                 else:
                     target[key] = value
 
@@ -359,3 +370,41 @@ class ConfigManager:
         
         # Save the updated config
         self.save_last_used_config(config_name)
+
+    def reset_config(self, config_name: str, config_class: Type[T]) -> T:
+        """
+        Reset config to default values by removing the last used config 
+        and reloading from bundled defaults.
+        
+        Args:
+            config_name: Name of the config to reset
+            config_class: Type of the config class
+            
+        Returns:
+            T: The reset config instance
+        """
+        # Remove last used config if it exists
+        last_used_path = os.path.join(
+            self._user_config_dir,
+            f"last_used_{config_name}_config.json"
+        )
+        if os.path.exists(last_used_path):
+            try:
+                os.remove(last_used_path)
+            except Exception as e:
+                logger.error(f"Failed to remove last used config file: {str(e)}")
+        
+        # Clear the cached config
+        if config_name in self._configs:
+            del self._configs[config_name]
+        
+        # Load default config from bundled configs
+        default_config = self._load_json_config(config_name, last_used=False)
+        
+        # Create and cache dataclass instance
+        self._configs[config_name] = self._create_dataclass_instance(
+            config_class, default_config
+        )
+        
+        logger.info(f"Reset {config_name} config to default values")
+        return self._configs[config_name]

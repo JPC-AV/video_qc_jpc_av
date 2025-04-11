@@ -6,7 +6,7 @@ import sys
 import argparse
 import toml
 from art import text2art
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import List, Optional, Any
 
 from .processing import processing_mgmt
@@ -14,7 +14,7 @@ from .processing.avspex_processor import AVSpexProcessor
 from .utils import dir_setup
 from .utils import config_edit
 from .utils.log_setup import logger
-from .utils.config_setup import SpexConfig
+from .utils.config_setup import SpexConfig, FilenameConfig
 from .utils.config_manager import ConfigManager
 from .utils.config_io import ConfigIO
 
@@ -30,8 +30,8 @@ class LazyGUILoader:
         if cls._QApplication is None:
             from PyQt6.QtWidgets import QApplication
             # Update imports to use the new UI modules
-            from .gui.gui_checks_window import ChecksWindow
-            from .gui.gui_main_window import MainWindow
+            from .gui.gui_checks_tab.gui_checks_tab import ChecksWindow
+            from .gui.gui_main import MainWindow
             cls._QApplication = QApplication
             cls._ChecksWindow = ChecksWindow
             cls._MainWindow = MainWindow
@@ -81,9 +81,11 @@ SIGNALFLOW_MAPPING = {
 }
 
 
+filename_config = config_mgr.get_config("filename", FilenameConfig)
+
 FILENAME_MAPPING = {
-    "jpc": config_edit.JPCAV_filename,
-    "bowser": config_edit.bowser_filename
+    "jpc": filename_config.filename_profiles["JPC Filename Profile"],
+    "bowser": filename_config.filename_profiles["Bowser Filename Profile"]
 }
 
 
@@ -171,6 +173,7 @@ The scripts will confirm that the digital files conform to predetermined specifi
             try:
                 os.remove(os.path.join(user_config_dir, "last_used_checks_config.json"))
                 os.remove(os.path.join(user_config_dir, "last_used_spex_config.json"))
+                os.remove(os.path.join(user_config_dir, "last_used_filename_config.json"))
                 print("Reset to default configuration")
             except FileNotFoundError:
                 # It's okay if the files don't exist
@@ -247,7 +250,9 @@ def run_cli_mode(args):
     if args.sn_config_changes:
         config_edit.apply_signalflow_profile(args.sn_config_changes)
     if args.fn_config_changes:
-        apply_filename_profile('filename', args.fn_config_changes)
+        filename_profile = args.fn_config_changes
+        config_edit.apply_filename_profile(filename_profile)
+        config_mgr.save_last_used_config('spex')
 
     # Handle config I/O operations
     if args.export_config:
