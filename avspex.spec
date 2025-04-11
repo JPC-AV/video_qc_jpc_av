@@ -5,8 +5,53 @@ from pathlib import Path
 
 # Get the directory where this spec file is located
 spec_dir = os.path.abspath('.')
-# Get the project root directory (one level up from spec_dir)
-root_dir = os.path.dirname(spec_dir)
+
+# Determine if we're in local dev environment or GitHub Actions
+# by checking common directory structures
+is_github_actions = os.path.exists(os.path.join(spec_dir, '.github')) or 'GITHUB_WORKSPACE' in os.environ
+
+# Set paths that work in both environments
+if is_github_actions:
+    # In GitHub Actions, resources are typically at the repository root
+    root_dir = spec_dir
+    src_dir = os.path.join(root_dir, 'src')
+else:
+    # In local development, spec file might be in a subdirectory
+    root_dir = os.path.dirname(spec_dir)  # One level up from spec dir
+    src_dir = os.path.join(root_dir, 'src')
+
+# Function to find path that exists
+def find_existing_path(*possible_paths):
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    print(f"Warning: None of the paths exist: {possible_paths}")
+    return possible_paths[0]  # Return first option even if it doesn't exist
+
+# Find key directories/files
+config_path = find_existing_path(
+    os.path.join(src_dir, 'AV_Spex', 'config'),
+    os.path.join(root_dir, 'AV_Spex', 'config'),
+    os.path.join(root_dir, 'src', 'AV_Spex', 'config')
+)
+
+logo_path = find_existing_path(
+    os.path.join(src_dir, 'AV_Spex', 'logo_image_files'),
+    os.path.join(root_dir, 'AV_Spex', 'logo_image_files'),
+    os.path.join(root_dir, 'src', 'AV_Spex', 'logo_image_files')
+)
+
+pyproject_path = find_existing_path(
+    os.path.join(root_dir, 'pyproject.toml'),
+    os.path.join(spec_dir, 'pyproject.toml')
+)
+
+# Print paths for debugging
+print(f"spec_dir: {spec_dir}")
+print(f"root_dir: {root_dir}")
+print(f"config_path: {config_path}")
+print(f"logo_path: {logo_path}")
+print(f"pyproject_path: {pyproject_path}")
 
 block_cipher = None
 
@@ -14,9 +59,9 @@ a = Analysis(['gui_launcher.py'],
     pathex=[],
     binaries=[],
     datas=[
-        (os.path.join(root_dir, 'src/AV_Spex/config'), 'AV_Spex/config'),
-        (os.path.join(root_dir, 'src/AV_Spex/logo_image_files'), 'AV_Spex/logo_image_files'),
-        (os.path.join(root_dir, 'pyproject.toml'), '.')
+        (config_path, 'AV_Spex/config'),
+        (logo_path, 'AV_Spex/logo_image_files'),
+        (pyproject_path, '.')
     ],
     hiddenimports=[
         'AV_Spex.processing',
