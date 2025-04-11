@@ -11,7 +11,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -194,7 +194,7 @@ jobs:
           echo "Build and notarization process complete for AV-Spex version $VERSION!"
 
       - name: Upload DMG as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: AV-Spex-DMG
           path: dist/AV-Spex-*.dmg
@@ -202,7 +202,7 @@ jobs:
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: dist/AV-Spex-*.dmg
           draft: false
