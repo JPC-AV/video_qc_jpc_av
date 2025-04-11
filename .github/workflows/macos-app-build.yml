@@ -103,13 +103,6 @@ jobs:
             "dist/AV-Spex-$VERSION.dmg" \
             "dist/dmg" || echo "DMG creation failed with error code $? but continuing workflow"
           
-          # Debug: show any error messages from create-dmg
-          if [ $? -ne 0 ]; then
-            echo "create-dmg failed with error code $?"
-            echo "Checking create-dmg version:"
-            create-dmg --version
-          fi
-          
           # List created files
           echo "Files in dist directory after DMG creation:"
           ls -la dist/
@@ -121,15 +114,21 @@ jobs:
           path: dist/AV-Spex-*.dmg
           if-no-files-found: warn
 
-      # Only run these steps for actual tagged releases
-      - name: Code Sign and Notarize (for tagged releases)
-        if: startsWith(github.ref, 'refs/tags/') && env.APPLE_ID != ''
+      # Modified to run for both manual triggers and tags if secrets are available
+      - name: Code Sign and Notarize
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && env.APPLE_ID != ''
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
         run: |
+          # Verify secrets are available
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_ID_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ] || [ -z "$APPLE_DEVELOPER_ID" ]; then
+            echo "⚠️ Apple signing credentials not available. Skipping notarization."
+            exit 0
+          fi
+
           VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
           DMG_PATH="dist/AV-Spex-$VERSION.dmg"
           
@@ -210,8 +209,28 @@ jobs:
           echo "Stapling ticket to DMG..."
           xcrun stapler staple "$DMG_PATH" || echo "Stapling failed but continuing"
           
+          # Add more verbose output to diagnose notarization issues
+          echo "Getting notarization history for additional debugging information:"
+          xcrun notarytool history --keychain-profile "github-actions" || echo "Could not retrieve notarization history"
+          
           echo "Build and notarization process complete for AV-Spex version $VERSION!"
+          
+          # Upload the notarized DMG as a separate artifact
+          mkdir -p notarized
+          cp "$DMG_PATH" notarized/
 
+      # Optional: Upload the notarized DMG as a separate artifact
+      - name: Upload Notarized DMG
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && env.APPLE_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: AV-Spex-Notarized-DMG
+          path: notarized/*.dmg
+          if-no-files-found: warn
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+
+      # Keep this step only for tag-based releases
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
