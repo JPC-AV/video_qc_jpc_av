@@ -1,24 +1,12 @@
 # avspex.spec
 
 import os
-import sys
+from pathlib import Path
 
 # Get the directory where this spec file is located
 spec_dir = os.path.abspath('.')
-# Get the project root directory (same as spec_dir in GitHub Actions)
-root_dir = spec_dir
-
-# Set paths for resources
-config_path = os.path.join(root_dir, 'src/AV_Spex/config')
-logo_path = os.path.join(root_dir, 'src/AV_Spex/logo_image_files')
-pyproject_path = os.path.join(root_dir, 'pyproject.toml')
-
-# Print paths for debugging
-print(f"spec_dir: {spec_dir}")
-print(f"root_dir: {root_dir}")
-print(f"config_path: {config_path}")
-print(f"logo_path: {logo_path}")
-print(f"pyproject_path: {pyproject_path}")
+# Get the project root directory (one level up from spec_dir)
+root_dir = os.path.dirname(spec_dir)
 
 block_cipher = None
 
@@ -26,9 +14,9 @@ a = Analysis(['gui_launcher.py'],
     pathex=[],
     binaries=[],
     datas=[
-        (config_path, 'AV_Spex/config'),
-        (logo_path, 'AV_Spex/logo_image_files'),
-        (pyproject_path, '.')
+        (os.path.join(root_dir, 'src/AV_Spex/config'), 'AV_Spex/config'),
+        (os.path.join(root_dir, 'src/AV_Spex/logo_image_files'), 'AV_Spex/logo_image_files'),
+        (os.path.join(root_dir, 'pyproject.toml'), '.')
     ],
     hiddenimports=[
         'AV_Spex.processing',
@@ -61,9 +49,9 @@ exe = EXE(
     runtime_tmpdir=None,
     console=False,
     codesign_identity=None,
-    entitlements_file=None,
-    target_arch=None,  
-    universal2=True,
+    entitlements_file=None, 
+    target_arch=None,  # Build for the current architecture
+    universal2=True,   # Build a universal binary (both Intel and Apple Silicon)
     icon='av_spex_the_logo.icns'
 )
 
