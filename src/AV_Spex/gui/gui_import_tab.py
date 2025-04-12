@@ -103,7 +103,7 @@ class ImportTab(ThemeableMixin):
                 file_path = file_dialog.selectedFiles()[0]
                 try:
                     # Use the ConfigIO class to export config
-                    config_io = ConfigIO(config_mgr)
+                    config_io = ConfigIO()
                     # Needs to deliver config_type as a list
                     config_io.save_configs(file_path, config_type)
                     

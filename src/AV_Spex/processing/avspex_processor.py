@@ -15,6 +15,8 @@ from ..utils.config_setup import ChecksConfig, SpexConfig
 from ..utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
+checks_config = config_mgr.get_config('checks', ChecksConfig)
+spex_config = config_mgr.get_config('spex', SpexConfig)
 
 def display_processing_banner(video_id=None):
     """
@@ -56,9 +58,6 @@ class AVSpexProcessor:
         # signals are connected in setup_signal_connections() function in gui_main_window
         # passed to AVSpexProcessor from ProcessingWorker
         self.signals = signals
-        self.config_mgr = ConfigManager()
-        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
-        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
         self._cancelled = False
         self._cancel_emitted = False 
 
@@ -98,6 +97,9 @@ class AVSpexProcessor:
         return True
 
     def process_directories(self, source_directories):
+        checks_config = config_mgr.get_config('checks', ChecksConfig)
+        spex_config = config_mgr.get_config('spex', SpexConfig)
+        
         if self.check_cancelled():
             return False
 
@@ -144,7 +146,7 @@ class AVSpexProcessor:
 
         # Check if fixity is enabled in config
         fixity_enabled = False
-        fixity_config = self.checks_config.fixity
+        fixity_config = checks_config.fixity
 
         # Check each relevant attribute directly
         if (fixity_config.check_fixity == "yes" or 
@@ -163,7 +165,7 @@ class AVSpexProcessor:
             return False
 
         # Check if mediaconch is enabled
-        mediaconch_enabled = self.checks_config.tools.mediaconch.run_mediaconch == "yes"
+        mediaconch_enabled = checks_config.tools.mediaconch.run_mediaconch == "yes"
         if mediaconch_enabled:
             if self.signals:
                 self.signals.tool_started.emit("MediaConch")
@@ -181,7 +183,7 @@ class AVSpexProcessor:
 
          # Process metadata tools (mediainfo, ffprobe, exiftool, etc.)
         metadata_tools_enabled = False
-        tools_config = self.checks_config.tools
+        tools_config = checks_config.tools
 
         # Check if any metadata tools are enabled
         if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool == "yes" or
@@ -205,13 +207,13 @@ class AVSpexProcessor:
             if self.signals:
                 self.signals.tool_completed.emit("Metadata tools complete")
                 # Emit signals for each completed metadata tool
-                if self.checks_config.tools.mediainfo.check_tool == "yes":
+                if checks_config.tools.mediainfo.check_tool == "yes":
                     self.signals.step_completed.emit("Mediainfo")
-                if self.checks_config.tools.mediatrace.check_tool == "yes":
+                if checks_config.tools.mediatrace.check_tool == "yes":
                     self.signals.step_completed.emit("Mediatrace")
-                if self.checks_config.tools.exiftool.check_tool == "yes":
+                if checks_config.tools.exiftool.check_tool == "yes":
                     self.signals.step_completed.emit("Exiftool")
-                if self.checks_config.tools.ffprobe.check_tool == "yes":
+                if checks_config.tools.ffprobe.check_tool == "yes":
                     self.signals.step_completed.emit("FFprobe")
 
         if self.check_cancelled():
@@ -219,10 +221,10 @@ class AVSpexProcessor:
 
         # Process output tools (QCTools, report generation, etc.)
         outputs_enabled = (
-            self.checks_config.outputs.access_file == "yes" or
-            self.checks_config.outputs.report == "yes" or
-            self.checks_config.tools.qctools.run_tool == "yes" or
-            self.checks_config.tools.qct_parse.run_tool == "yes"
+            checks_config.outputs.access_file == "yes" or
+            checks_config.outputs.report == "yes" or
+            checks_config.tools.qctools.run_tool == "yes" or
+            checks_config.tools.qct_parse.run_tool == "yes"
         )
         
         if outputs_enabled:
