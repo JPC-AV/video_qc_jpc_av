@@ -60,7 +60,10 @@ exe = EXE(
     upx=True,
     runtime_tmpdir=None,
     console=False,
-    target_arch='universal2',  # Explicitly set to universal2 for both Intel and Apple Silicon
+    codesign_identity=None,
+    entitlements_file=None,
+    target_arch=None,  
+    universal2=True,
     icon='av_spex_the_logo.icns'
 )
 
