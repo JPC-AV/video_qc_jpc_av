@@ -115,7 +115,17 @@ def resolve_config(args, config_mapping):
 
 
 def apply_filename_profile(selected_profile: FilenameProfile):
-    """Apply a FilenameProfile dataclass to the current configuration"""
+    """
+    Apply a FilenameProfile dataclass to the current configuration.
+    
+    Replaces the filename configuration in the spex config with the selected profile,
+    ensuring the changes are properly saved to disk and reflected in any
+    consuming components.
+    """
+    # First refresh configs to ensure we're working with the latest data
+    config_mgr.refresh_configs()
+    
+    # Get the current spex config
     spex_config = config_mgr.get_config('spex', SpexConfig)
     
     # Completely replace the fn_sections with just one empty section
@@ -126,9 +136,6 @@ def apply_filename_profile(selected_profile: FilenameProfile):
         )
     }
     
-    # Use set_config instead of update_config to ensure complete replacement
-    config_mgr.set_config("spex", spex_config)
-    
     # Create a new dict with the sections from the profile
     if selected_profile.fn_sections:
         # Replace the entire sections dict with the one from the profile
@@ -138,15 +145,29 @@ def apply_filename_profile(selected_profile: FilenameProfile):
     if hasattr(selected_profile, 'FileExtension') and selected_profile.FileExtension:
         spex_config.filename_values.FileExtension = selected_profile.FileExtension
     
-    # Use set_config to ensure complete replacement
-    config_mgr.set_config('spex', spex_config)
+    # Update the cached config directly
+    config_mgr._configs['spex'] = spex_config
+    
+    # Save the updated config to disk
+    config_mgr.save_config('spex', is_last_used=True)
+    
+    logger.debug(f"Applied filename profile beginning with '{selected_profile.fn_sections['section1'].value}_...' to configuration")
+
 
 def apply_signalflow_profile(selected_profile: dict):
-    """Apply signalflow profile changes to spex_config.
+    """
+    Apply signalflow profile changes to spex_config.
+    
+    Updates encoder settings in both mediatrace and ffmpeg configurations
+    with values from the provided profile.
     
     Args:
         selected_profile (dict): The signalflow profile to apply (encoder settings)
     """
+    # First refresh configs to ensure we're working with the latest data
+    config_mgr.refresh_configs()
+    
+    # Get the current spex config
     spex_config = config_mgr.get_config('spex', SpexConfig)
     
     # Validate input
@@ -174,11 +195,13 @@ def apply_signalflow_profile(selected_profile: dict):
         for key, value in selected_profile.items():
             spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'][key] = value
     
-    # Save the updated config
-    config_mgr.set_config('spex', spex_config)
+    # Update the cached config directly
+    config_mgr._configs['spex'] = spex_config
     
-    # Save the last used config
-    config_mgr.save_last_used_config('spex')
+    # Save the updated config to disk
+    config_mgr.save_config('spex', is_last_used=True)
+    
+    logger.debug(f"Applied signalflow profile to configuration")
 
 
 def apply_profile(selected_profile):
