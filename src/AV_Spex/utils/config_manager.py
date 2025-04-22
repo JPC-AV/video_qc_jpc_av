@@ -1,5 +1,5 @@
 from dataclasses import asdict
-from typing import Optional, TypeVar, Type, Dict, Any, get_type_hints
+from typing import Optional, TypeVar, Type, List, Dict, Union, Any, get_type_hints, get_origin, get_args
 import json
 import os
 from pathlib import Path
@@ -112,299 +112,223 @@ class ConfigManager:
             
         return file_path if os.path.exists(file_path) else None
 
-    def _load_json_config(self, config_name: str, last_used: bool = False) -> dict:
-        """
-        Load JSON config file by name
-        Args:
-            config_name: Name of the config file
-            last_used: If True, look for last_used_{config_name}_config.json in user directory
-        """
-        if last_used:
-            last_used_path = self.find_file(
-                f"last_used_{config_name}_config.json",
-                user_config=True
-            )
-            if last_used_path and os.path.exists(last_used_path):
-                try:
-                    with open(last_used_path, 'r') as f:
-                        data = json.load(f)
-                        # logger.debug(f"Loaded last used config from {last_used_path}")
-                        return data
-                except json.JSONDecodeError:
-                    logger.critical(f"Error loading last used config, falling back to defaults")
-
-        # Load default config from bundled configs
-        json_path = self.find_file(f"{config_name}_config.json", user_config=False)
+    def _load_json_config(self, config_name: str, use_last_used: bool = False) -> dict:
+        """Load JSON config from file."""
+        config_path = None
         
-        if not json_path or not os.path.exists(json_path):
-            raise FileNotFoundError(
-                f"Default config file {config_name}_config.json not found in bundled configs."
-            )
+        if use_last_used:
+            last_used_path = os.path.join(self._user_config_dir, f"last_used_{config_name}_config.json")
+            if os.path.exists(last_used_path):
+                config_path = last_used_path
+        
+        if not config_path:
+            # Use bundled config
+            config_path = os.path.join(self._bundle_dir, 'config', f"{config_name}_config.json")
+            
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Config file not found at {config_path}")
             
         try:
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-                # logger.debug(f"Loaded default config from {json_path}")
-                return data
+            with open(config_path, 'r') as f:
+                return json.load(f)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing {config_name}_config.json: {str(e)}")
+            raise ValueError(f"Error parsing config file {config_path}: {str(e)}")
 
-    def save_last_used_config(self, config_name: str) -> None:
-        """Save current config state as last used settings in user config directory"""
-        config = self._configs.get(config_name)
-        if not config:
-            logger.error(f"No config found for {config_name}, cannot save last used settings")
-            return
-            
-        last_used_path = os.path.join(
-            self._user_config_dir,
-            f"last_used_{config_name}_config.json"
-        )
+    # Dataclass conversion functions
+    def _deserialize_dataclass(self, cls: Type[T], data: Dict[str, Any]) -> T:
+        """Convert a dictionary to a dataclass instance."""
+        if data is None:
+            return None
         
-        try:
-            with open(last_used_path, 'w') as f:
-                json.dump(asdict(config), f, indent=2)
-            # logger.debug(f"Saved last used config to {last_used_path}")
-        except Exception as e:
-            logger.critical(f"Error saving last used config for {config_name}: {str(e)}")
-
-
-    def _create_dataclass_instance(self, cls: Type[T], data: dict) -> T:
-        """
-        Create a dataclass instance from a dictionary, ensuring nested structures
-        are also converted to dataclasses.
-        """
-        if not data:
-            raise ValueError(f"No data provided to create {cls.__name__} instance")
-
+        # Get type hints for the class
         type_hints = get_type_hints(cls)
-        processed_data = {}
         
-        for field_name, field_type in type_hints.items():
-            if field_name not in data:
-                logger.warning(f"Field {field_name} not found in data for {cls.__name__}")
+        # Initialize kwargs for class constructor
+        kwargs = {}
+        
+        for field_name, field_value in data.items():
+            if field_name not in type_hints:
+                # Skip fields not in dataclass
+                continue
+            
+            field_type = type_hints[field_name]
+            kwargs[field_name] = self._process_field(field_type, field_value)
+        
+        # Create and return the dataclass instance
+        return cls(**kwargs)
+
+    def _process_field(self, field_type: Type, field_value: Any) -> Any:
+        """Process a field value based on its type."""
+        if field_value is None:
+            return None
+        
+        # Get origin and args for complex types
+        origin = get_origin(field_type)
+        args = get_args(field_type)
+        
+        # Handle based on type
+        if origin is list or origin is List:
+            return self._handle_list(args[0], field_value)
+        elif origin is dict or origin is Dict:
+            return self._handle_dict(args[0], args[1], field_value)
+        elif origin is Union:
+            return self._handle_union(args, field_value)
+        elif hasattr(field_type, '__dataclass_fields__'):  # Is a dataclass
+            return self._deserialize_dataclass(field_type, field_value)
+        else:
+            # Simple type, use as is
+            return field_value
+
+    def _handle_list(self, item_type: Type, values: List) -> List:
+        """Handle list type conversion."""
+        if not isinstance(values, list):
+            return values
+        
+        if hasattr(item_type, '__dataclass_fields__'):
+            return [self._deserialize_dataclass(item_type, item) 
+                   for item in values if isinstance(item, dict)]
+        return values
+
+    def _handle_dict(self, key_type: Type, value_type: Type, data: Dict) -> Dict:
+        """Handle dictionary type conversion."""
+        if not isinstance(data, dict):
+            return data
+        
+        if hasattr(value_type, '__dataclass_fields__'):
+            return {k: self._deserialize_dataclass(value_type, v) 
+                   for k, v in data.items() if isinstance(v, dict)}
+        return data
+
+    def _handle_union(self, union_types: tuple, value: Any) -> Any:
+        """Handle Union types (including Optional)."""
+        if value is None:
+            return None
+        
+        # Try each type in the union
+        for union_type in union_types:
+            if union_type is type(None):
                 continue
                 
-            field_value = data[field_name]
-            
-            # Handle None values
-            if field_value is None:
-                processed_data[field_name] = None
-                continue
-            
-            # Extract actual type from Optional
-            if str(field_type).startswith('typing.Optional'):
-                field_type = field_type.__args__[0]
-            
-            # Handle nested dataclasses
-            if hasattr(field_type, '__dataclass_fields__'):
-                if isinstance(field_value, dict):
-                    processed_data[field_name] = self._create_dataclass_instance(
-                        field_type, field_value
-                    )
-                else:
-                    raise ValueError(
-                        f"Expected dict for {field_name}, got {type(field_value)}"
-                    )
-                    
-            # Handle List types
-            elif str(field_type).startswith('typing.List'):
-                if not isinstance(field_value, list):
-                    raise ValueError(
-                        f"Expected list for {field_name}, got {type(field_value)}"
-                    )
-                # Get the type of list elements
-                element_type = field_type.__args__[0]
-                if hasattr(element_type, '__dataclass_fields__'):
-                    # Convert each list element to a dataclass if needed
-                    processed_data[field_name] = [
-                        self._create_dataclass_instance(element_type, item)
-                        if isinstance(item, dict) else item
-                        for item in field_value
-                    ]
-                else:
-                    processed_data[field_name] = field_value
-                    
-            # Handle Dict types
-            elif str(field_type).startswith('typing.Dict'):
-                if not isinstance(field_value, dict):
-                    raise ValueError(
-                        f"Expected dict for {field_name}, got {type(field_value)}"
-                    )
-                # Get the value type of the dict
-                value_type = field_type.__args__[1]
-                if hasattr(value_type, '__dataclass_fields__'):
-                    # Convert each dict value to a dataclass if needed
-                    processed_data[field_name] = {
-                        k: self._create_dataclass_instance(value_type, v)
-                        if isinstance(v, dict) else v
-                        for k, v in field_value.items()
-                    }
-                else:
-                    processed_data[field_name] = field_value
-            
-            # Handle basic types
-            else:
-                processed_data[field_name] = field_value
+            if hasattr(union_type, '__dataclass_fields__') and isinstance(value, dict):
+                return self._deserialize_dataclass(union_type, value)
+            elif isinstance(value, union_type):
+                return value
         
-        return cls(**processed_data)
+        # If no specific handling, return as is
+        return value
+
+    def get_config(self, config_name: str, config_class: Type[T], 
+                   use_last_used: bool = True) -> T:
+        """
+        Get configuration as a dataclass instance.
+        
+        Args:
+            config_name: Name of the configuration
+            config_class: Dataclass type to instantiate
+            use_last_used: Whether to use the last used config if available
+            
+        Returns:
+            An instance of the config_class
+        """
+        # Return cached config if available
+        if config_name in self._configs:
+            return self._configs[config_name]
+            
+        # Load config data from file
+        config_data = self._load_json_config(config_name, use_last_used=use_last_used)
+        
+        # Convert to dataclass and cache
+        config = self._deserialize_dataclass(config_class, config_data)
+        self._configs[config_name] = config
+        
+        return config
+
+
+    def save_config(self, config_name: str, is_last_used: bool = False) -> None:
+        """
+        Save current config to a file.
+        
+        Args:
+            config_name: Name of the config to save
+            is_last_used: If True, save as last_used config, otherwise as regular config
+        """
+        config = self._configs.get(config_name)
+        if not config:
+            logger.error(f"No config found for {config_name}, cannot save")
+            return
+            
+        filename = f"{'last_used_' if is_last_used else ''}{config_name}_config.json"
+        save_path = os.path.join(self._user_config_dir, filename)
+        
+        try:
+            with open(save_path, 'w') as f:
+                json.dump(asdict(config), f, indent=2)
+            logger.info(f"Saved config to {save_path}")
+        except Exception as e:
+            logger.error(f"Error saving config to {save_path}: {str(e)}")
 
     def update_config(self, config_name: str, updates: dict) -> None:
         """
-        Update config while maintaining dataclass structure throughout.
+        Update specific fields in a config.
+        
+        Args:
+            config_name: Name of the config to update
+            updates: Dictionary of updates to apply
         """
-        current_config = self._configs.get(config_name)
-        if not current_config:
-            logger.error(f"No current {config_name} config found")
+        config = self._configs.get(config_name)
+        if not config:
+            logger.error(f"No config found for {config_name}, cannot update")
             return
-
-        def update_recursively(target, source):
-            for key, value in source.items():
-                if not hasattr(target, key):
-                    logger.error(f"Field '{key}' not found in config")
-                    continue
-                    
-                current_value = getattr(target, key)
-                
-                if isinstance(value, dict):
-                    if hasattr(current_value, '__dataclass_fields__'):
-                        # If current value is a dataclass, update it recursively
-                        update_recursively(current_value, value)
-                    else:
-                        # If we're updating a dict field
-                        setattr(target, key, value)
-                else:
-                    # Update the value directly
-                    setattr(target, key, value)
-
-        # Perform the update
-        update_recursively(current_config, updates)
-        # logger.debug(f"Updated {config_name} config")
-
-    def get_config(self, config_name: str, config_class: Type[T]) -> T:
-        """
-        Get config, ensuring it's always returned as a proper dataclass instance.
-        """
-        # If not in cache, load the default config:
-        if config_name not in self._configs:
-            # Load default config first
-            default_config = self._load_json_config(config_name, last_used=False)
             
-            # Only try to load and merge last used config if it exists
-            last_used_path = self.find_file(
-                f"last_used_{config_name}_config.json",
-                user_config=True
-            )
-            if last_used_path and os.path.exists(last_used_path):
-                try:
-                    last_used_data = self._load_json_config(config_name, last_used=True)
-                    self._deep_merge_dict(default_config, last_used_data)
-                    # logger.debug(f"using config from {last_used_path}")
-                except (FileNotFoundError, json.JSONDecodeError):
-                    logger.debug(f"No valid last used config found for {config_name}")
-                
-            # Create dataclass instance
-            self._configs[config_name] = self._create_dataclass_instance(
-                config_class, # This is either SpexConfig or ChecksConfig from setup_config.py
-                default_config
-            )
-            
-        return self._configs[config_name]
-
-    def _deep_merge_dict(self, target: dict, source: dict) -> None:
-        """
-        Recursively merge source dict into target dict while preserving types.
-        """
+        # Convert current config to dict
+        config_dict = asdict(config)
+        
+        # Apply updates recursively
+        self._update_dict_recursively(config_dict, updates)
+        
+        # Convert back to dataclass
+        self._configs[config_name] = self._deserialize_dataclass(type(config), config_dict)
+        
+        # Save as last used
+        self.save_config(config_name, is_last_used=True)
+        
+    def _update_dict_recursively(self, target: dict, source: dict) -> None:
+        """Update dictionary recursively."""
         for key, value in source.items():
             if key in target:
                 if isinstance(value, dict) and isinstance(target[key], dict):
-                    # Special handling for fn_sections - replace entirely
-                    if key == 'fn_sections' or key == 'filename_profiles':
-                        target[key] = value.copy()
-                    else:
-                        self._deep_merge_dict(target[key], value)
+                    self._update_dict_recursively(target[key], value)
                 else:
                     target[key] = value
 
-    def save_config(self, config_name: str) -> None:
-        """Save current config state to user config directory"""
-        config = self._configs.get(config_name)
-        if not config:
-            return
-            
-        json_path = os.path.join(self._user_config_dir, f"{config_name}_config.json")
-        
-        try:
-            with open(json_path, 'w') as f:
-                json.dump(asdict(config), f, indent=2)
-            # logger.debug(f"Saved config to {json_path}")
-        except Exception as e:
-            logger.critical(f"Error saving config for {config_name}: {str(e)}")
-
-    def set_config(self, config_name: str, config: Any) -> None:
-        """
-        Set config value, ensuring it maintains proper dataclass structure.
-        
-        Args:
-            config_name: Name of the config to set
-            config: Configuration value to set. Can be either a dataclass instance
-                or a dictionary that can be converted to the appropriate dataclass.
-        """
-        # If it's already a dataclass instance, store it directly
-        if hasattr(config, '__dataclass_fields__'):
-            self._configs[config_name] = config
-            return
-            
-        # If it's a dict, try to convert it to the appropriate dataclass
-        if isinstance(config, dict):
-            # Get the appropriate dataclass type from existing config
-            if config_name in self._configs:
-                config_class = self._configs[config_name].__class__
-                self._configs[config_name] = self._create_dataclass_instance(config_class, config)
-            else:
-                logger.error(f"Cannot determine dataclass type for {config_name}")
-                return
-        else:
-            logger.error(f"Config must be either a dataclass instance or a dictionary, got {type(config)}")
-            return
-        
-        # Save the updated config
-        self.save_last_used_config(config_name)
-
     def reset_config(self, config_name: str, config_class: Type[T]) -> T:
         """
-        Reset config to default values by removing the last used config 
-        and reloading from bundled defaults.
+        Reset config to default values.
         
         Args:
             config_name: Name of the config to reset
             config_class: Type of the config class
             
         Returns:
-            T: The reset config instance
+            The reset config instance
         """
-        # Remove last used config if it exists
-        last_used_path = os.path.join(
-            self._user_config_dir,
-            f"last_used_{config_name}_config.json"
-        )
+        # Remove from cache
+        if config_name in self._configs:
+            del self._configs[config_name]
+            
+        # Remove last used config file if it exists
+        last_used_path = os.path.join(self._user_config_dir, f"last_used_{config_name}_config.json")
         if os.path.exists(last_used_path):
             try:
                 os.remove(last_used_path)
+                logger.info(f"Removed last used config file {last_used_path}")
             except Exception as e:
-                logger.error(f"Failed to remove last used config file: {str(e)}")
-        
-        # Clear the cached config
-        if config_name in self._configs:
-            del self._configs[config_name]
-        
-        # Load default config from bundled configs
-        default_config = self._load_json_config(config_name, last_used=False)
-        
-        # Create and cache dataclass instance
-        self._configs[config_name] = self._create_dataclass_instance(
-            config_class, default_config
-        )
-        
-        logger.info(f"Reset {config_name} config to default values")
-        return self._configs[config_name]
+                logger.error(f"Failed to remove {last_used_path}: {str(e)}")
+                
+        # Load fresh config
+        return self.get_config(config_name, config_class, use_last_used=False)
+    
+    def refresh_configs(self):
+        """Force reload of all configs from disk"""
+        self._configs = {}
+        logger.debug("Config cache cleared, configs will be reloaded from disk")

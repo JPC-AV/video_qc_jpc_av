@@ -17,6 +17,7 @@ class ProcessingWorker(QThread):
         super().__init__(parent)
         self.source_directories = source_directories
         self.signals = signals
+
         self.processor = AVSpexProcessor(signals=signals)
         self.user_cancelled = False
         

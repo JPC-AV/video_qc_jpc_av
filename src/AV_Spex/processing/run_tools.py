@@ -5,8 +5,6 @@ from ..utils.config_setup import ChecksConfig
 from ..utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-
 
 def run_command(command, input_path, output_type, output_path):
     '''
@@ -36,6 +34,9 @@ def run_tool_command(tool_name, video_path, destination_directory, video_id):
     Returns:
         str or None: Path to the output file, or None if tool is not run
     """
+    # get config
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+
     # Define tool-specific commands
     tool_commands = {
         'exiftool': 'exiftool -j',

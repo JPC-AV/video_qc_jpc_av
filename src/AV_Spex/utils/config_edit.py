@@ -6,7 +6,7 @@ from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, File
 from ..utils.config_manager import ConfigManager
 
 
-config_mgr = ConfigManager()
+config_mgr = ConfigManager() # Gets the singleton instance
 
 
 def format_config_value(value, indent=0, is_nested=False):
@@ -186,45 +186,31 @@ def apply_profile(selected_profile):
     
     Args:
         selected_profile (dict): The profile configuration to apply
-        config_mgr (ConfigManager): Instance of the config manager
     """
-    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    # Prepare the updates dictionary with the structure matching the dataclass
+    updates = {}
     
+    # Handle outputs section
     if 'outputs' in selected_profile:
-        for key, value in selected_profile["outputs"].items():
-            setattr(checks_config.outputs, key, value)
-
-    if 'tools' in selected_profile:
-        for tool_name, updates in selected_profile["tools"].items():
-            # Handle each tool type differently based on its structure
-            if tool_name == 'mediaconch':
-                # MediaConch has mediaconch_policy and run_mediaconch
-                if isinstance(updates, dict):
-                    for key, value in updates.items():
-                        setattr(checks_config.tools.mediaconch, key, value)
-            
-            elif tool_name == 'qct_parse':
-                # QCT Parse has a unique structure with boolean and list fields
-                if isinstance(updates, dict):
-                    for key, value in updates.items():
-                        setattr(checks_config.tools.qct_parse, key, value)
-            
-            else:
-                # Standard tools with check_tool and run_tool
-                tool = getattr(checks_config.tools, tool_name)
-                if isinstance(updates, dict):
-                    if 'check_tool' in updates:
-                        tool.check_tool = updates['check_tool']
-                    if 'run_tool' in updates:
-                        tool.run_tool = updates['run_tool']
-
-    if 'fixity' in selected_profile:
-        for key, value in selected_profile["fixity"].items():
-            if hasattr(checks_config.fixity, key):
-                setattr(checks_config.fixity, key, value)
+        updates['outputs'] = selected_profile['outputs']
     
-    # Save the updated config
-    config_mgr.set_config('checks', checks_config)
+    # Handle fixity section
+    if 'fixity' in selected_profile:
+        updates['fixity'] = selected_profile['fixity']
+    
+    # Handle tools section with special cases
+    if 'tools' in selected_profile:
+        tools_updates = {}
+        
+        for tool_name, tool_updates in selected_profile['tools'].items():
+            # No need for special cases - the update_config method will handle it
+            tools_updates[tool_name] = tool_updates
+        
+        updates['tools'] = tools_updates
+    
+    # Apply all updates at once using the new update_config method
+    if updates:
+        config_mgr.update_config('checks', updates)
 
 
 def update_tool_setting(tool_names: List[str], value: str):

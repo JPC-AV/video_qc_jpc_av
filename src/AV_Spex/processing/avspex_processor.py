@@ -56,11 +56,15 @@ class AVSpexProcessor:
         # signals are connected in setup_signal_connections() function in gui_main_window
         # passed to AVSpexProcessor from ProcessingWorker
         self.signals = signals
-        self.config_mgr = ConfigManager()
-        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
-        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
         self._cancelled = False
         self._cancel_emitted = False 
+        
+        # Force a reload of the config from disk
+        self.config_mgr = ConfigManager()
+        self.config_mgr.refresh_configs()
+        self.checks_config = config_mgr.get_config('checks', ChecksConfig)
+        self.spex_config = config_mgr.get_config('spex', SpexConfig)
+
 
     def cancel(self):
         self._cancelled = True
