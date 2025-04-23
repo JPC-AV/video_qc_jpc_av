@@ -209,13 +209,13 @@ class AVSpexProcessor:
             if self.signals:
                 self.signals.tool_completed.emit("Metadata tools complete")
                 # Emit signals for each completed metadata tool
-                if self.checks_config.tools.mediainfo.check_tool == "yes":
+                if tools_config.mediainfo.check_tool == "yes":
                     self.signals.step_completed.emit("Mediainfo")
-                if self.checks_config.tools.mediatrace.check_tool == "yes":
+                if tools_config.mediatrace.check_tool == "yes":
                     self.signals.step_completed.emit("Mediatrace")
-                if self.checks_config.tools.exiftool.check_tool == "yes":
+                if tools_config.exiftool.check_tool == "yes":
                     self.signals.step_completed.emit("Exiftool")
-                if self.checks_config.tools.ffprobe.check_tool == "yes":
+                if tools_config.ffprobe.check_tool == "yes":
                     self.signals.step_completed.emit("FFprobe")
 
         if self.check_cancelled():

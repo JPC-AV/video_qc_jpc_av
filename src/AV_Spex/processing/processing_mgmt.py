@@ -183,12 +183,6 @@ class ProcessingManager:
             differences = check_tool_metadata(tool, output_path)
             if differences:
                 metadata_differences[tool] = differences
-            
-            # Emit step completed signal for this tool
-            if self.signals:
-                # Capitalize first letter for the step name to match the format in populate_steps_list
-                tool_name = tool.capitalize() if tool != 'ffprobe' else 'FFprobe'
-                self.signals.step_completed.emit(tool_name)
                 
             if self.check_cancelled():
                 return None
