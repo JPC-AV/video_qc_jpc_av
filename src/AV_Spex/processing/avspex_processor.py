@@ -143,9 +143,6 @@ class AVSpexProcessor:
         if self.check_cancelled():
             return False
 
-        if self.signals:
-            self.signals.tool_started.emit("Fixity...")
-
         # Check if fixity is enabled in config
         fixity_enabled = False
         fixity_config = self.checks_config.fixity
@@ -158,6 +155,8 @@ class AVSpexProcessor:
             fixity_enabled = True
             
         if fixity_enabled:
+            if self.signals:
+                self.signals.tool_started.emit("Fixity...")
             processing_mgmt.process_fixity(source_directory, video_path, video_id)
             if self.signals:
                 self.signals.tool_completed.emit("Fixity processing complete")

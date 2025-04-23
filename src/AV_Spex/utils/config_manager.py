@@ -331,4 +331,4 @@ class ConfigManager:
     def refresh_configs(self):
         """Force reload of all configs from disk"""
         self._configs = {}
-        logger.debug("Config cache cleared, configs will be reloaded from disk")
+        logger.debug(f"Config cache cleared, configs will be reloaded from disk\n")
