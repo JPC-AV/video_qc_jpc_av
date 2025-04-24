@@ -71,10 +71,7 @@ class MainWindowUI:
     
     def logo_setup(self):
         """Set up the logo display"""
-        if getattr(sys, 'frozen', False):
-            QTimer.singleShot(0, self.main_window.theme._delayed_logo_setup)
-        else:
-            self.main_window.theme._load_logo()
+        self.main_window.theme._load_logo()
     
     def setup_tabs(self):
         """Set up tab styling"""

@@ -18,16 +18,27 @@ spex_config = config_mgr.get_config('spex', SpexConfig)
 
 def parse_mediatrace(xml_file):
     expected_mediatrace = asdict(spex_config.mediatrace_values)
-
     expected_mt_keys = expected_mediatrace.keys()
-
-    expected_encoder_settings = []
     expected_encoder_settings = expected_mediatrace['ENCODER_SETTINGS']
 
-    # Parse the XML file
-    tree = ET.parse(xml_file)
-    root = tree.getroot()
+    # Default values
+    root = None
+    mediatrace_output = {}
+    
+    try:
+        # Parse the XML file
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
+    except ET.ParseError as e:
+        # Log the error
+        print(f"Warning: Could not parse XML file {xml_file}: {e}")
+        return None  # Return early only if parsing fails
+    except Exception as e:
+        # Handle other potential errors
+        print(f"Unexpected error processing {xml_file}: {e}")
+        return None  # Return early only if parsing fails
 
+    # If we get here, XML parsing was successful
     # Define the namespace
     ns = {'mt': 'https://mediaarea.net/mediatrace'}
 
