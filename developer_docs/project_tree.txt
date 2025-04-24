@@ -1,0 +1,80 @@
+JPC_AV_videoQC
+├── LICENSE
+├── README.md
+├── app_packaging
+├── build
+├── build_avspex_dmg.sh
+├── developer_docs
+├── entitlements.plist
+├── images_for_readme
+├── logs
+├── pyproject.toml
+├── src/AV_Spex/
+    ├── __init__.py
+    ├── av_spex_the_file.py
+    ├── checks
+    │   ├── __init__.py
+    │   ├── __pycache__
+    │   ├── embed_fixity.py
+    │   ├── exiftool_check.py
+    │   ├── ffprobe_check.py
+    │   ├── fixity_check.py
+    │   ├── make_access.py
+    │   ├── mediaconch_check.py
+    │   ├── mediainfo_check.py
+    │   ├── mediatrace_check.py
+    │   └── qct_parse.py
+    ├── config
+    │   ├── checks_config.json
+    │   ├── mediaconch_policies
+    │   └── spex_config.json
+    ├── gui
+    |   ├── __init__.py
+    |   |── gui_checks_tab
+    │   |   |── __init__.py
+    │   |   |── __pycache__
+    │   |   |── gui_checks_tab.py
+    |   │   └── gui_checks_window.py
+    |   |── gui_import_tab.py
+    |   |── gui_main.py
+    |   |── gui_main_window
+    │   |   |── __init__.py
+    │   |   |── __pycache__
+    │   |   |── gui_main_window_processing.py
+    │   |   |── gui_main_window_signals.py
+    │   |   |── gui_main_window_theme.py
+    |   │   └── gui_main_window_ui.py
+    |   |── gui_processing_window.py
+    |   |── gui_processing_window_console.py
+    |   |── gui_signals.py
+    |   |── gui_spex_tab.py
+    |   └── gui_theme_manager.py
+    ├── logo_image_files
+    │   ├── Branding_avspex_noJPC_030725.png
+    │   ├── Branding_avspex_noJPC_inverted_032325.png
+    │   ├── Branding_noJPC_030725.png
+    │   ├── JPCA_Branding_011025.png
+    │   ├── JPCA_H_Branding_011025.png
+    │   ├── av_spex_the_logo.png
+    │   ├── germfree_eq.png
+    │   ├── jpc_logo_purple.png
+    │   └── nmaahc_vert_purple.png
+    ├── processing
+    │   ├── __init__.py
+    │   ├── __pycache__
+    │   ├── avspex_processor.py
+    │   ├── processing_mgmt.py
+    │   ├── run_tools.py
+    │   └── worker_thread.py
+    └── utils
+        ├── __init__.py
+        ├── __pycache__
+        ├── config_edit.py
+        ├── config_io.py
+        ├── config_manager.py
+        ├── config_setup.py
+        ├── deps_setup.py
+        ├── dir_setup.py
+        ├── generate_report.py
+        └── log_setup.py
+└── tests

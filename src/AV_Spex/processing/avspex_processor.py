@@ -56,11 +56,15 @@ class AVSpexProcessor:
         # signals are connected in setup_signal_connections() function in gui_main_window
         # passed to AVSpexProcessor from ProcessingWorker
         self.signals = signals
-        self.config_mgr = ConfigManager()
-        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
-        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
         self._cancelled = False
         self._cancel_emitted = False 
+        
+        # Force a reload of the config from disk
+        self.config_mgr = ConfigManager()
+        self.config_mgr.refresh_configs()
+        self.checks_config = config_mgr.get_config('checks', ChecksConfig)
+        self.spex_config = config_mgr.get_config('spex', SpexConfig)
+
 
     def cancel(self):
         self._cancelled = True
@@ -139,9 +143,6 @@ class AVSpexProcessor:
         if self.check_cancelled():
             return False
 
-        if self.signals:
-            self.signals.tool_started.emit("Fixity...")
-
         # Check if fixity is enabled in config
         fixity_enabled = False
         fixity_config = self.checks_config.fixity
@@ -154,6 +155,8 @@ class AVSpexProcessor:
             fixity_enabled = True
             
         if fixity_enabled:
+            if self.signals:
+                self.signals.tool_started.emit("Fixity...")
             processing_mgmt.process_fixity(source_directory, video_path, video_id)
             if self.signals:
                 self.signals.tool_completed.emit("Fixity processing complete")
@@ -205,13 +208,13 @@ class AVSpexProcessor:
             if self.signals:
                 self.signals.tool_completed.emit("Metadata tools complete")
                 # Emit signals for each completed metadata tool
-                if self.checks_config.tools.mediainfo.check_tool == "yes":
+                if tools_config.mediainfo.check_tool == "yes":
                     self.signals.step_completed.emit("Mediainfo")
-                if self.checks_config.tools.mediatrace.check_tool == "yes":
+                if tools_config.mediatrace.check_tool == "yes":
                     self.signals.step_completed.emit("Mediatrace")
-                if self.checks_config.tools.exiftool.check_tool == "yes":
+                if tools_config.exiftool.check_tool == "yes":
                     self.signals.step_completed.emit("Exiftool")
-                if self.checks_config.tools.ffprobe.check_tool == "yes":
+                if tools_config.ffprobe.check_tool == "yes":
                     self.signals.step_completed.emit("FFprobe")
 
         if self.check_cancelled():

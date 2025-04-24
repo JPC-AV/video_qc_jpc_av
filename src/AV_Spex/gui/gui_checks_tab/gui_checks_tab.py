@@ -38,7 +38,7 @@ class ChecksTab(ThemeableMixin):
                 # Call the backend function to apply the selected profile
                 config_edit.apply_profile(profile)
                 logger.debug(f"Profile '{selected_profile}' applied successfully.")
-                config_mgr.save_last_used_config('checks')
+                # config_mgr.save_last_used_config('checks')
             except ValueError as e:
                 logger.critical(f"Error: {e}")
 
@@ -142,7 +142,7 @@ class ChecksTab(ThemeableMixin):
                 border: none;
             }
         """)
-        self.main_window.config_widget = ChecksWindow(config_mgr=config_mgr)
+        self.main_window.config_widget = ChecksWindow()
         config_scroll_area.setWidgetResizable(True)
         config_scroll_area.setWidget(self.main_window.config_widget)
 

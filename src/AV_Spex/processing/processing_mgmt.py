@@ -20,14 +20,16 @@ from ..checks.qct_parse import run_qctparse
 from ..checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
 
 
-config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
-
 class ProcessingManager:
     def __init__(self, signals=None, check_cancelled_fn=None):
         self.signals = signals
         self.check_cancelled = check_cancelled_fn or (lambda: False)
+        # Force a reload of the config from disk
+         # Store config manager as an instance attribute
+        self.config_mgr = ConfigManager()
+        self.config_mgr.refresh_configs()
+        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
 
     def process_fixity(self, source_directory, video_path, video_id):
         """
@@ -43,7 +45,7 @@ class ProcessingManager:
             return None
         
         # Embed stream fixity if required  
-        if checks_config.fixity.embed_stream_fixity == 'yes':
+        if self.checks_config.fixity.embed_stream_fixity == 'yes':
             if self.signals:
                 self.signals.fixity_progress.emit("Embedding fixity...")
             if self.check_cancelled():
@@ -56,10 +58,10 @@ class ProcessingManager:
                 self.signals.step_completed.emit("Embed Stream Fixity")
 
         # Validate stream hashes if required
-        if checks_config.fixity.validate_stream_fixity == 'yes':
+        if self.checks_config.fixity.validate_stream_fixity == 'yes':
             if self.signals:
                 self.signals.fixity_progress.emit("Validating embedded fixity...")
-            if checks_config.fixity.embed_stream_fixity == 'yes':
+            if self.checks_config.fixity.embed_stream_fixity == 'yes':
                 logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
             else:
                 validate_embedded_md5(video_path, check_cancelled=self.check_cancelled, signals=self.signals)
@@ -71,7 +73,7 @@ class ProcessingManager:
         md5_checksum = None
 
         # Create checksum for video file and output results
-        if checks_config.fixity.output_fixity == 'yes':
+        if self.checks_config.fixity.output_fixity == 'yes':
             if self.signals:
                 self.signals.fixity_progress.emit("Outputting fixity...")
             md5_checksum = output_fixity(source_directory, video_path, check_cancelled=self.check_cancelled, signals=self.signals)
@@ -79,7 +81,7 @@ class ProcessingManager:
                 self.signals.step_completed.emit("Output Fixity")
 
         # Verify stored checksum and write results  
-        if checks_config.fixity.check_fixity == 'yes':
+        if self.checks_config.fixity.check_fixity == 'yes':
             if self.signals:
                 self.signals.fixity_progress.emit("Validating fixity...")
             check_fixity(source_directory, video_id, actual_checksum=md5_checksum, check_cancelled=self.check_cancelled, signals=self.signals)
@@ -104,7 +106,7 @@ class ProcessingManager:
             dict: Validation results from MediaConch policy check
         """
         # Check if MediaConch should be run
-        if checks_config.tools.mediaconch.run_mediaconch != 'yes':
+        if self.checks_config.tools.mediaconch.run_mediaconch != 'yes':
             logger.info(f"MediaConch validation skipped\n")
             return {}
         
@@ -114,8 +116,8 @@ class ProcessingManager:
             return None
         
         # Find the policy file
-        policy_name = checks_config.tools.mediaconch.mediaconch_policy
-        policy_path = config_mgr.get_policy_path(policy_name)
+        policy_name = self.checks_config.tools.mediaconch.mediaconch_policy
+        policy_path = self.config_mgr.get_policy_path(policy_name)
         if not policy_path:
             return {}
 
@@ -181,12 +183,6 @@ class ProcessingManager:
             differences = check_tool_metadata(tool, output_path)
             if differences:
                 metadata_differences[tool] = differences
-            
-            # Emit step completed signal for this tool
-            if self.signals:
-                # Capitalize first letter for the step name to match the format in populate_steps_list
-                tool_name = tool.capitalize() if tool != 'ffprobe' else 'FFprobe'
-                self.signals.step_completed.emit(tool_name)
                 
             if self.check_cancelled():
                 return None
@@ -222,7 +218,7 @@ class ProcessingManager:
        
         # Create report directory if report is enabled
         report_directory = None
-        if checks_config.outputs.report == 'yes':
+        if self.checks_config.outputs.report == 'yes':
             report_directory = dir_setup.make_report_dir(source_directory, video_id)
             # Process metadata differences report
             processing_results['metadata_diff_report'] = create_metadata_difference_report(
@@ -281,6 +277,9 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     Returns:
         dict: Processing results and paths
     """
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    
     results = {
         'qctools_output_path': None,
         'qctools_check_output': None
@@ -320,6 +319,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     return results
 
 def run_qctools_command(command, input_path, output_type, output_path, check_cancelled=None):
+    
     if check_cancelled():
         return None
     
@@ -355,6 +355,9 @@ def check_tool_metadata(tool_name, output_path):
     Returns:
         dict or None: Differences found by parsing the tool's output, or None
     """
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+
     # Mapping of tool names to their parsing functions
     parse_functions = {
         'exiftool': parse_exiftool,
