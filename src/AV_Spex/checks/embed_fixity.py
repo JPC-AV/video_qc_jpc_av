@@ -10,8 +10,6 @@ from ..utils.config_setup import ChecksConfig
 from ..utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-
 
 def get_total_frames(video_path):
     """
@@ -374,6 +372,8 @@ def process_embedded_fixity(video_path, check_cancelled=None, signals=None):
     """
     Handles embedding stream fixity tags in the video file.
     """
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+
     existing_tags = extract_tags(video_path)
     if existing_tags:
         existing_video_hash, existing_audio_hash = extract_hashes(existing_tags)
@@ -389,17 +389,5 @@ def process_embedded_fixity(video_path, check_cancelled=None, signals=None):
         if checks_config.fixity.overwrite_stream_fixity == 'yes':
             logger.critical('New stream hashes will be generated and old hashes will be overwritten!\n')
             embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
-        elif checks_config.fixity.overwrite_stream_fixity == 'no':
+        else:
             logger.error('Not writing stream hashes to MKV\n')
-        elif checks_config.fixity.overwrite_stream_fixity == 'ask me':
-            # User input for handling existing stream hashes
-            while True:
-                user_input = input("Do you want to overwrite existing stream hashes? (yes/no): ")
-                if user_input.lower() in ["yes", "y"]:
-                    embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
-                    break
-                elif user_input.lower() in ["no", "n"]:
-                    logger.debug('Not writing stream hashes to MKV\n')
-                    break
-                else:
-                    print("Invalid input. Please enter yes/no.") 

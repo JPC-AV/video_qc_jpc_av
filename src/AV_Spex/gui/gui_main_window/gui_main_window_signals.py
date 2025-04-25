@@ -65,9 +65,13 @@ class MainWindowSignals:
         """Handle the 'Quit' button click."""
         self.main_window.selected_directories = None  # Clear any selections
         self.main_window.check_spex_clicked = False  # Ensure the flag is reset
-        config_mgr.save_last_used_config('checks')
-        config_mgr.save_last_used_config('spex')
-        self.main_window.close()  # Close the GUI
+         # Only save configs that are actually in the ConfigManager._configs dictionary
+        if 'checks' in config_mgr._configs:
+            config_mgr.save_config('checks', is_last_used=True)
+        
+        if 'spex' in config_mgr._configs:
+            config_mgr.save_config('spex', is_last_used=True)
+
     
     def update_main_status_label(self, filename, current_index=None, total_files=None):
         """Update the status label in the main window."""

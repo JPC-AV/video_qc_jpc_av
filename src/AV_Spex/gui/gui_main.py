@@ -30,7 +30,7 @@ from ..gui.gui_spex_tab import SpexTab
 
 # Get configuration manager
 config_mgr = ConfigManager()
-checks_Config = config_mgr.get_config('checks', ChecksConfig)
+checks_config = config_mgr.get_config('checks', ChecksConfig)
 spex_config = config_mgr.get_config('spex', SpexConfig)
 
 
@@ -96,8 +96,10 @@ class MainWindow(QMainWindow, ThemeableMixin):
             self.worker.cancel()
             self.worker.wait()
         
-        # Call quit handling method
-        self.signals_handler.on_quit_clicked()
+        # Call quit handling method but don't call it if we're already in the closing process
+        if not hasattr(self, '_is_closing') or not self._is_closing:
+            self._is_closing = True
+            self.signals_handler.on_quit_clicked()
         
         # Clean up main window theme connections last
         self.cleanup_theme_handling()

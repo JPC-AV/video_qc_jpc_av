@@ -34,23 +34,21 @@ The ConfigManager class uses a deep merge strategy when loading the Checks confi
 ### Loading Sequence
 
 1. When `get_config()` is called for a config that isn't in cache:
-   - First loads the default configuration from the bundled configs
-   - Then attempts to load and merge any last-used settings from the user config directory
-   - Creates a dataclass instance from the merged result
+   - Loads the JSON configuration using `_load_json_config()`
+   - Creates a dataclass instance from the result using `_deserialize_dataclass()`
 
 ### Deep Merge (Recursive) 
 
-The `_deep_merge_dict()` method implements a recursive dictionary merging strategy:
+
+The `_update_dict_recursively()` method implements a recursive dictionary merging strategy:
 
 ```python
-def _deep_merge_dict(self, target: dict, source: dict) -> None:
-    """
-    Recursively merge source dict into target dict while preserving types.
-    """
+def _update_dict_recursively(self, target: dict, source: dict) -> None:
+    """Update dictionary recursively."""
     for key, value in source.items():
         if key in target:
             if isinstance(value, dict) and isinstance(target[key], dict):
-                self._deep_merge_dict(target[key], value)
+                self._update_dict_recursively(target[key], value)
             else:
                 target[key] = value
 ```
@@ -59,56 +57,7 @@ This function:
 - Traverses both dictionaries recursively
 - For nested dictionaries, continues merging deeper
 - For non-dictionary values, the source value overwrites the target value
-- Preserves keys in the target that don't exist in the source
 
-### Merge Behavior Examples
-
-```python
-# Default config
-default = {
-    'filename_values': {
-        'fn_sections': {
-            'section1': {'value': 'default1'},
-            'section2': {'value': 'default2'}
-        },
-        'FileExtension': 'mkv'
-    }
-}
-
-# Last used config
-last_used = {
-    'filename_values': {
-        'fn_sections': {
-            'section1': {'value': 'custom1'}
-        }
-    }
-}
-
-# After merge
-result = {
-    'filename_values': {
-        'fn_sections': {
-            'section1': {'value': 'custom1'},  # Overwritten by last_used
-            'section2': {'value': 'default2'}  # Preserved from default
-        },
-        'FileExtension': 'mkv'  # Preserved from default
-    }
-}
-```
-
-### Preservation of Default Values
-
-The merge strategy preserves all keys from the default configuration. This means:
-- Default settings act as a fallback for missing values
-- The complete configuration structure is maintained
-- New settings added to defaults will be available in user configs
-
-### Implications
-
-For nested dictionaries like `fn_sections`:
-- Entries in the default config remain unless explicitly overwritten
-- Cannot remove entries by omitting them from the last-used config
-- To completely replace a collection, must implement special handling
 
 ## Config Setup
 
@@ -127,132 +76,146 @@ spex_config = config_mgr.get_config('spex', SpexConfig)
 This calls the `ConfigManager`'s `get_config()` function, with the dataclass defined in `config_setup.py` passed as an argument:
 
 ```python
-def get_config(self, config_name: str, config_class: Type[T]) -> T:
+def get_config(self, config_name: str, config_class: Type[T], 
+               use_last_used: bool = True) -> T:
     """
-    Get config, ensuring it's always returned as a proper dataclass instance.
-    """
-    if config_name not in self._configs:
-        # Load default config first
-        default_config = self._load_json_config(config_name, last_used=False)
-        
-        # Only try to load and merge last used config if it exists
-        last_used_path = self.find_file(
-            f"last_used_{config_name}_config.json",
-            user_config=True
-        )
-        if last_used_path and os.path.exists(last_used_path):
-            try:
-                last_used_data = self._load_json_config(config_name, last_used=True)
-                self._deep_merge_dict(default_config, last_used_data)
-            except (FileNotFoundError, json.JSONDecodeError):
-                logger.debug(f"No valid last used config found for {config_name}")
-            
-        # Create dataclass instance
-        self._configs[config_name] = self._create_dataclass_instance(
-            config_class, # will be either SpexConfig or ChecksConfig
-            default_config
-        )
-        
-    return self._configs[config_name]
-```
-
-The `_create_dataclass_instance()` helper function performs a recursive conversion of the JSON data into a proper dataclass instance, handling nested dataclasses, lists, and dictionaries:
-
-```python
-def _create_dataclass_instance(self, cls: Type[T], data: dict) -> T:
-    # Get expected types from dataclass
-    type_hints = get_type_hints(cls)  # Gets QCTParseToolConfig's type hints
+    Get configuration as a dataclass instance.
     
-    for field_name, field_type in type_hints.items():
-        field_value = data[field_name]
+    Args:
+        config_name: Name of the configuration
+        config_class: Dataclass type to instantiate
+        use_last_used: Whether to use the last used config if available
         
-        # Handle Optional fields (like tagname: Optional[str])
-        if str(field_type).startswith('typing.Optional'):
-            if field_value is None:  # JSON null becomes Python None
-                processed_data[field_name] = None
-                continue
-            field_type = field_type.__args__[0]  # Get the inner type (str)
-            
-        # Handle Lists (like contentFilter: List[str])
-        elif str(field_type).startswith('typing.List'):
-            if not isinstance(field_value, list):
-                raise ValueError(f"Expected list for {field_name}, got {type(field_value)}")
-            element_type = field_type.__args__[0]  # Get list element type (str)
-            # Validate each element matches expected type
-            if not all(isinstance(item, element_type) for item in field_value):
-                raise ValueError(f"Invalid type in list for {field_name}")
-            
-        # Handle basic types (str, bool)
-        else:
-            # Python's type system handles basic type conversion:
-            # - JSON true/false automatically becomes Python True/False
-            # - strings remain strings
-            # - numbers become int/float as appropriate
-            if not isinstance(field_value, field_type):
-                raise ValueError(
-                    f"Field {field_name} expected {field_type}, got {type(field_value)}"
-                )
+    Returns:
+        An instance of the config_class
+    """
+    # Return cached config if available
+    if config_name in self._configs:
+        return self._configs[config_name]
+        
+    # Load config data from file
+    config_data = self._load_json_config(config_name, use_last_used=use_last_used)
+    
+    # Convert to dataclass and cache
+    config = self._deserialize_dataclass(config_class, config_data)
+    self._configs[config_name] = config
+    
+    return config
 ```
 
-The dataclasses defined in `config_setup.py` are passed to the `_create_dataclass_instance()` helper function as an argument (initially passed to `get_config()`).  
-
-### Type Validation
-The ChecksConfig and SpexConfig dataclasses define the data types for specific metadata fields. For example:
+The `_deserialize_dataclass()` helper function performs a recursive conversion of the JSON data into a proper dataclass instance, handling nested dataclasses, lists, dictionaries, and union types:
 
 ```python
-@dataclass
-class ChecksConfig:
-    outputs: OutputsConfig
-    fixity: FixityConfig
-    tools: ToolsConfig
+def _deserialize_dataclass(self, cls: Type[T], data: Dict[str, Any]) -> T:
+    """Convert a dictionary to a dataclass instance."""
+    if data is None:
+        return None
+    
+    # Get type hints for the class
+    type_hints = get_type_hints(cls)
+    
+    # Initialize kwargs for class constructor
+    kwargs = {}
+    
+    for field_name, field_value in data.items():
+        if field_name not in type_hints:
+            # Skip fields not in dataclass
+            continue
+        
+        field_type = type_hints[field_name]
+        kwargs[field_name] = self._process_field(field_type, field_value)
+    
+    # Create and return the dataclass instance
+    return cls(**kwargs)
 ```
 
-For each field, `_create_dataclass_instance()` looks at the type:
-
-- For "outputs" -> creates `OutputsConfig` instance
-- For "fixity" -> creates `FixityConfig` instance
-- For "tools" -> creates `ToolsConfig` instance with nested tool configs
-
-The values for the different fields is populated from the json configs. As described above, the most recent values from the last used config are deep merged when the config is first loaded. 
-
-The `_create_dataclass_instance()` implements Type validation, ensuring inputs from the JSON match the expected type defined in `config_setup.py`.
-
-The individual checks are:
+The `_process_field()` function and its helper methods handle the specific conversion of different field types:
 
 ```python
-# For basic types (str, bool)
-if not isinstance(field_value, field_type):
-    raise ValueError(f"Field {field_name} expected {field_type}, got {type(field_value)}")
-
-# For lists
-if str(field_type).startswith('typing.List'):
-    if not isinstance(field_value, list):
-        raise ValueError(f"Expected list for {field_name}")
-
-# For nested dataclasses
-if hasattr(field_type, '__dataclass_fields__'):
-    if not isinstance(field_value, dict):
-        raise ValueError(
-            f"Expected dict for nested dataclass {field_name}"
-        )
-    # Recursively validate nested structure
-    processed_data[field_name] = self._create_dataclass_instance(
-        field_type, field_value
-    )
-
-# For nested dataclasses
-if hasattr(field_type, '__dataclass_fields__'):
-    if not isinstance(field_value, dict):
-        raise ValueError(
-            f"Expected dict for nested dataclass {field_name}"
-        )
-    # Recursively validate nested structure
-    processed_data[field_name] = self._create_dataclass_instance(
-        field_type, field_value
-    )
+def _process_field(self, field_type: Type, field_value: Any) -> Any:
+    """Process a field value based on its type."""
+    if field_value is None:
+        return None
+    
+    # Get origin and args for complex types
+    origin = get_origin(field_type)
+    args = get_args(field_type)
+    
+    # Handle based on type
+    if origin is list or origin is List:
+        return self._handle_list(args[0], field_value)
+    elif origin is dict or origin is Dict:
+        return self._handle_dict(args[0], args[1], field_value)
+    elif origin is Union:
+        return self._handle_union(args, field_value)
+    elif hasattr(field_type, '__dataclass_fields__'):  # Is a dataclass
+        return self._deserialize_dataclass(field_type, field_value)
+    else:
+        # Simple type, use as is
+        return field_value
 ```
 
-Here is an example from the Checks config JSON, which controls the options selected for qct-parse:
+The dataclasses defined in `config_setup.py` are passed to the `_deserialize_dataclass()` helper function as an argument (initially passed to `get_config()`).  
+
+### Type Handling
+
+The approach implements systematic type handling through specialized helper methods:
+
+```python
+def _handle_list(self, item_type: Type, values: List) -> List:
+    """Handle list type conversion."""
+    if not isinstance(values, list):
+        return values
+    
+    if hasattr(item_type, '__dataclass_fields__'):
+        return [self._deserialize_dataclass(item_type, item) 
+               for item in values if isinstance(item, dict)]
+    return values
+
+def _handle_dict(self, key_type: Type, value_type: Type, data: Dict) -> Dict:
+    """Handle dictionary type conversion."""
+    if not isinstance(data, dict):
+        return data
+    
+    if hasattr(value_type, '__dataclass_fields__'):
+        return {k: self._deserialize_dataclass(value_type, v) 
+               for k, v in data.items() if isinstance(v, dict)}
+    return data
+
+def _handle_union(self, union_types: tuple, value: Any) -> Any:
+    """Handle Union types (including Optional)."""
+    if value is None:
+        return None
+    
+    # Try each type in the union
+    for union_type in union_types:
+        if union_type is type(None):
+            continue
+            
+        if hasattr(union_type, '__dataclass_fields__') and isinstance(value, dict):
+            return self._deserialize_dataclass(union_type, value)
+        elif isinstance(value, union_type):
+            return value
+    
+    # If no specific handling, return as is
+    return value
+```
+
+This approach:
+- Handles nested dataclasses recursively through `_deserialize_dataclass()`
+- Processes lists and dictionaries with the appropriate handling for their element types
+- Supports Union types (including Optional fields) through `_handle_union()`
+- Preserves basic types without modification
+
+For each field, based on its type:
+
+- For simple types (int, str, bool): retains the value directly
+- For lists: uses `_handle_list()` to process each element according to the list's item type
+- For dictionaries: uses `_handle_dict()` to process key-value pairs based on their types
+- For Union types: uses `_handle_union()` to attempt matching against each possible type
+- For nested dataclasses: recursively applies `_deserialize_dataclass()`
+
+Here is an example from the Checks config JSON:
 
 ```json
 "qct_parse": {
@@ -266,29 +229,27 @@ Here is an example from the Checks config JSON, which controls the options selec
 }
 ```
 
-Validation process:
+The conversion process:
 
 ```python
 # JSON input
 data = {
-    "run_tool": "yes",        # Stays string
-    "barsDetection": true,    # Becomes Python True
-    "contentFilter": [],      # Validated as empty List[str]
-    "tagname": null,         # Becomes Python None
+    "run_tool": "yes",        # String - passed through unchanged
+    "barsDetection": true,    # Boolean - passed through unchanged
+    "contentFilter": [],      # Empty list - passed through unchanged
+    "tagname": null,         # null becomes None
 }
 
-# Validation checks:
-1. Check all required fields exist
-   - Missing 'evaluateBars' would raise error
-   
-2. Check type compatibility
-   - If "barsDetection": "true" (string) -> Error: expected bool
-   - If "contentFilter": "[]" (string) -> Error: expected list
-   
-3. Check nested structures
-   - Lists must contain correct type
-   - Optional fields can be null
-   - Nested objects must match their dataclass structure
+# Each field is processed based on its expected type:
+1. For run_tool (string): Value remains "yes"
+2. For barsDetection (boolean): Value remains True
+3. For contentFilter (List[str]): Empty list remains []
+4. For tagname (Optional[str]): null becomes None
+
+# For nested dataclasses:
+1. Get expected type from type hints
+2. Process each field recursively using _process_field
+3. Instantiate the dataclass with processed values
 ```
 
 ### Entry Points for Configuration Creation
@@ -312,52 +273,113 @@ self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
 self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
 ```
 
+## The Refresh Challenge
+
+When working with the singleton pattern across multiple modules in Python, each module that imports and instantiates the `ConfigManager` at import time will get its own cached copy of the configuration data. This can lead to a critical synchronization issue:
+
+```python
+# Module-level instantiation pattern (GUI modules)
+config_mgr = ConfigManager()
+checks_config = config_mgr.get_config('checks', ChecksConfig)
+```
+
+While the singleton ensures there's only one `ConfigManager` instance per module, configuration changes made in the GUI aren't automatically reflected in the processing modules that load their configurations at different times.
+
+## The Solution: Explicit Configuration Refresh
+
+To address this issue, there is a dedicated method to explicitly refresh the configuration cache:
+
+```python
+def refresh_configs(self):
+    """Force a reload of all configs from disk."""
+    # Clear the cached configurations to force a reload from disk
+    self._configs = {}
+    logger.debug("Config cache cleared, configs will be reloaded from disk")
+```
+
+## Different Instantiation Patterns
+
+The application uses two distinct patterns for configuration management:
+
+### 1. GUI Components (Module-level Instantiation)
+```python
+# At module level (outside of class)
+config_mgr = ConfigManager()
+checks_config = config_mgr.get_config('checks', ChecksConfig)
+spex_config = config_mgr.get_config('spex', SpexConfig)
+
+class SomeGuiComponent:
+    # Access configurations directly
+```
+
+### 2. Processing Classes (Instance-level Refresh)
+```python
+class AVSpexProcessor:
+    def __init__(self, signals=None):
+        self.signals = signals
+        self._cancelled = False
+        self._cancel_emitted = False 
+        
+        # Force a reload of the config from disk
+        self.config_mgr = ConfigManager()
+        self.config_mgr.refresh_configs()
+        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+```
+
+This pattern ensures that processing components always have the most current configuration data at the time processing begins, regardless of when configuration changes were made in the GUI.
+
+## Best Practices
+
+1. **GUI Components**: Use module-level instantiation for consistent configuration access across UI components
+2. **Processing Classes**: Refresh configurations at initialization time to ensure the latest settings are used
+3. **Cache Control**: Call `refresh_configs()` whenever a fresh copy of the configuration is needed
+4. **Configuration Updates**: Continue using `update_config()` for making changes that will be reflected across the application
+
+This pattern balances consistency and freshness, ensuring that all components work with appropriately timed configuration data.
+
+
 ## Editing Configs
 
 The ConfigManager provides mechanisms for editing the Checks and Spex configs through the CLI or UI. These include targeted updates to specific fields, applying predefined profiles, and saving the updated configurations to persist changes between sessions.
 
 ### Updating Individual Settings
 
-The `update_config()` method enables precise updates to configuration values while maintaining the dataclass structure:
+The `update_config()` method enables precise updates to configuration values:
 
 ```python
 def update_config(self, config_name: str, updates: dict) -> None:
     """
-    Update config while maintaining dataclass structure throughout.
+    Update specific fields in a config.
+    
+    Args:
+        config_name: Name of the config to update
+        updates: Dictionary of updates to apply
     """
-    current_config = self._configs.get(config_name)
-    if not current_config:
-        logger.error(f"No current {config_name} config found")
+    config = self._configs.get(config_name)
+    if not config:
+        logger.error(f"No config found for {config_name}, cannot update")
         return
-
-    def update_recursively(target, source):
-        for key, value in source.items():
-            if not hasattr(target, key):
-                logger.error(f"Field '{key}' not found in config")
-                continue
-                
-            current_value = getattr(target, key)
-            
-            if isinstance(value, dict):
-                if hasattr(current_value, '__dataclass_fields__'):
-                    # If current value is a dataclass, update it recursively
-                    update_recursively(current_value, value)
-                else:
-                    # If we're updating a dict field
-                    setattr(target, key, value)
-            else:
-                # Update the value directly
-                setattr(target, key, value)
-
-    # Perform the update
-    update_recursively(current_config, updates)
+        
+    # Convert current config to dict
+    config_dict = asdict(config)
+    
+    # Apply updates recursively
+    self._update_dict_recursively(config_dict, updates)
+    
+    # Convert back to dataclass
+    self._configs[config_name] = self._deserialize_dataclass(type(config), config_dict)
+    
+    # Save as last used
+    self.save_config(config_name, is_last_used=True)
 ```
 
 This method:
-- Recursively traverses nested dataclass structures
-- Updates values at any level of nesting
-- Maintains type validation through the dataclass framework
-- Reports errors for non-existent fields
+- Converts the current dataclass instance to a dictionary
+- Applies updates recursively using `_update_dict_recursively()`
+- Converts the updated dictionary back to a dataclass using `_deserialize_dataclass()`
+- Saves the updated configuration as the last used config
+
 
 #### GUI Integration
 
@@ -387,40 +409,36 @@ This allows each checkbox in the interface to directly modify its corresponding 
 The system supports applying predefined configuration profiles that modify multiple settings at once through the `apply_profile()` function:
 
 ```python
-def apply_profile(profile_dict: dict):
-    """Apply a predefined profile to the checks config.
+def apply_profile(selected_profile):
+    """Apply profile changes to checks_config.
     
     Args:
-        profile_dict (dict): Dictionary containing the profile settings
+        selected_profile (dict): The profile configuration to apply
     """
-    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    # Prepare the updates dictionary with the structure matching the dataclass
+    updates = {}
     
-    # Update tool settings recursively
-    for section, section_values in profile_dict.items():
-        if section == 'tools':
-            for tool_name, tool_settings in section_values.items():
-                # Get the current tool settings
-                if hasattr(checks_config.tools, tool_name):
-                    tool_obj = getattr(checks_config.tools, tool_name)
-                    
-                    # Apply each setting
-                    for key, value in tool_settings.items():
-                        if hasattr(tool_obj, key):
-                            setattr(tool_obj, key, value)
-                        else:
-                            logger.error(f"Invalid tool setting: {tool_name}.{key}")
-        elif hasattr(checks_config, section):
-            section_obj = getattr(checks_config, section)
-            
-            # Apply each setting in the section
-            for key, value in section_values.items():
-                if hasattr(section_obj, key):
-                    setattr(section_obj, key, value)
-                else:
-                    logger.error(f"Invalid setting: {section}.{key}")
+    # Handle outputs section
+    if 'outputs' in selected_profile:
+        updates['outputs'] = selected_profile['outputs']
     
-    # Save the updated config
-    config_mgr.set_config('checks', checks_config)
+    # Handle fixity section
+    if 'fixity' in selected_profile:
+        updates['fixity'] = selected_profile['fixity']
+    
+    # Handle tools section with special cases
+    if 'tools' in selected_profile:
+        tools_updates = {}
+        
+        for tool_name, tool_updates in selected_profile['tools'].items():
+            # No need for special cases - the update_config method will handle it
+            tools_updates[tool_name] = tool_updates
+        
+        updates['tools'] = tools_updates
+    
+    # Apply all updates at once using the new update_config method
+    if updates:
+        config_mgr.update_config('checks', updates)
 ```
 
 Predefined profiles are stored as dictionaries in `config_edit.py`:
@@ -447,11 +465,19 @@ For domain-specific configuration areas like signal flow profiles, specialized u
 
 ```python
 def apply_signalflow_profile(selected_profile: dict):
-    """Apply signalflow profile changes to spex_config.
+    """
+    Apply signalflow profile changes to spex_config.
+    
+    Updates encoder settings in both mediatrace and ffmpeg configurations
+    with values from the provided profile.
     
     Args:
         selected_profile (dict): The signalflow profile to apply (encoder settings)
     """
+    # First refresh configs to ensure we're working with the latest data
+    config_mgr.refresh_configs()
+    
+    # Get the current spex config
     spex_config = config_mgr.get_config('spex', SpexConfig)
     
     # Validate input
@@ -460,6 +486,7 @@ def apply_signalflow_profile(selected_profile: dict):
         return
     
     # Update mediatrace_values.ENCODER_SETTINGS
+    # Each key in selected_profile should be a field in ENCODER_SETTINGS (like Source_VTR)
     for key, value in selected_profile.items():
         if hasattr(spex_config.mediatrace_values.ENCODER_SETTINGS, key):
             setattr(spex_config.mediatrace_values.ENCODER_SETTINGS, key, value)
@@ -478,11 +505,13 @@ def apply_signalflow_profile(selected_profile: dict):
         for key, value in selected_profile.items():
             spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'][key] = value
     
-    # Save the updated config
-    config_mgr.set_config('spex', spex_config)
+    # Update the cached config directly
+    config_mgr._configs['spex'] = spex_config
     
-    # Save the last used config
-    config_mgr.save_last_used_config('spex')
+    # Save the updated config to disk
+    config_mgr.save_config('spex', is_last_used=True)
+    
+    logger.debug(f"Applied signalflow profile to configuration")
 ```
 
 This function handles the specific complexities of updating the signal flow configuration, ensuring that settings are applied correctly to all relevant parts of the nested structure.
@@ -505,22 +534,37 @@ def update_tool_setting(tool_names: List[str], value: str):
         try:
             tool_name, field = tool_spec.split('.')
             
-            # Special handling for different tools
+            # Special handling for qct_parse which uses booleans instead of yes/no
             if tool_name == 'qct_parse':
+                if value.lower() not in ('yes', 'no'):
+                    logger.warning(f"Invalid value '{value}' for qct_parse. Must be 'yes' or 'no'")
+                    continue
                 bool_value = True if value.lower() == 'yes' else False
                 updates['tools'][tool_name] = {field: bool_value}
                 
+            # Special handling for mediaconch which has different field names
             elif tool_name == 'mediaconch':
+                if field not in ('run_mediaconch'):
+                    logger.warning(f"Invalid field '{field}' for mediaconch. To turn mediaconch on/off use 'mediaconch.run_mediaconch'.")
+                    continue
                 updates['tools'][tool_name] = {field: value}
 
             elif tool_name == 'fixity':
                 updates['fixity'] = {}
+                if field not in ('check_fixity','validate_stream_fixity','embed_stream_fixity','output_fixity','overwrite_stream_fixity'):
+                    logger.warning(f"Invalid field '{field}' for fixity settings")
+                    continue
                 updates['fixity'][field] = value
                 
             # Standard tools with check_tool/run_tool fields
             else:
+                if field not in ('check_tool', 'run_tool'):
+                    logger.warning(f"Invalid field '{field}' for {tool_name}. Must be 'check_tool' or 'run_tool'")
+                    continue
                 updates['tools'][tool_name] = {field: value}
                 
+            logger.debug(f"{tool_name}.{field} will be set to '{value}'")
+            
         except ValueError:
             logger.warning(f"Invalid format '{tool_spec}'. Expected format: tool.field")
     
@@ -544,102 +588,87 @@ python av_spex_the_file.py --on mediainfo.run_tool
 python av_spex_the_file.py --off exiftool.run_tool --off fixity.check_fixity
 ```
 
-### Replacing Entire Configurations with `set_config()`
-
-While `update_config()` is designed for modifying specific fields within a configuration, the `set_config()` method provides a mechanism to replace an entire configuration object:
-
-```python
-def set_config(self, config_name: str, config: Any) -> None:
-    """
-    Set config value, ensuring it maintains proper dataclass structure.
-    
-    Args:
-        config_name: Name of the config to set
-        config: Configuration value to set. Can be either a dataclass instance
-            or a dictionary that can be converted to the appropriate dataclass.
-    """
-    # If it's already a dataclass instance, store it directly
-    if hasattr(config, '__dataclass_fields__'):
-        self._configs[config_name] = config
-        return
-        
-    # If it's a dict, try to convert it to the appropriate dataclass
-    if isinstance(config, dict):
-        # Get the appropriate dataclass type from existing config
-        if config_name in self._configs:
-            config_class = self._configs[config_name].__class__
-            self._configs[config_name] = self._create_dataclass_instance(config_class, config)
-        else:
-            logger.error(f"Cannot determine dataclass type for {config_name}")
-            return
-    else:
-        logger.error(f"Config must be either a dataclass instance or a dictionary, got {type(config)}")
-        return
-    
-    # Save the updated config
-    self.save_last_used_config(config_name)
-```
-
-Key differences between `set_config()` and `update_config()`:
-
-1. **Complete Replacement vs. Partial Update**:
-   - `set_config()` replaces the entire configuration object in the cache
-   - `update_config()` modifies specific fields while preserving the rest
-
-2. **Input Handling**:
-   - `set_config()` accepts either a complete dataclass instance or a dictionary
-   - `update_config()` requires a dictionary specifying just the fields to update
-
-3. **Type Conversion**:
-   - `set_config()` handles conversion of dictionaries to dataclass instances
-   - `update_config()` works with the existing dataclass structure
-
-4. **Auto-Saving**:
-   - `set_config()` automatically calls `save_last_used_config()` to persist changes
-   - `update_config()` only modifies the in-memory representation
-
-This method is typically used in specialized update functions like `apply_signalflow_profile()` after making significant changes to a configuration object:
-
-```python
-# Save the updated config
-config_mgr.set_config('spex', spex_config)
-```
 
 ### Persisting Configuration Changes
 
-After modifying a configuration, changes can be persisted to disk using the `save_last_used_config()` method:
+After modifying a configuration, changes can be persisted to disk using the `save_config()` method:
 
 ```python
-def save_last_used_config(self, config_name: str) -> None:
+def save_config(self, config_name: str, is_last_used: bool = False) -> None:
     """
-    Save the current state of a config to the user's last_used config file.
+    Save current config to a file.
+    
+    Args:
+        config_name: Name of the config to save
+        is_last_used: If True, save as last_used config, otherwise as regular config
     """
-    if config_name not in self._configs:
-        logger.error(f"Cannot save {config_name} config - not in cache")
+    config = self._configs.get(config_name)
+    if not config:
+        logger.error(f"No config found for {config_name}, cannot save")
         return
         
-    # Convert dataclass to dictionary for storage
-    config_dict = dataclasses.asdict(self._configs[config_name])
+    filename = f"{'last_used_' if is_last_used else ''}{config_name}_config.json"
+    save_path = os.path.join(self._user_config_dir, filename)
     
-    # Ensure user config directory exists
-    user_config_dir = self.get_user_config_dir()
-    os.makedirs(user_config_dir, exist_ok=True)
-    
-    # Save to last_used_{config_name}_config.json
-    config_path = os.path.join(
-        user_config_dir, 
-        f"last_used_{config_name}_config.json"
-    )
-    
-    with open(config_path, 'w') as f:
-        json.dump(config_dict, f, indent=4)
-        
-    logger.debug(f"Saved {config_name} config to {config_path}")
+    try:
+        with open(save_path, 'w') as f:
+            json.dump(asdict(config), f, indent=2)
+        logger.info(f"Saved config to {save_path}")
+    except Exception as e:
+        logger.error(f"Error saving config to {save_path}: {str(e)}")
 ```
 
 This method:
-1. Converts the dataclass instance to a dictionary
-2. Ensures the user configuration directory exists
-3. Writes the configuration to a JSON file named `last_used_{config_name}_config.json`
+1. Retrieves the configuration from the cache
+2. Converts the dataclass instance to a dictionary using `asdict()`
+3. Writes the configuration to a JSON file, using the `is_last_used` flag to determine the filename
 
-Persisted configurations are automatically loaded and merged with default values the next time the application starts, as described in the "The Merge Process" section.
+### Resetting Configurations
+
+The `reset_config()` method provides a way to restore a configuration to its default values:
+
+```python
+def reset_config(self, config_name: str, config_class: Type[T]) -> T:
+    """
+    Reset config to default values.
+    
+    Args:
+        config_name: Name of the config to reset
+        config_class: Type of the config class
+        
+    Returns:
+        The reset config instance
+    """
+    # Remove from cache
+    if config_name in self._configs:
+        del self._configs[config_name]
+        
+    # Remove last used config file if it exists
+    last_used_path = os.path.join(self._user_config_dir, f"last_used_{config_name}_config.json")
+    if os.path.exists(last_used_path):
+        try:
+            os.remove(last_used_path)
+            logger.info(f"Removed last used config file {last_used_path}")
+        except Exception as e:
+            logger.error(f"Failed to remove {last_used_path}: {str(e)}")
+                
+    # Load fresh config
+    return self.get_config(config_name, config_class, use_last_used=False)
+```
+
+This method:
+1. Removes the configuration from the in-memory cache
+2. Deletes any last-used configuration file for this configuration
+3. Loads a fresh configuration from the default config file
+4. Returns the reset configuration instance
+
+The `refresh_configs()` method provides a more general way to clear the entire configuration cache:
+
+```python
+def refresh_configs(self):
+    """Force reload of all configs from disk"""
+    self._configs = {}
+    logger.debug(f"Config cache cleared, configs will be reloaded from disk\n")
+```
+
+This method simply clears the configuration cache, ensuring that the next time a configuration is requested, it will be reloaded from disk.

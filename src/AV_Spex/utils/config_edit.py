@@ -6,7 +6,7 @@ from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, File
 from ..utils.config_manager import ConfigManager
 
 
-config_mgr = ConfigManager()
+config_mgr = ConfigManager() # Gets the singleton instance
 
 
 def format_config_value(value, indent=0, is_nested=False):
@@ -115,7 +115,17 @@ def resolve_config(args, config_mapping):
 
 
 def apply_filename_profile(selected_profile: FilenameProfile):
-    """Apply a FilenameProfile dataclass to the current configuration"""
+    """
+    Apply a FilenameProfile dataclass to the current configuration.
+    
+    Replaces the filename configuration in the spex config with the selected profile,
+    ensuring the changes are properly saved to disk and reflected in any
+    consuming components.
+    """
+    # First refresh configs to ensure we're working with the latest data
+    config_mgr.refresh_configs()
+    
+    # Get the current spex config
     spex_config = config_mgr.get_config('spex', SpexConfig)
     
     # Completely replace the fn_sections with just one empty section
@@ -126,9 +136,6 @@ def apply_filename_profile(selected_profile: FilenameProfile):
         )
     }
     
-    # Use set_config instead of update_config to ensure complete replacement
-    config_mgr.set_config("spex", spex_config)
-    
     # Create a new dict with the sections from the profile
     if selected_profile.fn_sections:
         # Replace the entire sections dict with the one from the profile
@@ -138,15 +145,29 @@ def apply_filename_profile(selected_profile: FilenameProfile):
     if hasattr(selected_profile, 'FileExtension') and selected_profile.FileExtension:
         spex_config.filename_values.FileExtension = selected_profile.FileExtension
     
-    # Use set_config to ensure complete replacement
-    config_mgr.set_config('spex', spex_config)
+    # Update the cached config directly
+    config_mgr._configs['spex'] = spex_config
+    
+    # Save the updated config to disk
+    config_mgr.save_config('spex', is_last_used=True)
+    
+    logger.debug(f"Applied filename profile beginning with '{selected_profile.fn_sections['section1'].value}_...' to configuration")
+
 
 def apply_signalflow_profile(selected_profile: dict):
-    """Apply signalflow profile changes to spex_config.
+    """
+    Apply signalflow profile changes to spex_config.
+    
+    Updates encoder settings in both mediatrace and ffmpeg configurations
+    with values from the provided profile.
     
     Args:
         selected_profile (dict): The signalflow profile to apply (encoder settings)
     """
+    # First refresh configs to ensure we're working with the latest data
+    config_mgr.refresh_configs()
+    
+    # Get the current spex config
     spex_config = config_mgr.get_config('spex', SpexConfig)
     
     # Validate input
@@ -174,11 +195,13 @@ def apply_signalflow_profile(selected_profile: dict):
         for key, value in selected_profile.items():
             spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'][key] = value
     
-    # Save the updated config
-    config_mgr.set_config('spex', spex_config)
+    # Update the cached config directly
+    config_mgr._configs['spex'] = spex_config
     
-    # Save the last used config
-    config_mgr.save_last_used_config('spex')
+    # Save the updated config to disk
+    config_mgr.save_config('spex', is_last_used=True)
+    
+    logger.debug(f"Applied signalflow profile to configuration")
 
 
 def apply_profile(selected_profile):
@@ -186,45 +209,31 @@ def apply_profile(selected_profile):
     
     Args:
         selected_profile (dict): The profile configuration to apply
-        config_mgr (ConfigManager): Instance of the config manager
     """
-    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    # Prepare the updates dictionary with the structure matching the dataclass
+    updates = {}
     
+    # Handle outputs section
     if 'outputs' in selected_profile:
-        for key, value in selected_profile["outputs"].items():
-            setattr(checks_config.outputs, key, value)
-
-    if 'tools' in selected_profile:
-        for tool_name, updates in selected_profile["tools"].items():
-            # Handle each tool type differently based on its structure
-            if tool_name == 'mediaconch':
-                # MediaConch has mediaconch_policy and run_mediaconch
-                if isinstance(updates, dict):
-                    for key, value in updates.items():
-                        setattr(checks_config.tools.mediaconch, key, value)
-            
-            elif tool_name == 'qct_parse':
-                # QCT Parse has a unique structure with boolean and list fields
-                if isinstance(updates, dict):
-                    for key, value in updates.items():
-                        setattr(checks_config.tools.qct_parse, key, value)
-            
-            else:
-                # Standard tools with check_tool and run_tool
-                tool = getattr(checks_config.tools, tool_name)
-                if isinstance(updates, dict):
-                    if 'check_tool' in updates:
-                        tool.check_tool = updates['check_tool']
-                    if 'run_tool' in updates:
-                        tool.run_tool = updates['run_tool']
-
-    if 'fixity' in selected_profile:
-        for key, value in selected_profile["fixity"].items():
-            if hasattr(checks_config.fixity, key):
-                setattr(checks_config.fixity, key, value)
+        updates['outputs'] = selected_profile['outputs']
     
-    # Save the updated config
-    config_mgr.set_config('checks', checks_config)
+    # Handle fixity section
+    if 'fixity' in selected_profile:
+        updates['fixity'] = selected_profile['fixity']
+    
+    # Handle tools section with special cases
+    if 'tools' in selected_profile:
+        tools_updates = {}
+        
+        for tool_name, tool_updates in selected_profile['tools'].items():
+            # No need for special cases - the update_config method will handle it
+            tools_updates[tool_name] = tool_updates
+        
+        updates['tools'] = tools_updates
+    
+    # Apply all updates at once using the new update_config method
+    if updates:
+        config_mgr.update_config('checks', updates)
 
 
 def update_tool_setting(tool_names: List[str], value: str):

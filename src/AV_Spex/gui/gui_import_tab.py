@@ -105,7 +105,7 @@ class ImportTab(ThemeableMixin):
                     # Use the ConfigIO class to export config
                     config_io = ConfigIO(config_mgr)
                     # Needs to deliver config_type as a list
-                    config_io.save_configs(file_path, config_type)
+                    config_io.save_config_files(file_path, config_type)
                     
                     QMessageBox.information(self.main_window, "Success", f"Configuration exported successfully to {file_path}")
                 except Exception as e:
@@ -132,8 +132,8 @@ class ImportTab(ThemeableMixin):
                     logger.error(f"Error resetting config: {str(e)}")
                     QMessageBox.critical(self.main_window, "Error", f"Error resetting configuration: {str(e)}")
             
-                config_mgr.save_last_used_config('checks')
-                config_mgr.save_last_used_config('spex')
+                config_mgr.save_config('checks', is_last_used=True)
+                config_mgr.save_config('spex', is_last_used=True)
 
                 # Reload UI components to reflect new settings
                 self.main_window.config_widget.load_config_values()
@@ -545,8 +545,8 @@ class ImportTab(ThemeableMixin):
         """Handle the Check Spex button click."""
         self.update_selected_directories()
         self.main_window.check_spex_clicked = True  # Mark that the button was clicked
-        config_mgr.save_last_used_config('checks')
-        config_mgr.save_last_used_config('spex')
+        config_mgr.save_config('checks', is_last_used=True)
+        config_mgr.save_config('spex', is_last_used=True)
         # Make sure the processing window is visible before starting the process
         if hasattr(self.main_window, 'processing_window') and self.main_window.processing_window:
             # If it exists but might be hidden, show it

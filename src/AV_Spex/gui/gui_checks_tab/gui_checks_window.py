@@ -17,7 +17,7 @@ checks_config = config_mgr.get_config('checks', ChecksConfig)
 class ChecksWindow(QWidget, ThemeableMixin):
     """Configuration window for managing application settings."""
     
-    def __init__(self, config_mgr=None):
+    def __init__(self):
         super().__init__()
         self.is_loading = False
 
@@ -509,6 +509,10 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
     def on_checkbox_changed(self, state, path):
         """Handle changes in yes/no checkboxes"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+
         new_value = 'yes' if Qt.CheckState(state) == Qt.CheckState.Checked else 'no'
         
         if path[0] == "tools" and len(path) > 2:
@@ -524,6 +528,10 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
     def on_boolean_changed(self, state, path):
         """Handle changes in boolean checkboxes"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
         new_value = Qt.CheckState(state) == Qt.CheckState.Checked
         
         if path[0] == "tools" and path[1] == "qct_parse":
@@ -532,22 +540,38 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
     def on_text_changed(self, path, text):
         """Handle changes in text inputs"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
         updates = {path[0]: {path[1]: text}}
         config_mgr.update_config('checks', updates)
 
     def on_qct_combo_changed(self, value, field):
         """Handle changes in QCT Parse combo boxes"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+
         values = [value] if value is not None else []
         updates = {'tools': {'qct_parse': {field: values}}}
         config_mgr.update_config('checks', updates)
 
     def on_tagname_changed(self, text):
         """Handle changes in tagname field"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+
         updates = {'tools': {'qct_parse': {'tagname': text if text else None}}}
         config_mgr.update_config('checks', updates)
 
     def on_mediaconch_policy_changed(self, policy_name):
         """Handle selection of MediaConch policy"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
         if not self.is_loading and policy_name:
             config_mgr.update_config('checks', {
                 'tools': {

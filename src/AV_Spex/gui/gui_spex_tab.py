@@ -43,16 +43,16 @@ class SpexTab(ThemeableMixin):
             
             if selected_option == "JPC Filename Profile":
                 config_edit.apply_filename_profile(jpc_filename_profile)
-                config_mgr.save_last_used_config('spex')
+                config_mgr.save_config('spex', is_last_used=True)
             elif selected_option == "Bowser Filename Profile":
                 config_edit.apply_filename_profile(bowser_filename_profile)
-                config_mgr.save_last_used_config('spex')
+                config_mgr.save_config('spex', is_last_used=True)
             elif selected_option.startswith("Custom ("):
                 for profile_name in filename_config.filename_profiles.keys():
                     if selected_option == profile_name:
                         profile_class = filename_config.filename_profiles[profile_name]
                         config_edit.apply_filename_profile(profile_class)
-                        config_mgr.save_last_used_config('spex')
+                        config_mgr.save_config('spex', is_last_used=True)
 
         def on_signalflow_profile_changed(self, index):
             """Handle signal flow profile selection change."""
