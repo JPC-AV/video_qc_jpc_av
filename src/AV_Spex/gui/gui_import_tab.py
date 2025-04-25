@@ -105,7 +105,7 @@ class ImportTab(ThemeableMixin):
                     # Use the ConfigIO class to export config
                     config_io = ConfigIO(config_mgr)
                     # Needs to deliver config_type as a list
-                    config_io.save_configs(file_path, config_type)
+                    config_io.save_config_files(file_path, config_type)
                     
                     QMessageBox.information(self.main_window, "Success", f"Configuration exported successfully to {file_path}")
                 except Exception as e:
