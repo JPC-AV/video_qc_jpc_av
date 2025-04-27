@@ -55,17 +55,35 @@ def is_valid_filename(video_filename):
     Returns:
     - Tuple[bool, str]: (is_valid, error_message)
     '''
+    # Add this debugging code at the beginning of the function
+    logger.debug("==== FILENAME VALIDATION DEBUGGING ====")
+    logger.debug(f"Validating filename: {video_filename}")
+
+    # Force refresh to ensure we have the latest config
+    config_mgr.refresh_configs()
+    
+    # Get the LATEST spex_config (critical to use use_last_used=True)
+    current_spex = config_mgr.get_config('spex', SpexConfig, use_last_used=True)
+    
+    # HERE'S THE FIX: Use current_spex instead of the module-level spex_config
+    # This ensures we're using the latest config loaded from disk
+    
+    # Log details about the current config
+    logger.debug(f"Filename validation using config with {len(current_spex.filename_values.fn_sections)} sections")
+    for idx, (key, section) in enumerate(sorted(current_spex.filename_values.fn_sections.items()), 1):
+        logger.debug(f"  Section {idx}: {key} = {section.value} ({section.section_type})")
+
     base_filename = os.path.basename(video_filename)
     name_without_ext, file_ext = os.path.splitext(base_filename)
     file_ext = file_ext[1:]  # Remove the leading dot
     
-    # Validate extension first
-    if file_ext.lower() != spex_config.filename_values.FileExtension.lower():
-        logger.critical(f"Invalid file extension: Expected '{spex_config.filename_values.FileExtension}', got '{file_ext}'")
+    # Validate extension first - USE current_spex INSTEAD OF spex_config
+    if file_ext.lower() != current_spex.filename_values.FileExtension.lower():
+        logger.critical(f"Invalid file extension: Expected '{current_spex.filename_values.FileExtension}', got '{file_ext}'")
         return False
     
-    # Extract section configurations
-    fn_sections = spex_config.filename_values.fn_sections
+    # Extract section configurations - USE current_spex INSTEAD OF spex_config
+    fn_sections = current_spex.filename_values.fn_sections
     
     # Validate number of sections
     if not fn_sections:

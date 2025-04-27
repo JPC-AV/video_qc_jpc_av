@@ -118,32 +118,40 @@ def apply_filename_profile(selected_profile: FilenameProfile):
     """
     Apply a FilenameProfile dataclass to the current configuration.
     
-    Replaces the filename configuration in the spex config with the selected profile,
-    ensuring the changes are properly saved to disk and reflected in any
-    consuming components.
+    Completely replaces the existing filename configuration with the selected profile,
+    ensuring all sections are properly saved and persisted.
     """
-    # First refresh configs to ensure we're working with the latest data
-    config_mgr.refresh_configs()
+    # Debug information about the provided profile
+    logger.debug(f"==== APPLYING FILENAME PROFILE ====")
+    logger.debug(f"Profile has {len(selected_profile.fn_sections)} sections")
+    for idx, (key, section) in enumerate(sorted(selected_profile.fn_sections.items()), 1):
+        logger.debug(f"  Section {idx}: {key} = {section.value} ({section.section_type})")
     
-    # Get the current spex config
+    # Get the current spex config without refreshing first
     spex_config = config_mgr.get_config('spex', SpexConfig)
     
-    # Completely replace the fn_sections with just one empty section
-    spex_config.filename_values.fn_sections = {
-        "section1": FilenameSection(
-            value="",
-            section_type="literal"
+    # Debug the current config before changes
+    logger.debug(f"Before update: Config has {len(spex_config.filename_values.fn_sections)} sections")
+    
+    # Import necessary classes
+    from ..utils.config_setup import FilenameValues, FilenameSection
+    
+    # Create new sections dictionary by copying from the selected profile
+    new_sections = {}
+    for section_key, section_value in selected_profile.fn_sections.items():
+        new_sections[section_key] = FilenameSection(
+            value=section_value.value,
+            section_type=section_value.section_type
         )
-    }
     
-    # Create a new dict with the sections from the profile
-    if selected_profile.fn_sections:
-        # Replace the entire sections dict with the one from the profile
-        spex_config.filename_values.fn_sections = selected_profile.fn_sections
+    # Create a brand new FilenameValues object
+    new_filename_values = FilenameValues(
+        fn_sections=new_sections,
+        FileExtension=selected_profile.FileExtension
+    )
     
-    # Set the file extension if it exists in the profile
-    if hasattr(selected_profile, 'FileExtension') and selected_profile.FileExtension:
-        spex_config.filename_values.FileExtension = selected_profile.FileExtension
+    # Replace the entire filename_values object
+    spex_config.filename_values = new_filename_values
     
     # Update the cached config directly
     config_mgr._configs['spex'] = spex_config
@@ -151,7 +159,16 @@ def apply_filename_profile(selected_profile: FilenameProfile):
     # Save the updated config to disk
     config_mgr.save_config('spex', is_last_used=True)
     
-    logger.debug(f"Applied filename profile beginning with '{selected_profile.fn_sections['section1'].value}_...' to configuration")
+    # Verify BEFORE refresh
+    verification_config = config_mgr.get_config('spex', SpexConfig)
+    logger.debug(f"After update, before refresh: Config has {len(verification_config.filename_values.fn_sections)} sections")
+    
+    config_mgr.refresh_configs()
+    
+    # Verify changes persisted
+    # One final verification after refresh
+    final_config = config_mgr.get_config('spex', SpexConfig)
+    logger.debug(f"Final verification after refresh: Config has {len(final_config.filename_values.fn_sections)} sections")
 
 
 def apply_signalflow_profile(selected_profile: dict):
