@@ -254,7 +254,7 @@ class ConfigManager:
         """
         config = self._configs.get(config_name)
         if not config:
-            logger.error(f"No config found for {config_name}, cannot save")
+            # logger.error(f"No config found for {config_name}, cannot save")
             return
             
         filename = f"{'last_used_' if is_last_used else ''}{config_name}_config.json"
