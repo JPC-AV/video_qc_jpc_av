@@ -14,8 +14,6 @@ from ..utils.deps_setup import required_commands, check_external_dependency, che
 from ..utils.config_setup import ChecksConfig, SpexConfig
 from ..utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
-
 def display_processing_banner(video_id=None):
     """
     Display ASCII art banners before and after processing.
@@ -58,13 +56,24 @@ class AVSpexProcessor:
         self.signals = signals
         self._cancelled = False
         self._cancel_emitted = False 
-        
-        # Force a reload of the config from disk
-        self.config_mgr = ConfigManager()
-        self.config_mgr.refresh_configs()
-        self.checks_config = config_mgr.get_config('checks', ChecksConfig)
-        self.spex_config = config_mgr.get_config('spex', SpexConfig)
 
+        self.config_mgr = ConfigManager()
+        # logger.debug("==== PROCESSOR INITIALIZATION DEBUGGING ====")
+        
+        # Get the config before refresh
+        pre_refresh_spex = self.config_mgr.get_config('spex', SpexConfig, use_last_used=True)
+        # logger.debug(f"Pre-refresh spex config has {len(pre_refresh_spex.filename_values.fn_sections)} sections")
+        
+        self.config_mgr.refresh_configs()
+        
+        # Get configs after refresh
+        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
+        self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+        
+        # Log details about the refreshed config
+        # logger.debug(f"Post-refresh spex config has {len(self.spex_config.filename_values.fn_sections)} sections")
+        # for idx, (key, section) in enumerate(sorted(self.spex_config.filename_values.fn_sections.items()), 1):
+        #     logger.debug(f"  Section {idx}: {key} = {section.value} ({section.section_type})")
 
     def cancel(self):
         self._cancelled = True
