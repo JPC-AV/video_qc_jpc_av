@@ -11,12 +11,11 @@ from ..utils.log_setup import logger
 from ..utils.config_setup import ChecksConfig, SpexConfig
 from ..utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
-
 
 def parse_mediatrace(xml_file):
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    spex_config = config_mgr.get_config('spex', SpexConfig)
     expected_mediatrace = asdict(spex_config.mediatrace_values)
     expected_mt_keys = expected_mediatrace.keys()
     expected_encoder_settings = expected_mediatrace['ENCODER_SETTINGS']
