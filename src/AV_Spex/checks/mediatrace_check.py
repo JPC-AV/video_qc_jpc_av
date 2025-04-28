@@ -104,7 +104,7 @@ def parse_mediatrace(xml_file):
         logger.critical("Some specified MediaTrace fields or values are missing or don't match:")
         for mediatrace_key, values in mediatrace_differences.items():
             actual_value, expected_value = values
-            logger.critical(f"{mediatrace_key} {actual_value}")
+            logger.critical(f"Metadata field {mediatrace_key} has a value of: {actual_value}\nThe expected value is: {expected_value}")
         logger.debug("")  # adding a space after mediatrace results if there are failures
 
     return mediatrace_differences
