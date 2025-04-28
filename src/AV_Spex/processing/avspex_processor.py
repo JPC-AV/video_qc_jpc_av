@@ -58,11 +58,11 @@ class AVSpexProcessor:
         self._cancel_emitted = False 
 
         self.config_mgr = ConfigManager()
-        logger.debug("==== PROCESSOR INITIALIZATION DEBUGGING ====")
+        # logger.debug("==== PROCESSOR INITIALIZATION DEBUGGING ====")
         
         # Get the config before refresh
         pre_refresh_spex = self.config_mgr.get_config('spex', SpexConfig, use_last_used=True)
-        logger.debug(f"Pre-refresh spex config has {len(pre_refresh_spex.filename_values.fn_sections)} sections")
+        # logger.debug(f"Pre-refresh spex config has {len(pre_refresh_spex.filename_values.fn_sections)} sections")
         
         self.config_mgr.refresh_configs()
         
@@ -71,9 +71,9 @@ class AVSpexProcessor:
         self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
         
         # Log details about the refreshed config
-        logger.debug(f"Post-refresh spex config has {len(self.spex_config.filename_values.fn_sections)} sections")
-        for idx, (key, section) in enumerate(sorted(self.spex_config.filename_values.fn_sections.items()), 1):
-            logger.debug(f"  Section {idx}: {key} = {section.value} ({section.section_type})")
+        # logger.debug(f"Post-refresh spex config has {len(self.spex_config.filename_values.fn_sections)} sections")
+        # for idx, (key, section) in enumerate(sorted(self.spex_config.filename_values.fn_sections.items()), 1):
+        #     logger.debug(f"  Section {idx}: {key} = {section.value} ({section.section_type})")
 
     def cancel(self):
         self._cancelled = True

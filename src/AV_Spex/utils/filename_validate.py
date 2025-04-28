@@ -56,8 +56,7 @@ def is_valid_filename(video_filename):
     - Tuple[bool, str]: (is_valid, error_message)
     '''
     # Add this debugging code at the beginning of the function
-    logger.debug("==== FILENAME VALIDATION DEBUGGING ====")
-    logger.debug(f"Validating filename: {video_filename}")
+    logger.debug(f"Validating filename: {video_filename}\n")
 
     # Force refresh to ensure we have the latest config
     config_mgr.refresh_configs()
@@ -65,13 +64,13 @@ def is_valid_filename(video_filename):
     # Get the LATEST spex_config (critical to use use_last_used=True)
     current_spex = config_mgr.get_config('spex', SpexConfig, use_last_used=True)
     
-    # HERE'S THE FIX: Use current_spex instead of the module-level spex_config
+    # Use current_spex instead of the module-level spex_config
     # This ensures we're using the latest config loaded from disk
     
     # Log details about the current config
-    logger.debug(f"Filename validation using config with {len(current_spex.filename_values.fn_sections)} sections")
-    for idx, (key, section) in enumerate(sorted(current_spex.filename_values.fn_sections.items()), 1):
-        logger.debug(f"  Section {idx}: {key} = {section.value} ({section.section_type})")
+    # logger.debug(f"Filename validation using config with {len(current_spex.filename_values.fn_sections)} sections")
+    # for idx, (key, section) in enumerate(sorted(current_spex.filename_values.fn_sections.items()), 1):
+    #     logger.debug(f"  Section {idx}: {key} = {section.value} ({section.section_type})")
 
     base_filename = os.path.basename(video_filename)
     name_without_ext, file_ext = os.path.splitext(base_filename)
