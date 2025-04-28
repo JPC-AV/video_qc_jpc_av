@@ -11,12 +11,11 @@ from ..utils.log_setup import logger
 from ..utils.config_setup import ChecksConfig, SpexConfig
 from ..utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
-
 
 def parse_mediatrace(xml_file):
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    spex_config = config_mgr.get_config('spex', SpexConfig)
     expected_mediatrace = asdict(spex_config.mediatrace_values)
     expected_mt_keys = expected_mediatrace.keys()
     expected_encoder_settings = expected_mediatrace['ENCODER_SETTINGS']
@@ -104,7 +103,10 @@ def parse_mediatrace(xml_file):
         logger.critical("Some specified MediaTrace fields or values are missing or don't match:")
         for mediatrace_key, values in mediatrace_differences.items():
             actual_value, expected_value = values
-            logger.critical(f"{mediatrace_key} {actual_value}")
+            if expected_value == '':
+                logger.critical(f"{mediatrace_key} {actual_value}")
+            else:
+                logger.critical(f"Encoder settings field {mediatrace_key} has a value of: {actual_value}\nThe expected value is: {expected_value}")
         logger.debug("")  # adding a space after mediatrace results if there are failures
 
     return mediatrace_differences

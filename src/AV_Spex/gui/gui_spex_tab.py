@@ -403,11 +403,13 @@ class SpexTab(ThemeableMixin):
                     
                     # Only add if it's not already in the dropdown
                     if not found:
+                        # Add to dropdown UI
                         self.filename_profile_dropdown.addItem(custom_name)
                         self.filename_profile_dropdown.setCurrentText(custom_name)
                         
-                        # Get the ConfigManager instance
+                        # Get the ConfigManager instance and refresh configs
                         config_manager = ConfigManager()
+                        config_manager.refresh_configs()
                         
                         # Get the current filename configuration
                         filename_config = config_manager.get_config('filename', FilenameConfig)
@@ -416,19 +418,19 @@ class SpexTab(ThemeableMixin):
                         updated_profiles = dict(filename_config.filename_profiles)
                         updated_profiles[custom_name] = pattern
                         
-                        # Create a new FilenameConfig with the updated profiles
-                        new_config = FilenameConfig(
-                            filename_profiles=updated_profiles
-                        )
+                        # Update the configuration
+                        filename_config.filename_profiles = updated_profiles
                         
-                        # Set the config with the complete new object
-                        config_manager.set_config('filename', new_config)
+                        # Update the cached config directly
+                        config_manager._configs['filename'] = filename_config
                         
-                        # Save the last used configuration
-                        config_manager.save_last_used_config('filename')
+                        # Save the updated config to disk
+                        config_manager.save_config('filename', is_last_used=True)
+                        
+                        logger.debug(f"Added custom filename pattern '{custom_name}' to configuration")
                         
                 except Exception as e:
-                    QMessageBox.warning(self, "Error", f"Error adding custom pattern to dropdown: {str(e)}")          
+                    QMessageBox.warning(self, "Error", f"Error adding custom pattern to dropdown: {str(e)}")        
     
     def on_theme_changed(self, palette):
         """Handle theme changes for this tab"""
