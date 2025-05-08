@@ -127,43 +127,24 @@ def apply_filename_profile(selected_profile: FilenameProfile):
     for idx, (key, section) in enumerate(sorted(selected_profile.fn_sections.items()), 1):
         logger.debug(f"  Section {idx}: {key} = {section.value} ({section.section_type})")
     
-    # Get the current spex config without refreshing first
-    spex_config = config_mgr.get_config('spex', SpexConfig)
-    
-    # Debug the current config before changes
-    logger.debug(f"Before update: Config has {len(spex_config.filename_values.fn_sections)} sections")
-    
     # Create new sections dictionary by copying from the selected profile
     new_sections = {}
     for section_key, section_value in selected_profile.fn_sections.items():
-        new_sections[section_key] = FilenameSection(
-            value=section_value.value,
-            section_type=section_value.section_type
-        )
+        new_sections[section_key] = {
+            'value': section_value.value,
+            'section_type': section_value.section_type
+        }
     
-    # Create a brand new FilenameValues object
-    new_filename_values = FilenameValues(
-        fn_sections=new_sections,
-        FileExtension=selected_profile.FileExtension
-    )
+    # Replace the entire fn_sections dictionary
+    config_mgr.replace_config_section('spex', 'filename_values.fn_sections', new_sections)
     
-    # Replace the entire filename_values object
-    spex_config.filename_values = new_filename_values
+    # Replace the FileExtension
+    config_mgr.replace_config_section('spex', 'filename_values.FileExtension', selected_profile.FileExtension)
     
-    # Update the cached config directly
-    config_mgr._configs['spex'] = spex_config
-    
-    # Save the updated config to disk
-    config_mgr.save_config('spex', is_last_used=True)
-    
-    # Verify BEFORE refresh
-    verification_config = config_mgr.get_config('spex', SpexConfig)
-    logger.debug(f"After update, before refresh: Config has {len(verification_config.filename_values.fn_sections)} sections")
-    
+    # Force a refresh to ensure changes are persisted
     config_mgr.refresh_configs()
     
     # Verify changes persisted
-    # One final verification after refresh
     final_config = config_mgr.get_config('spex', SpexConfig)
     logger.debug(f"Final verification after refresh: Config has {len(final_config.filename_values.fn_sections)} sections")
 
@@ -184,50 +165,55 @@ def apply_signalflow_profile(selected_profile: dict):
     for idx, (key, value) in enumerate(sorted(selected_profile.items()), 1):
         logger.debug(f"  Setting {idx}: {key} = {value}")
     
-    # Get the current spex config without refreshing first
-    spex_config = config_mgr.get_config('spex', SpexConfig)
-    
     # Validate input
     if not isinstance(selected_profile, dict):
         logger.critical(f"Invalid signalflow settings: {selected_profile}")
         return
     
-    # Debug the current config before changes
-    logger.debug(f"Before update: Config has encoder settings in mediatrace_values")
+    # Get the current spex config to check structure
+    spex_config = config_mgr.get_config('spex', SpexConfig)
     
     # Update mediatrace_values.ENCODER_SETTINGS
-    # Each key in selected_profile should be a field in ENCODER_SETTINGS (like Source_VTR)
-    for key, value in selected_profile.items():
-        if hasattr(spex_config.mediatrace_values.ENCODER_SETTINGS, key):
-            setattr(spex_config.mediatrace_values.ENCODER_SETTINGS, key, value)
+    # Create a new ENCODER_SETTINGS object with the profile values
+    current_encoder_settings = {}
+    if hasattr(spex_config.mediatrace_values.ENCODER_SETTINGS, '__dict__'):
+        # Get existing attributes that aren't in the selected profile
+        for key, value in spex_config.mediatrace_values.ENCODER_SETTINGS.__dict__.items():
+            if not key.startswith('_') and key not in selected_profile:
+                current_encoder_settings[key] = value
     
-    # Now update ffmpeg_values.format.tags.ENCODER_SETTINGS if it exists
+    # Add all settings from the profile
+    for key, value in selected_profile.items():
+        current_encoder_settings[key] = value
+    
+    # Replace the entire ENCODER_SETTINGS object
+    config_mgr.replace_config_section('spex', 'mediatrace_values.ENCODER_SETTINGS', current_encoder_settings)
+    
+    # Check if ffmpeg_values.format.tags exists and update it
     if (hasattr(spex_config, 'ffmpeg_values') and 
         'format' in spex_config.ffmpeg_values and 
         'tags' in spex_config.ffmpeg_values['format']):
         
-        # Initialize ENCODER_SETTINGS as a dict if needed
-        if 'ENCODER_SETTINGS' not in spex_config.ffmpeg_values['format']['tags'] or \
-           spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'] is None:
-            spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'] = {}
-            
-        # Update the settings
+        # Get current ENCODER_SETTINGS dict or create a new one
+        current_ffmpeg_settings = {}
+        if ('ENCODER_SETTINGS' in spex_config.ffmpeg_values['format']['tags'] and 
+            spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'] is not None):
+            # Copy existing settings that aren't in the selected profile
+            for key, value in spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'].items():
+                if key not in selected_profile:
+                    current_ffmpeg_settings[key] = value
+        
+        # Add all settings from the profile
         for key, value in selected_profile.items():
-            spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'][key] = value
+            current_ffmpeg_settings[key] = value
+        
+        # Replace the entire ENCODER_SETTINGS dictionary
+        config_mgr.replace_config_section('spex', 'ffmpeg_values.format.tags.ENCODER_SETTINGS', current_ffmpeg_settings)
     
-    # Update the cached config directly
-    config_mgr._configs['spex'] = spex_config
-    
-    # Save the updated config to disk
-    config_mgr.save_config('spex', is_last_used=True)
-    
-    # Verify BEFORE refresh
-    verification_config = config_mgr.get_config('spex', SpexConfig)
-    logger.debug(f"After update, before refresh: Verifying encoder settings updated")
-    
+    # Force a refresh to ensure changes are persisted
     config_mgr.refresh_configs()
     
-    # One final verification after refresh
+    # Verify changes persisted
     final_config = config_mgr.get_config('spex', SpexConfig)
     logger.debug(f"Final verification after refresh: Confirming encoder settings persisted")
     
