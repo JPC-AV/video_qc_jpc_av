@@ -288,6 +288,7 @@ class SpexConfig:
     ffmpeg_values: Dict[str, Union[FFmpegVideoStream, FFmpegAudioStream, FFmpegFormat]]
     mediatrace_values: MediaTraceValues
     qct_parse_values: QCTParseValues
+    signalflow_profiles: Dict[str, Dict] = field(default_factory=dict)
 
 # Output configuration
 @dataclass
