@@ -65,26 +65,69 @@ class ImportTab(ThemeableMixin):
                     checks_config = config_mgr.get_config('checks', ChecksConfig)
                     spex_config = config_mgr.get_config('spex', SpexConfig)
 
-                    # Spex dropdowns
-                    # file name dropdown
-                    if spex_config.filename_values.fn_sections["section1"].value == "JPC":
-                        self.spex_tab.filename_profile_dropdown.setCurrentText("JPC Filename Profile")
-                    elif spex_config.filename_values.fn_sections["section1"].value == "2012":
-                        self.spex_tab.filename_profile_dropdown.setCurrentText("Bowser Filename Profile")
-                    else:
-                        self.spex_tab.filename_profile_dropdown.setCurrentText("Select a profile...")
+                    # Checks Tab dropdowns
+                    # Update the Checks profile dropdown
+                    if hasattr(self.main_window, 'checks_profile_dropdown'):
+                        self.main_window.checks_profile_dropdown.blockSignals(True)
+                        
+                        # Set based on exiftool.run_tool value (same logic as in gui_checks_tab.py)
+                        if checks_config.tools.exiftool.run_tool == "yes":
+                            self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
+                        elif checks_config.tools.exiftool.run_tool == "no" and checks_config.tools.exiftool.check_tool == "yes":
+                            self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
+                        else:
+                            # Fallback to "All Off" if neither "yes" nor "no"
+                            self.main_window.checks_profile_dropdown.setCurrentText("All Off")
+                        
+                        self.main_window.checks_profile_dropdown.blockSignals(False)
+
+                    # Spex Tab dropdowns
+                    # Refresh filename profile dropdown
+                    if hasattr(self.spex_tab, 'filename_profile_dropdown'):
+                        # Block signals to prevent triggering change events
+                        self.spex_tab.filename_profile_dropdown.blockSignals(True)
+                        
+                        # Get the current section1 value from the reset config
+                        section1_value = spex_config.filename_values.fn_sections.get("section1", {}).value
+                        
+                        # Set the dropdown based on the config value
+                        if section1_value == "JPC":
+                            self.spex_tab.filename_profile_dropdown.setCurrentText("JPC Filename Profile")
+                        elif section1_value == "2012":
+                            self.spex_tab.filename_profile_dropdown.setCurrentText("Bowser Filename Profile")
+                        else:
+                            self.spex_tab.filename_profile_dropdown.setCurrentText("Select a profile...")
+                        
+                        # Re-enable signals
+                        self.spex_tab.filename_profile_dropdown.blockSignals(False)
                     
                     # Signalflow profile dropdown
-                    # Set initial state based on config
-                    encoder_settings = spex_config.mediatrace_values.ENCODER_SETTINGS
-                    if isinstance(encoder_settings, dict):
-                        source_vtr = encoder_settings.get('Source_VTR', [])
-                    else:
-                        source_vtr = encoder_settings.Source_VTR
-                    if any("SVO5800" in vtr for vtr in source_vtr):
-                        self.main_window.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
-                    elif any("Sony BVH3100" in vtr for vtr in source_vtr):
-                        self.main_window.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
+                    # Refresh signalflow profile dropdown
+                    if hasattr(self.main_window, 'signalflow_profile_dropdown'):
+                        # Block signals to prevent triggering change events
+                        self.main_window.signalflow_profile_dropdown.blockSignals(True)
+                        
+                        # Get encoder settings
+                        encoder_settings = spex_config.mediatrace_values.ENCODER_SETTINGS
+                        source_vtr = []
+                        
+                        if isinstance(encoder_settings, dict):
+                            source_vtr = encoder_settings.get('Source_VTR', [])
+                        else:
+                            # Handle case where encoder_settings is an object
+                            source_vtr = getattr(encoder_settings, 'Source_VTR', [])
+                        
+                        # Set the dropdown based on VTR values
+                        if any(isinstance(vtr, str) and "SVO5800" in vtr for vtr in source_vtr):
+                            self.main_window.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
+                        elif any(isinstance(vtr, str) and "Sony BVH3100" in vtr for vtr in source_vtr):
+                            self.main_window.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
+                        else:
+                            # Default option
+                            self.main_window.signalflow_profile_dropdown.setCurrentText("Select a profile...")
+                        
+                        # Re-enable signals
+                        self.main_window.signalflow_profile_dropdown.blockSignals(False)
                     
                     QMessageBox.information(self.main_window, "Success", f"Configuration imported successfully from {file_path}")
                 except Exception as e:
