@@ -104,8 +104,6 @@ class CustomSignalflowDialog(QDialog, ThemeableMixin):
             "SVO5800 (S-VHS VCR)",
             "BVH3100 (1\" Type C)",
             "DVW-A500 (Digital Betacam)",
-            "UVW-1800 (Betacam SP)",
-            "BR-S525U (S-VHS)",
             "PVW-2800 (Betacam SP)",
             "Other"
         ])
@@ -139,8 +137,8 @@ class CustomSignalflowDialog(QDialog, ThemeableMixin):
         vtr_grid.addWidget(QLabel("Connection Type:"), row, 0)
         self.vtr_connection_combo = QComboBox()
         self.vtr_connection_combo.addItems([
-            "composite", 
-            "component", 
+            "Composite", 
+            "Component", 
             "S-Video", 
             "SDI"
         ])
@@ -152,10 +150,10 @@ class CustomSignalflowDialog(QDialog, ThemeableMixin):
         vtr_grid.addWidget(QLabel("Audio Type:"), row, 0)
         self.vtr_audio_combo = QComboBox()
         self.vtr_audio_combo.addItems([
-            "analog balanced", 
-            "analog unbalanced", 
-            "digital embedded", 
-            "digital AES/EBU"
+            "Analog balanced", 
+            "Analog unbalanced", 
+            "Audio embedded", 
+            "Digital AES/EBU"
         ])
         self.vtr_audio_combo.currentIndexChanged.connect(self.update_preview)
         vtr_grid.addWidget(self.vtr_audio_combo, row, 1)
@@ -179,8 +177,6 @@ class CustomSignalflowDialog(QDialog, ThemeableMixin):
             "Internal TBC (same as VTR)",
             "DPS575 with flash firmware",
             "AVT-8710 (Digital TBC)",
-            "FA-300 (Digital TBC)",
-            "FOR-A FA-310 (Digital TBC)",
             "None",
             "Other"
         ])
@@ -223,8 +219,8 @@ class CustomSignalflowDialog(QDialog, ThemeableMixin):
         self.tbc_connection_combo = QComboBox()
         self.tbc_connection_combo.addItems([
             "SDI", 
-            "composite", 
-            "component", 
+            "Composite", 
+            "Component", 
             "S-Video"
         ])
         self.tbc_connection_combo.currentIndexChanged.connect(self.update_preview)
@@ -235,10 +231,10 @@ class CustomSignalflowDialog(QDialog, ThemeableMixin):
         tbc_grid.addWidget(QLabel("Audio Output:"), row, 0)
         self.tbc_audio_combo = QComboBox()
         self.tbc_audio_combo.addItems([
-            "audio embedded", 
-            "audio pass-through", 
-            "analog balanced",
-            "analog unbalanced"
+            "Audio embedded", 
+            "Audio pass-through", 
+            "Analog balanced",
+            "Analog unbalanced"
         ])
         self.tbc_audio_combo.currentIndexChanged.connect(self.update_preview)
         tbc_grid.addWidget(self.tbc_audio_combo, row, 1)
@@ -304,7 +300,7 @@ class CustomSignalflowDialog(QDialog, ThemeableMixin):
         self.adc_connection_combo.addItems([
             "SDI", 
             "HDMI", 
-            "component"
+            "Component"
         ])
         self.adc_connection_combo.currentIndexChanged.connect(self.update_preview)
         self.adc_grid.addWidget(self.adc_connection_combo, row, 1)
@@ -333,11 +329,8 @@ class CustomSignalflowDialog(QDialog, ThemeableMixin):
         self.capture_model_combo = QComboBox()
         self.capture_model_combo.addItems([
             "Blackmagic Design UltraStudio",
-            "Blackmagic Intensity Pro",
-            "AJA Kona LHe Plus", 
-            "Magewell USB Capture",
-            "Blackmagic DeckLink",
-            "AJA U-TAP",
+            "Blackmagic Design Hyperdeck Studio",
+            "AJA Kona", 
             "Other"
         ])
         self.capture_model_combo.currentIndexChanged.connect(self.update_preview)
