@@ -239,6 +239,8 @@ def apply_profile(selected_profile):
     Args:
         selected_profile (dict): The profile configuration to apply
     """
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    
     # Prepare the updates dictionary with the structure matching the dataclass
     updates = {}
     
