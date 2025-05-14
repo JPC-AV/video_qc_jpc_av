@@ -48,7 +48,7 @@ class SpexTab(ThemeableMixin):
             elif selected_option == "Bowser Filename Profile":
                 config_edit.apply_filename_profile(bowser_filename_profile)
                 config_mgr.save_config('spex', is_last_used=True)
-            elif selected_option.startswith("Custom ("):
+            else:
                 for profile_name in filename_config.filename_profiles.keys():
                     if selected_option == profile_name:
                         profile_class = filename_config.filename_profiles[profile_name]
@@ -57,6 +57,8 @@ class SpexTab(ThemeableMixin):
 
         def on_signalflow_profile_changed(self, index):
             """Handle signal flow profile selection change."""
+            signalflow_config = config_mgr.get_config("signalflow", SignalflowConfig)
+
             selected_option = self.main_window.signalflow_profile_dropdown.itemText(index)
             logger.debug(f"Selected signal flow profile: {selected_option}")
 
@@ -64,19 +66,15 @@ class SpexTab(ThemeableMixin):
                 sn_config_changes = config_edit.JPC_AV_SVHS
             elif selected_option == "BVH3100 Signal Flow":
                 sn_config_changes = config_edit.BVH3100
-            elif selected_option.startswith("Custom ("):
+            else:
                 # Handle custom profile
-                spex_config = config_mgr.get_config('spex', SpexConfig)
-                if hasattr(spex_config, 'signalflow_profiles') and spex_config.signalflow_profiles:
-                    for profile_name, profile_data in spex_config.signalflow_profiles.items():
+                if hasattr(signalflow_config, 'signalflow_profiles') and signalflow_config.signalflow_profiles:
+                    for profile_name, profile_data in signalflow_config.signalflow_profiles.items():
                         if selected_option == profile_name:
                             config_edit.apply_signalflow_profile(profile_data)
                             config_mgr.save_config('spex', is_last_used=True)
                             return
                 logger.error(f"Could not find profile: {selected_option}")
-                return
-            else:
-                logger.error("Signal flow identifier not recognized, config not updated")
                 return
 
             if sn_config_changes:
