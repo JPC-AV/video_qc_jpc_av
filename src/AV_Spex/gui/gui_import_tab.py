@@ -176,6 +176,7 @@ class ImportTab(ThemeableMixin):
                     config_mgr.reset_config('checks', ChecksConfig)
                     config_mgr.reset_config('spex', SpexConfig)
                     config_mgr.reset_config('filename', FilenameConfig)
+                    config_mgr.reset_config('signalflow', SignalflowConfig)
             
                     config_mgr.save_config('checks', is_last_used=True)
                     config_mgr.save_config('spex', is_last_used=True)
@@ -184,8 +185,10 @@ class ImportTab(ThemeableMixin):
                     self.main_window.config_widget.load_config_values()
 
                     # Get fresh copies of configs after reset
+                    checks_config = config_mgr.get_config('checks', ChecksConfig)
                     spex_config = config_mgr.get_config('spex', SpexConfig)
                     filename_config = config_mgr.get_config('filename', FilenameConfig)
+                    signalflow_config = config_mgr.get_config("signalflow", SignalflowConfig)
 
                     # Checks Tab dropdowns
                     # Update the Checks profile dropdown
