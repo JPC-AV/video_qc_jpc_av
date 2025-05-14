@@ -12,7 +12,7 @@ from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from ..gui.gui_processing_window import DirectoryListWidget
 from ..utils.config_io import ConfigIO
 from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameConfig
+from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameConfig, SignalflowConfig
 from ..utils.log_setup import logger
 
 from AV_Spex import __version__
@@ -42,7 +42,11 @@ class ImportTab(ThemeableMixin):
                 self.export_config_dialog('checks')
             elif selected_option == "Export Spex Config":
                 self.export_config_dialog('spex')
-            elif selected_option == "Export All Config":
+            elif selected_option == "Export File name Config":
+                self.export_config_dialog('filename')
+            elif selected_option == "Export Signal flow Config":
+                self.export_config_dialog('signalflow')
+            elif selected_option == "Export Spex and Checks Config":
                 self.export_config_dialog(['checks','spex'])
 
         def import_config(self):
@@ -64,8 +68,10 @@ class ImportTab(ThemeableMixin):
                     # Ensure recent config ref
                     checks_config = config_mgr.get_config('checks', ChecksConfig)
                     spex_config = config_mgr.get_config('spex', SpexConfig)
+                    signalflow_config = config_mgr.get_config('signalflow', SignalflowConfig)
+                    filename_config = config_mgr.get_config('filename', FilenameConfig)
 
-                    # Checks Tab dropdowns
+                    # Checks Tab dropdowns 
                     # Update the Checks profile dropdown
                     if hasattr(self.main_window, 'checks_profile_dropdown'):
                         self.main_window.checks_profile_dropdown.blockSignals(True)
@@ -488,9 +494,11 @@ class ImportTab(ThemeableMixin):
 
         # Add the default placeholder option first
         self.main_window.export_config_dropdown.addItem("Export Config Type...")  
+        self.main_window.export_config_dropdown.addItem("Export File name Config")
+        self.main_window.export_config_dropdown.addItem("Export Signal flow Config")
         self.main_window.export_config_dropdown.addItem("Export Checks Config")
         self.main_window.export_config_dropdown.addItem("Export Spex Config")
-        self.main_window.export_config_dropdown.addItem("Export All Config")
+        self.main_window.export_config_dropdown.addItem("Export Spex and Checks Config")
 
         # Connect the combobox signal to your function
         self.main_window.export_config_dropdown.currentIndexChanged.connect(self.config_handlers.export_selected_config)

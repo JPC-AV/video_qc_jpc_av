@@ -6,7 +6,7 @@ from datetime import datetime
 
 from ..utils.log_setup import logger
 
-from ..utils.config_setup import SpexConfig, ChecksConfig
+from ..utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig, SignalflowConfig
 from ..utils.config_manager import ConfigManager
 
 class ConfigIO:
@@ -26,6 +26,10 @@ class ConfigIO:
                 config = self.config_mgr.get_config('spex', SpexConfig)
             elif config_type == 'checks':
                 config = self.config_mgr.get_config('checks', ChecksConfig)
+            elif config_type == 'filename':
+                config = self.config_mgr.get_config('filename', FilenameConfig)
+            elif config_type == 'signalflow':
+                config = self.config_mgr.get_config('signalflow', SignalflowConfig)
             else:
                 continue
             export_data[config_type] = asdict(config)
