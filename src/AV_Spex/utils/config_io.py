@@ -86,6 +86,58 @@ class ConfigIO:
             # Save to disk as last_used config
             self.config_mgr.save_config('checks', is_last_used=True)
 
+        # Process filename config if present
+        if 'filename' in config_data and 'filename_profiles' in config_data['filename']:
+            try:
+                # Prepare filename profiles for replacement
+                imported_profiles = {}
+                
+                # Process each profile in the imported data
+                for profile_name, profile_data in config_data['filename']['filename_profiles'].items():
+                    # Create filename sections
+                    fn_sections = {}
+                    for section_key, section_data in profile_data['fn_sections'].items():
+                        fn_sections[section_key] = {
+                            'value': section_data['value'],
+                            'section_type': section_data['section_type']
+                        }
+                    
+                    # Create the profile structure
+                    imported_profiles[profile_name] = {
+                        'fn_sections': fn_sections,
+                        'FileExtension': profile_data['FileExtension']
+                    }
+                
+                # Replace the entire filename_profiles section
+                self.config_mgr.replace_config_section('filename', 'filename_profiles', imported_profiles)
+                logger.info("Imported and updated filename configuration")
+            except Exception as e:
+                logger.error(f"Error importing filename config: {str(e)}")
+        
+        # Process signalflow config if present
+        if 'signalflow' in config_data and 'signalflow_profiles' in config_data['signalflow']:
+            try:
+                # Prepare signalflow profiles for replacement
+                imported_profiles = {}
+                
+                # Process each profile in the imported data
+                for profile_name, profile_data in config_data['signalflow']['signalflow_profiles'].items():
+                    # Create the profile structure with correct format
+                    imported_profiles[profile_name] = {
+                        'name': profile_data.get('name', profile_name),
+                        'Source_VTR': profile_data.get('Source_VTR', []),
+                        'TBC_Framesync': profile_data.get('TBC_Framesync', []),
+                        'ADC': profile_data.get('ADC', []),
+                        'Capture_Device': profile_data.get('Capture_Device', []),
+                        'Computer': profile_data.get('Computer', [])
+                    }
+                
+                # Replace the entire signalflow_profiles section
+                self.config_mgr.replace_config_section('signalflow', 'signalflow_profiles', imported_profiles)
+                logger.info("Imported and updated signalflow configuration")
+            except Exception as e:
+                logger.error(f"Error importing signalflow config: {str(e)}")
+
 
 def handle_config_io(args, config_mgr: ConfigManager):
     """Handle config I/O operations based on arguments"""
