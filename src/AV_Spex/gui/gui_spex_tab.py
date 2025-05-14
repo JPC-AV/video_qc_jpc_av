@@ -16,7 +16,7 @@ from ..gui.gui_custom_filename import CustomFilenameDialog
 from ..gui.gui_custom_signalflow import CustomSignalflowDialog
 
 from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig
+from ..utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig, SignalflowConfig, SignalflowProfile
 
 from ..utils.log_setup import logger
 
@@ -426,14 +426,18 @@ class SpexTab(ThemeableMixin):
         # Create the dropdown
         self.main_window.signalflow_profile_dropdown = QComboBox()
         self.main_window.signalflow_profile_dropdown.addItem("Select a profile...")
-        self.main_window.signalflow_profile_dropdown.addItem("JPC_AV_SVHS Signal Flow")
-        self.main_window.signalflow_profile_dropdown.addItem("BVH3100 Signal Flow")
         
-        # Add any custom signal flow profiles from the config
-        spex_config = config_mgr.get_config('spex', SpexConfig)
-        if hasattr(spex_config, 'signalflow_profiles') and spex_config.signalflow_profiles:
-            for profile_name in spex_config.signalflow_profiles.keys():
-                self.main_window.signalflow_profile_dropdown.addItem(profile_name)
+        # Try to load profiles from the dedicated signalflow config
+        try:
+            signalflow_config = config_mgr.get_config('signalflow', SignalflowConfig)
+            if hasattr(signalflow_config, 'signalflow_profiles') and signalflow_config.signalflow_profiles:
+                for profile_name in signalflow_config.signalflow_profiles.keys():
+                    self.main_window.signalflow_profile_dropdown.addItem(profile_name)
+        except Exception as e:
+            logger.warning(f"Could not load signalflow config: {e}")
+            # Fall back to hardcoded profiles
+            self.main_window.signalflow_profile_dropdown.addItem("JPC_AV_SVHS Signal Flow")
+            self.main_window.signalflow_profile_dropdown.addItem("BVH3100 Signal Flow")
         
         # Set initial state based on config
         encoder_settings = spex_config.mediatrace_values.ENCODER_SETTINGS
@@ -523,30 +527,68 @@ class SpexTab(ThemeableMixin):
                         config_manager = ConfigManager()
                         config_manager.refresh_configs()
                         
-                        # Get the current spex configuration
-                        spex_config = config_manager.get_config('spex', SpexConfig)
-                        
-                        # Create or update the signalflow_profiles dictionary
-                        if not hasattr(spex_config, 'signalflow_profiles'):
-                            spex_config.signalflow_profiles = {}
-                        
-                        # Create an updated dictionary of profiles
-                        updated_profiles = dict(spex_config.signalflow_profiles)
-                        updated_profiles[profile_name] = profile
-                        
-                        # Update the configuration
-                        spex_config.signalflow_profiles = updated_profiles
-                        
-                        # Update the cached config directly
-                        config_manager._configs['spex'] = spex_config
-                        
-                        # Save the updated config to disk
-                        config_manager.save_config('spex', is_last_used=True)
+                        # Try to save to the dedicated signalflow config
+                        try:
+                            # Get the signalflow configuration
+                            signalflow_config = config_manager.get_config('signalflow', SignalflowConfig)
+                            
+                            # Create or update the signalflow_profiles dictionary
+                            if not hasattr(signalflow_config, 'signalflow_profiles'):
+                                signalflow_config.signalflow_profiles = {}
+                            
+                            # Create an updated dictionary of profiles
+                            updated_profiles = dict(signalflow_config.signalflow_profiles)
+                            
+                            # Create a SignalflowProfile object
+                            new_profile = SignalflowProfile(
+                                name=profile['name'],
+                                Source_VTR=profile['Source_VTR'],
+                                TBC_Framesync=profile.get('TBC_Framesync', []),
+                                ADC=profile.get('ADC', []),
+                                Capture_Device=profile['Capture_Device'],
+                                Computer=profile['Computer']
+                            )
+                            
+                            # Add the new profile
+                            updated_profiles[profile_name] = new_profile
+                            
+                            # Update the configuration
+                            signalflow_config.signalflow_profiles = updated_profiles
+                            
+                            # Update the cached config directly
+                            config_manager._configs['signalflow'] = signalflow_config
+                            
+                            # Save the updated config to disk
+                            config_manager.save_config('signalflow', is_last_used=True)
+                            
+                            logger.debug(f"Added custom signal flow profile '{profile_name}' to signalflow configuration")
+                            
+                        except Exception as e:
+                            logger.warning(f"Could not save to signalflow config: {e}")
+                            # Fall back to storing in SpexConfig (legacy method)
+                            spex_config = config_manager.get_config('spex', SpexConfig)
+                            
+                            # Create or update the signalflow_profiles dictionary
+                            if not hasattr(spex_config, 'signalflow_profiles'):
+                                spex_config.signalflow_profiles = {}
+                            
+                            # Create an updated dictionary of profiles
+                            updated_profiles = dict(spex_config.signalflow_profiles)
+                            updated_profiles[profile_name] = profile
+                            
+                            # Update the configuration
+                            spex_config.signalflow_profiles = updated_profiles
+                            
+                            # Update the cached config directly
+                            config_manager._configs['spex'] = spex_config
+                            
+                            # Save the updated config to disk
+                            config_manager.save_config('spex', is_last_used=True)
+                            
+                            logger.debug(f"Added custom signal flow profile '{profile_name}' to spex configuration (fallback)")
                         
                         # Apply the new profile
                         config_edit.apply_signalflow_profile(profile)
-                        
-                        logger.debug(f"Added custom signal flow profile '{profile_name}' to configuration")
                         
                 except Exception as e:
                     QMessageBox.warning(self.main_window, "Error", f"Error adding custom profile to dropdown: {str(e)}")
