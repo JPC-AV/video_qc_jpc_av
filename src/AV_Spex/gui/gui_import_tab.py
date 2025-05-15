@@ -120,6 +120,8 @@ class ImportTab(ThemeableMixin):
                         # Block signals to prevent triggering change events
                         self.main_window.signalflow_profile_dropdown.blockSignals(True)
 
+                        self.main_window.signalflow_profile_dropdown.clear()
+
                         # Try to load profiles from the dedicated signalflow config
                         try:
                             if hasattr(signalflow_config, 'signalflow_profiles') and signalflow_config.signalflow_profiles:
