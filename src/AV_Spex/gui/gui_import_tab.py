@@ -92,6 +92,13 @@ class ImportTab(ThemeableMixin):
                     if hasattr(self.spex_tab, 'filename_profile_dropdown'):
                         # Block signals to prevent triggering change events
                         self.spex_tab.filename_profile_dropdown.blockSignals(True)
+
+                        self.spex_tab.filename_profile_dropdown.clear()
+
+                        # Add any custom filename profiles from the config
+                        if hasattr(filename_config, 'filename_profiles') and filename_config.filename_profiles:
+                            for profile_name in filename_config.filename_profiles.keys():
+                                self.spex_tab.filename_profile_dropdown.addItem(profile_name)
                         
                         # Get the current section1 value from the reset config
                         section1_value = spex_config.filename_values.fn_sections.get("section1", {}).value
@@ -112,6 +119,14 @@ class ImportTab(ThemeableMixin):
                     if hasattr(self.main_window, 'signalflow_profile_dropdown'):
                         # Block signals to prevent triggering change events
                         self.main_window.signalflow_profile_dropdown.blockSignals(True)
+
+                        # Try to load profiles from the dedicated signalflow config
+                        try:
+                            if hasattr(signalflow_config, 'signalflow_profiles') and signalflow_config.signalflow_profiles:
+                                for profile_name in signalflow_config.signalflow_profiles.keys():
+                                    self.main_window.signalflow_profile_dropdown.addItem(profile_name)
+                        except Exception as e:
+                            logger.warning(f"Could not load signalflow config: {e}")
                         
                         # Get encoder settings
                         encoder_settings = spex_config.mediatrace_values.ENCODER_SETTINGS
