@@ -2,7 +2,7 @@ from dataclasses import asdict
 from typing import List
 
 from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, FilenameSection
+from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, FilenameSection, SignalflowConfig
 from ..utils.config_manager import ConfigManager
 
 
@@ -149,28 +149,66 @@ def apply_filename_profile(selected_profile: FilenameProfile):
     logger.debug(f"Final verification after refresh: Config has {len(final_config.filename_values.fn_sections)} sections")
 
 
-def apply_signalflow_profile(selected_profile: dict):
+def get_signalflow_profile(profile_name: str):
     """
-    Apply signalflow profile changes to spex_config.
-    
-    Completely replaces the existing encoder settings with the selected profile,
-    ensuring all settings are properly saved and persisted.
+    Get a signalflow profile by name from the configuration.
     
     Args:
-        selected_profile (dict): The signalflow profile to apply (encoder settings)
+        profile_name (str): The name of the profile to retrieve
+        
+    Returns:
+        SignalflowProfile or None: The requested profile or None if not found
+    """
+    config_mgr = ConfigManager()
+    signalflow_config = config_mgr.get_config('signalflow', SignalflowConfig)
+    
+    if profile_name in signalflow_config.signalflow_profiles:
+        return signalflow_config.signalflow_profiles[profile_name]
+    
+    return None
+
+def apply_signalflow_profile(selected_profile):
+    """
+    Apply a SignalflowProfile dataclass or dict to the current configuration.
+    
+    Completely replaces the existing signalflow configuration with the selected profile,
+    ensuring all sections are properly saved and persisted.
+    
+    Args:
+        selected_profile (SignalflowProfile or dict): The signalflow profile to apply
     """
     # Debug information about the provided profile
     logger.debug(f"==== APPLYING SIGNALFLOW PROFILE ====")
-    logger.debug(f"Profile has {len(selected_profile)} settings")
-    for idx, (key, value) in enumerate(sorted(selected_profile.items()), 1):
+    
+    # Convert dict to proper structure if needed
+    encoder_settings = {}
+    
+    if isinstance(selected_profile, dict):
+        # If given a direct dict (from the hardcoded profiles or custom UI)
+        if "name" in selected_profile:
+            # This is already in the right format from the JSON config
+            for key in ["Source_VTR", "TBC_Framesync", "ADC", "Capture_Device", "Computer"]:
+                if key in selected_profile:
+                    encoder_settings[key] = selected_profile[key]
+        else:
+            # This is from the old hardcoded dict format, just use as is
+            encoder_settings = selected_profile
+    else:
+        # If given a SignalflowProfile dataclass, convert to dict
+        encoder_settings = {
+            "Source_VTR": selected_profile.Source_VTR,
+            "TBC_Framesync": selected_profile.TBC_Framesync,
+            "ADC": selected_profile.ADC,
+            "Capture_Device": selected_profile.Capture_Device,
+            "Computer": selected_profile.Computer
+        }
+    
+    # Debug the settings we're going to apply
+    for idx, (key, value) in enumerate(sorted(encoder_settings.items()), 1):
         logger.debug(f"  Setting {idx}: {key} = {value}")
     
-    # Validate input
-    if not isinstance(selected_profile, dict):
-        logger.critical(f"Invalid signalflow settings: {selected_profile}")
-        return
-    
     # Get the current spex config to check structure
+    config_mgr = ConfigManager()
     spex_config = config_mgr.get_config('spex', SpexConfig)
     
     # Update mediatrace_values.ENCODER_SETTINGS
@@ -179,11 +217,11 @@ def apply_signalflow_profile(selected_profile: dict):
     if hasattr(spex_config.mediatrace_values.ENCODER_SETTINGS, '__dict__'):
         # Get existing attributes that aren't in the selected profile
         for key, value in spex_config.mediatrace_values.ENCODER_SETTINGS.__dict__.items():
-            if not key.startswith('_') and key not in selected_profile:
+            if not key.startswith('_') and key not in encoder_settings:
                 current_encoder_settings[key] = value
     
     # Add all settings from the profile
-    for key, value in selected_profile.items():
+    for key, value in encoder_settings.items():
         current_encoder_settings[key] = value
     
     # Replace the entire ENCODER_SETTINGS object
@@ -200,11 +238,11 @@ def apply_signalflow_profile(selected_profile: dict):
             spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'] is not None):
             # Copy existing settings that aren't in the selected profile
             for key, value in spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS'].items():
-                if key not in selected_profile:
+                if key not in encoder_settings:
                     current_ffmpeg_settings[key] = value
         
         # Add all settings from the profile
-        for key, value in selected_profile.items():
+        for key, value in encoder_settings.items():
             current_ffmpeg_settings[key] = value
         
         # Replace the entire ENCODER_SETTINGS dictionary
@@ -239,6 +277,8 @@ def apply_profile(selected_profile):
     Args:
         selected_profile (dict): The profile configuration to apply
     """
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    
     # Prepare the updates dictionary with the structure matching the dataclass
     updates = {}
     
