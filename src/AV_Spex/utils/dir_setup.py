@@ -4,11 +4,11 @@ import shutil
 import re
 from dataclasses import asdict
 
-from ..utils.filename_validate import is_valid_filename
+from AV_Spex.utils.filename_validate import is_valid_filename
 
-from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig, SpexConfig
-from ..utils.config_manager import ConfigManager
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
 checks_config = config_mgr.get_config('checks', ChecksConfig)

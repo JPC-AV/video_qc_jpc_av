@@ -3,21 +3,21 @@ import shutil
 import subprocess
 import time
 
-from ..processing import run_tools
-from ..utils import dir_setup
-from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig, SpexConfig
-from ..utils.config_manager import ConfigManager
-from ..utils.generate_report import generate_final_report
-from ..checks.fixity_check import check_fixity, output_fixity
-from ..checks.mediainfo_check import parse_mediainfo
-from ..checks.mediatrace_check import parse_mediatrace, create_metadata_difference_report
-from ..checks.exiftool_check import parse_exiftool
-from ..checks.ffprobe_check import parse_ffprobe
-from ..checks.embed_fixity import validate_embedded_md5, process_embedded_fixity
-from ..checks.make_access import process_access_file
-from ..checks.qct_parse import run_qctparse
-from ..checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
+from AV_Spex.processing import run_tools
+from AV_Spex.utils import dir_setup
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.generate_report import generate_final_report
+from AV_Spex.checks.fixity_check import check_fixity, output_fixity
+from AV_Spex.checks.mediainfo_check import parse_mediainfo
+from AV_Spex.checks.mediatrace_check import parse_mediatrace, create_metadata_difference_report
+from AV_Spex.checks.exiftool_check import parse_exiftool
+from AV_Spex.checks.ffprobe_check import parse_ffprobe
+from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_fixity
+from AV_Spex.checks.make_access import process_access_file
+from AV_Spex.checks.qct_parse import run_qctparse
+from AV_Spex.checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
 
 
 class ProcessingManager:

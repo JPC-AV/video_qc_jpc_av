@@ -6,9 +6,9 @@ os.environ["NUMEXPR_MAX_THREADS"] = "11" # troubleshooting goofy numbpy related 
 
 import csv
 from base64 import b64encode
-from ..utils.config_setup import ChecksConfig
-from ..utils.config_manager import ConfigManager
-from ..utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig
+from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.log_setup import logger
 
 config_mgr = ConfigManager()
 

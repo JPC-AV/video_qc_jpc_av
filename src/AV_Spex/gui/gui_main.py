@@ -7,26 +7,26 @@ from PyQt6.QtGui import QPalette
 import os
 import sys
 
-from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..utils.config_setup import SpexConfig, ChecksConfig
-from ..utils.config_manager import ConfigManager
-from ..utils.log_setup import logger
+from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from AV_Spex.utils.config_setup import SpexConfig, ChecksConfig
+from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.log_setup import logger
 
-from ..processing.worker_thread import ProcessingWorker
-from ..processing.avspex_processor import AVSpexProcessor
-from ..gui.gui_signals import ProcessingSignals
+from AV_Spex.processing.worker_thread import ProcessingWorker
+from AV_Spex.processing.avspex_processor import AVSpexProcessor
+from AV_Spex.gui.gui_signals import ProcessingSignals
 
 from AV_Spex import __version__
 version_string = __version__
 
-from ..gui.gui_main_window.gui_main_window_ui import MainWindowUI
-from ..gui.gui_main_window.gui_main_window_signals import MainWindowSignals
-from ..gui.gui_main_window.gui_main_window_processing import MainWindowProcessing
-from ..gui.gui_main_window.gui_main_window_theme import MainWindowTheme
+from AV_Spex.gui.gui_main_window.gui_main_window_ui import MainWindowUI
+from AV_Spex.gui.gui_main_window.gui_main_window_signals import MainWindowSignals
+from AV_Spex.gui.gui_main_window.gui_main_window_processing import MainWindowProcessing
+from AV_Spex.gui.gui_main_window.gui_main_window_theme import MainWindowTheme
 
-from ..gui.gui_import_tab import ImportTab
-from ..gui.gui_checks_tab.gui_checks_tab import ChecksTab
-from ..gui.gui_spex_tab import SpexTab
+from AV_Spex.gui.gui_import_tab import ImportTab
+from AV_Spex.gui.gui_checks_tab.gui_checks_tab import ChecksTab
+from AV_Spex.gui.gui_spex_tab import SpexTab
 
 # Get configuration manager
 config_mgr = ConfigManager()

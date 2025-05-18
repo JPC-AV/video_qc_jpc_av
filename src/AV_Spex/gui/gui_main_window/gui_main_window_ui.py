@@ -8,7 +8,7 @@ from PyQt6.QtGui import QPixmap
 import os
 import sys
 
-from ...gui.gui_theme_manager import ThemeManager
+from AV_Spex.gui.gui_theme_manager import ThemeManager
 
 class MainWindowUI:
     """UI components and setup for the main window"""

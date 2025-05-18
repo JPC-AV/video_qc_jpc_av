@@ -8,12 +8,12 @@ from PyQt6.QtGui import QPixmap
 
 import os
 
-from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..gui.gui_processing_window import DirectoryListWidget
-from ..utils.config_io import ConfigIO
-from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameConfig, SignalflowConfig
-from ..utils.log_setup import logger
+from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from AV_Spex.gui.gui_processing_window import DirectoryListWidget
+from AV_Spex.utils.config_io import ConfigIO
+from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, FilenameConfig, SignalflowConfig
+from AV_Spex.utils.log_setup import logger
 
 from AV_Spex import __version__
 version_string = __version__

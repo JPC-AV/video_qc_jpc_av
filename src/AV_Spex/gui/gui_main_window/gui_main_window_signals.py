@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QApplication
 import os
-from ...utils.config_manager import ConfigManager
+from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
 

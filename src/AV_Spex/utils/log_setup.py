@@ -10,7 +10,7 @@ from colorlog import ColoredFormatter
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
-from ..gui.gui_processing_window_console import MessageType
+from AV_Spex.gui.gui_processing_window_console import MessageType
 
 class QtLogHandler(logging.Handler, QObject):
     """
