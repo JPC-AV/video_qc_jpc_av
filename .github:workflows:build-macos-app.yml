@@ -28,52 +28,25 @@ jobs:
         
     - name: Install macOS dependencies
       run: |
-        # PyObjC is helpful for macOS-specific features if needed
+        # PyObjC is helpful for macOS-specific features
         pip install pyobjc-core
-        # If you need homebrew packages, uncomment and add them
-        # brew install some_package
         
     - name: Build macOS App
       run: |
         # Run PyInstaller to build the app
         pyinstaller avspex.spec
         
-    - name: Create DMG (optional)
-      run: |
-        # You can use create-dmg to package your app into a DMG file
-        # First install create-dmg
-        brew install create-dmg
-        
-        # Then create the DMG
-        create-dmg \
-          --volname "AV-Spex" \
-          --volicon "av_spex_the_logo.icns" \
-          --window-pos 200 120 \
-          --window-size 800 400 \
-          --icon-size 100 \
-          --icon "AV-Spex.app" 200 190 \
-          --hide-extension "AV-Spex.app" \
-          --app-drop-link 600 185 \
-          "AV-Spex-Installer.dmg" \
-          "dist/AV-Spex.app/"
-      
     - name: Upload App as Artifact
       uses: actions/upload-artifact@v3
       with:
         name: AV-Spex-App
         path: dist/AV-Spex.app/
         
-    - name: Upload DMG as Artifact (optional)
-      uses: actions/upload-artifact@v3
-      with:
-        name: AV-Spex-DMG
-        path: AV-Spex-Installer.dmg
-        
     - name: Attach to Release
       if: github.event_name == 'release'
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          AV-Spex-Installer.dmg
+          dist/AV-Spex.app/
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
