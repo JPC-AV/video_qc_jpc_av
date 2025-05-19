@@ -9,10 +9,7 @@ root_dir = os.path.abspath('.')
 src_dir = os.path.join(root_dir, 'src')
 
 # Define the packaging assets directory for icon files
-# Option 1: If you keep the icon in app_packaging
-icon_path = os.path.join(root_dir, 'app_packaging', 'av_spex_the_logo.icns')
-# Option 2: If you move the icon to root (uncomment this if you move the icon)
-# icon_path = os.path.join(root_dir, 'av_spex_the_logo.icns')
+icon_path = os.path.join(root_dir, 'av_spex_the_logo.icns')
 
 block_cipher = None
 
@@ -26,7 +23,7 @@ a = Analysis(['av_spex_launcher.py'],  # New launcher in root directory
         # Update paths to be relative to the repository structure
         (os.path.join(src_dir, 'AV_Spex/config'), 'AV_Spex/config'),
         (os.path.join(src_dir, 'AV_Spex/logo_image_files'), 'AV_Spex/logo_image_files'),
-        (os.path.join(root_dir, 'pyproject.toml'), '.')
+        (os.path.join(root_dir, 'pyproject.toml'), '.'),
     ],
     hiddenimports=[
         'AV_Spex',
@@ -53,7 +50,9 @@ a = Analysis(['av_spex_launcher.py'],  # New launcher in root directory
         'PyQt6',
         'PyQt6.QtWidgets',
         'PyQt6.QtCore',
-        'PyQt6.QtGui'
+        'PyQt6.QtGui',
+        # Additional imports for macOS support
+        'AppKit',
     ],
     hookspath=[],
     hooksconfig={},
@@ -79,7 +78,7 @@ exe = EXE(
     strip=False,
     upx=True,
     runtime_tmpdir=None,
-    console=True,  # Keep True for debugging, change to False for production
+    console=False,  # Set to False for production
     codesign_identity=None,
     entitlements_file=None, 
     target_arch=None,
@@ -98,8 +97,24 @@ coll = COLLECT(
     name='AV-Spex'
 )
 
+# Create a full Info.plist with all macOS app requirements
 app = BUNDLE(coll,
     name='AV-Spex.app',
     icon=icon_path,
-    bundle_identifier='com.jpc.avspex'
+    bundle_identifier='com.jpc.avspex',
+    info_plist={
+        'CFBundleName': 'AV-Spex',
+        'CFBundleDisplayName': 'AV-Spex',
+        'CFBundleExecutable': 'AV-Spex',
+        'CFBundlePackageType': 'APPL',
+        'CFBundleInfoDictionaryVersion': '6.0',
+        'NSHumanReadableCopyright': 'Copyright © 2025',
+        'NSPrincipalClass': 'NSApplication',
+        'NSHighResolutionCapable': True,
+        'LSMinimumSystemVersion': '10.13.0',
+        'LSApplicationCategoryType': 'public.app-category.utilities',
+        'LSUIElement': False,
+        'LSBackgroundOnly': False,
+        'CFBundleIconFile': 'av_spex_the_logo.icns',
+    }
 )
