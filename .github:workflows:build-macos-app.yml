@@ -1,0 +1,79 @@
+name: Build macOS App
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:  # This allows manual triggering as needed
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'  # Adjust this to match your project's Python version
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # Install your package in development mode
+        pip install -e .
+        # Install PyInstaller and any other build dependencies
+        pip install pyinstaller
+        
+    - name: Install macOS dependencies
+      run: |
+        # PyObjC is helpful for macOS-specific features if needed
+        pip install pyobjc-core
+        # If you need homebrew packages, uncomment and add them
+        # brew install some_package
+        
+    - name: Build macOS App
+      run: |
+        # Run PyInstaller to build the app
+        pyinstaller avspex.spec
+        
+    - name: Create DMG (optional)
+      run: |
+        # You can use create-dmg to package your app into a DMG file
+        # First install create-dmg
+        brew install create-dmg
+        
+        # Then create the DMG
+        create-dmg \
+          --volname "AV-Spex" \
+          --volicon "av_spex_the_logo.icns" \
+          --window-pos 200 120 \
+          --window-size 800 400 \
+          --icon-size 100 \
+          --icon "AV-Spex.app" 200 190 \
+          --hide-extension "AV-Spex.app" \
+          --app-drop-link 600 185 \
+          "AV-Spex-Installer.dmg" \
+          "dist/AV-Spex.app/"
+      
+    - name: Upload App as Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: AV-Spex-App
+        path: dist/AV-Spex.app/
+        
+    - name: Upload DMG as Artifact (optional)
+      uses: actions/upload-artifact@v3
+      with:
+        name: AV-Spex-DMG
+        path: AV-Spex-Installer.dmg
+        
+    - name: Attach to Release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          AV-Spex-Installer.dmg
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
