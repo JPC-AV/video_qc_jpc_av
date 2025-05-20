@@ -14,38 +14,62 @@ config_mgr = ConfigManager()
 
 # Read CSV files and convert them to HTML tables
 def csv_to_html_table(csv_file, style_mismatched=False, mismatch_color="#ff9999", match_color="#d2ffed", check_fail=False):
-    with open(csv_file, newline='') as f:
-        reader = csv.reader(f)
-        rows = list(reader)
+    try:
+        # Try UTF-8 first
+        try:
+            with open(csv_file, newline='', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+        except UnicodeDecodeError:
+            # If UTF-8 fails, try latin-1
+            with open(csv_file, newline='', encoding='latin-1') as f:
+                logger.warning(f"Used latin-1 encoding as fallback for CSV file {csv_file}")
+                reader = csv.reader(f)
+                rows = list(reader)
 
-    table_html = '<table>\n'
-    header = rows[0]
-    table_html += '  <tr>\n'
-    for cell in header:
-        table_html += f'    <th>{cell}</th>\n'
-    table_html += '  </tr>\n'
-
-    for row in rows[1:]:
+        # Rest of the function remains the same
+        table_html = '<table>\n'
+        header = rows[0]
         table_html += '  <tr>\n'
-        for i, cell in enumerate(row):
-            if check_fail and cell.lower() == "fail":
-                table_html += f'    <td style="background-color: {mismatch_color};">{cell}</td>\n'
-            elif check_fail and cell.lower() == "pass":
-                table_html += f'    <td style="background-color: {match_color};">{cell}</td>\n'
-            elif style_mismatched and i == 2 and row[2] != '' and row[1] != row[2]:
-                table_html += f'    <td style="background-color: {match_color};">{cell}</td>\n'
-            elif style_mismatched and i == 3 and row[2] != '' and row[1] != row[2]:
-                table_html += f'    <td style="background-color: {mismatch_color};">{cell}</td>\n'
-            else:
-                table_html += f'    <td>{cell}</td>\n'
+        for cell in header:
+            table_html += f'    <th>{cell}</th>\n'
         table_html += '  </tr>\n'
-    table_html += '</table>\n'
-    return table_html
+
+        for row in rows[1:]:
+            table_html += '  <tr>\n'
+            for i, cell in enumerate(row):
+                if check_fail and cell.lower() == "fail":
+                    table_html += f'    <td style="background-color: {mismatch_color};">{cell}</td>\n'
+                elif check_fail and cell.lower() == "pass":
+                    table_html += f'    <td style="background-color: {match_color};">{cell}</td>\n'
+                elif style_mismatched and i == 2 and row[2] != '' and row[1] != row[2]:
+                    table_html += f'    <td style="background-color: {match_color};">{cell}</td>\n'
+                elif style_mismatched and i == 3 and row[2] != '' and row[1] != row[2]:
+                    table_html += f'    <td style="background-color: {mismatch_color};">{cell}</td>\n'
+                else:
+                    table_html += f'    <td>{cell}</td>\n'
+            table_html += '  </tr>\n'
+        table_html += '</table>\n'
+        return table_html
+    except Exception as e:
+        logger.error(f"Error processing CSV file {csv_file}: {e}")
+        return f"<p>Error processing CSV file: {e}</p>"
 
 
 def read_text_file(text_file_path):
-    with open(text_file_path, 'r') as file:
-        return file.read()
+    try:
+        # First try UTF-8
+        with open(text_file_path, 'r', encoding='utf-8') as file:
+            return file.read()
+    except UnicodeDecodeError:
+        try:
+            # If UTF-8 fails, try latin-1 which can handle any byte
+            with open(text_file_path, 'r', encoding='latin-1') as file:
+                logger.warning(f"Used latin-1 encoding as fallback for {text_file_path}")
+                return file.read()
+        except Exception as e:
+            logger.error(f"Failed to decode {text_file_path} with fallback encoding: {e}")
+            return f"[Error reading file: {e}]"
 
 
 def prepare_file_section(file_path, process_function=None):
@@ -205,17 +229,37 @@ def summarize_failures(failure_csv_path):  # Change parameter to accept CSV file
     """
     failureInfo = {}
     # 0. Read the failure information from the CSV
-    with open(failure_csv_path, 'r') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            timestamp = row['Timestamp']
-            if timestamp not in failureInfo:
-                failureInfo[timestamp] = []
-            failureInfo[timestamp].append({
-                'tag': row['Tag'],
-                'tagValue': float(row['Tag Value']),  # Convert to float
-                'over': float(row['Threshold'])     # Convert to float
-            })
+    try:
+        # Try UTF-8 first
+        try:
+            with open(failure_csv_path, 'r', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    timestamp = row['Timestamp']
+                    if timestamp not in failureInfo:
+                        failureInfo[timestamp] = []
+                    failureInfo[timestamp].append({
+                        'tag': row['Tag'],
+                        'tagValue': float(row['Tag Value']),  # Convert to float
+                        'over': float(row['Threshold'])     # Convert to float
+                    })
+        except UnicodeDecodeError:
+            # If UTF-8 fails, try latin-1
+            with open(failure_csv_path, 'r', encoding='latin-1') as csvfile:
+                logger.warning(f"Used latin-1 encoding as fallback for CSV file {failure_csv_path}")
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    timestamp = row['Timestamp']
+                    if timestamp not in failureInfo:
+                        failureInfo[timestamp] = []
+                    failureInfo[timestamp].append({
+                        'tag': row['Tag'],
+                        'tagValue': float(row['Tag Value']),  # Convert to float
+                        'over': float(row['Threshold'])     # Convert to float
+                    })
+    except Exception as e:
+        logger.error(f"Error reading failure CSV file {failure_csv_path}: {e}")
+        return {}  # Return empty dictionary on error
 
     # 1. Collect all unique tags and count their occurrences
     tag_counts = {}
@@ -584,6 +628,8 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
 
     except Exception as e:
         logger.critical(f"Error generating HTML report: {e}")
+        import traceback
+        logger.critical(f"Traceback: {traceback.format_exc()}")
         return None
 
 
