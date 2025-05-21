@@ -117,38 +117,8 @@ jobs:
       run: |
         echo "Cleaning app bundle..."
         
-        # Create a directory to contain only the essential binary files
-        mkdir -p dist/clean_app/AV-Spex.app/Contents/MacOS
-        mkdir -p dist/clean_app/AV-Spex.app/Contents/Resources
-        mkdir -p dist/clean_app/AV-Spex.app/Contents/Frameworks
-        
-        # Copy Info.plist and PkgInfo
-        cp -R dist/dmg/AV-Spex.app/Contents/Info.plist dist/clean_app/AV-Spex.app/Contents/
-        [ -f dist/dmg/AV-Spex.app/Contents/PkgInfo ] && cp dist/dmg/AV-Spex.app/Contents/PkgInfo dist/clean_app/AV-Spex.app/Contents/
-        
-        # Copy MacOS executables
-        cp -R dist/dmg/AV-Spex.app/Contents/MacOS/* dist/clean_app/AV-Spex.app/Contents/MacOS/
-        
-        # Copy Resources (icons, etc.)
-        cp -R dist/dmg/AV-Spex.app/Contents/Resources/* dist/clean_app/AV-Spex.app/Contents/Resources/ 2>/dev/null || true
-        
-        # Copy only binary files from Frameworks
-        echo "Copying only binary files from Frameworks..."
-        
-        # Create a list of all .so and .dylib files
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) > binary_files.txt
-        
-        # Create directories for each binary file
-        while read file; do
-          rel_path=${file#dist/dmg/AV-Spex.app/Contents/Frameworks/}
-          target_dir="dist/clean_app/AV-Spex.app/Contents/Frameworks/$(dirname "$rel_path")"
-          mkdir -p "$target_dir"
-          cp "$file" "$target_dir/"
-        done < binary_files.txt
-        
-        # Replace the original app with the clean version
-        rm -rf dist/dmg/AV-Spex.app
-        cp -R dist/clean_app/AV-Spex.app dist/dmg/
+        # Remove any problematic non-binary files
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.py" -o -name "*.toml" -o -name "*.txt" -o -name "*.csv" -o -name "*.gz" \) -delete
         
         # Make sure everything is executable
         chmod -R 755 dist/dmg/AV-Spex.app
@@ -185,9 +155,22 @@ jobs:
           echo "WARNING: Code verification failed, but continuing with DMG creation..."
         }
         
-        # Create DMG
-        echo "Creating DMG with hdiutil (simpler method)..."
-        hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+    - name: Create DMG with proper cleanup
+      run: |
+        # Make sure the DMG destination doesn't already exist
+        rm -f "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        
+        # Copy the signed app to a fresh location to avoid resource conflicts
+        mkdir -p dmg_source
+        cp -R dist/dmg/AV-Spex.app dmg_source/
+        
+        # Make sure nothing is using the files (release any file handles)
+        sync
+        sleep 2
+        
+        # Create DMG from the fresh location
+        echo "Creating DMG with hdiutil..."
+        hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dmg_source -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
           
         # Sign the DMG
         echo "Signing DMG..."
