@@ -56,12 +56,6 @@ jobs:
           cp -R dist/app_download/* "dist/AV-Spex.app/Contents/"
         fi
         
-        # Create DMG preparation folder and copy app
-        echo "Creating DMG preparation folder..."
-        mkdir -p dist/dmg
-        cp -R "dist/AV-Spex.app" dist/dmg
-        chmod -R 755 dist/dmg/AV-Spex.app
-        
     - name: Install create-dmg
       run: brew install create-dmg
       
@@ -115,12 +109,41 @@ jobs:
         
     - name: Clean app bundle for signing
       run: |
-        echo "Cleaning app bundle..."
+        echo "Creating a clean app bundle structure..."
         
-        # Remove any problematic non-binary files
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.py" -o -name "*.toml" -o -name "*.txt" -o -name "*.csv" -o -name "*.gz" \) -delete
+        # Create a directory for clean app bundle
+        mkdir -p dist/clean_app/AV-Spex.app/Contents/{MacOS,Resources,Frameworks}
         
-        # Make sure everything is executable
+        # Copy Info.plist and PkgInfo
+        cp -R dist/AV-Spex.app/Contents/Info.plist dist/clean_app/AV-Spex.app/Contents/
+        [ -f dist/AV-Spex.app/Contents/PkgInfo ] && cp dist/AV-Spex.app/Contents/PkgInfo dist/clean_app/AV-Spex.app/Contents/
+        
+        # Copy MacOS executables
+        cp -R dist/AV-Spex.app/Contents/MacOS/* dist/clean_app/AV-Spex.app/Contents/MacOS/ 2>/dev/null || true
+        
+        # Copy Resources directory
+        cp -R dist/AV-Spex.app/Contents/Resources/* dist/clean_app/AV-Spex.app/Contents/Resources/ 2>/dev/null || true
+        
+        # Find all binary files in Frameworks
+        echo "Extracting binary files from Frameworks..."
+        
+        # Create temporary directories list
+        mkdir -p binary_dirs
+        
+        # Extract binary files and keep directory structure
+        find dist/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read -r file; do
+          rel_path=${file#dist/AV-Spex.app/Contents/Frameworks/}
+          dir_path=$(dirname "$rel_path")
+          mkdir -p "binary_dirs/$dir_path"
+          cp "$file" "binary_dirs/$dir_path/"
+        done
+        
+        # Copy extracted binary files with directory structure intact
+        cp -R binary_dirs/* dist/clean_app/AV-Spex.app/Contents/Frameworks/
+        
+        # Create DMG preparation folder
+        mkdir -p dist/dmg
+        cp -R dist/clean_app/AV-Spex.app dist/dmg/
         chmod -R 755 dist/dmg/AV-Spex.app
         
     - name: Sign and package app
@@ -155,50 +178,55 @@ jobs:
           echo "WARNING: Code verification failed, but continuing with DMG creation..."
         }
         
-    - name: Create DMG with proper cleanup
+    - name: Create DMG
       run: |
         # Make sure the DMG destination doesn't already exist
         rm -f "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
         
-        # Copy the signed app to a fresh location to avoid resource conflicts
-        mkdir -p dmg_source
-        cp -R dist/dmg/AV-Spex.app dmg_source/
-        
-        # Make sure nothing is using the files (release any file handles)
+        # Ensure nothing is using the files
         sync
         sleep 2
         
-        # Create DMG from the fresh location
+        # Create DMG
         echo "Creating DMG with hdiutil..."
-        hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dmg_source -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
           
         # Sign the DMG
         echo "Signing DMG..."
-        codesign --force --timestamp --sign "$DEVELOPER_ID" "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        codesign --force --timestamp --sign "${{ secrets.APPLE_DEVELOPER_ID }}" "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
         
     - name: Notarize DMG with detailed logs
       run: |
         # Submit for notarization
         echo "Submitting DMG for notarization..."
-        SUBMISSION_ID=$(xcrun notarytool submit "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
+        NOTARIZE_OUTPUT=$(xcrun notarytool submit "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
           --keychain-profile "GITHUB_ACTIONS_PROFILE" \
-          --wait --timeout 1800 | grep "id:" | head -1 | awk '{print $2}')
+          --wait --timeout 1800)
+          
+        echo "$NOTARIZE_OUTPUT"
         
-        echo "Submission ID: $SUBMISSION_ID"
+        # Extract submission ID
+        SUBMISSION_ID=$(echo "$NOTARIZE_OUTPUT" | grep "id:" | head -1 | awk '{print $2}')
         
-        # Get detailed notarization log
-        echo "Getting detailed notarization log..."
-        xcrun notarytool log $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE"
-        
-        # Check status
-        STATUS=$(xcrun notarytool info $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE" | grep "status:" | awk '{print $2}')
-        
-        if [ "$STATUS" = "Accepted" ]; then
-          echo "Notarization successful, stapling ticket..."
-          xcrun stapler staple "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        if [ -n "$SUBMISSION_ID" ]; then
+          echo "Submission ID: $SUBMISSION_ID"
+          
+          # Get detailed notarization log
+          echo "Getting detailed notarization log..."
+          xcrun notarytool log $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE"
+          
+          # Check status
+          STATUS=$(xcrun notarytool info $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE" | grep "status:" | awk '{print $2}')
+          
+          if [ "$STATUS" = "Accepted" ]; then
+            echo "Notarization successful, stapling ticket..."
+            xcrun stapler staple "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+          else
+            echo "Notarization failed with status: $STATUS"
+            echo "Will continue to upload unsigned DMG as artifact"
+          fi
         else
-          echo "Notarization failed with status: $STATUS"
-          echo "Will continue to upload unsigned DMG as artifact"
+          echo "Failed to extract submission ID from output. Continuing without notarization."
         fi
         
     - name: Upload signed app as artifact
