@@ -56,6 +56,11 @@ jobs:
           cp -R dist/app_download/* "dist/AV-Spex.app/Contents/"
         fi
         
+        # Create DMG preparation folder
+        mkdir -p dist/dmg
+        cp -R "dist/AV-Spex.app" dist/dmg/
+        chmod -R 755 dist/dmg/AV-Spex.app
+        
     - name: Install create-dmg
       run: brew install create-dmg
       
@@ -107,68 +112,37 @@ jobs:
         </plist>
         EOF
         
-    - name: Clean app bundle for signing
+    - name: Remove problematic non-binary files
       run: |
-        echo "Creating a clean app bundle structure..."
-        
-        # Create a directory for clean app bundle
-        mkdir -p dist/clean_app/AV-Spex.app/Contents/{MacOS,Resources,Frameworks}
-        
-        # Copy Info.plist and PkgInfo
-        cp -R dist/AV-Spex.app/Contents/Info.plist dist/clean_app/AV-Spex.app/Contents/
-        [ -f dist/AV-Spex.app/Contents/PkgInfo ] && cp dist/AV-Spex.app/Contents/PkgInfo dist/clean_app/AV-Spex.app/Contents/
-        
-        # Copy MacOS executables
-        cp -R dist/AV-Spex.app/Contents/MacOS/* dist/clean_app/AV-Spex.app/Contents/MacOS/ 2>/dev/null || true
-        
-        # Copy Resources directory
-        cp -R dist/AV-Spex.app/Contents/Resources/* dist/clean_app/AV-Spex.app/Contents/Resources/ 2>/dev/null || true
-        
-        # Find all binary files in Frameworks
-        echo "Extracting binary files from Frameworks..."
-        
-        # Create temporary directories list
-        mkdir -p binary_dirs
-        
-        # Extract binary files and keep directory structure
-        find dist/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read -r file; do
-          rel_path=${file#dist/AV-Spex.app/Contents/Frameworks/}
-          dir_path=$(dirname "$rel_path")
-          mkdir -p "binary_dirs/$dir_path"
-          cp "$file" "binary_dirs/$dir_path/"
-        done
-        
-        # Copy extracted binary files with directory structure intact
-        cp -R binary_dirs/* dist/clean_app/AV-Spex.app/Contents/Frameworks/
-        
-        # Create DMG preparation folder
-        mkdir -p dist/dmg
-        cp -R dist/clean_app/AV-Spex.app dist/dmg/
-        chmod -R 755 dist/dmg/AV-Spex.app
+        # Remove any non-binary files that might cause signing issues
+        find dist/dmg/AV-Spex.app -type f \( -name "*.py" -o -name "*.toml" -o -name "*.txt" -o -name "*.csv" -o -name "*.gz" -o -name "*.md" -o -name "*.json" \) -delete
         
     - name: Sign and package app
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # Sign frameworks and libraries
-        echo "Signing frameworks and libraries..."
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
+        # First, find and sign ALL dynamic libraries and frameworks in the entire app bundle
+        echo "Signing ALL dynamic libraries and binaries in app bundle..."
+        find dist/dmg/AV-Spex.app -type f \( -name "*.so" -o -name "*.dylib" -o -path "*/QtCore" -o -path "*/QtGui" -o -path "*/QtWidgets" -o -path "*/QtNetwork" -o -path "*/QtSvg" -o -path "*/QtDBus" -o -path "*/QtPdf" -o -path "*/Python" \) | while read file; do
+          echo "Signing $file"
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
         done
         
-        # Sign Python executables (if any)
+        # Sign any Python executables
         echo "Signing Python executables..."
-        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" 2>/dev/null | while read file; do
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
+        find dist/dmg/AV-Spex.app -type f -name "python*" 2>/dev/null | while read file; do
+          echo "Signing $file"
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
         done
         
-        # Sign executables in MacOS folder
-        echo "Signing other executables..."
-        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 2>/dev/null | while read file; do
-          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"
+        # Sign any executable files in MacOS folder
+        echo "Signing executables in MacOS folder..."
+        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
+          echo "Signing $file"
+          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
         done
         
-        # Sign the main app bundle
+        # Sign the main app bundle with --force --deep to make sure all binaries are signed
         echo "Signing main application bundle..."
         codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
         
@@ -178,22 +152,13 @@ jobs:
           echo "WARNING: Code verification failed, but continuing with DMG creation..."
         }
         
-    - name: Create DMG
-      run: |
-        # Make sure the DMG destination doesn't already exist
-        rm -f "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
-        
-        # Ensure nothing is using the files
-        sync
-        sleep 2
-        
-        # Create DMG
-        echo "Creating DMG with hdiutil..."
+        # Create DMG with hdiutil (more reliable)
+        echo "Creating DMG..."
         hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
           
         # Sign the DMG
         echo "Signing DMG..."
-        codesign --force --timestamp --sign "${{ secrets.APPLE_DEVELOPER_ID }}" "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        codesign --force --timestamp --sign "$DEVELOPER_ID" "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
         
     - name: Notarize DMG with detailed logs
       run: |
