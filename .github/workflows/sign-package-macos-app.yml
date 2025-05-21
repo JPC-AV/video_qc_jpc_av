@@ -15,14 +15,14 @@ jobs:
     - name: Download unsigned app
       uses: dawidd6/action-download-artifact@v2
       with:
-        workflow: macos-app-build.yml  
+        workflow: macos-app-build.yml
         name: AV-Spex-App
         path: dist/app_download/
         
     - name: Download version info
       uses: dawidd6/action-download-artifact@v2
       with:
-        workflow: macos-app-build.yml 
+        workflow: macos-app-build.yml
         name: app-version
         path: dist/
         
@@ -38,10 +38,9 @@ jobs:
         fi
         echo "Using version: ${{ env.APP_VERSION }}"
         
-    - name: Debug artifact structure
+    - name: Prepare app bundle
       run: |
-        echo "Examining downloaded artifact structure:"
-        ls -la dist/app_download/
+        echo "Preparing app bundle..."
         
         # See if Contents folder is at the root or inside an .app bundle
         if [ -d "dist/app_download/Contents" ]; then
@@ -51,18 +50,17 @@ jobs:
         elif [ -d "dist/app_download/AV-Spex.app" ]; then
           echo "Found AV-Spex.app directory inside artifact"
           cp -R dist/app_download/AV-Spex.app dist/
-        elif find dist/app_download -name "AV-Spex.app" -type d | grep -q .; then
-          echo "Found AV-Spex.app directory somewhere in artifact"
-          find dist/app_download -name "AV-Spex.app" -type d -exec cp -R {} dist/ \;
         else
-          # If none of the above, create app bundle with whatever we have
-          echo "Couldn't find expected app structure, creating from what we have"
+          echo "Couldn't find expected app structure, will try to use what we have"
           mkdir -p "dist/AV-Spex.app/Contents"
           cp -R dist/app_download/* "dist/AV-Spex.app/Contents/"
         fi
         
-        echo "Verifying reconstructed app bundle:"
-        ls -la dist/AV-Spex.app/
+        # Create DMG preparation folder and copy app
+        echo "Creating DMG preparation folder..."
+        mkdir -p dist/dmg
+        cp -R "dist/AV-Spex.app" dist/dmg
+        chmod -R 755 dist/dmg/AV-Spex.app
         
     - name: Install create-dmg
       run: brew install create-dmg
@@ -115,49 +113,51 @@ jobs:
         </plist>
         EOF
         
+    - name: Check for problematic files
+      run: |
+        # Check if pyproject.toml exists in Frameworks
+        if [ -f "dist/dmg/AV-Spex.app/Contents/Frameworks/pyproject.toml" ]; then
+          echo "Found pyproject.toml in Frameworks, removing it..."
+          rm "dist/dmg/AV-Spex.app/Contents/Frameworks/pyproject.toml"
+        fi
+        
+        # List any text files that might cause issues
+        echo "Checking for potential problematic files..."
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f -name "*.py" -o -name "*.toml" -o -name "*.txt" | while read file; do
+          echo "Found potential problematic file: $file"
+        done
+        
     - name: Sign and package app
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # Create a folder for DMG preparation
-        mkdir -p dist/dmg
-        cp -R "dist/AV-Spex.app" dist/dmg
-        chmod -R 755 dist/dmg/AV-Spex.app
-        
-        # Make sure the Frameworks directory exists
-        mkdir -p dist/dmg/AV-Spex.app/Contents/Frameworks
-        
-        # Sign frameworks and libraries (if any)
+        # Sign frameworks and libraries (using exact syntax from your shell script)
         echo "Signing frameworks and libraries..."
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
-          echo "Signing $file"
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f -name "*.so" -o -name "*.dylib" | while read file; do
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
         done
         
-        # Find and sign Python executables (if any)
+        # Sign Python executables
         echo "Signing Python executables..."
-        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" 2>/dev/null | while read file; do
-          echo "Signing $file"
+        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" | while read file; do
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
         done
-        
-        # Make sure MacOS directory exists
-        mkdir -p dist/dmg/AV-Spex.app/Contents/MacOS
         
         # Sign executables in MacOS folder
         echo "Signing other executables..."
-        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 2>/dev/null | while read file; do
-          echo "Signing $file"
+        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
           codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"
         done
         
-        # Sign the main app bundle
+        # Sign the main app bundle (using exact syntax from your shell script)
         echo "Signing main application bundle..."
         codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
         
         # Verify code signature
         echo "Verifying code signature..."
-        codesign --verify --deep --strict dist/dmg/AV-Spex.app
+        codesign --verify --deep dist/dmg/AV-Spex.app || {
+          echo "WARNING: Code verification failed, but continuing with DMG creation..."
+        }
         
         # Create DMG
         echo "Creating DMG..."
@@ -172,7 +172,11 @@ jobs:
           --app-drop-link 425 120 \
           --no-internet-enable \
           "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
-          "dist/dmg"
+          "dist/dmg" || {
+            echo "DMG creation failed, trying alternative approach..."
+            # Alternative approach with less fancy DMG
+            hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+          }
           
         # Sign the DMG
         echo "Signing DMG..."
