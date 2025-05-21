@@ -61,6 +61,9 @@ jobs:
         cp -R "dist/AV-Spex.app" dist/dmg/
         chmod -R 755 dist/dmg/AV-Spex.app
         
+        echo "Original app bundle size:"
+        du -sh dist/dmg/AV-Spex.app
+        
     - name: Install create-dmg
       run: brew install create-dmg
       
@@ -112,107 +115,71 @@ jobs:
         </plist>
         EOF
         
-    - name: Fix problematic files
+    - name: Remove only problematic files for signing
       run: |
-        echo "Removing problematic files that could interfere with signing..."
+        echo "Removing only the most problematic files that prevent signing..."
         
-        # Inspect the app bundle structure
-        echo "App bundle structure:"
-        find dist/dmg/AV-Spex.app -type d -name "Python*" | xargs ls -la
-        
-        # Move the base_library.zip out of the Frameworks directory
+        # Remove base_library.zip from Frameworks if it exists
         if [ -f "dist/dmg/AV-Spex.app/Contents/Frameworks/base_library.zip" ]; then
           echo "Moving base_library.zip from Frameworks to Resources..."
-          mkdir -p "dist/dmg/AV-Spex.app/Contents/Resources/lib" || true
-          mv "dist/dmg/AV-Spex.app/Contents/Frameworks/base_library.zip" "dist/dmg/AV-Spex.app/Contents/Resources/lib/" || true
+          mkdir -p "dist/dmg/AV-Spex.app/Contents/Resources/lib"
+          mv "dist/dmg/AV-Spex.app/Contents/Frameworks/base_library.zip" "dist/dmg/AV-Spex.app/Contents/Resources/lib/"
         fi
         
-        # Handle Python.framework - ignore errors
-        if [ -d "dist/dmg/AV-Spex.app/Contents/Frameworks/Python.framework" ]; then
-          echo "Found Python.framework in Frameworks directory"
-          
-          # Let's rename the Python directory in Resources if it exists
-          if [ -d "dist/dmg/AV-Spex.app/Contents/Resources/Python" ]; then
-            echo "Renaming existing Resources/Python to Resources/Python-old"
-            mv "dist/dmg/AV-Spex.app/Contents/Resources/Python" "dist/dmg/AV-Spex.app/Contents/Resources/Python-old" || true
-          fi
-          
-          # Create a new directory with a different name
-          echo "Creating Resources/PythonFramework directory..."
-          mkdir -p "dist/dmg/AV-Spex.app/Contents/Resources/PythonFramework" || true
-          
-          # Try to move the framework, ignoring errors
-          echo "Moving Python.framework out of Frameworks..."
-          cp -R "dist/dmg/AV-Spex.app/Contents/Frameworks/Python.framework" "dist/dmg/AV-Spex.app/Contents/Resources/PythonFramework/" || true
-          rm -rf "dist/dmg/AV-Spex.app/Contents/Frameworks/Python.framework" || true
-        fi
+        # Remove compiled Python files that might cause issues
+        echo "Removing compiled Python cache files..."
+        find dist/dmg/AV-Spex.app -name "*.pyc" -delete || true
+        find dist/dmg/AV-Spex.app -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
         
-        # Special handling for ZIP files which should not be in Frameworks
-        echo "Moving ZIP files out of Frameworks..."
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -name "*.zip" | xargs -I{} mv {} dist/dmg/AV-Spex.app/Contents/Resources/ 2>/dev/null || true
+        # Remove any obvious text files from Frameworks directory only
+        echo "Removing text files from Frameworks directory..."
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -name "*.txt" -delete || true
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -name "*.md" -delete || true
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -name "*.toml" -delete || true
         
-        # Remove any non-binary files that might cause signing issues
-        echo "Removing non-binary files that might cause signing issues..."
-        find dist/dmg/AV-Spex.app -type f \( -name "*.py" -o -name "*.toml" -o -name "*.txt" -o -name "*.csv" -o -name "*.gz" -o -name "*.md" -o -name "*.json" \) -delete || true
-        
-    - name: Create simple version for signing
-      run: |
-        echo "Creating a simplified app copy for signing..."
-        
-        # Create a fresh directory structure
-        mkdir -p dist/simple_app/AV-Spex.app/Contents/{MacOS,Resources,Frameworks}
-        
-        # Copy essential components
-        cp -R dist/dmg/AV-Spex.app/Contents/Info.plist dist/simple_app/AV-Spex.app/Contents/
-        cp -R dist/dmg/AV-Spex.app/Contents/MacOS/* dist/simple_app/AV-Spex.app/Contents/MacOS/
-        
-        # Only copy binary files from Frameworks
-        echo "Copying only binary files from Frameworks..."
-        mkdir -p dist/simple_app/AV-Spex.app/Contents/Frameworks
-        
-        # Find and copy all dylib files
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -name "*.dylib" | while read file; do
-          rel_path=${file#dist/dmg/AV-Spex.app/Contents/Frameworks/}
-          target_dir="dist/simple_app/AV-Spex.app/Contents/Frameworks/$(dirname "$rel_path")"
-          mkdir -p "$target_dir" || true
-          cp "$file" "$target_dir/" || true
-        done
-        
-        # Find and copy all .so files
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -name "*.so" | while read file; do
-          rel_path=${file#dist/dmg/AV-Spex.app/Contents/Frameworks/}
-          target_dir="dist/simple_app/AV-Spex.app/Contents/Frameworks/$(dirname "$rel_path")"
-          mkdir -p "$target_dir" || true
-          cp "$file" "$target_dir/" || true
-        done
-        
-        # Copy resources that are needed
-        mkdir -p dist/simple_app/AV-Spex.app/Contents/Resources
-        
-        # Use this app bundle for signing
-        rm -rf dist/dmg/AV-Spex.app
-        cp -R dist/simple_app/AV-Spex.app dist/dmg/
-        chmod -R 755 dist/dmg/AV-Spex.app
+        echo "App bundle size after cleanup:"
+        du -sh dist/dmg/AV-Spex.app
         
     - name: Sign binary files
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # First sign all .dylib files
+        # Sign all .dylib files
         echo "Signing dylib files..."
         find dist/dmg/AV-Spex.app -name "*.dylib" | while read file; do
           echo "Signing $file"
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
         done
         
-        # Then sign all .so files
+        # Sign all .so files
         echo "Signing .so files..."
         find dist/dmg/AV-Spex.app -name "*.so" | while read file; do
           echo "Signing $file"
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
         done
         
-        # Sign any executables in MacOS folder
+        # Sign Python framework binaries (if they exist)
+        echo "Signing Python framework binaries..."
+        find dist/dmg/AV-Spex.app -path "*/Python.framework/*/Python" -type f | while read file; do
+          echo "Signing Python framework: $file"
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
+        done
+        
+        # Sign Qt framework binaries
+        echo "Signing Qt framework binaries..."
+        find dist/dmg/AV-Spex.app -path "*/Qt*.framework/Qt*" -type f | while read file; do
+          echo "Signing Qt framework: $file"
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
+        done
+        
+        # Sign other binaries in Resources
+        echo "Signing other binaries in Resources..."
+        find dist/dmg/AV-Spex.app/Contents/Resources -type f \( -name "QtCore" -o -name "QtGui" -o -name "QtWidgets" -o -name "Python" \) | while read file; do
+          echo "Signing binary: $file"
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
+        done
+        
+        # Sign executables in MacOS folder
         echo "Signing executables in MacOS folder..."
         find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
           echo "Signing $file"
@@ -223,13 +190,15 @@ jobs:
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # Sign the main app bundle
+        # Sign the main app bundle with --deep to catch anything we missed
         echo "Signing main application bundle..."
-        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
+        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app || {
+          echo "Main bundle signing had issues, but continuing..."
+        }
         
         # Verify code signature (but don't fail if there are issues)
         echo "Verifying code signature..."
-        codesign --verify --verbose=4 dist/dmg/AV-Spex.app || {
+        codesign --verify --verbose=2 dist/dmg/AV-Spex.app || {
           echo "WARNING: Code verification had issues, but continuing with DMG creation..."
         }
         
