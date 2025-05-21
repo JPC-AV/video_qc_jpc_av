@@ -37,7 +37,7 @@ jobs:
         pyinstaller avspex.spec
         
     - name: Upload App as Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: AV-Spex-App
         path: dist/AV-Spex.app/
