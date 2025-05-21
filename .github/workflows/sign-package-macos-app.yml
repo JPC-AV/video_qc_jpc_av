@@ -15,9 +15,9 @@ jobs:
     - name: Download unsigned app
       uses: dawidd6/action-download-artifact@v2
       with:
-        workflow: macos-app-build.yml
-        name: AV-Spex-App  
-        path: dist/
+        workflow: macos-app-build.yml  # Make sure this matches your workflow filename
+        name: AV-Spex-App
+        path: dist/app_download/
         
     - name: Download version info
       uses: dawidd6/action-download-artifact@v2
@@ -37,6 +37,32 @@ jobs:
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
         fi
         echo "Using version: ${{ env.APP_VERSION }}"
+        
+    - name: Debug artifact structure
+      run: |
+        echo "Examining downloaded artifact structure:"
+        ls -la dist/app_download/
+        
+        # See if Contents folder is at the root or inside an .app bundle
+        if [ -d "dist/app_download/Contents" ]; then
+          echo "Found Contents folder at root of artifact"
+          mkdir -p "dist/AV-Spex.app"
+          cp -R dist/app_download/Contents "dist/AV-Spex.app/"
+        elif [ -d "dist/app_download/AV-Spex.app" ]; then
+          echo "Found AV-Spex.app directory inside artifact"
+          cp -R dist/app_download/AV-Spex.app dist/
+        elif find dist/app_download -name "AV-Spex.app" -type d | grep -q .; then
+          echo "Found AV-Spex.app directory somewhere in artifact"
+          find dist/app_download -name "AV-Spex.app" -type d -exec cp -R {} dist/ \;
+        else
+          # If none of the above, create app bundle with whatever we have
+          echo "Couldn't find expected app structure, creating from what we have"
+          mkdir -p "dist/AV-Spex.app/Contents"
+          cp -R dist/app_download/* "dist/AV-Spex.app/Contents/"
+        fi
+        
+        echo "Verifying reconstructed app bundle:"
+        ls -la dist/AV-Spex.app/
         
     - name: Install create-dmg
       run: brew install create-dmg
@@ -93,39 +119,34 @@ jobs:
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # Debug: List contents of dist directory
-        echo "Contents of dist directory:"
-        ls -la dist/
-        
         # Create a folder for DMG preparation
         mkdir -p dist/dmg
-        
-        # Debug: Check if the .app exists
-        if [ ! -d "dist/AV-Spex.app" ]; then
-          echo "ERROR: AV-Spex.app not found in dist directory!"
-          exit 1
-        fi
-        
         cp -R "dist/AV-Spex.app" dist/dmg
         chmod -R 755 dist/dmg/AV-Spex.app
         
-        # Sign frameworks and libraries
+        # Make sure the Frameworks directory exists
+        mkdir -p dist/dmg/AV-Spex.app/Contents/Frameworks
+        
+        # Sign frameworks and libraries (if any)
         echo "Signing frameworks and libraries..."
         find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
           echo "Signing $file"
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
         done
         
-        # Sign Python executables
+        # Find and sign Python executables (if any)
         echo "Signing Python executables..."
-        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" | while read file; do
+        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" 2>/dev/null | while read file; do
           echo "Signing $file"
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
         done
         
+        # Make sure MacOS directory exists
+        mkdir -p dist/dmg/AV-Spex.app/Contents/MacOS
+        
         # Sign executables in MacOS folder
         echo "Signing other executables..."
-        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
+        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 2>/dev/null | while read file; do
           echo "Signing $file"
           codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"
         done
