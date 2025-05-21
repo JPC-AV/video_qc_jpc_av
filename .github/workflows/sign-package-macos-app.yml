@@ -1,0 +1,176 @@
+name: Sign and Package macOS App
+on:
+  release:
+    types: [published]
+  workflow_dispatch:  # For manual triggering
+    inputs:
+      build_id:
+        description: 'Build workflow run ID to use (leave empty for latest)'
+        required: false
+        type: string
+
+jobs:
+  sign-and-package:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Download unsigned app
+      uses: dawidd6/action-download-artifact@v2
+      with:
+        workflow: build-macos-app.yml
+        name: AV-Spex-Unsigned
+        path: dist/
+        run_id: ${{ github.event.inputs.build_id }}  # Use specified or latest
+        
+    - name: Download version info
+      uses: dawidd6/action-download-artifact@v2
+      with:
+        workflow: build-macos-app.yml
+        name: app-version
+        path: dist/
+        run_id: ${{ github.event.inputs.build_id }}
+        
+    - name: Set version
+      run: |
+        echo "APP_VERSION=$(cat dist/version.txt)" >> $GITHUB_ENV
+        
+    - name: Install create-dmg
+      run: brew install create-dmg
+      
+    - name: Set up keychain
+      env:
+        CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      run: |
+        # Create temporary keychain
+        KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        
+        # Import certificate to keychain
+        echo "$CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+        security import certificate.p12 -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+        security list-keychain -d user -s $KEYCHAIN_PATH
+        
+        # Delete the certificate file
+        rm certificate.p12
+        
+    - name: Setup notarytool credentials
+      run: |
+        xcrun notarytool store-credentials "GITHUB_ACTIONS_PROFILE" \
+          --apple-id ${{ secrets.APPLE_ID }} \
+          --team-id ${{ secrets.APPLE_TEAM_ID }} \
+          --password ${{ secrets.APPLE_ID_PASSWORD }}
+          
+    - name: Create entitlements file
+      run: |
+        cat > entitlements.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+            <key>com.apple.security.cs.disable-library-validation</key>
+            <true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+            <true/>
+            <key>com.apple.security.automation.apple-events</key>
+            <true/>
+        </dict>
+        </plist>
+        EOF
+        
+    - name: Sign and package app
+      env:
+        DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+      run: |
+        # Create a folder for DMG preparation
+        mkdir -p dist/dmg
+        cp -R "dist/AV-Spex.app" dist/dmg
+        chmod -R 755 dist/dmg/AV-Spex.app
+        
+        # Sign frameworks and libraries
+        echo "Signing frameworks and libraries..."
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
+        done
+        
+        # Sign Python executables
+        echo "Signing Python executables..."
+        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" | while read file; do
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
+        done
+        
+        # Sign executables in MacOS folder
+        echo "Signing other executables..."
+        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
+          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"
+        done
+        
+        # Sign the main app bundle
+        echo "Signing main application bundle..."
+        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
+        
+        # Verify code signature
+        echo "Verifying code signature..."
+        codesign --verify --deep --strict dist/dmg/AV-Spex.app
+        
+        # Create DMG
+        echo "Creating DMG..."
+        create-dmg \
+          --volname "AV-Spex ${{ env.APP_VERSION }}" \
+          --volicon "av_spex_the_logo.icns" \
+          --window-pos 200 120 \
+          --window-size 600 300 \
+          --icon-size 100 \
+          --icon "AV-Spex.app" 175 120 \
+          --hide-extension "AV-Spex.app" \
+          --app-drop-link 425 120 \
+          --no-internet-enable \
+          "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
+          "dist/dmg"
+          
+        # Sign the DMG
+        echo "Signing DMG..."
+        codesign --force --timestamp --sign "$DEVELOPER_ID" "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        
+    - name: Notarize DMG
+      run: |
+        # Submit for notarization
+        echo "Submitting DMG for notarization..."
+        xcrun notarytool submit "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
+          --keychain-profile "GITHUB_ACTIONS_PROFILE" \
+          --wait --timeout 1800
+          
+        # Staple the ticket
+        echo "Stapling ticket to DMG..."
+        xcrun stapler staple "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        
+    - name: Upload signed app as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AV-Spex-Signed-App
+        path: dist/dmg/AV-Spex.app/
+        
+    - name: Upload DMG as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AV-Spex-DMG
+        path: dist/AV-Spex-${{ env.APP_VERSION }}.dmg
+        
+    - name: Attach to Release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/AV-Spex-${{ env.APP_VERSION }}.dmg
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
