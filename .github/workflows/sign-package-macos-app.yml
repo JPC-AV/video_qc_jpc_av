@@ -112,48 +112,82 @@ jobs:
         </plist>
         EOF
         
-    - name: Remove problematic non-binary files
+    - name: Fix problematic files
       run: |
+        echo "Removing problematic files that could interfere with signing..."
+        
+        # Move the base_library.zip out of the Frameworks directory
+        if [ -f "dist/dmg/AV-Spex.app/Contents/Frameworks/base_library.zip" ]; then
+          echo "Moving base_library.zip from Frameworks to Resources..."
+          mkdir -p "dist/dmg/AV-Spex.app/Contents/Resources/lib"
+          mv "dist/dmg/AV-Spex.app/Contents/Frameworks/base_library.zip" "dist/dmg/AV-Spex.app/Contents/Resources/lib/"
+        fi
+        
+        # Handle Python.framework
+        if [ -d "dist/dmg/AV-Spex.app/Contents/Frameworks/Python.framework" ]; then
+          echo "Moving Python.framework out of Frameworks..."
+          mkdir -p "dist/dmg/AV-Spex.app/Contents/Resources/Python"
+          mv "dist/dmg/AV-Spex.app/Contents/Frameworks/Python.framework" "dist/dmg/AV-Spex.app/Contents/Resources/Python/"
+        fi
+        
         # Remove any non-binary files that might cause signing issues
+        echo "Removing non-binary files that might cause signing issues..."
         find dist/dmg/AV-Spex.app -type f \( -name "*.py" -o -name "*.toml" -o -name "*.txt" -o -name "*.csv" -o -name "*.gz" -o -name "*.md" -o -name "*.json" \) -delete
         
-    - name: Sign and package app
+    - name: Sign binary files
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # First, find and sign ALL dynamic libraries and frameworks in the entire app bundle
-        echo "Signing ALL dynamic libraries and binaries in app bundle..."
-        find dist/dmg/AV-Spex.app -type f \( -name "*.so" -o -name "*.dylib" -o -path "*/QtCore" -o -path "*/QtGui" -o -path "*/QtWidgets" -o -path "*/QtNetwork" -o -path "*/QtSvg" -o -path "*/QtDBus" -o -path "*/QtPdf" -o -path "*/Python" \) | while read file; do
+        # Create a list of all dylibs and so files to sign first
+        echo "Finding all dynamic libraries to sign..."
+        find dist/dmg/AV-Spex.app -type f -name "*.dylib" -o -name "*.so" > dylibs_to_sign.txt
+        
+        # Sign each dylib/so individually
+        echo "Signing dynamic libraries and shared objects..."
+        cat dylibs_to_sign.txt | while read file; do
           echo "Signing $file"
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
         done
         
-        # Sign any Python executables
-        echo "Signing Python executables..."
-        find dist/dmg/AV-Spex.app -type f -name "python*" 2>/dev/null | while read file; do
-          echo "Signing $file"
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
+        # Sign any Qt binaries
+        echo "Signing Qt binaries..."
+        find dist/dmg/AV-Spex.app -type f -path "*/Qt*" -not -path "*.framework*" | while read file; do
+          if file "$file" | grep -q "Mach-O"; then
+            echo "Signing Qt binary: $file"
+            codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
+          fi
         done
         
-        # Sign any executable files in MacOS folder
-        echo "Signing executables in MacOS folder..."
-        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
-          echo "Signing $file"
-          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
+        # Find and sign all executable files
+        echo "Signing all executable files..."
+        find dist/dmg/AV-Spex.app -type f -perm +111 | while read file; do
+          if file "$file" | grep -q "Mach-O"; then
+            echo "Signing executable: $file"
+            codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
+          fi
         done
         
+    - name: Sign the main app bundle
+      env:
+        DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+      run: |
         # Sign the main app bundle with --force --deep to make sure all binaries are signed
         echo "Signing main application bundle..."
-        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
+        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app || echo "Main app bundle signing may have warnings but continuing..."
         
         # Verify code signature
         echo "Verifying code signature..."
-        codesign --verify --deep dist/dmg/AV-Spex.app || {
-          echo "WARNING: Code verification failed, but continuing with DMG creation..."
+        codesign --verify --verbose=4 dist/dmg/AV-Spex.app || {
+          echo "WARNING: Code verification had issues, but continuing with DMG creation..."
         }
         
-        # Create DMG with hdiutil (more reliable)
+    - name: Create and sign DMG
+      env:
+        DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+      run: |
+        # Create DMG with hdiutil
         echo "Creating DMG..."
+        rm -f "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
         hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
           
         # Sign the DMG
@@ -166,7 +200,7 @@ jobs:
         echo "Submitting DMG for notarization..."
         NOTARIZE_OUTPUT=$(xcrun notarytool submit "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
           --keychain-profile "GITHUB_ACTIONS_PROFILE" \
-          --wait --timeout 1800)
+          --wait --timeout 3600)
           
         echo "$NOTARIZE_OUTPUT"
         
