@@ -193,17 +193,30 @@ jobs:
         echo "Signing DMG..."
         codesign --force --timestamp --sign "$DEVELOPER_ID" "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
         
-    - name: Notarize DMG
+    - name: Notarize DMG with detailed logs
       run: |
         # Submit for notarization
         echo "Submitting DMG for notarization..."
-        xcrun notarytool submit "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
+        SUBMISSION_ID=$(xcrun notarytool submit "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
           --keychain-profile "GITHUB_ACTIONS_PROFILE" \
-          --wait --timeout 1800
-          
-        # Staple the ticket
-        echo "Stapling ticket to DMG..."
-        xcrun stapler staple "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+          --wait --timeout 1800 | grep "id:" | head -1 | awk '{print $2}')
+        
+        echo "Submission ID: $SUBMISSION_ID"
+        
+        # Get detailed notarization log
+        echo "Getting detailed notarization log..."
+        xcrun notarytool log $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE"
+        
+        # Check status
+        STATUS=$(xcrun notarytool info $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE" | grep "status:" | awk '{print $2}')
+        
+        if [ "$STATUS" = "Accepted" ]; then
+          echo "Notarization successful, stapling ticket..."
+          xcrun stapler staple "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        else
+          echo "Notarization failed with status: $STATUS"
+          echo "Will continue to upload unsigned DMG as artifact"
+        fi
         
     - name: Upload signed app as artifact
       uses: actions/upload-artifact@v4
@@ -211,7 +224,7 @@ jobs:
         name: AV-Spex-Signed-App
         path: dist/dmg/AV-Spex.app/
         
-    - name: Upload DMG as artifact
+    - name: Upload DMG as artifact (even if notarization failed)
       uses: actions/upload-artifact@v4
       with:
         name: AV-Spex-DMG
