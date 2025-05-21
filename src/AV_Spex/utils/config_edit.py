@@ -1,9 +1,9 @@
 from dataclasses import asdict
 from typing import List
 
-from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, FilenameSection, SignalflowConfig
-from ..utils.config_manager import ConfigManager
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, FilenameSection, SignalflowConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 
 config_mgr = ConfigManager() # Gets the singleton instance

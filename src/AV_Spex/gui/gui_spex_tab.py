@@ -11,16 +11,16 @@ from PyQt6.QtGui import QPalette
 
 from dataclasses import asdict
 
-from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..gui.gui_custom_filename import CustomFilenameDialog
-from ..gui.gui_custom_signalflow import CustomSignalflowDialog
+from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from AV_Spex.gui.gui_custom_filename import CustomFilenameDialog
+from AV_Spex.gui.gui_custom_signalflow import CustomSignalflowDialog
 
-from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig, SignalflowConfig, SignalflowProfile
+from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig, SignalflowConfig, SignalflowProfile
 
-from ..utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger
 
-from ..utils import config_edit
+from AV_Spex.utils import config_edit
 
 config_mgr = ConfigManager()
 spex_config = config_mgr.get_config('spex', SpexConfig)

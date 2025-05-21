@@ -41,6 +41,18 @@ class LazyGUILoader:
         cls.load_gui_components()
         if cls._app is None:
             cls._app = cls._QApplication(sys.argv)
+            
+            # Connect the aboutToQuit signal to save configs
+            def save_configs_on_quit():
+                print("Application about to quit - saving configs")
+                from .utils.config_manager import ConfigManager
+                config_mgr = ConfigManager()
+                config_mgr.save_config('checks', is_last_used=True)
+                config_mgr.save_config('spex', is_last_used=True)
+            
+            # Make sure to explicitly connect to the instance
+            cls._app.aboutToQuit.connect(save_configs_on_quit)
+        
         return cls._app
     
     @classmethod

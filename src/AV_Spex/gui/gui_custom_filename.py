@@ -4,10 +4,10 @@ from PyQt6.QtWidgets import (
     QMessageBox, QDialog
 )
 
-from ..utils import config_edit
-from ..utils.config_setup import FilenameSection, FilenameProfile
+from AV_Spex.utils import config_edit
+from AV_Spex.utils.config_setup import FilenameSection, FilenameProfile
 
-from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
 
 class CustomFilenameDialog(QDialog, ThemeableMixin):
     def __init__(self, parent=None):

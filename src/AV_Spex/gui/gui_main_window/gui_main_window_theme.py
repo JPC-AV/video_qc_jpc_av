@@ -3,8 +3,8 @@ from PyQt6.QtCore import Qt
 
 import os
 
-from ...gui.gui_theme_manager import ThemeManager
-from ...utils.config_manager import ConfigManager
+from AV_Spex.gui.gui_theme_manager import ThemeManager
+from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
 

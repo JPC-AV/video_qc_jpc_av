@@ -4,10 +4,10 @@ import os
 from typing import Optional, Union, List
 from datetime import datetime
 
-from ..utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger
 
-from ..utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig, SignalflowConfig
-from ..utils.config_manager import ConfigManager
+from AV_Spex.utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig, SignalflowConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 class ConfigIO:
     def __init__(self, config_mgr: ConfigManager):

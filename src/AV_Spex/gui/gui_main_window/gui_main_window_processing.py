@@ -1,8 +1,8 @@
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from ...gui.gui_processing_window import ProcessingWindow
+from AV_Spex.gui.gui_processing_window import ProcessingWindow
 
-from ...utils.log_setup import logger
-from ...processing.worker_thread import ProcessingWorker
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.processing.worker_thread import ProcessingWorker
 
 class MainWindowProcessing:
     """Processing-related event handlers for the main window"""

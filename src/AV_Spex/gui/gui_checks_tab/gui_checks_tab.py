@@ -5,12 +5,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from ...gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ...gui.gui_checks_tab.gui_checks_window import ChecksWindow
-from ...utils.config_manager import ConfigManager
-from ...utils.config_setup import SpexConfig, ChecksConfig
-from ...utils import config_edit
-from ...utils.log_setup import logger
+from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from AV_Spex.gui.gui_checks_tab.gui_checks_window import ChecksWindow
+from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.config_setup import SpexConfig, ChecksConfig
+from AV_Spex.utils import config_edit
+from AV_Spex.utils.log_setup import logger
 
 config_mgr = ConfigManager()
 checks_config = config_mgr.get_config('checks', ChecksConfig)

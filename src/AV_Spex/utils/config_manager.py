@@ -6,7 +6,7 @@ from pathlib import Path
 import appdirs
 import sys
 
-from ..utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger
 
 T = TypeVar('T')
 

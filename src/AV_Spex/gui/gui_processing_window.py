@@ -7,12 +7,12 @@ from PyQt6.QtCore import Qt, QEvent, QSize
 from PyQt6.QtGui import QPalette, QFont
 
 import os
-from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..gui.gui_processing_window_console import ConsoleTextEdit, MessageType
+from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from AV_Spex.gui.gui_processing_window_console import ConsoleTextEdit, MessageType
 
-from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import ChecksConfig
-from ..utils.log_setup import connect_logger_to_ui
+from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.config_setup import ChecksConfig
+from AV_Spex.utils.log_setup import connect_logger_to_ui
 
 config_mgr = ConfigManager()
 checks_config = config_mgr.get_config('checks', ChecksConfig)

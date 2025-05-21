@@ -37,29 +37,54 @@ def parse_mediainfo_json(file_path: str) -> Dict[str, Dict[str, Any]]:
     if not os.path.exists(file_path):
         logger.critical(f"Cannot perform MediaInfo check! No such file: {file_path}")
         return section_data
-
-    try:
-        with open(file_path, 'r') as file:
-            mediainfo = json.load(file)
-            
-            # Extract track information from the JSON structure
-            if 'media' in mediainfo and 'track' in mediainfo['media']:
-                tracks = mediainfo['media']['track']
-                
-                for track in tracks:
-                    track_type = track.get('@type')
-                    
-                    if track_type == 'General':
-                        section_data["General"] = extract_general_data(track)
-                    elif track_type == 'Video':
-                        section_data["Video"] = extract_video_data(track)
-                    elif track_type == 'Audio':
-                        section_data["Audio"] = extract_audio_data(track)
     
-    except json.JSONDecodeError as e:
-        logger.error(f"Error parsing JSON file {file_path}: {e}")
+    try:
+        # Read the file in binary mode first to handle encoding issues
+        with open(file_path, 'rb') as file:
+            content = file.read()
+        
+        # Try to decode with utf-8 first, with error reporting
+        try:
+            decoded_content = content.decode('utf-8')
+        except UnicodeDecodeError as e:
+            logger.error(f"UTF-8 decoding error in {file_path}: {e}")
+            # Try with latin-1 as a fallback, which can handle any byte
+            try:
+                decoded_content = content.decode('latin-1')
+                logger.warning(f"Used latin-1 encoding as fallback for {file_path}\n")
+            except Exception as e2:
+                logger.error(f"Failed to decode {file_path} with fallback encoding: {e2}\n")
+                return section_data
+        
+        # Parse the JSON
+        try:
+            mediainfo = json.loads(decoded_content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing JSON file {file_path}: {e}")
+            return section_data
+                
+        # Extract track information from the JSON structure
+        if 'media' in mediainfo and 'track' in mediainfo['media']:
+            tracks = mediainfo['media']['track']
+            
+            for track in tracks:
+                track_type = track.get('@type')
+                
+                if track_type == 'General':
+                    section_data["General"] = extract_general_data(track)
+                elif track_type == 'Video':
+                    section_data["Video"] = extract_video_data(track)
+                elif track_type == 'Audio':
+                    section_data["Audio"] = extract_audio_data(track)
+        else:
+            logger.error(f"Expected JSON structure not found in {file_path}")
+            
     except Exception as e:
         logger.error(f"Unexpected error processing {file_path}: {e}")
+        
+    # Validate that we got meaningful data
+    if not section_data["Video"] and not section_data["Audio"] and not section_data["General"]:
+        logger.error(f"No valid MediaInfo data extracted from {file_path}")
         
     return section_data
 

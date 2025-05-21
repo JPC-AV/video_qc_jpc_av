@@ -24,17 +24,42 @@ def parse_mediatrace(xml_file):
     root = None
     mediatrace_output = {}
     
+
     try:
-        # Parse the XML file
-        tree = ET.parse(xml_file)
-        root = tree.getroot()
+        # Try parsing with explicit encoding options
+        try:
+            # First try with UTF-8 encoding
+            parser = ET.XMLParser(encoding='utf-8')
+            tree = ET.parse(xml_file, parser=parser)
+            root = tree.getroot()
+        except ET.ParseError:
+            # If UTF-8 fails, try with latin-1
+            parser = ET.XMLParser(encoding='latin-1')
+            tree = ET.parse(xml_file, parser=parser)
+            root = tree.getroot()
+        except Exception as e:
+            # Fall back to trying to read the file with different encodings
+            for encoding in ['utf-8', 'latin-1', 'cp1252']:
+                try:
+                    with open(xml_file, 'rb') as f:
+                        content = f.read()
+                        decoded_content = content.decode(encoding)
+                    
+                    # Parse from the decoded string
+                    root = ET.fromstring(decoded_content)
+                    break
+                except (UnicodeDecodeError, ET.ParseError):
+                    continue
+            else:
+                # If all encodings fail
+                raise Exception(f"Could not decode {xml_file} with any tried encoding")
     except ET.ParseError as e:
         # Log the error
-        print(f"Warning: Could not parse XML file {xml_file}: {e}")
+        logger.error(f"Warning: Could not parse XML file {xml_file}: {e}")
         return None  # Return early only if parsing fails
     except Exception as e:
         # Handle other potential errors
-        print(f"Unexpected error processing {xml_file}: {e}")
+        logger.error(f"Unexpected error processing {xml_file}: {e}")
         return None  # Return early only if parsing fails
 
     # If we get here, XML parsing was successful

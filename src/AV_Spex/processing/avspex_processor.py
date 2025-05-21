@@ -7,12 +7,12 @@ import time
 from art import art, text2art
 from dataclasses import asdict
 
-from ..processing.processing_mgmt import ProcessingManager
-from ..utils import dir_setup
-from ..utils.log_setup import logger
-from ..utils.deps_setup import required_commands, check_external_dependency, check_py_version
-from ..utils.config_setup import ChecksConfig, SpexConfig
-from ..utils.config_manager import ConfigManager
+from AV_Spex.processing.processing_mgmt import ProcessingManager
+from AV_Spex.utils import dir_setup
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.deps_setup import required_commands, check_external_dependency, check_py_version
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 def display_processing_banner(video_id=None):
     """
