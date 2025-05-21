@@ -41,12 +41,17 @@ jobs:
       with:
         name: AV-Spex-App
         path: dist/AV-Spex.app/
+        retention-days: 5
         
-    - name: Attach to Release
-      if: github.event_name == 'release'
-      uses: softprops/action-gh-release@v1
+    # Extract version and create a version file to pass to the next workflow
+    - name: Extract Version
+      run: |
+        VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
+        echo "$VERSION" > dist/version.txt
+        
+    - name: Upload Version Info
+      uses: actions/upload-artifact@v4
       with:
-        files: |
-          dist/AV-Spex.app/
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: app-version
+        path: dist/version.txt
+        retention-days: 5
