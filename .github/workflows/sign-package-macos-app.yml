@@ -2,12 +2,7 @@ name: Sign and Package macOS App
 on:
   release:
     types: [published]
-  workflow_dispatch:  # For manual triggering
-    inputs:
-      build_id:
-        description: 'Build workflow run ID to use (leave empty for latest)'
-        required: false
-        type: string
+  workflow_dispatch:
 
 jobs:
   sign-and-package:
@@ -21,9 +16,8 @@ jobs:
       uses: dawidd6/action-download-artifact@v2
       with:
         workflow: macos-app-build.yml
-        name: AV-Spex-Unsigned
+        name: AV-Spex-App  
         path: dist/
-        run_id: ${{ github.event.inputs.build_id }}  # Use specified or latest
         
     - name: Download version info
       uses: dawidd6/action-download-artifact@v2
@@ -31,11 +25,18 @@ jobs:
         workflow: macos-app-build.yml
         name: app-version
         path: dist/
-        run_id: ${{ github.event.inputs.build_id }}
         
     - name: Set version
       run: |
-        echo "APP_VERSION=$(cat dist/version.txt)" >> $GITHUB_ENV
+        if [ -f "dist/version.txt" ]; then
+          echo "APP_VERSION=$(cat dist/version.txt)" >> $GITHUB_ENV
+        else
+          # Fallback: extract version from pyproject.toml
+          echo "Version file not found. Extracting from pyproject.toml..."
+          VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+        fi
+        echo "Using version: ${{ env.APP_VERSION }}"
         
     - name: Install create-dmg
       run: brew install create-dmg
@@ -92,26 +93,40 @@ jobs:
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
+        # Debug: List contents of dist directory
+        echo "Contents of dist directory:"
+        ls -la dist/
+        
         # Create a folder for DMG preparation
         mkdir -p dist/dmg
+        
+        # Debug: Check if the .app exists
+        if [ ! -d "dist/AV-Spex.app" ]; then
+          echo "ERROR: AV-Spex.app not found in dist directory!"
+          exit 1
+        fi
+        
         cp -R "dist/AV-Spex.app" dist/dmg
         chmod -R 755 dist/dmg/AV-Spex.app
         
         # Sign frameworks and libraries
         echo "Signing frameworks and libraries..."
         find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
+          echo "Signing $file"
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
         done
         
         # Sign Python executables
         echo "Signing Python executables..."
         find dist/dmg/AV-Spex.app/Contents -type f -name "python*" | while read file; do
+          echo "Signing $file"
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
         done
         
         # Sign executables in MacOS folder
         echo "Signing other executables..."
         find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
+          echo "Signing $file"
           codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"
         done
         
