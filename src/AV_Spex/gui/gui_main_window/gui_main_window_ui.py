@@ -3,10 +3,11 @@ from PyQt6.QtWidgets import (
     QLabel, QScrollArea, QMenuBar, QTabWidget
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QPixmap, QKeySequence
 
 import os
 import sys
+import platform
 
 from AV_Spex.gui.gui_theme_manager import ThemeManager
 
@@ -30,22 +31,42 @@ class MainWindowUI:
         self.menu_bar = QMenuBar(self.main_window)
         self.main_window.setMenuBar(self.menu_bar)
         
-        # App menu 
-        self.app_menu = self.menu_bar.addMenu("AV Spex")
-        self.about_action = self.app_menu.addAction("About AV Spex")
-        self.about_action.triggered.connect(self.main_window.import_tab.dialog_handlers.show_about_dialog)
-        
-        # Add a separator
-        self.app_menu.addSeparator()
-        
-        # Add Quit action to the app menu
-        self.quit_action = self.app_menu.addAction("Quit")
-        self.quit_action.triggered.connect(self.main_window.signals_handler.on_quit_clicked)
-        
-        # File menu (comes after the app menu)
-        self.file_menu = self.menu_bar.addMenu("File")
-        self.import_action = self.file_menu.addAction("Import Directory")
-        self.import_action.triggered.connect(self.main_window.import_tab.import_directories)
+        # Platform-specific menu setup
+        if platform.system() == 'Darwin':
+            # On macOS, the application menu is handled differently
+            # File menu (this becomes the first menu after the Apple menu on macOS)
+            self.file_menu = self.menu_bar.addMenu("File")
+            self.import_action = self.file_menu.addAction("Import Directory")
+            self.import_action.triggered.connect(self.main_window.import_tab.import_directories)
+            
+            # Add Quit action to the File menu on macOS
+            self.file_menu.addSeparator()
+            self.quit_action = self.file_menu.addAction("Quit")
+            self.quit_action.setShortcut(QKeySequence.StandardKey.Quit)
+            self.quit_action.triggered.connect(self.main_window.signals_handler.on_quit_clicked)
+            
+            # About action in its own menu
+            self.help_menu = self.menu_bar.addMenu("Help")
+            self.about_action = self.help_menu.addAction("About AV Spex")
+            self.about_action.triggered.connect(self.main_window.import_tab.dialog_handlers.show_about_dialog)
+        else:
+            # For Windows/Linux (if we expand support)
+            # App menu 
+            self.app_menu = self.menu_bar.addMenu("AV Spex")
+            self.about_action = self.app_menu.addAction("About AV Spex")
+            self.about_action.triggered.connect(self.main_window.import_tab.dialog_handlers.show_about_dialog)
+            
+            # Add a separator
+            self.app_menu.addSeparator()
+            
+            # Add Quit action to the app menu
+            self.quit_action = self.app_menu.addAction("Quit")
+            self.quit_action.triggered.connect(self.main_window.signals_handler.on_quit_clicked)
+            
+            # File menu (comes after the app menu)
+            self.file_menu = self.menu_bar.addMenu("File")
+            self.import_action = self.file_menu.addAction("Import Directory")
+            self.import_action.triggered.connect(self.main_window.import_tab.import_directories)
 
         self.setup_main_layout()
         

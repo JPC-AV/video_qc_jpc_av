@@ -96,10 +96,8 @@ class MainWindow(QMainWindow, ThemeableMixin):
             self.worker.cancel()
             self.worker.wait()
         
-        # Call quit handling method but don't call it if we're already in the closing process
-        if not hasattr(self, '_is_closing') or not self._is_closing:
-            self._is_closing = True
-            self.signals_handler.on_quit_clicked()
+        # Remove the recursive call to on_quit_clicked
+        # We'll let the aboutToQuit signal handle saving configs
         
         # Clean up main window theme connections last
         self.cleanup_theme_handling()
