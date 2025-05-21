@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QApplication
 import os
-from ...utils.config_manager import ConfigManager
+from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
 
@@ -62,16 +62,9 @@ class MainWindowSignals:
             self.main_window.open_processing_button.setText("Show Processing Window")
     
     def on_quit_clicked(self):
-        """Handle the 'Quit' button click."""
-        self.main_window.selected_directories = None  # Clear any selections
-        self.main_window.check_spex_clicked = False  # Ensure the flag is reset
-         # Only save configs that are actually in the ConfigManager._configs dictionary
-        if 'checks' in config_mgr._configs:
-            config_mgr.save_config('checks', is_last_used=True)
-        
-        if 'spex' in config_mgr._configs:
-            config_mgr.save_config('spex', is_last_used=True)
-
+        """Handle quit button click."""
+        # Force application to close using close event to ensure cleanup
+        self.main_window.close()
     
     def update_main_status_label(self, filename, current_index=None, total_files=None):
         """Update the status label in the main window."""

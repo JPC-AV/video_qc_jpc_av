@@ -11,15 +11,16 @@ from PyQt6.QtGui import QPalette
 
 from dataclasses import asdict
 
-from ..gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from ..gui.gui_custom_filename import CustomFilenameDialog
+from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from AV_Spex.gui.gui_custom_filename import CustomFilenameDialog
+from AV_Spex.gui.gui_custom_signalflow import CustomSignalflowDialog
 
-from ..utils.config_manager import ConfigManager
-from ..utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig
+from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.config_setup import SpexConfig, ChecksConfig, FilenameConfig, SignalflowConfig, SignalflowProfile
 
-from ..utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger
 
-from ..utils import config_edit
+from AV_Spex.utils import config_edit
 
 config_mgr = ConfigManager()
 spex_config = config_mgr.get_config('spex', SpexConfig)
@@ -47,7 +48,7 @@ class SpexTab(ThemeableMixin):
             elif selected_option == "Bowser Filename Profile":
                 config_edit.apply_filename_profile(bowser_filename_profile)
                 config_mgr.save_config('spex', is_last_used=True)
-            elif selected_option.startswith("Custom ("):
+            else:
                 for profile_name in filename_config.filename_profiles.keys():
                     if selected_option == profile_name:
                         profile_class = filename_config.filename_profiles[profile_name]
@@ -56,6 +57,8 @@ class SpexTab(ThemeableMixin):
 
         def on_signalflow_profile_changed(self, index):
             """Handle signal flow profile selection change."""
+            signalflow_config = config_mgr.get_config("signalflow", SignalflowConfig)
+
             selected_option = self.main_window.signalflow_profile_dropdown.itemText(index)
             logger.debug(f"Selected signal flow profile: {selected_option}")
 
@@ -64,11 +67,19 @@ class SpexTab(ThemeableMixin):
             elif selected_option == "BVH3100 Signal Flow":
                 sn_config_changes = config_edit.BVH3100
             else:
-                logger.error("Signal flow identifier not recognized, config not updated")
+                # Handle custom profile
+                if hasattr(signalflow_config, 'signalflow_profiles') and signalflow_config.signalflow_profiles:
+                    for profile_name, profile_data in signalflow_config.signalflow_profiles.items():
+                        if selected_option == profile_name:
+                            config_edit.apply_signalflow_profile(profile_data)
+                            config_mgr.save_config('spex', is_last_used=True)
+                            return
+                logger.error(f"Could not find profile: {selected_option}")
                 return
 
             if sn_config_changes:
                 config_edit.apply_signalflow_profile(sn_config_changes)
+                config_mgr.save_config('spex', is_last_used=True)
     
     def __init__(self, main_window):
         self.main_window = main_window
@@ -159,47 +170,9 @@ class SpexTab(ThemeableMixin):
         # Style the button
         theme_manager.style_buttons(ffprobe_button)
         
-        # 5. Mediatrace section
-        self.mediatrace_group = QGroupBox("Mediatrace Values")
-        theme_manager.style_groupbox(self.mediatrace_group, "top center")
-        self.main_window.spex_tab_group_boxes.append(self.mediatrace_group)
-        
-        mediatrace_layout = QVBoxLayout()
-        
-        # Signalflow profile dropdown
-        signalflow_label = QLabel("Expected Signalflow profiles:")
-        signalflow_label.setStyleSheet("font-weight: bold;")
-        self.main_window.signalflow_profile_dropdown = QComboBox()
-        self.main_window.signalflow_profile_dropdown.addItem("JPC_AV_SVHS Signal Flow")
-        self.main_window.signalflow_profile_dropdown.addItem("BVH3100 Signal Flow")
-        
-        # Set initial state based on config
-        encoder_settings = spex_config.mediatrace_values.ENCODER_SETTINGS
-        if isinstance(encoder_settings, dict):
-            source_vtr = encoder_settings.get('Source_VTR', [])
-        else:
-            source_vtr = encoder_settings.Source_VTR
-            
-        if any("SVO5800" in vtr for vtr in source_vtr):
-            self.main_window.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
-        elif any("Sony BVH3100" in vtr for vtr in source_vtr):
-            self.main_window.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
-            
-        self.main_window.signalflow_profile_dropdown.currentIndexChanged.connect(self.profile_handlers.on_signalflow_profile_changed)
-        
-        mediatrace_button = QPushButton("Open Section")
-        mediatrace_button.clicked.connect(
-            lambda: self.open_new_window('Mediatrace Values', 'mediatrace_values')
-        )
-        
-        mediatrace_layout.addWidget(signalflow_label)
-        mediatrace_layout.addWidget(self.main_window.signalflow_profile_dropdown)
-        mediatrace_layout.addWidget(mediatrace_button)
-        self.mediatrace_group.setLayout(mediatrace_layout)
+         # 5. Mediatrace section
+        self.mediatrace_group = self.setup_mediatrace_section()
         vertical_layout.addWidget(self.mediatrace_group)
-        
-        # Style the button
-        theme_manager.style_buttons(self.mediatrace_group)
         
         # 6. QCT section
         self.qct_group = QGroupBox("qct-parse Values")
@@ -431,6 +404,192 @@ class SpexTab(ThemeableMixin):
                         
                 except Exception as e:
                     QMessageBox.warning(self, "Error", f"Error adding custom pattern to dropdown: {str(e)}")        
+    
+    def setup_mediatrace_section(self):
+        """Setup the Mediatrace section with signalflow profiles"""
+        # Create and style the group box
+        mediatrace_group = QGroupBox("Mediatrace Values")
+        theme_manager = ThemeManager.instance()
+        theme_manager.style_groupbox(mediatrace_group, "top center")
+        self.main_window.spex_tab_group_boxes.append(mediatrace_group)
+        
+        # Create layout
+        mediatrace_layout = QVBoxLayout()
+        
+        # Add a dropdown menu for signal flow profiles
+        signalflow_label = QLabel("Expected Signalflow profiles:")
+        signalflow_label.setStyleSheet("font-weight: bold;")
+        mediatrace_layout.addWidget(signalflow_label)
+
+        # Create the dropdown
+        self.main_window.signalflow_profile_dropdown = QComboBox()
+        self.main_window.signalflow_profile_dropdown.addItem("Select a profile...")
+        
+        # Try to load profiles from the dedicated signalflow config
+        try:
+            signalflow_config = config_mgr.get_config('signalflow', SignalflowConfig)
+            if hasattr(signalflow_config, 'signalflow_profiles') and signalflow_config.signalflow_profiles:
+                for profile_name in signalflow_config.signalflow_profiles.keys():
+                    self.main_window.signalflow_profile_dropdown.addItem(profile_name)
+        except Exception as e:
+            logger.warning(f"Could not load signalflow config: {e}")
+            # Fall back to hardcoded profiles
+            self.main_window.signalflow_profile_dropdown.addItem("JPC_AV_SVHS Signal Flow")
+            self.main_window.signalflow_profile_dropdown.addItem("BVH3100 Signal Flow")
+        
+        # Set initial state based on config
+        encoder_settings = spex_config.mediatrace_values.ENCODER_SETTINGS
+        if isinstance(encoder_settings, dict):
+            source_vtr = encoder_settings.get('Source_VTR', [])
+        else:
+            source_vtr = encoder_settings.Source_VTR
+            
+        if any("SVO5800" in vtr for vtr in source_vtr):
+            self.main_window.signalflow_profile_dropdown.setCurrentText("JPC_AV_SVHS Signal Flow")
+        elif any("Sony BVH3100" in vtr for vtr in source_vtr):
+            self.main_window.signalflow_profile_dropdown.setCurrentText("BVH3100 Signal Flow")
+        else:
+            # Check if it matches any custom profile
+            found_match = False
+            if hasattr(spex_config, 'signalflow_profiles'):
+                for profile_name, profile_data in spex_config.signalflow_profiles.items():
+                    if 'Source_VTR' in profile_data and source_vtr and any(vtr in str(source_vtr) for vtr in profile_data['Source_VTR']):
+                        self.main_window.signalflow_profile_dropdown.setCurrentText(profile_name)
+                        found_match = True
+                        break
+            
+            if not found_match:
+                self.main_window.signalflow_profile_dropdown.setCurrentText("Select a profile...")
+                
+        # Connect the dropdown to the handler
+        self.main_window.signalflow_profile_dropdown.currentIndexChanged.connect(
+            self.profile_handlers.on_signalflow_profile_changed
+        )
+        mediatrace_layout.addWidget(self.main_window.signalflow_profile_dropdown)
+        
+        # Store the layout as an instance variable so it can be accessed by other methods
+        self.mediatrace_section_layout = mediatrace_layout
+        
+        # Add the custom signalflow button
+        self.add_custom_signalflow_button()
+        
+        # Open section button
+        mediatrace_button = QPushButton("Open Section")
+        mediatrace_button.clicked.connect(
+            lambda: self.open_new_window('Mediatrace Values', 'mediatrace_values')
+        )
+        mediatrace_layout.addWidget(mediatrace_button)
+        
+        # Set the layout for the group
+        mediatrace_group.setLayout(mediatrace_layout)
+        mediatrace_group.setMinimumHeight(200)
+        
+        # Style the buttons using theme manager
+        theme_manager.style_buttons(mediatrace_layout)
+        
+        return mediatrace_group
+    
+    def add_custom_signalflow_button(self):
+        """Add a button to create custom signal flow profiles"""
+        custom_button = QPushButton("Create Custom Signalflow...")
+        custom_button.clicked.connect(self.show_custom_signalflow_dialog)
+        # Add to the mediatrace section layout that's already defined
+        self.mediatrace_section_layout.addWidget(custom_button)
+        
+    def show_custom_signalflow_dialog(self):
+        """Show the custom signal flow dialog"""
+        dialog = CustomSignalflowDialog(self.main_window)
+        result = dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted:
+            profile = dialog.profile
+            if profile:
+                try:
+                    # Get the profile name for the dropdown
+                    profile_name = f"Custom ({profile['name']})"
+                    
+                    # Check if this profile already exists in the dropdown
+                    found = False
+                    for i in range(self.main_window.signalflow_profile_dropdown.count()):
+                        if self.main_window.signalflow_profile_dropdown.itemText(i) == profile_name:
+                            found = True
+                            break
+                    
+                    # Only add if it's not already in the dropdown
+                    if not found:
+                        # Add to dropdown UI
+                        self.main_window.signalflow_profile_dropdown.addItem(profile_name)
+                        self.main_window.signalflow_profile_dropdown.setCurrentText(profile_name)
+                        
+                        # Get the ConfigManager instance and refresh configs
+                        config_manager = ConfigManager()
+                        config_manager.refresh_configs()
+                        
+                        # Try to save to the dedicated signalflow config
+                        try:
+                            # Get the signalflow configuration
+                            signalflow_config = config_manager.get_config('signalflow', SignalflowConfig)
+                            
+                            # Create or update the signalflow_profiles dictionary
+                            if not hasattr(signalflow_config, 'signalflow_profiles'):
+                                signalflow_config.signalflow_profiles = {}
+                            
+                            # Create an updated dictionary of profiles
+                            updated_profiles = dict(signalflow_config.signalflow_profiles)
+                            
+                            # Create a SignalflowProfile object
+                            new_profile = SignalflowProfile(
+                                name=profile['name'],
+                                Source_VTR=profile['Source_VTR'],
+                                TBC_Framesync=profile.get('TBC_Framesync', []),
+                                ADC=profile.get('ADC', []),
+                                Capture_Device=profile['Capture_Device'],
+                                Computer=profile['Computer']
+                            )
+                            
+                            # Add the new profile
+                            updated_profiles[profile_name] = new_profile
+                            
+                            # Update the configuration
+                            signalflow_config.signalflow_profiles = updated_profiles
+                            
+                            # Update the cached config directly
+                            config_manager._configs['signalflow'] = signalflow_config
+                            
+                            # Save the updated config to disk
+                            config_manager.save_config('signalflow', is_last_used=True)
+                            
+                            logger.debug(f"Added custom signal flow profile '{profile_name}' to signalflow configuration")
+                            
+                        except Exception as e:
+                            logger.warning(f"Could not save to signalflow config: {e}")
+                            # Fall back to storing in SpexConfig (legacy method)
+                            spex_config = config_manager.get_config('spex', SpexConfig)
+                            
+                            # Create or update the signalflow_profiles dictionary
+                            if not hasattr(spex_config, 'signalflow_profiles'):
+                                spex_config.signalflow_profiles = {}
+                            
+                            # Create an updated dictionary of profiles
+                            updated_profiles = dict(spex_config.signalflow_profiles)
+                            updated_profiles[profile_name] = profile
+                            
+                            # Update the configuration
+                            spex_config.signalflow_profiles = updated_profiles
+                            
+                            # Update the cached config directly
+                            config_manager._configs['spex'] = spex_config
+                            
+                            # Save the updated config to disk
+                            config_manager.save_config('spex', is_last_used=True)
+                            
+                            logger.debug(f"Added custom signal flow profile '{profile_name}' to spex configuration (fallback)")
+                        
+                        # Apply the new profile
+                        config_edit.apply_signalflow_profile(profile)
+                        
+                except Exception as e:
+                    QMessageBox.warning(self.main_window, "Error", f"Error adding custom profile to dropdown: {str(e)}")
     
     def on_theme_changed(self, palette):
         """Handle theme changes for this tab"""

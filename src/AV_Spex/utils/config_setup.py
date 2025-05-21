@@ -288,6 +288,7 @@ class SpexConfig:
     ffmpeg_values: Dict[str, Union[FFmpegVideoStream, FFmpegAudioStream, FFmpegFormat]]
     mediatrace_values: MediaTraceValues
     qct_parse_values: QCTParseValues
+    signalflow_profiles: Dict[str, Dict] = field(default_factory=dict)
 
 # Output configuration
 @dataclass
@@ -354,3 +355,18 @@ class FilenameProfile:
 @dataclass
 class FilenameConfig:
     filename_profiles: Dict[str, FilenameProfile]
+
+@dataclass
+class SignalflowProfile:
+    """Profile for signal flow equipment configuration"""
+    name: str
+    Source_VTR: List[str] = field(default_factory=list)
+    TBC_Framesync: List[str] = field(default_factory=list)
+    ADC: List[str] = field(default_factory=list)
+    Capture_Device: List[str] = field(default_factory=list)
+    Computer: List[str] = field(default_factory=list)
+
+@dataclass
+class SignalflowConfig:
+    """Container for signal flow profiles"""
+    signalflow_profiles: Dict[str, SignalflowProfile] = field(default_factory=dict)

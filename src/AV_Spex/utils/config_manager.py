@@ -6,7 +6,7 @@ from pathlib import Path
 import appdirs
 import sys
 
-from ..utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger
 
 T = TypeVar('T')
 
@@ -301,6 +301,49 @@ class ConfigManager:
                 else:
                     target[key] = value
 
+    def replace_config_section(self, config_name: str, section_path: str, new_value: any) -> None:
+        """
+        Replace an entire section of a config with a new value.
+        
+        Args:
+            config_name: Name of the config to update
+            section_path: Dot-separated path to the section (e.g., 'filename_values.fn_sections')
+            new_value: New value to replace the entire section with
+        """
+        config = self._configs.get(config_name)
+        if not config:
+            logger.error(f"No config found for {config_name}, cannot replace section")
+            return
+            
+        # Convert current config to dict
+        config_dict = asdict(config)
+        
+        # Navigate to the parent of the target section
+        path_parts = section_path.split('.')
+        target_dict = config_dict
+        
+        # Navigate to the parent container
+        for i, part in enumerate(path_parts[:-1]):
+            if part not in target_dict:
+                logger.error(f"Section path '{'.'.join(path_parts[:i+1])}' not found in config")
+                return
+            target_dict = target_dict[part]
+            
+        # Replace the target section
+        final_key = path_parts[-1]
+        if final_key not in target_dict:
+            logger.error(f"Section '{section_path}' not found in config")
+            return
+            
+        # Replace the section with the new value
+        target_dict[final_key] = new_value
+        
+        # Convert back to dataclass
+        self._configs[config_name] = self._deserialize_dataclass(type(config), config_dict)
+        
+        # Save as last used
+        self.save_config(config_name, is_last_used=True)
+    
     def reset_config(self, config_name: str, config_class: Type[T]) -> T:
         """
         Reset config to default values.

@@ -1,7 +1,7 @@
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from ..processing.avspex_processor import AVSpexProcessor
-from ..utils.log_setup import logger
+from AV_Spex.processing.avspex_processor import AVSpexProcessor
+from AV_Spex.utils.log_setup import logger
 
 
 class ProcessingWorker(QThread):
