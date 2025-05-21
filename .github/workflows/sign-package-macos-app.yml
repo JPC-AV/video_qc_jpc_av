@@ -15,14 +15,14 @@ jobs:
     - name: Download unsigned app
       uses: dawidd6/action-download-artifact@v2
       with:
-        workflow: macos-app-build.yml  # Make sure this matches your workflow filename
+        workflow: macos-app-build.yml  
         name: AV-Spex-App
         path: dist/app_download/
         
     - name: Download version info
       uses: dawidd6/action-download-artifact@v2
       with:
-        workflow: macos-app-build.yml
+        workflow: macos-app-build.yml 
         name: app-version
         path: dist/
         
