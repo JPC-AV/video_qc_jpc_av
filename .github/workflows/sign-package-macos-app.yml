@@ -20,7 +20,7 @@ jobs:
     - name: Download unsigned app
       uses: dawidd6/action-download-artifact@v2
       with:
-        workflow: build-macos-app.yml
+        workflow: macos-app-build.yml
         name: AV-Spex-Unsigned
         path: dist/
         run_id: ${{ github.event.inputs.build_id }}  # Use specified or latest
@@ -28,7 +28,7 @@ jobs:
     - name: Download version info
       uses: dawidd6/action-download-artifact@v2
       with:
-        workflow: build-macos-app.yml
+        workflow: macos-app-build.yml
         name: app-version
         path: dist/
         run_id: ${{ github.event.inputs.build_id }}
