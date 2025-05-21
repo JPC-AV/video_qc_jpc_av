@@ -113,43 +113,69 @@ jobs:
         </plist>
         EOF
         
-    - name: Check for problematic files
+    - name: Clean app bundle for signing
       run: |
-        # Check if pyproject.toml exists in Frameworks
-        if [ -f "dist/dmg/AV-Spex.app/Contents/Frameworks/pyproject.toml" ]; then
-          echo "Found pyproject.toml in Frameworks, removing it..."
-          rm "dist/dmg/AV-Spex.app/Contents/Frameworks/pyproject.toml"
-        fi
+        echo "Cleaning app bundle..."
         
-        # List any text files that might cause issues
-        echo "Checking for potential problematic files..."
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f -name "*.py" -o -name "*.toml" -o -name "*.txt" | while read file; do
-          echo "Found potential problematic file: $file"
-        done
+        # Create a directory to contain only the essential binary files
+        mkdir -p dist/clean_app/AV-Spex.app/Contents/MacOS
+        mkdir -p dist/clean_app/AV-Spex.app/Contents/Resources
+        mkdir -p dist/clean_app/AV-Spex.app/Contents/Frameworks
+        
+        # Copy Info.plist and PkgInfo
+        cp -R dist/dmg/AV-Spex.app/Contents/Info.plist dist/clean_app/AV-Spex.app/Contents/
+        [ -f dist/dmg/AV-Spex.app/Contents/PkgInfo ] && cp dist/dmg/AV-Spex.app/Contents/PkgInfo dist/clean_app/AV-Spex.app/Contents/
+        
+        # Copy MacOS executables
+        cp -R dist/dmg/AV-Spex.app/Contents/MacOS/* dist/clean_app/AV-Spex.app/Contents/MacOS/
+        
+        # Copy Resources (icons, etc.)
+        cp -R dist/dmg/AV-Spex.app/Contents/Resources/* dist/clean_app/AV-Spex.app/Contents/Resources/ 2>/dev/null || true
+        
+        # Copy only binary files from Frameworks
+        echo "Copying only binary files from Frameworks..."
+        
+        # Create a list of all .so and .dylib files
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) > binary_files.txt
+        
+        # Create directories for each binary file
+        while read file; do
+          rel_path=${file#dist/dmg/AV-Spex.app/Contents/Frameworks/}
+          target_dir="dist/clean_app/AV-Spex.app/Contents/Frameworks/$(dirname "$rel_path")"
+          mkdir -p "$target_dir"
+          cp "$file" "$target_dir/"
+        done < binary_files.txt
+        
+        # Replace the original app with the clean version
+        rm -rf dist/dmg/AV-Spex.app
+        cp -R dist/clean_app/AV-Spex.app dist/dmg/
+        
+        # Make sure everything is executable
+        chmod -R 755 dist/dmg/AV-Spex.app
         
     - name: Sign and package app
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # Sign frameworks and libraries (using exact syntax from your shell script)
+        # Sign frameworks and libraries
         echo "Signing frameworks and libraries..."
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f -name "*.so" -o -name "*.dylib" | while read file; do
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
         done
         
-        # Sign Python executables
+        # Sign Python executables (if any)
         echo "Signing Python executables..."
-        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" | while read file; do
+        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" 2>/dev/null | while read file; do
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
         done
         
         # Sign executables in MacOS folder
         echo "Signing other executables..."
-        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
+        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 2>/dev/null | while read file; do
           codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"
         done
         
-        # Sign the main app bundle (using exact syntax from your shell script)
+        # Sign the main app bundle
         echo "Signing main application bundle..."
         codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
         
@@ -160,23 +186,8 @@ jobs:
         }
         
         # Create DMG
-        echo "Creating DMG..."
-        create-dmg \
-          --volname "AV-Spex ${{ env.APP_VERSION }}" \
-          --volicon "av_spex_the_logo.icns" \
-          --window-pos 200 120 \
-          --window-size 600 300 \
-          --icon-size 100 \
-          --icon "AV-Spex.app" 175 120 \
-          --hide-extension "AV-Spex.app" \
-          --app-drop-link 425 120 \
-          --no-internet-enable \
-          "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
-          "dist/dmg" || {
-            echo "DMG creation failed, trying alternative approach..."
-            # Alternative approach with less fancy DMG
-            hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
-          }
+        echo "Creating DMG with hdiutil (simpler method)..."
+        hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
           
         # Sign the DMG
         echo "Signing DMG..."
