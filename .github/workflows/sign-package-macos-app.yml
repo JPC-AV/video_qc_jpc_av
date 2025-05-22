@@ -56,13 +56,11 @@ jobs:
           cp -R dist/app_download/* "dist/AV-Spex.app/Contents/"
         fi
         
-        # Create DMG preparation folder
+        # Create DMG preparation folder and copy app
+        echo "Creating DMG preparation folder..."
         mkdir -p dist/dmg
-        cp -R "dist/AV-Spex.app" dist/dmg/
+        cp -R "dist/AV-Spex.app" dist/dmg
         chmod -R 755 dist/dmg/AV-Spex.app
-        
-        echo "Original app bundle size:"
-        du -sh dist/dmg/AV-Spex.app
         
     - name: Install create-dmg
       run: brew install create-dmg
@@ -115,98 +113,80 @@ jobs:
         </plist>
         EOF
         
-    - name: Aggressively clean problematic files
+    - name: Clean app bundle for signing
       run: |
-        echo "Aggressively cleaning problematic files from Frameworks..."
+        echo "Cleaning app bundle..."
         
-        # Remove base_library.zip from Frameworks if it exists
-        if [ -f "dist/dmg/AV-Spex.app/Contents/Frameworks/base_library.zip" ]; then
-          echo "Moving base_library.zip from Frameworks to Resources..."
-          mkdir -p "dist/dmg/AV-Spex.app/Contents/Resources/lib"
-          mv "dist/dmg/AV-Spex.app/Contents/Frameworks/base_library.zip" "dist/dmg/AV-Spex.app/Contents/Resources/lib/"
-        fi
+        # Create a directory to contain only the essential binary files
+        mkdir -p dist/clean_app/AV-Spex.app/Contents/MacOS
+        mkdir -p dist/clean_app/AV-Spex.app/Contents/Resources
+        mkdir -p dist/clean_app/AV-Spex.app/Contents/Frameworks
         
-        # Remove ALL non-binary files from Frameworks directory
-        echo "Removing ALL non-binary files from Frameworks directory..."
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( \
-          -name "*.txt" -o -name "*.md" -o -name "*.toml" -o -name "*.json" -o \
-          -name "*.csv" -o -name "*.gz" -o -name "*.zip" -o -name "*.tar" -o \
-          -name "*.py" -o -name "*.pyc" -o -name "*.pyo" -o -name "*.rst" -o \
-          -name "*.cfg" -o -name "*.ini" -o -name "*.yaml" -o -name "*.yml" -o \
-          -name "*.xml" -o -name "*.html" -o -name "*.css" -o -name "*.js" -o \
-          -name "*.LICENSE" -o -name "*.license" -o -name "LICENSE*" -o \
-          -name "README*" -o -name "MANIFEST*" -o -name "*.dist-info" \
-        \) -delete || true
+        # Copy Info.plist and PkgInfo
+        cp -R dist/dmg/AV-Spex.app/Contents/Info.plist dist/clean_app/AV-Spex.app/Contents/
+        [ -f dist/dmg/AV-Spex.app/Contents/PkgInfo ] && cp dist/dmg/AV-Spex.app/Contents/PkgInfo dist/clean_app/AV-Spex.app/Contents/
         
-        # Remove empty directories that might cause issues
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type d -empty -delete || true
+        # Copy MacOS executables
+        cp -R dist/dmg/AV-Spex.app/Contents/MacOS/* dist/clean_app/AV-Spex.app/Contents/MacOS/
         
-        # Remove compiled Python cache files everywhere
-        echo "Removing compiled Python cache files..."
-        find dist/dmg/AV-Spex.app -name "*.pyc" -delete || true
-        find dist/dmg/AV-Spex.app -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+        # Copy Resources (icons, etc.)
+        cp -R dist/dmg/AV-Spex.app/Contents/Resources/* dist/clean_app/AV-Spex.app/Contents/Resources/ 2>/dev/null || true
         
-        echo "App bundle size after aggressive cleanup:"
-        du -sh dist/dmg/AV-Spex.app
+        # Copy only binary files from Frameworks
+        echo "Copying only binary files from Frameworks..."
         
-    - name: Find and sign all binaries systematically
+        # Create a list of all .so and .dylib files
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) > binary_files.txt
+        
+        # Create directories for each binary file
+        while read file; do
+          rel_path=${file#dist/dmg/AV-Spex.app/Contents/Frameworks/}
+          target_dir="dist/clean_app/AV-Spex.app/Contents/Frameworks/$(dirname "$rel_path")"
+          mkdir -p "$target_dir"
+          cp "$file" "$target_dir/"
+        done < binary_files.txt
+        
+        # Replace the original app with the clean version
+        rm -rf dist/dmg/AV-Spex.app
+        cp -R dist/clean_app/AV-Spex.app dist/dmg/
+        
+        # Make sure everything is executable
+        chmod -R 755 dist/dmg/AV-Spex.app
+        
+    - name: Sign and package app
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        echo "=== COMPREHENSIVE BINARY SIGNING ==="
+        # Sign frameworks and libraries
+        echo "Signing frameworks and libraries..."
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
+        done
         
-        # First, find ALL Mach-O binaries in the entire app bundle
-        echo "Finding all Mach-O binaries in the app bundle..."
-        find dist/dmg/AV-Spex.app -type f -exec file {} \; | grep "Mach-O" | cut -d: -f1 > all_binaries.txt
+        # Sign Python executables (if any)
+        echo "Signing Python executables..."
+        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" 2>/dev/null | while read file; do
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
+        done
         
-        echo "Found $(wc -l < all_binaries.txt) Mach-O binaries to sign:"
-        cat all_binaries.txt
+        # Sign executables in MacOS folder
+        echo "Signing other executables..."
+        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 2>/dev/null | while read file; do
+          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"
+        done
         
-        # Sign each binary individually with runtime hardening
-        echo "Signing all binaries with hardened runtime..."
-        while read binary; do
-          echo "Signing: $binary"
-          # Use runtime hardening for all binaries
-          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$binary" || {
-            echo "FAILED to sign $binary with entitlements - trying without entitlements..."
-            codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$binary" || {
-              echo "FAILED to sign $binary completely - continuing..."
-            }
-          }
-        done < all_binaries.txt
+        # Sign the main app bundle
+        echo "Signing main application bundle..."
+        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
         
-    - name: Sign the main app bundle carefully
-      env:
-        DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
-      run: |
-        # Sign the main app bundle WITHOUT --deep to avoid re-signing subcomponents
-        echo "Signing main application bundle (without --deep)..."
-        codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app || {
-          echo "Main bundle signing failed, trying without strict validation..."
-          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app || {
-            echo "WARNING: Main bundle signing failed, but continuing..."
-          }
-        }
-        
-        # Verify code signature (but don't fail on errors)
+        # Verify code signature
         echo "Verifying code signature..."
-        codesign --verify --verbose=2 dist/dmg/AV-Spex.app || {
-          echo "WARNING: Code verification had issues, but continuing..."
+        codesign --verify --deep dist/dmg/AV-Spex.app || {
+          echo "WARNING: Code verification failed, but continuing with DMG creation..."
         }
         
-        # Check if hardened runtime is enabled (but don't fail on errors)
-        echo "Checking hardened runtime..."
-        codesign -dv --entitlements - dist/dmg/AV-Spex.app || {
-          echo "WARNING: Could not check entitlements, but continuing..."
-        }
-        
-    - name: Create and sign DMG
-      env:
-        DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
-      run: |
-        # Create DMG with hdiutil
-        echo "Creating DMG..."
-        rm -f "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        # Create DMG
+        echo "Creating DMG with hdiutil (simpler method)..."
         hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
           
         # Sign the DMG
@@ -217,34 +197,25 @@ jobs:
       run: |
         # Submit for notarization
         echo "Submitting DMG for notarization..."
-        NOTARIZE_OUTPUT=$(xcrun notarytool submit "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
+        SUBMISSION_ID=$(xcrun notarytool submit "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
           --keychain-profile "GITHUB_ACTIONS_PROFILE" \
-          --wait --timeout 3600)
-          
-        echo "$NOTARIZE_OUTPUT"
+          --wait --timeout 1800 | grep "id:" | head -1 | awk '{print $2}')
         
-        # Extract submission ID
-        SUBMISSION_ID=$(echo "$NOTARIZE_OUTPUT" | grep "id:" | head -1 | awk '{print $2}')
+        echo "Submission ID: $SUBMISSION_ID"
         
-        if [ -n "$SUBMISSION_ID" ]; then
-          echo "Submission ID: $SUBMISSION_ID"
-          
-          # Get detailed notarization log
-          echo "Getting detailed notarization log..."
-          xcrun notarytool log $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE"
-          
-          # Check status
-          STATUS=$(xcrun notarytool info $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE" | grep "status:" | awk '{print $2}')
-          
-          if [ "$STATUS" = "Accepted" ]; then
-            echo "Notarization successful, stapling ticket..."
-            xcrun stapler staple "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
-          else
-            echo "Notarization failed with status: $STATUS"
-            echo "Will continue to upload unsigned DMG as artifact"
-          fi
+        # Get detailed notarization log
+        echo "Getting detailed notarization log..."
+        xcrun notarytool log $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE"
+        
+        # Check status
+        STATUS=$(xcrun notarytool info $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE" | grep "status:" | awk '{print $2}')
+        
+        if [ "$STATUS" = "Accepted" ]; then
+          echo "Notarization successful, stapling ticket..."
+          xcrun stapler staple "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
         else
-          echo "Failed to extract submission ID from output. Continuing without notarization."
+          echo "Notarization failed with status: $STATUS"
+          echo "Will continue to upload unsigned DMG as artifact"
         fi
         
     - name: Upload signed app as artifact
