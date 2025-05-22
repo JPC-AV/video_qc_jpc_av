@@ -140,67 +140,47 @@ jobs:
         echo "App bundle size after cleanup:"
         du -sh dist/dmg/AV-Spex.app
         
-    - name: Sign binary files
+    - name: Find and sign all binaries systematically
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # Sign all .dylib files
-        echo "Signing dylib files..."
-        find dist/dmg/AV-Spex.app -name "*.dylib" | while read file; do
-          echo "Signing $file"
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
-        done
+        echo "=== COMPREHENSIVE BINARY SIGNING ==="
         
-        # Sign all .so files
-        echo "Signing .so files..."
-        find dist/dmg/AV-Spex.app -name "*.so" | while read file; do
-          echo "Signing $file"
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
-        done
+        # First, find ALL Mach-O binaries in the entire app bundle
+        echo "Finding all Mach-O binaries in the app bundle..."
+        find dist/dmg/AV-Spex.app -type f -exec file {} \; | grep "Mach-O" | cut -d: -f1 > all_binaries.txt
         
-        # Sign Python framework binaries (if they exist)
-        echo "Signing Python framework binaries..."
-        find dist/dmg/AV-Spex.app -path "*/Python.framework/*/Python" -type f | while read file; do
-          echo "Signing Python framework: $file"
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
-        done
+        echo "Found $(wc -l < all_binaries.txt) Mach-O binaries to sign:"
+        cat all_binaries.txt
         
-        # Sign Qt framework binaries
-        echo "Signing Qt framework binaries..."
-        find dist/dmg/AV-Spex.app -path "*/Qt*.framework/Qt*" -type f | while read file; do
-          echo "Signing Qt framework: $file"
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
-        done
-        
-        # Sign other binaries in Resources
-        echo "Signing other binaries in Resources..."
-        find dist/dmg/AV-Spex.app/Contents/Resources -type f \( -name "QtCore" -o -name "QtGui" -o -name "QtWidgets" -o -name "Python" \) | while read file; do
-          echo "Signing binary: $file"
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
-        done
-        
-        # Sign executables in MacOS folder
-        echo "Signing executables in MacOS folder..."
-        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
-          echo "Signing $file"
-          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file, continuing..."
-        done
+        # Sign each binary individually with runtime hardening
+        echo "Signing all binaries with hardened runtime..."
+        while read binary; do
+          echo "Signing: $binary"
+          # Use runtime hardening for all binaries
+          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$binary" || {
+            echo "FAILED to sign $binary - trying without entitlements..."
+            codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$binary" || {
+              echo "FAILED to sign $binary completely"
+            }
+          }
+        done < all_binaries.txt
         
     - name: Sign the main app bundle
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # Sign the main app bundle with --deep to catch anything we missed
-        echo "Signing main application bundle..."
-        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app || {
-          echo "Main bundle signing had issues, but continuing..."
-        }
+        # Now sign the main app bundle
+        echo "Signing main application bundle with hardened runtime..."
+        codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
         
-        # Verify code signature (but don't fail if there are issues)
+        # Verify code signature
         echo "Verifying code signature..."
-        codesign --verify --verbose=2 dist/dmg/AV-Spex.app || {
-          echo "WARNING: Code verification had issues, but continuing with DMG creation..."
-        }
+        codesign --verify --verbose=2 dist/dmg/AV-Spex.app
+        
+        # Check if hardened runtime is enabled
+        echo "Checking hardened runtime..."
+        codesign -dv --entitlements - dist/dmg/AV-Spex.app
         
     - name: Create and sign DMG
       env:
