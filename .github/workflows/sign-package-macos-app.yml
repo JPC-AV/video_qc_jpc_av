@@ -113,80 +113,105 @@ jobs:
         </plist>
         EOF
         
-    - name: Clean app bundle for signing
-      run: |
-        echo "Cleaning app bundle..."
-        
-        # Create a directory to contain only the essential binary files
-        mkdir -p dist/clean_app/AV-Spex.app/Contents/MacOS
-        mkdir -p dist/clean_app/AV-Spex.app/Contents/Resources
-        mkdir -p dist/clean_app/AV-Spex.app/Contents/Frameworks
-        
-        # Copy Info.plist and PkgInfo
-        cp -R dist/dmg/AV-Spex.app/Contents/Info.plist dist/clean_app/AV-Spex.app/Contents/
-        [ -f dist/dmg/AV-Spex.app/Contents/PkgInfo ] && cp dist/dmg/AV-Spex.app/Contents/PkgInfo dist/clean_app/AV-Spex.app/Contents/
-        
-        # Copy MacOS executables
-        cp -R dist/dmg/AV-Spex.app/Contents/MacOS/* dist/clean_app/AV-Spex.app/Contents/MacOS/
-        
-        # Copy Resources (icons, etc.)
-        cp -R dist/dmg/AV-Spex.app/Contents/Resources/* dist/clean_app/AV-Spex.app/Contents/Resources/ 2>/dev/null || true
-        
-        # Copy only binary files from Frameworks
-        echo "Copying only binary files from Frameworks..."
-        
-        # Create a list of all .so and .dylib files
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) > binary_files.txt
-        
-        # Create directories for each binary file
-        while read file; do
-          rel_path=${file#dist/dmg/AV-Spex.app/Contents/Frameworks/}
-          target_dir="dist/clean_app/AV-Spex.app/Contents/Frameworks/$(dirname "$rel_path")"
-          mkdir -p "$target_dir"
-          cp "$file" "$target_dir/"
-        done < binary_files.txt
-        
-        # Replace the original app with the clean version
-        rm -rf dist/dmg/AV-Spex.app
-        cp -R dist/clean_app/AV-Spex.app dist/dmg/
-        
-        # Make sure everything is executable
-        chmod -R 755 dist/dmg/AV-Spex.app
-        
-    - name: Sign and package app
+    - name: Sign app bundle with proper order
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        # Sign frameworks and libraries
-        echo "Signing frameworks and libraries..."
-        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
+        echo "Starting comprehensive code signing process..."
+        
+        # Function to sign a file if it exists and is a binary
+        sign_if_binary() {
+          local file="$1"
+          if [ -f "$file" ]; then
+            # Check if it's a binary file (not a text file)
+            if file "$file" | grep -q "Mach-O\|executable\|shared library"; then
+              echo "Signing: $file"
+              codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file"
+            fi
+          fi
+        }
+        
+        # Sign all Python extension modules (.so files) in lib-dynload
+        echo "Signing Python extension modules..."
+        find dist/dmg/AV-Spex.app/Contents/Frameworks/lib-dynload -name "*.so" 2>/dev/null | while read file; do
+          sign_if_binary "$file"
         done
         
-        # Sign Python executables (if any)
-        echo "Signing Python executables..."
-        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" 2>/dev/null | while read file; do
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"
+        # Sign all .dylib files in Frameworks
+        echo "Signing dynamic libraries..."
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -name "*.dylib" 2>/dev/null | while read file; do
+          sign_if_binary "$file"
+        done
+        
+        # Sign all lxml modules
+        echo "Signing lxml modules..."
+        find dist/dmg/AV-Spex.app/Contents/Frameworks/lxml -name "*.so" 2>/dev/null | while read file; do
+          sign_if_binary "$file"
+        done
+        
+        # Sign all PyQt6 modules and plugins
+        echo "Signing PyQt6 modules..."
+        find dist/dmg/AV-Spex.app/Contents/Frameworks/PyQt6 -name "*.so" -o -name "*.dylib" 2>/dev/null | while read file; do
+          sign_if_binary "$file"
+        done
+        
+        # Sign Qt frameworks - these need special handling
+        echo "Signing Qt frameworks..."
+        QT_FRAMEWORKS="QtCore QtGui QtWidgets QtNetwork QtSvg QtDBus QtPdf"
+        for framework in $QT_FRAMEWORKS; do
+          # Sign versioned framework binaries
+          for version_path in dist/dmg/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/lib/${framework}.framework/Versions/*/; do
+            if [ -d "$version_path" ]; then
+              framework_binary="${version_path}${framework}"
+              sign_if_binary "$framework_binary"
+            fi
+          done
+          
+          # Sign current version symlink target
+          current_binary="dist/dmg/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/lib/${framework}.framework/Versions/Current/${framework}"
+          sign_if_binary "$current_binary"
+          
+          # Sign main framework binary
+          main_binary="dist/dmg/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/lib/${framework}.framework/${framework}"
+          sign_if_binary "$main_binary"
+        done
+        
+        # Sign Python framework if it exists
+        echo "Signing Python framework..."
+        for python_binary in dist/dmg/AV-Spex.app/Contents/Frameworks/Python.framework/Versions/*/Python; do
+          sign_if_binary "$python_binary"
+        done
+        sign_if_binary "dist/dmg/AV-Spex.app/Contents/Frameworks/Python.framework/Versions/Current/Python"
+        sign_if_binary "dist/dmg/AV-Spex.app/Contents/Frameworks/Python.framework/Python"
+        
+        # Sign any Resources that are actually binaries (this shouldn't happen in a proper PyInstaller build)
+        echo "Checking Resources folder for binaries..."
+        find dist/dmg/AV-Spex.app/Contents/Resources -type f 2>/dev/null | while read file; do
+          if file "$file" | grep -q "Mach-O\|executable\|shared library"; then
+            echo "WARNING: Found binary in Resources: $file"
+            sign_if_binary "$file"
+          fi
         done
         
         # Sign executables in MacOS folder
-        echo "Signing other executables..."
+        echo "Signing main executables..."
         find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 2>/dev/null | while read file; do
+          echo "Signing executable: $file"
           codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"
         done
         
-        # Sign the main app bundle
+        # Finally, sign the main app bundle
         echo "Signing main application bundle..."
-        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
+        codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
         
-        # Verify code signature
+        # Verify the signature
         echo "Verifying code signature..."
-        codesign --verify --deep dist/dmg/AV-Spex.app || {
+        codesign --verify --deep --verbose dist/dmg/AV-Spex.app || {
           echo "WARNING: Code verification failed, but continuing with DMG creation..."
         }
         
         # Create DMG
-        echo "Creating DMG with hdiutil (simpler method)..."
+        echo "Creating DMG with hdiutil..."
         hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
           
         # Sign the DMG
