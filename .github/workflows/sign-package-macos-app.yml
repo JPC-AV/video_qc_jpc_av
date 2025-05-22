@@ -128,6 +128,11 @@ jobs:
             return 0
           fi
           
+          # Skip symlinks - we only want to sign actual binaries
+          if [ -L "$file" ]; then
+            return 0
+          fi
+          
           # Check if it's a binary file
           if ! file "$file" | grep -q "Mach-O\|executable\|shared library"; then
             return 0
@@ -141,9 +146,29 @@ jobs:
           fi
         }
         
-        # Remove any non-binary files that might be confused as frameworks
-        echo "Cleaning up any non-binary framework files..."
+        # Clean up problematic files and fix Python framework structure
+        echo "Cleaning up problematic files..."
         find dist/dmg/AV-Spex.app/Contents -name "pyproject.toml" -delete 2>/dev/null || true
+        
+        # Fix malformed Python framework - remove the top-level Python binary that's causing issues
+        for location in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
+          if [ -f "$location/Python.framework/Python" ] && [ ! -L "$location/Python.framework/Python" ]; then
+            echo "Removing problematic Python framework binary: $location/Python.framework/Python"
+            rm -f "$location/Python.framework/Python"
+          fi
+        done
+        
+        # Remove Qt framework main binaries that are causing "bundle format is ambiguous" errors
+        QT_FRAMEWORKS="QtCore QtGui QtWidgets QtNetwork QtSvg QtDBus QtPdf"
+        for framework in $QT_FRAMEWORKS; do
+          for location in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
+            framework_binary="$location/PyQt6/Qt6/lib/${framework}.framework/${framework}"
+            if [ -f "$framework_binary" ] && [ ! -L "$framework_binary" ]; then
+              echo "Removing problematic Qt framework binary: $framework_binary"
+              rm -f "$framework_binary"
+            fi
+          done
+        done
         
         # Phase 1: Sign all .so files (Python extensions)
         echo "Phase 1: Signing Python extension modules..."
@@ -157,64 +182,57 @@ jobs:
           sign_binary "$file" false
         done
         
-        # Phase 3: Sign Qt framework binaries specifically (avoid framework bundle signing)
-        echo "Phase 3: Signing Qt framework binaries..."
-        QT_FRAMEWORKS="QtCore QtGui QtWidgets QtNetwork QtSvg QtDBus QtPdf"
+        # Phase 3: Sign Qt framework versioned binaries only
+        echo "Phase 3: Signing Qt framework versioned binaries..."
         for framework in $QT_FRAMEWORKS; do
-          # Look for framework binaries in both Frameworks and Resources
           for base_path in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
-            # Sign versioned framework binaries
-            find "$base_path" -path "*/${framework}.framework/Versions/*/${framework}" -type f 2>/dev/null | while read file; do
+            # Sign only the versioned framework binaries (Versions/A/QtXxx and Versions/Current/QtXxx)
+            find "$base_path" -path "*/${framework}.framework/Versions/*/${framework}" -type f | while read file; do
               sign_binary "$file" false
             done
             
-            # Sign main framework binary (but not the framework bundle itself)
-            if [ -f "$base_path/PyQt6/Qt6/lib/${framework}.framework/${framework}" ]; then
-              # Check if this is actually a binary, not a symlink to the framework bundle
-              if [ ! -L "$base_path/PyQt6/Qt6/lib/${framework}.framework/${framework}" ]; then
-                sign_binary "$base_path/PyQt6/Qt6/lib/${framework}.framework/${framework}" false
-              fi
-            fi
-            
-            # Also check for direct Qt binaries in Resources (from your logs)
+            # Also sign direct Qt binaries in Resources (flat structure)
             if [ -f "$base_path/${framework}" ]; then
               sign_binary "$base_path/${framework}" false
             fi
           done
         done
         
-        # Phase 4: Sign Python framework binaries
-        echo "Phase 4: Signing Python framework binaries..."
-        find dist/dmg/AV-Spex.app/Contents -path "*/Python.framework/*/Python" -type f 2>/dev/null | while read file; do
-          # Avoid signing the framework bundle itself, only the binary
-          if [ ! -L "$file" ]; then
+        # Phase 4: Sign Python framework versioned binaries only
+        echo "Phase 4: Signing Python framework versioned binaries..."
+        for base_path in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
+          # Sign versioned Python binaries
+          find "$base_path" -path "*/Python.framework/Versions/*/Python" -type f | while read file; do
             sign_binary "$file" false
+          done
+          
+          # Also sign direct Python binary in Resources (flat structure)
+          if [ -f "$base_path/Python" ]; then
+            sign_binary "$base_path/Python" false
           fi
         done
         
-        # Also check for direct Python binary in Resources
-        if [ -f "dist/dmg/AV-Spex.app/Contents/Resources/Python" ]; then
-          sign_binary "dist/dmg/AV-Spex.app/Contents/Resources/Python" false
-        fi
-        
-        # Phase 5: Sign main executable
+        # Phase 5: Sign main executable with entitlements
         echo "Phase 5: Signing main executables..."
-        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 2>/dev/null | while read file; do
+        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
           sign_binary "$file" true
         done
         
-        # Phase 6: Sign the main app bundle (but use --deep to handle any missed components)
+        # Phase 6: Try to sign the main app bundle without --deep first
         echo "Phase 6: Signing main application bundle..."
-        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
+        if ! codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app 2>/dev/null; then
+          echo "Standard signing failed, trying with --deep flag..."
+          codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
+        fi
         
         # Verify the signature
         echo "Verifying code signature..."
-        if codesign --verify --deep --verbose dist/dmg/AV-Spex.app; then
+        if codesign --verify --deep --verbose dist/dmg/AV-Spex.app 2>/dev/null; then
           echo "✓ Code signature verification successful"
         else
           echo "⚠ Code signature verification failed, but continuing..."
           # Try to get more details about what failed
-          codesign --verify --verbose=4 dist/dmg/AV-Spex.app || true
+          codesign --verify --verbose=4 dist/dmg/AV-Spex.app 2>&1 || true
         fi
         
         # Create DMG
