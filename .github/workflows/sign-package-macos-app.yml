@@ -395,10 +395,18 @@ jobs:
         echo "Submitting DMG for notarization..."
         
         # Submit for notarization and wait (like your working script)
-        if xcrun notarytool submit "dist/AV-Spex-$APP_VERSION.dmg" \
+        NOTARIZATION_OUTPUT=$(xcrun notarytool submit "dist/AV-Spex-$APP_VERSION.dmg" \
           --keychain-profile "GITHUB_ACTIONS_PROFILE" \
-          --wait --timeout 1800; then
-          
+          --wait --timeout 1800 2>&1)
+        
+        echo "$NOTARIZATION_OUTPUT"
+        
+        # Extract the submission ID
+        SUBMISSION_ID=$(echo "$NOTARIZATION_OUTPUT" | grep "id:" | head -1 | awk '{print $2}')
+        echo "Submission ID: $SUBMISSION_ID"
+        
+        # Check if notarization was successful
+        if echo "$NOTARIZATION_OUTPUT" | grep -q "status: Accepted"; then
           echo "✓ Notarization successful, stapling ticket..."
           xcrun stapler staple "dist/AV-Spex-$APP_VERSION.dmg"
           echo "✓ Notarization and stapling completed successfully"
@@ -414,18 +422,27 @@ jobs:
         else
           echo "❌ Notarization failed"
           
-          # Get the submission ID from recent submissions to see the log
-          echo "Getting recent notarization history for debugging..."
-          xcrun notarytool history --keychain-profile "GITHUB_ACTIONS_PROFILE" | head -5
-          
-          # Get the most recent submission details
-          SUBMISSION_ID=$(xcrun notarytool history --keychain-profile "GITHUB_ACTIONS_PROFILE" | head -3 | tail -1 | awk '{print $1}')
-          if [ ! -z "$SUBMISSION_ID" ] && [ "$SUBMISSION_ID" != "id" ]; then
-            echo "Getting notarization log for submission: $SUBMISSION_ID"
-            xcrun notarytool log $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE" || true
+          # Get detailed error information
+          if [ ! -z "$SUBMISSION_ID" ]; then
+            echo "Getting detailed notarization log for submission: $SUBMISSION_ID"
+            xcrun notarytool log $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE" 2>&1 || true
+          else
+            echo "Could not extract submission ID from output"
           fi
           
-          echo "Continuing with unsigned DMG (will show warning when opened)"
+          echo ""
+          echo "=== NOTARIZATION FAILED ==="
+          echo "The app is signed but not notarized."
+          echo "Users will see a warning: 'Apple cannot check it for malicious software'"
+          echo "To fix this, check the notarization log above for specific issues."
+          echo "Common issues:"
+          echo "- Missing or invalid entitlements"
+          echo "- Unsigned components"
+          echo "- Invalid bundle structure"
+          echo "=========================="
+          echo ""
+          
+          echo "Continuing with signed but unnotarized DMG..."
           # Don't exit - we'll upload the DMG anyway for testing
         fi
         
