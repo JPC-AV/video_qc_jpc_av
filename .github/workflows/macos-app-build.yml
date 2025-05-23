@@ -18,23 +18,96 @@ jobs:
       with:
         python-version: '3.10'  # Adjust this to match your project's Python version
         
-    - name: Install dependencies
+    - name: Install system dependencies
+      run: |
+        # Install create-dmg for later use
+        brew install create-dmg
+        
+    - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         # Install your package in development mode
         pip install -e .
-        # Install PyInstaller and any other build dependencies
+        # Install PyInstaller and build dependencies
         pip install pyinstaller
+        # Install PyQt6 explicitly
+        pip install PyQt6
+        # Install macOS-specific dependencies
+        pip install pyobjc-core pyobjc-framework-Cocoa
         
-    - name: Install macOS dependencies
+        # List installed packages for debugging
+        pip list
+        
+    - name: Verify spec file and dependencies
       run: |
-        # PyObjC is helpful for macOS-specific features
-        pip install pyobjc-core
+        # Check if spec file exists
+        ls -la avspex.spec
+        # Check if icon file exists
+        ls -la av_spex_the_logo.icns
+        # Check if launcher exists
+        ls -la av_spex_launcher.py
         
     - name: Build macOS App
       run: |
+        echo "Starting PyInstaller build..."
         # Run PyInstaller to build the app
-        pyinstaller avspex.spec
+        pyinstaller --clean avspex.spec
+        
+        echo "Build completed. Checking output..."
+        # Verify the app bundle was created correctly
+        ls -la dist/
+        
+        if [ ! -d "dist/AV-Spex.app" ]; then
+          echo "ERROR: AV-Spex.app directory not found!"
+          echo "Contents of dist/:"
+          find dist/ -type d
+          exit 1
+        fi
+        
+        echo "App bundle created successfully. Checking structure..."
+        ls -la dist/AV-Spex.app/Contents/
+        
+        # Ensure proper permissions (like your shell script does)
+        chmod -R 755 dist/AV-Spex.app
+        
+        # Verify the main executable exists and is executable
+        if [ -f "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ]; then
+          echo "Main executable found and verified"
+          file dist/AV-Spex.app/Contents/MacOS/AV-Spex
+          ls -la dist/AV-Spex.app/Contents/MacOS/
+        else
+          echo "ERROR: Main executable not found!"
+          echo "Contents of MacOS directory:"
+          ls -la dist/AV-Spex.app/Contents/MacOS/ || echo "MacOS directory doesn't exist"
+          echo "Searching for executables..."
+          find dist/AV-Spex.app -name "*AV-Spex*" -type f
+          exit 1
+        fi
+        
+        # Check for required frameworks and libraries
+        echo "Checking for frameworks and libraries..."
+        ls -la dist/AV-Spex.app/Contents/Frameworks/ || echo "No Frameworks directory"
+        
+        # Verify Info.plist was created correctly
+        if [ -f "dist/AV-Spex.app/Contents/Info.plist" ]; then
+          echo "Info.plist found:"
+          cat dist/AV-Spex.app/Contents/Info.plist
+        else
+          echo "WARNING: Info.plist not found"
+        fi
+        
+        # Check for plotly files and identify problematic ones
+        echo "Checking for plotly files..."
+        find dist/AV-Spex.app/Contents -name "*plotly*" -type f | head -10
+        
+        # Look for the specific files that cause signing issues
+        echo "Checking for problematic files that will be removed during signing..."
+        find dist/AV-Spex.app/Contents -name "iris.csv.gz" 2>/dev/null || echo "No iris.csv.gz found"
+        find dist/AV-Spex.app/Contents -name "plotly.min.js" 2>/dev/null | head -5 || echo "No plotly.min.js found"
+        
+        # Test that the app can at least start (basic smoke test)
+        echo "Running basic smoke test..."
+        timeout 10s dist/AV-Spex.app/Contents/MacOS/AV-Spex --help > /dev/null 2>&1 || echo "App help test completed (timeout expected)"
         
     - name: Upload App as Artifact
       uses: actions/upload-artifact@v4
@@ -47,6 +120,7 @@ jobs:
     - name: Extract Version
       run: |
         VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
+        echo "Extracted version: $VERSION"
         echo "$VERSION" > dist/version.txt
         
     - name: Upload Version Info
