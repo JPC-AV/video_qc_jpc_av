@@ -390,6 +390,45 @@ jobs:
           exit 1
         fi
         
+    - name: Notarize DMG
+      run: |
+        echo "Submitting DMG for notarization..."
+        
+        # Submit for notarization and wait (like your working script)
+        if xcrun notarytool submit "dist/AV-Spex-$APP_VERSION.dmg" \
+          --keychain-profile "GITHUB_ACTIONS_PROFILE" \
+          --wait --timeout 1800; then
+          
+          echo "✓ Notarization successful, stapling ticket..."
+          xcrun stapler staple "dist/AV-Spex-$APP_VERSION.dmg"
+          echo "✓ Notarization and stapling completed successfully"
+          
+          # Verify the stapling worked
+          echo "Verifying stapled ticket..."
+          if xcrun stapler validate "dist/AV-Spex-$APP_VERSION.dmg"; then
+            echo "✓ DMG stapling verification successful"
+          else
+            echo "⚠ DMG stapling verification failed, but continuing..."
+          fi
+          
+        else
+          echo "❌ Notarization failed"
+          
+          # Get the submission ID from recent submissions to see the log
+          echo "Getting recent notarization history for debugging..."
+          xcrun notarytool history --keychain-profile "GITHUB_ACTIONS_PROFILE" | head -5
+          
+          # Get the most recent submission details
+          SUBMISSION_ID=$(xcrun notarytool history --keychain-profile "GITHUB_ACTIONS_PROFILE" | head -3 | tail -1 | awk '{print $1}')
+          if [ ! -z "$SUBMISSION_ID" ] && [ "$SUBMISSION_ID" != "id" ]; then
+            echo "Getting notarization log for submission: $SUBMISSION_ID"
+            xcrun notarytool log $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE" || true
+          fi
+          
+          echo "Continuing with unsigned DMG (will show warning when opened)"
+          # Don't exit - we'll upload the DMG anyway for testing
+        fi
+        
     - name: Upload signed app as artifact
       uses: actions/upload-artifact@v4
       with:
