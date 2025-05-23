@@ -1,4 +1,3 @@
-# avspex.spec - Hybrid approach: Include Plotly normally, handle problematic files during signing
 import os
 from pathlib import Path
 
