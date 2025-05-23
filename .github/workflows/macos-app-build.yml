@@ -47,10 +47,10 @@ jobs:
         # Check if launcher exists
         ls -la av_spex_launcher.py
         
-    - name: Build macOS App
+    - name: Build macOS App with PyInstaller (minimal changes)
       run: |
         echo "Starting PyInstaller build..."
-        # Run PyInstaller to build the app
+        # Run PyInstaller to build the app (this should create proper symlinks naturally)
         pyinstaller --clean avspex.spec
         
         echo "Build completed. Checking output..."
@@ -67,12 +67,19 @@ jobs:
         echo "App bundle created successfully. Checking structure..."
         ls -la dist/AV-Spex.app/Contents/
         
-        # Ensure proper permissions (like your shell script does)
+        # Check if we have the proper symlink structure (like your working version)
+        echo "Checking for symlinks in Frameworks:"
+        ls -la dist/AV-Spex.app/Contents/Frameworks/ | grep "^l" | head -5 || echo "No symlinks found in Frameworks"
+        
+        echo "Checking for symlinks in Resources:"
+        ls -la dist/AV-Spex.app/Contents/Resources/ | grep "^l" | head -5 || echo "No symlinks found in Resources"
+        
+        # Ensure proper permissions
         chmod -R 755 dist/AV-Spex.app
         
         # Verify the main executable exists and is executable
         if [ -f "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ]; then
-          echo "Main executable found and verified"
+          echo "✓ Main executable found and verified"
           file dist/AV-Spex.app/Contents/MacOS/AV-Spex
           ls -la dist/AV-Spex.app/Contents/MacOS/
         else
@@ -84,32 +91,93 @@ jobs:
           exit 1
         fi
         
-        # Check for required frameworks and libraries
-        echo "Checking for frameworks and libraries..."
-        ls -la dist/AV-Spex.app/Contents/Frameworks/ || echo "No Frameworks directory"
-        
         # Verify Info.plist was created correctly
         if [ -f "dist/AV-Spex.app/Contents/Info.plist" ]; then
-          echo "Info.plist found:"
-          cat dist/AV-Spex.app/Contents/Info.plist
+          echo "✓ Info.plist found"
         else
           echo "WARNING: Info.plist not found"
         fi
-        
-        # Check for plotly files and identify problematic ones
-        echo "Checking for plotly files..."
-        find dist/AV-Spex.app/Contents -name "*plotly*" -type f | head -10
-        
-        # Look for the specific files that cause signing issues
-        echo "Checking for problematic files that will be removed during signing..."
-        find dist/AV-Spex.app/Contents -name "iris.csv.gz" 2>/dev/null || echo "No iris.csv.gz found"
-        find dist/AV-Spex.app/Contents -name "plotly.min.js" 2>/dev/null | head -5 || echo "No plotly.min.js found"
         
         # Test that the app can at least start (basic smoke test)
         echo "Running basic smoke test..."
         timeout 10s dist/AV-Spex.app/Contents/MacOS/AV-Spex --help > /dev/null 2>&1 || echo "App help test completed (timeout expected)"
         
-    - name: Upload App as Artifact
+        echo "✓ Build completed successfully"
+        
+    - name: Minimal fixes only if needed
+      run: |
+        echo "Checking if PyInstaller created proper structure..."
+        
+        # Check if we already have a good structure with symlinks
+        SYMLINK_COUNT=$(find dist/AV-Spex.app/Contents -type l | wc -l)
+        echo "Found $SYMLINK_COUNT symlinks in app bundle"
+        
+        if [ "$SYMLINK_COUNT" -gt 10 ]; then
+          echo "✓ Good symlink structure detected, minimal fixes needed"
+          
+          # Only do essential fixes for signing
+          echo "Applying minimal fixes for code signing..."
+          
+          # Remove only the most problematic files
+          find dist/AV-Spex.app/Contents -name "pyproject.toml" -delete 2>/dev/null || true
+          
+          # Remove Qt framework Info.plist files that cause "bundle format is ambiguous"
+          find dist/AV-Spex.app/Contents -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
+          find dist/AV-Spex.app/Contents -path "*/Qt*.framework/Info.plist" -delete 2>/dev/null || true
+          
+          # Remove Python framework Info.plist files
+          find dist/AV-Spex.app/Contents -path "*/Python.framework/Resources/Info.plist" -delete 2>/dev/null || true
+          find dist/AV-Spex.app/Contents -path "*/Python.framework/Info.plist" -delete 2>/dev/null || true
+          
+          echo "✓ Minimal fixes applied"
+        else
+          echo "⚠ Poor symlink structure detected, need more extensive fixes"
+          
+          # If PyInstaller didn't create proper symlinks, we need to fix manually
+          # This shouldn't happen with the corrected spec file, but just in case
+          
+          echo "Applying extensive structure fixes..."
+          
+          cd dist/AV-Spex.app/Contents
+          
+          # Move duplicated content and create symlinks
+          if [ -d "Frameworks/AV_Spex" ] && [ -d "Resources/AV_Spex" ]; then
+            rm -rf Frameworks/AV_Spex
+            ln -sf ../Resources/AV_Spex Frameworks/AV_Spex
+            echo "✓ Fixed AV_Spex duplication"
+          fi
+          
+          if [ -f "Frameworks/base_library.zip" ] && [ -f "Resources/base_library.zip" ]; then
+            rm -f Frameworks/base_library.zip
+            ln -sf ../Resources/base_library.zip Frameworks/base_library.zip
+            echo "✓ Fixed base_library.zip duplication"
+          fi
+          
+          # Apply the same minimal fixes as above
+          find . -name "pyproject.toml" -delete 2>/dev/null || true
+          find . -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
+          find . -path "*/Qt*.framework/Info.plist" -delete 2>/dev/null || true
+          find . -path "*/Python.framework/Resources/Info.plist" -delete 2>/dev/null || true
+          find . -path "*/Python.framework/Info.plist" -delete 2>/dev/null || true
+          
+          cd ../../..
+          
+          echo "✓ Extensive fixes applied"
+        fi
+        
+        # Set proper permissions
+        chmod -R 755 dist/AV-Spex.app
+        
+        # Final verification
+        echo "Final structure verification:"
+        echo "Frameworks symlinks:"
+        ls -la dist/AV-Spex.app/Contents/Frameworks/ | grep "^l" | head -3 || echo "No symlinks in Frameworks"
+        echo "Resources symlinks:"  
+        ls -la dist/AV-Spex.app/Contents/Resources/ | grep "^l" | head -3 || echo "No symlinks in Resources"
+        
+        echo "✓ App bundle structure ready for signing"
+        
+    - name: Upload Fixed App as Artifact
       uses: actions/upload-artifact@v4
       with:
         name: AV-Spex-App
