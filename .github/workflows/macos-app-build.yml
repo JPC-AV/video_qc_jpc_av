@@ -112,7 +112,7 @@ jobs:
         cd "dist/AV-Spex.app/Contents"
         
         # Step 1: Keep Resources as the source of truth, convert Frameworks to symlinks
-        # This matches your working app structure
+        # This matches your working app structure EXACTLY
         
         echo "Converting duplicated directories to symlinks..."
         
@@ -245,7 +245,23 @@ jobs:
           fi
         done
         
-        # Final verification
+        # Step 10: CRITICAL - Fix circular symlinks by checking working pattern
+        echo "Checking for and fixing circular symlinks..."
+        
+        # Based on your working app, these should NOT be symlinks in Resources:
+        # AppKit, CoreFoundation, Foundation, objc should stay as real directories in Resources
+        # Only certain things like lib-dynload, .dylib files should be symlinks in Resources
+        
+        # Remove any circular symlinks we may have created
+        for dir in AppKit CoreFoundation Foundation objc; do
+          if [ -L "Resources/$dir" ]; then
+            echo "Removing circular symlink: Resources/$dir"
+            rm -f "Resources/$dir"
+            # These should stay as real directories in Resources (not symlinks)
+          fi
+        done
+        
+        # Final verification and cleanup
         echo "=== Symlink structure created ==="
         echo "Frameworks symlinks:"
         ls -la Frameworks/ | grep "^l" | head -10
@@ -254,13 +270,36 @@ jobs:
         ls -la Resources/ | grep "^l" | head -10
         echo ""
         
+        # Check for circular symlinks
+        echo "Checking for circular symlinks..."
+        CIRCULAR_COUNT=0
+        for link in $(find . -type l); do
+          if ! readlink -f "$link" >/dev/null 2>&1; then
+            echo "Found circular symlink: $link"
+            CIRCULAR_COUNT=$((CIRCULAR_COUNT + 1))
+          fi
+        done
+        
+        if [ "$CIRCULAR_COUNT" -gt 0 ]; then
+          echo "❌ Found $CIRCULAR_COUNT circular symlinks - fixing..."
+          # Additional cleanup if needed
+          for dir in AppKit CoreFoundation Foundation objc; do
+            if [ -L "Resources/$dir" ]; then
+              rm -f "Resources/$dir"
+              echo "Removed circular symlink: Resources/$dir"
+            fi
+          done
+        else
+          echo "✓ No circular symlinks detected"
+        fi
+        
         SYMLINK_COUNT=$(find . -type l | wc -l)
         echo "Total symlinks created: $SYMLINK_COUNT"
         
-        if [ "$SYMLINK_COUNT" -gt 15 ]; then
+        if [ "$SYMLINK_COUNT" -gt 10 ] && [ "$CIRCULAR_COUNT" -eq 0 ]; then
           echo "✓ Good symlink structure achieved!"
         else
-          echo "⚠ Warning: Low symlink count, structure may still have issues"
+          echo "⚠ Warning: Structure may still have issues"
         fi
         
     - name: Upload Fixed App as Artifact
