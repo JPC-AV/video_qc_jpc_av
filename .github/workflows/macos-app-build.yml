@@ -104,203 +104,78 @@ jobs:
         
         echo "✓ Build completed successfully"
         
-    - name: Create proper symlink structure (like working version)
+    - name: Minimal fixes only if needed
       run: |
-        echo "=== Converting duplicate structure to proper symlink structure ==="
-        echo "Current structure has duplication issues, converting to symlink pattern..."
+        echo "Checking if PyInstaller created proper structure..."
         
-        cd "dist/AV-Spex.app/Contents"
+        # Check if we already have a good structure with symlinks
+        SYMLINK_COUNT=$(find dist/AV-Spex.app/Contents -type l | wc -l)
+        echo "Found $SYMLINK_COUNT symlinks in app bundle"
         
-        # Step 1: Keep Resources as the source of truth, convert Frameworks to symlinks
-        # This matches your working app structure EXACTLY
-        
-        echo "Converting duplicated directories to symlinks..."
-        
-        # List of directories that should be symlinks in Frameworks pointing to Resources
-        SYMLINK_DIRS="AV_Spex AppKit CoreFoundation Foundation objc lxml plotly av_spex-0.7.8.5.dist-info"
-        
-        for dir in $SYMLINK_DIRS; do
-          if [ -d "Frameworks/$dir" ] && [ -d "Resources/$dir" ]; then
-            echo "Converting $dir to symlink..."
-            rm -rf "Frameworks/$dir"
-            ln -sf "../Resources/$dir" "Frameworks/$dir"
-            echo "✓ Created symlink: Frameworks/$dir -> ../Resources/$dir"
+        if [ "$SYMLINK_COUNT" -gt 10 ]; then
+          echo "✓ Good symlink structure detected, minimal fixes needed"
+          
+          # Only do essential fixes for signing
+          echo "Applying minimal fixes for code signing..."
+          
+          # Remove only the most problematic files
+          find dist/AV-Spex.app/Contents -name "pyproject.toml" -delete 2>/dev/null || true
+          
+          # Remove Qt framework Info.plist files that cause "bundle format is ambiguous"
+          find dist/AV-Spex.app/Contents -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
+          find dist/AV-Spex.app/Contents -path "*/Qt*.framework/Info.plist" -delete 2>/dev/null || true
+          
+          # Remove Python framework Info.plist files
+          find dist/AV-Spex.app/Contents -path "*/Python.framework/Resources/Info.plist" -delete 2>/dev/null || true
+          find dist/AV-Spex.app/Contents -path "*/Python.framework/Info.plist" -delete 2>/dev/null || true
+          
+          echo "✓ Minimal fixes applied"
+        else
+          echo "⚠ Poor symlink structure detected, need more extensive fixes"
+          
+          # If PyInstaller didn't create proper symlinks, we need to fix manually
+          # This shouldn't happen with the corrected spec file, but just in case
+          
+          echo "Applying extensive structure fixes..."
+          
+          cd dist/AV-Spex.app/Contents
+          
+          # Move duplicated content and create symlinks
+          if [ -d "Frameworks/AV_Spex" ] && [ -d "Resources/AV_Spex" ]; then
+            rm -rf Frameworks/AV_Spex
+            ln -sf ../Resources/AV_Spex Frameworks/AV_Spex
+            echo "✓ Fixed AV_Spex duplication"
           fi
-        done
-        
-        # Step 2: Handle base_library.zip - should be in Resources with symlink from Frameworks
-        if [ -f "Frameworks/base_library.zip" ]; then
-          if [ -f "Resources/base_library.zip" ]; then
-            # Both exist, remove from Frameworks and create symlink
-            rm -f "Frameworks/base_library.zip"
-          else
-            # Move from Frameworks to Resources
-            mv "Frameworks/base_library.zip" "Resources/"
+          
+          if [ -f "Frameworks/base_library.zip" ] && [ -f "Resources/base_library.zip" ]; then
+            rm -f Frameworks/base_library.zip
+            ln -sf ../Resources/base_library.zip Frameworks/base_library.zip
+            echo "✓ Fixed base_library.zip duplication"
           fi
-          ln -sf "../Resources/base_library.zip" "Frameworks/base_library.zip"
-          echo "✓ Created symlink: Frameworks/base_library.zip -> ../Resources/base_library.zip"
+          
+          # Apply the same minimal fixes as above
+          find . -name "pyproject.toml" -delete 2>/dev/null || true
+          find . -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
+          find . -path "*/Qt*.framework/Info.plist" -delete 2>/dev/null || true
+          find . -path "*/Python.framework/Resources/Info.plist" -delete 2>/dev/null || true
+          find . -path "*/Python.framework/Info.plist" -delete 2>/dev/null || true
+          
+          cd ../../..
+          
+          echo "✓ Extensive fixes applied"
         fi
         
-        # Step 3: Handle lib-dynload - should be in Frameworks with symlink from Resources
-        # (This is different from the other dirs - lib-dynload lives in Frameworks)
-        if [ -d "Resources/lib-dynload" ]; then
-          if [ -d "Frameworks/lib-dynload" ]; then
-            # Keep the one in Frameworks, remove from Resources
-            rm -rf "Resources/lib-dynload"
-          else
-            # Move from Resources to Frameworks
-            mv "Resources/lib-dynload" "Frameworks/"
-          fi
-          ln -sf "../Frameworks/lib-dynload" "Resources/lib-dynload"
-          echo "✓ Created symlink: Resources/lib-dynload -> ../Frameworks/lib-dynload"
-        fi
+        # Set proper permissions
+        chmod -R 755 dist/AV-Spex.app
         
-        # Step 4: Handle .dylib files - should be in Frameworks with symlinks from Resources
-        for dylib in Frameworks/*.dylib; do
-          if [ -f "$dylib" ]; then
-            dylib_name=$(basename "$dylib")
-            if [ -f "Resources/$dylib_name" ]; then
-              # Remove duplicate from Resources
-              rm -f "Resources/$dylib_name"
-            fi
-            # Create symlink from Resources to Frameworks
-            ln -sf "../Frameworks/$dylib_name" "Resources/$dylib_name"
-            echo "✓ Created symlink: Resources/$dylib_name -> ../Frameworks/$dylib_name"
-          fi
-        done
-        
-        # Step 5: Handle Qt framework binaries - create symlinks like working version
-        QT_FRAMEWORKS="QtCore QtGui QtWidgets QtNetwork QtSvg QtDBus QtPdf"
-        for framework in $QT_FRAMEWORKS; do
-          framework_path="PyQt6/Qt6/lib/${framework}.framework/Versions/A/${framework}"
-          
-          # Remove standalone binaries if they exist
-          rm -f "Frameworks/$framework" 2>/dev/null || true
-          rm -f "Resources/$framework" 2>/dev/null || true
-          
-          # Create symlinks in both locations pointing to the versioned binary
-          if [ -f "Frameworks/$framework_path" ]; then
-            ln -sf "$framework_path" "Frameworks/$framework"
-            ln -sf "PyQt6/Qt6/lib/${framework}.framework/Versions/A/${framework}" "Resources/$framework"
-            echo "✓ Created Qt symlinks for $framework"
-          fi
-        done
-        
-        # Step 6: Handle PyQt6 .so files - create symlinks from Resources to Frameworks
-        if [ -d "Frameworks/PyQt6" ]; then
-          for so_file in Frameworks/PyQt6/*.so; do
-            if [ -f "$so_file" ]; then
-              so_name=$(basename "$so_file")
-              if [ -f "Resources/PyQt6/$so_name" ]; then
-                rm -f "Resources/PyQt6/$so_name"
-              fi
-              ln -sf "../../Frameworks/PyQt6/$so_name" "Resources/PyQt6/$so_name"
-              echo "✓ Created PyQt6 symlink: Resources/PyQt6/$so_name"
-            fi
-          done
-        fi
-        
-        # Step 7: Create PyQt6 lib and plugins symlinks in Resources
-        if [ -d "Resources/PyQt6/Qt6" ]; then
-          cd "Resources/PyQt6/Qt6"
-          
-          # Remove duplicate lib and plugins, create symlinks
-          if [ -d "lib" ] && [ -d "../../../Frameworks/PyQt6/Qt6/lib" ]; then
-            rm -rf "lib"
-            ln -sf "../../../Frameworks/PyQt6/Qt6/lib" "lib"
-            echo "✓ Created symlink: Resources/PyQt6/Qt6/lib"
-          fi
-          
-          if [ -d "plugins" ] && [ -d "../../../Frameworks/PyQt6/Qt6/plugins" ]; then
-            rm -rf "plugins"
-            ln -sf "../../../Frameworks/PyQt6/Qt6/plugins" "plugins"
-            echo "✓ Created symlink: Resources/PyQt6/Qt6/plugins"
-          fi
-          
-          cd "../../.."
-        fi
-        
-        # Step 8: Remove problematic Info.plist files that cause signing issues
-        echo "Removing problematic Info.plist files..."
-        find . -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
-        find . -path "*/Qt*.framework/Info.plist" -delete 2>/dev/null || true
-        find . -path "*/Python.framework/Resources/Info.plist" -delete 2>/dev/null || true
-        find . -path "*/Python.framework/Info.plist" -delete 2>/dev/null || true
-        
-        # Step 9: Create proper Python framework symlinks
-        for location in "Frameworks" "Resources"; do
-          if [ -d "$location/Python.framework" ]; then
-            # Remove problematic top-level Python binary if it's not a symlink
-            if [ -f "$location/Python.framework/Python" ] && [ ! -L "$location/Python.framework/Python" ]; then
-              rm -f "$location/Python.framework/Python"
-            fi
-            
-            # Create proper symlink if versioned binary exists
-            if [ -f "$location/Python.framework/Versions/Current/Python" ] && [ ! -L "$location/Python.framework/Python" ]; then
-              cd "$location/Python.framework"
-              ln -sf "Versions/Current/Python" "Python"
-              echo "✓ Created Python framework symlink in $location"
-              cd - > /dev/null
-            fi
-          fi
-        done
-        
-        # Step 10: CRITICAL - Fix circular symlinks by checking working pattern
-        echo "Checking for and fixing circular symlinks..."
-        
-        # Based on your working app, these should NOT be symlinks in Resources:
-        # AppKit, CoreFoundation, Foundation, objc should stay as real directories in Resources
-        # Only certain things like lib-dynload, .dylib files should be symlinks in Resources
-        
-        # Remove any circular symlinks we may have created
-        for dir in AppKit CoreFoundation Foundation objc; do
-          if [ -L "Resources/$dir" ]; then
-            echo "Removing circular symlink: Resources/$dir"
-            rm -f "Resources/$dir"
-            # These should stay as real directories in Resources (not symlinks)
-          fi
-        done
-        
-        # Final verification and cleanup
-        echo "=== Symlink structure created ==="
+        # Final verification
+        echo "Final structure verification:"
         echo "Frameworks symlinks:"
-        ls -la Frameworks/ | grep "^l" | head -10
-        echo ""
-        echo "Resources symlinks:"
-        ls -la Resources/ | grep "^l" | head -10
-        echo ""
+        ls -la dist/AV-Spex.app/Contents/Frameworks/ | grep "^l" | head -3 || echo "No symlinks in Frameworks"
+        echo "Resources symlinks:"  
+        ls -la dist/AV-Spex.app/Contents/Resources/ | grep "^l" | head -3 || echo "No symlinks in Resources"
         
-        # Check for circular symlinks
-        echo "Checking for circular symlinks..."
-        CIRCULAR_COUNT=0
-        for link in $(find . -type l); do
-          if ! readlink -f "$link" >/dev/null 2>&1; then
-            echo "Found circular symlink: $link"
-            CIRCULAR_COUNT=$((CIRCULAR_COUNT + 1))
-          fi
-        done
-        
-        if [ "$CIRCULAR_COUNT" -gt 0 ]; then
-          echo "❌ Found $CIRCULAR_COUNT circular symlinks - fixing..."
-          # Additional cleanup if needed
-          for dir in AppKit CoreFoundation Foundation objc; do
-            if [ -L "Resources/$dir" ]; then
-              rm -f "Resources/$dir"
-              echo "Removed circular symlink: Resources/$dir"
-            fi
-          done
-        else
-          echo "✓ No circular symlinks detected"
-        fi
-        
-        SYMLINK_COUNT=$(find . -type l | wc -l)
-        echo "Total symlinks created: $SYMLINK_COUNT"
-        
-        if [ "$SYMLINK_COUNT" -gt 10 ] && [ "$CIRCULAR_COUNT" -eq 0 ]; then
-          echo "✓ Good symlink structure achieved!"
-        else
-          echo "⚠ Warning: Structure may still have issues"
-        fi
+        echo "✓ App bundle structure ready for signing"
         
     - name: Upload Fixed App as Artifact
       uses: actions/upload-artifact@v4
