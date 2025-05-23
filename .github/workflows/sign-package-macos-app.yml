@@ -265,8 +265,15 @@ jobs:
         echo "Cleanup completed. Proceeding with signing..."
         
         # Sign each framework/library/plugin individually first (like your shell script)
-        echo "Signing frameworks and libraries..."
+        echo "Signing frameworks and libraries in Frameworks directory..."
         find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
+          echo "Signing: $file"
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Warning: Failed to sign $file"
+        done
+        
+        # CRITICAL FIX: Also sign libraries in Resources directory
+        echo "Signing libraries in Resources directory..."
+        find dist/dmg/AV-Spex.app/Contents/Resources -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
           echo "Signing: $file"
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Warning: Failed to sign $file"
         done
