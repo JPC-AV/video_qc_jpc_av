@@ -211,6 +211,29 @@ jobs:
         cp -R "dist/AV-Spex.app" dist/dmg/
         chmod -R 755 dist/dmg/AV-Spex.app
         
+        # CRITICAL: Clean up files that cannot be signed AFTER copying to dmg folder
+        echo "Removing files that cannot be code-signed from DMG copy..."
+        
+        # Remove Qt translation files that cannot be signed
+        echo "Removing Qt translation files (.qm files)..."
+        find dist/dmg/AV-Spex.app/Contents -name "*.qm" -delete 2>/dev/null || true
+        QM_COUNT=$(find dist/dmg/AV-Spex.app/Contents -name "*.qm" | wc -l)
+        echo "Remaining .qm files after cleanup: $QM_COUNT"
+        
+        # Remove Info.plist files from frameworks
+        echo "Removing problematic framework Info.plist files..."
+        find dist/dmg/AV-Spex.app/Contents -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
+        find dist/dmg/AV-Spex.app/Contents -path "*/Qt*.framework/Info.plist" -delete 2>/dev/null || true
+        find dist/dmg/AV-Spex.app/Contents -path "*/Python.framework/Resources/Info.plist" -delete 2>/dev/null || true
+        find dist/dmg/AV-Spex.app/Contents -path "*/Python.framework/Info.plist" -delete 2>/dev/null || true
+        
+        # Remove pyproject.toml and other problematic files
+        find dist/dmg/AV-Spex.app/Contents -name "pyproject.toml" -delete 2>/dev/null || true
+        find dist/dmg/AV-Spex.app/Contents -name "*.csv*" -path "*/plotly/*" -delete 2>/dev/null || true
+        find dist/dmg/AV-Spex.app/Contents -name "plotly.min.js" -delete 2>/dev/null || true
+        
+        echo "Cleanup completed. Proceeding with signing..."
+        
         # Sign each framework/library/plugin individually first (like your shell script)
         echo "Signing frameworks and libraries..."
         find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
@@ -224,6 +247,18 @@ jobs:
           echo "Signing Python executable: $file"
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Warning: Failed to sign $file"
         done
+        
+        # Verify no .qm files remain before signing main executable
+        echo "Final verification - checking for remaining .qm files..."
+        QM_FINAL_COUNT=$(find dist/dmg/AV-Spex.app/Contents -name "*.qm" | wc -l)
+        if [ "$QM_FINAL_COUNT" -gt 0 ]; then
+          echo "WARNING: Found $QM_FINAL_COUNT remaining .qm files:"
+          find dist/dmg/AV-Spex.app/Contents -name "*.qm" | head -5
+          echo "Removing them now..."
+          find dist/dmg/AV-Spex.app/Contents -name "*.qm" -delete 2>/dev/null || true
+        else
+          echo "✓ No .qm files found - good for signing"
+        fi
         
         # Sign any other executables in MacOS folder (like your shell script)
         echo "Signing other executables..."
