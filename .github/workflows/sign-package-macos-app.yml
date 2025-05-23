@@ -220,6 +220,14 @@ jobs:
         QM_COUNT=$(find dist/dmg/AV-Spex.app/Contents -name "*.qm" | wc -l)
         echo "Remaining .qm files after cleanup: $QM_COUNT"
         
+        # Remove problematic Python framework that causes "unsealed contents" error
+        echo "Removing problematic Python frameworks..."
+        rm -rf dist/dmg/AV-Spex.app/Contents/Frameworks/Python.framework 2>/dev/null || true
+        rm -rf dist/dmg/AV-Spex.app/Contents/Resources/Python.framework 2>/dev/null || true
+        rm -f dist/dmg/AV-Spex.app/Contents/Frameworks/Python 2>/dev/null || true
+        rm -f dist/dmg/AV-Spex.app/Contents/Resources/Python 2>/dev/null || true
+        echo "Removed Python frameworks that were causing signing issues"
+        
         # Remove Info.plist files from frameworks
         echo "Removing problematic framework Info.plist files..."
         find dist/dmg/AV-Spex.app/Contents -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
