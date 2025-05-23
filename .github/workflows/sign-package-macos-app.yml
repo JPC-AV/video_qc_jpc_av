@@ -228,27 +228,27 @@ jobs:
         rm -f dist/dmg/AV-Spex.app/Contents/Resources/Python 2>/dev/null || true
         echo "Removed Python frameworks that were causing signing issues"
         
-        # Remove problematic Qt framework top-level binaries that cause "unsealed contents"
-        echo "Removing problematic Qt framework top-level binaries..."
+        # Remove problematic Qt frameworks entirely that cause "unsealed contents"
+        echo "Removing problematic Qt frameworks entirely..."
         QT_FRAMEWORKS="QtCore QtGui QtWidgets QtNetwork QtSvg QtDBus QtPdf"
-        for framework in $QT_FRAMEWORKS; do
-          for location in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
-            framework_path="$location/PyQt6/Qt6/lib/${framework}.framework"
-            if [ -d "$framework_path" ]; then
-              # Remove top-level framework binary (keep only versioned ones)
-              if [ -f "$framework_path/$framework" ] && [ ! -L "$framework_path/$framework" ]; then
-                echo "Removing top-level Qt binary: $framework_path/$framework"
-                rm -f "$framework_path/$framework"
-              fi
-              # Remove any other loose files in framework root
-              find "$framework_path" -maxdepth 1 -type f -delete 2>/dev/null || true
-            fi
-          done
+        for location in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
+          if [ -d "$location/PyQt6/Qt6/lib" ]; then
+            echo "Removing Qt frameworks from $location/PyQt6/Qt6/lib"
+            for framework in $QT_FRAMEWORKS; do
+              rm -rf "$location/PyQt6/Qt6/lib/${framework}.framework" 2>/dev/null || true
+              echo "Removed $framework.framework"
+            done
+          fi
           # Also remove standalone Qt binaries
-          rm -f "dist/dmg/AV-Spex.app/Contents/Frameworks/$framework" 2>/dev/null || true
-          rm -f "dist/dmg/AV-Spex.app/Contents/Resources/$framework" 2>/dev/null || true
+          for framework in $QT_FRAMEWORKS; do
+            rm -f "$location/$framework" 2>/dev/null || true
+          done
         done
-        echo "Removed problematic Qt framework top-level binaries"
+        echo "Removed all problematic Qt frameworks"
+        
+        # Verify what's left in Qt lib directory
+        echo "Remaining contents in PyQt6/Qt6/lib:"
+        ls -la dist/dmg/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/lib/ 2>/dev/null || echo "Directory not found or empty"
         
         # Remove Info.plist files from frameworks
         echo "Removing problematic framework Info.plist files..."
