@@ -175,12 +175,13 @@ jobs:
         echo "Cleaning up problematic files..."
         find dist/dmg/AV-Spex.app/Contents -name "pyproject.toml" -delete 2>/dev/null || true
         
-        # Remove problematic Plotly data files that cause signing issues
-        echo "Removing problematic Plotly data files..."
-        find dist/dmg/AV-Spex.app/Contents -path "*/plotly/package_data/datasets/*" -name "*.csv*" -delete 2>/dev/null || true
-        find dist/dmg/AV-Spex.app/Contents -name "iris.csv.gz" -delete 2>/dev/null || true
-        find dist/dmg/AV-Spex.app/Contents -path "*/plotly/*" -name "*.min.js" -delete 2>/dev/null || true
-        # Keep templates and other essential plotly files
+        # Remove ALL Plotly data files that cause signing issues
+        echo "Removing ALL Plotly data files that cause signing issues..."
+        find dist/dmg/AV-Spex.app/Contents -path "*/plotly/package_data/*" -type f -delete 2>/dev/null || true
+        find dist/dmg/AV-Spex.app/Contents -name "*.json" -path "*/plotly/*" -delete 2>/dev/null || true
+        find dist/dmg/AV-Spex.app/Contents -name "*.csv*" -path "*/plotly/*" -delete 2>/dev/null || true
+        find dist/dmg/AV-Spex.app/Contents -name "*.js" -path "*/plotly/*" -delete 2>/dev/null || true
+        echo "Removed all plotly package data files (using CDN for JS anyway)"
         
         # Fix malformed Python framework - remove the top-level Python binary that's causing issues
         for location in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
@@ -265,54 +266,32 @@ jobs:
           sign_binary "$file" true
         done
         
-        # Phase 6: Try to sign the main app bundle without --deep first
+        # Phase 6: Sign the main app bundle
         echo "Phase 6: Signing main application bundle..."
         
-        # First, try to sign just the main executable separately with more specific error handling
-        echo "Pre-signing main executable..."
-        if codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app/Contents/MacOS/AV-Spex 2>&1 | tee /tmp/sign_log.txt; then
-          echo "✓ Main executable signed successfully"
-        else
-          echo "Main executable signing failed, checking error details..."
-          cat /tmp/sign_log.txt
-          
-          # Try to identify and remove the problematic files
-          if grep -q "plotly" /tmp/sign_log.txt; then
-            echo "Removing additional plotly files causing issues..."
-            find dist/dmg/AV-Spex.app/Contents -path "*/plotly/*" -name "*.js" -delete 2>/dev/null || true
-            find dist/dmg/AV-Spex.app/Contents -path "*/plotly/*" -name "*.json" -delete 2>/dev/null || true
-            find dist/dmg/AV-Spex.app/Contents -path "*/plotly/*" -name "*.csv*" -delete 2>/dev/null || true
-            
-            # Try signing the main executable again
-            codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app/Contents/MacOS/AV-Spex
-          fi
-        fi
-        
-        # Now try to sign the entire app bundle
+        # Don't try to sign the main executable separately - let the bundle signing handle it
+        echo "Signing the entire app bundle..."
         if codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app 2>&1 | tee /tmp/bundle_sign_log.txt; then
-          echo "✓ Standard signing successful"
+          echo "✓ App bundle signing successful"
         else
-          echo "Standard signing failed, checking error details..."
+          echo "App bundle signing failed, checking error details..."
           cat /tmp/bundle_sign_log.txt
           
-          # If it's a framework structure issue, try without the problematic frameworks
-          if grep -q "bundle format is ambiguous" /tmp/bundle_sign_log.txt; then
-            echo "Fixing framework structure issues..."
+          # If it's a plotly data file issue, try removing more files
+          if grep -q "plotly.*json\|plotly.*csv\|xgridoff\|plotly.*template" /tmp/bundle_sign_log.txt; then
+            echo "Removing additional plotly template files causing issues..."
+            find dist/dmg/AV-Spex.app/Contents -path "*/plotly/*" -name "*.json" -delete 2>/dev/null || true
+            find dist/dmg/AV-Spex.app/Contents -path "*/plotly/*" -name "*.csv" -delete 2>/dev/null || true
             
-            # Remove any remaining framework Info.plist files that cause ambiguity
-            find dist/dmg/AV-Spex.app/Contents/Frameworks -name "Info.plist" -delete 2>/dev/null || true
-            find dist/dmg/AV-Spex.app/Contents/Resources -name "Info.plist" -path "*/framework/*" -delete 2>/dev/null || true
-            
-            # Try with --deep flag
-            echo "Trying with --deep flag..."
-            if codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app; then
-              echo "✓ Deep signing successful"
+            # Try signing again
+            echo "Retrying app bundle signing after removing more plotly files..."
+            if codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app; then
+              echo "✓ App bundle signing successful after cleanup"
             else
-              echo "❌ Both signing attempts failed, but continuing..."
-              # Don't exit here, continue to create unsigned DMG
+              echo "❌ App bundle signing still failed, but continuing..."
             fi
           else
-            echo "❌ App bundle signing failed for other reasons, continuing..."
+            echo "❌ App bundle signing failed for other reasons, but continuing..."
           fi
         fi
         
