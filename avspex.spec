@@ -52,6 +52,28 @@ a = Analysis(['av_spex_launcher.py'],  # New launcher in root directory
         'PyQt6.QtGui',
         # Additional imports for macOS support
         'AppKit',
+        # Force include commonly lazy-loaded Python modules
+        '_datetime',
+        'mmap',
+        '_codecs_jp',
+        '_bz2',
+        '_ctypes',
+        'math',
+        '_codecs_iso2022',
+        '_scproxy',
+        '_md5',
+        '_sha1',
+        '_sha256',
+        '_sha512',
+        '_sha3',
+        '_blake2',
+        'select',
+        'fcntl',
+        'grp',
+        'pwd',
+        'resource',
+        'termios',
+        '_posixsubprocess',
     ],
     hookspath=[],
     hooksconfig={},
@@ -70,32 +92,39 @@ a = Analysis(['av_spex_launcher.py'],  # New launcher in root directory
     cipher=block_cipher
 )
 
-# Only filter out the specific files that cause signing issues, not entire modules
-print("Filtering only specific problematic files that cause signing issues...")
+# More aggressive filtering of problematic files
+print("Filtering problematic files that cause signing issues...")
 original_count = len(a.datas)
 
+# Remove problematic files more comprehensively
 a.datas = [
     (dest, source, kind) for dest, source, kind in a.datas
     if not any([
-        # Only remove the specific files that were causing signing problems
-        'iris.csv.gz' in dest,  # This specific file was in the error
-        'plotly.min.js' in dest and 'package_data' in dest,  # Large JS files that aren't needed with CDN
-        '/datasets/' in dest and '.csv' in dest and 'plotly' in dest,  # Dataset CSV files
-        # Keep templates and other essential files
+        # Remove specific files that cause signing problems
+        'iris.csv.gz' in dest,
+        'plotly.min.js' in dest and 'package_data' in dest,
+        '/datasets/' in dest and '.csv' in dest and 'plotly' in dest,
+        # Remove all JSON files from plotly package_data (we use CDN)
+        'package_data' in dest and 'plotly' in dest and dest.endswith('.json'),
+        # Remove large data files that aren't needed for core functionality
+        'package_data' in dest and 'plotly' in dest and any(ext in dest for ext in ['.csv', '.txt', '.dat']),
+        # Keep only essential plotly files
     ])
 ]
 
 new_count = len(a.datas)
 print(f"Removed {original_count - new_count} problematic data files")
 
-# Debug: Print plotly files being included
-print("Plotly files being included:")
-plotly_files = [(dest, source, kind) for dest, source, kind in a.datas if 'plotly' in dest.lower()]
-print(f"  Total plotly files: {len(plotly_files)}")
-for dest, source, kind in plotly_files[:10]:  # Show first 10
-    print(f"  {dest}")
-if len(plotly_files) > 10:
-    print(f"  ... and {len(plotly_files) - 10} more")
+# Force early creation of lib-dynload files by including them explicitly
+print("Ensuring lib-dynload modules are included upfront...")
+lib_dynload_modules = [
+    '_datetime', 'mmap', '_codecs_jp', '_bz2', '_ctypes', 'math',
+    '_codecs_iso2022', '_scproxy', '_md5', '_sha1', '_sha256', '_sha512',
+    '_sha3', '_blake2', 'select', 'fcntl', 'grp', 'pwd', 'resource',
+    'termios', '_posixsubprocess'
+]
+
+# These will be included in hiddenimports above, which should prevent lazy loading
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
