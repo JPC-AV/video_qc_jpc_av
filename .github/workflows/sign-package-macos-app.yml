@@ -29,14 +29,23 @@ jobs:
     - name: Set version
       run: |
         if [ -f "dist/version.txt" ]; then
-          echo "APP_VERSION=$(cat dist/version.txt)" >> $GITHUB_ENV
+          VERSION=$(cat dist/version.txt)
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Found version file with version: $VERSION"
         else
           # Fallback: extract version from pyproject.toml
           echo "Version file not found. Extracting from pyproject.toml..."
           VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Extracted version from pyproject.toml: $VERSION"
         fi
-        echo "Using version: ${{ env.APP_VERSION }}"
+        
+    - name: Verify downloaded artifacts
+      run: |
+        echo "Checking downloaded artifacts..."
+        ls -la dist/
+        ls -la dist/app_download/
+        echo "Using version: $APP_VERSION"
         
     - name: Prepare app bundle
       run: |
@@ -52,9 +61,16 @@ jobs:
           cp -R dist/app_download/AV-Spex.app dist/
         else
           echo "Couldn't find expected app structure, will try to use what we have"
+          echo "Contents of app_download:"
+          find dist/app_download -type d | head -10
           mkdir -p "dist/AV-Spex.app/Contents"
           cp -R dist/app_download/* "dist/AV-Spex.app/Contents/"
         fi
+        
+        # Verify the app bundle structure
+        echo "Verifying app bundle structure..."
+        ls -la dist/AV-Spex.app/Contents/
+        ls -la dist/AV-Spex.app/Contents/MacOS/
         
         # Create DMG preparation folder and copy app
         echo "Creating DMG preparation folder..."
@@ -62,9 +78,6 @@ jobs:
         cp -R "dist/AV-Spex.app" dist/dmg
         chmod -R 755 dist/dmg/AV-Spex.app
         
-    - name: Install create-dmg
-      run: brew install create-dmg
-      
     - name: Set up keychain
       env:
         CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
@@ -81,6 +94,9 @@ jobs:
         echo "$CERTIFICATE_BASE64" | base64 --decode > certificate.p12
         security import certificate.p12 -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
         security list-keychain -d user -s $KEYCHAIN_PATH
+        
+        # Verify certificate was imported
+        security find-identity -v $KEYCHAIN_PATH
         
         # Delete the certificate file
         rm certificate.p12
@@ -118,6 +134,7 @@ jobs:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
         echo "Starting comprehensive code signing process..."
+        echo "Using Developer ID: $DEVELOPER_ID"
         
         # Function to sign a binary file
         sign_binary() {
@@ -140,9 +157,17 @@ jobs:
           
           echo "Signing: $file"
           if [ "$use_entitlements" = "true" ]; then
-            codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file" 2>/dev/null || echo "Failed to sign $file"
+            if codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"; then
+              echo "✓ Successfully signed: $file"
+            else
+              echo "❌ Failed to sign: $file"
+            fi
           else
-            codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" 2>/dev/null || echo "Failed to sign $file"
+            if codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file"; then
+              echo "✓ Successfully signed: $file"
+            else
+              echo "❌ Failed to sign: $file"
+            fi
           fi
         }
         
@@ -187,7 +212,7 @@ jobs:
         for framework in $QT_FRAMEWORKS; do
           for base_path in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
             # Sign only the versioned framework binaries (Versions/A/QtXxx and Versions/Current/QtXxx)
-            find "$base_path" -path "*/${framework}.framework/Versions/*/${framework}" -type f | while read file; do
+            find "$base_path" -path "*/${framework}.framework/Versions/*/${framework}" -type f 2>/dev/null | while read file; do
               sign_binary "$file" false
             done
             
@@ -202,7 +227,7 @@ jobs:
         echo "Phase 4: Signing Python framework versioned binaries..."
         for base_path in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
           # Sign versioned Python binaries
-          find "$base_path" -path "*/Python.framework/Versions/*/Python" -type f | while read file; do
+          find "$base_path" -path "*/Python.framework/Versions/*/Python" -type f 2>/dev/null | while read file; do
             sign_binary "$file" false
           done
           
@@ -214,40 +239,58 @@ jobs:
         
         # Phase 5: Sign main executable with entitlements
         echo "Phase 5: Signing main executables..."
-        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
+        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 2>/dev/null | while read file; do
           sign_binary "$file" true
         done
         
         # Phase 6: Try to sign the main app bundle without --deep first
         echo "Phase 6: Signing main application bundle..."
-        if ! codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app 2>/dev/null; then
+        if codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app; then
+          echo "✓ Standard signing successful"
+        else
           echo "Standard signing failed, trying with --deep flag..."
-          codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app
+          if codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app; then
+            echo "✓ Deep signing successful"
+          else
+            echo "❌ Both signing attempts failed"
+            exit 1
+          fi
         fi
         
         # Verify the signature
         echo "Verifying code signature..."
-        if codesign --verify --deep --verbose dist/dmg/AV-Spex.app 2>/dev/null; then
+        if codesign --verify --deep --verbose dist/dmg/AV-Spex.app; then
           echo "✓ Code signature verification successful"
         else
-          echo "⚠ Code signature verification failed, but continuing..."
+          echo "⚠ Code signature verification failed"
           # Try to get more details about what failed
           codesign --verify --verbose=4 dist/dmg/AV-Spex.app 2>&1 || true
+          echo "Continuing despite verification failure..."
         fi
         
         # Create DMG
         echo "Creating DMG with hdiutil..."
-        hdiutil create -volname "AV-Spex ${{ env.APP_VERSION }}" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        if hdiutil create -volname "AV-Spex $APP_VERSION" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-$APP_VERSION.dmg"; then
+          echo "✓ DMG creation successful"
+        else
+          echo "❌ DMG creation failed"
+          exit 1
+        fi
           
         # Sign the DMG
         echo "Signing DMG..."
-        codesign --force --timestamp --sign "$DEVELOPER_ID" "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+        if codesign --force --timestamp --sign "$DEVELOPER_ID" "dist/AV-Spex-$APP_VERSION.dmg"; then
+          echo "✓ DMG signing successful"
+        else
+          echo "❌ DMG signing failed"
+          exit 1
+        fi
         
     - name: Notarize DMG with detailed logs
       run: |
         # Submit for notarization
         echo "Submitting DMG for notarization..."
-        SUBMISSION_ID=$(xcrun notarytool submit "dist/AV-Spex-${{ env.APP_VERSION }}.dmg" \
+        SUBMISSION_ID=$(xcrun notarytool submit "dist/AV-Spex-$APP_VERSION.dmg" \
           --keychain-profile "GITHUB_ACTIONS_PROFILE" \
           --wait --timeout 1800 | grep "id:" | head -1 | awk '{print $2}')
         
@@ -262,7 +305,7 @@ jobs:
         
         if [ "$STATUS" = "Accepted" ]; then
           echo "Notarization successful, stapling ticket..."
-          xcrun stapler staple "dist/AV-Spex-${{ env.APP_VERSION }}.dmg"
+          xcrun stapler staple "dist/AV-Spex-$APP_VERSION.dmg"
         else
           echo "Notarization failed with status: $STATUS"
           echo "Will continue to upload unsigned DMG as artifact"
