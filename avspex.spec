@@ -1,4 +1,4 @@
-# avspex.spec
+# avspex.spec - Hybrid approach: Include Plotly normally, handle problematic files during signing
 import os
 from pathlib import Path
 
@@ -58,12 +58,45 @@ a = Analysis(['av_spex_launcher.py'],  # New launcher in root directory
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # Only exclude Qt modules we definitely don't need
         'PyQt6.QtDBus', 'PyQt6.QtPdf', 'PyQt6.QtSvg', 'PyQt6.QtNetwork',
-        'plotly.matplotlylib', 'plotly.figure_factory'
+        # Only exclude clearly unnecessary plotly modules
+        'plotly.matplotlylib', 
+        'plotly.figure_factory',
+        'plotly.io.orca',
+        'plotly.io.kaleido',
+        # Let PyInstaller handle the rest of plotly automatically
     ],
     noarchive=False,
     cipher=block_cipher
 )
+
+# Only filter out the specific files that cause signing issues, not entire modules
+print("Filtering only specific problematic files that cause signing issues...")
+original_count = len(a.datas)
+
+a.datas = [
+    (dest, source, kind) for dest, source, kind in a.datas
+    if not any([
+        # Only remove the specific files that were causing signing problems
+        'iris.csv.gz' in dest,  # This specific file was in the error
+        'plotly.min.js' in dest and 'package_data' in dest,  # Large JS files that aren't needed with CDN
+        '/datasets/' in dest and '.csv' in dest and 'plotly' in dest,  # Dataset CSV files
+        # Keep templates and other essential files
+    ])
+]
+
+new_count = len(a.datas)
+print(f"Removed {original_count - new_count} problematic data files")
+
+# Debug: Print plotly files being included
+print("Plotly files being included:")
+plotly_files = [(dest, source, kind) for dest, source, kind in a.datas if 'plotly' in dest.lower()]
+print(f"  Total plotly files: {len(plotly_files)}")
+for dest, source, kind in plotly_files[:10]:  # Show first 10
+    print(f"  {dest}")
+if len(plotly_files) > 10:
+    print(f"  ... and {len(plotly_files) - 10} more")
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -116,5 +149,9 @@ app = BUNDLE(coll,
         'LSUIElement': False,
         'LSBackgroundOnly': False,
         'CFBundleIconFile': 'av_spex_the_logo.icns',
+        # Add signing-friendly properties
+        'CFBundleSupportedPlatforms': ['MacOSX'],
+        'DTSDKName': 'macosx',
+        'LSRequiresIPhoneOS': False,
     }
 )
