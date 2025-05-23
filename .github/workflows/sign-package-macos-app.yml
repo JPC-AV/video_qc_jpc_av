@@ -248,6 +248,62 @@ jobs:
           codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Warning: Failed to sign $file"
         done
         
+        # Sign Python framework components specifically
+        echo "Signing Python framework components..."
+        for location in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
+          if [ -d "$location/Python.framework" ]; then
+            echo "Signing Python framework in $location"
+            
+            # Sign versioned Python binaries first
+            find "$location/Python.framework/Versions" -name "Python" -type f | while read pybin; do
+              echo "Signing Python binary: $pybin"
+              codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$pybin" || echo "Warning: Failed to sign $pybin"
+            done
+            
+            # Remove or sign any loose files in the framework root
+            if [ -f "$location/Python.framework/Python" ] && [ ! -L "$location/Python.framework/Python" ]; then
+              echo "Signing top-level Python framework binary: $location/Python.framework/Python"
+              codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$location/Python.framework/Python" || echo "Warning: Failed to sign framework root Python"
+            fi
+            
+            # Clean up any problematic files in framework root
+            find "$location/Python.framework" -maxdepth 1 -type f -name "*.dylib" | while read dylib; do
+              echo "Signing framework dylib: $dylib"
+              codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$dylib" || echo "Warning: Failed to sign $dylib"
+            done
+          fi
+        done
+        
+        # Sign Qt framework components specifically
+        echo "Signing Qt framework components..."
+        QT_FRAMEWORKS="QtCore QtGui QtWidgets QtNetwork QtSvg QtDBus QtPdf"
+        for framework in $QT_FRAMEWORKS; do
+          for location in "dist/dmg/AV-Spex.app/Contents/Frameworks" "dist/dmg/AV-Spex.app/Contents/Resources"; do
+            framework_path="$location/PyQt6/Qt6/lib/${framework}.framework"
+            if [ -d "$framework_path" ]; then
+              echo "Signing Qt framework: $framework_path"
+              
+              # Sign versioned binaries
+              find "$framework_path/Versions" -name "$framework" -type f | while read qtbin; do
+                echo "Signing Qt binary: $qtbin"
+                codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$qtbin" || echo "Warning: Failed to sign $qtbin"
+              done
+              
+              # Sign top-level binary if it exists and isn't a symlink
+              if [ -f "$framework_path/$framework" ] && [ ! -L "$framework_path/$framework" ]; then
+                echo "Signing top-level Qt binary: $framework_path/$framework"
+                codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$framework_path/$framework" || echo "Warning: Failed to sign $qtbin"
+              fi
+              
+              # Clean up any other loose files
+              find "$framework_path" -maxdepth 1 -type f -name "*.dylib" | while read dylib; do
+                echo "Signing Qt framework dylib: $dylib"
+                codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$dylib" || echo "Warning: Failed to sign $dylib"
+              done
+            fi
+          done
+        done
+        
         # Verify no .qm files remain before signing main executable
         echo "Final verification - checking for remaining .qm files..."
         QM_FINAL_COUNT=$(find dist/dmg/AV-Spex.app/Contents -name "*.qm" | wc -l)
