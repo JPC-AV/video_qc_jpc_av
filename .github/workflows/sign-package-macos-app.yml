@@ -389,3 +389,24 @@ jobs:
           echo "❌ DMG signing failed"
           exit 1
         fi
+        
+    - name: Upload signed app as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AV-Spex-Signed-App
+        path: dist/dmg/AV-Spex.app/
+        
+    - name: Upload DMG as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AV-Spex-DMG
+        path: dist/AV-Spex-${{ env.APP_VERSION }}.dmg
+        
+    - name: Attach to Release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/AV-Spex-${{ env.APP_VERSION }}.dmg
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
