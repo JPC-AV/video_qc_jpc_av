@@ -40,11 +40,11 @@ jobs:
           echo "Extracted version from pyproject.toml: $VERSION"
         fi
         
-    - name: Prepare app bundle and finalize PyInstaller
+    - name: Fix PyInstaller app bundle structure
       run: |
-        echo "Preparing app bundle..."
+        echo "Fixing PyInstaller app bundle structure..."
         
-        # See if Contents folder is at the root or inside an .app bundle
+        # Extract the app bundle
         if [ -d "dist/app_download/Contents" ]; then
           echo "Found Contents folder at root of artifact"
           mkdir -p "dist/AV-Spex.app"
@@ -53,45 +53,99 @@ jobs:
           echo "Found AV-Spex.app directory inside artifact"
           cp -R dist/app_download/AV-Spex.app dist/
         else
-          echo "Couldn't find expected app structure, will try to use what we have"
-          echo "Contents of app_download:"
-          find dist/app_download -type d | head -10
-          mkdir -p "dist/AV-Spex.app/Contents"
-          cp -R dist/app_download/* "dist/AV-Spex.app/Contents/"
+          echo "Couldn't find expected app structure"
+          exit 1
         fi
         
-        # CRITICAL: Trigger PyInstaller to create any remaining files by running the app briefly
-        echo "Triggering PyInstaller lazy loading to create all files..."
-        export PYTHONPATH="$(pwd)"
-        timeout 15s dist/AV-Spex.app/Contents/MacOS/AV-Spex --help > /dev/null 2>&1 || echo "App initialization completed (timeout expected)"
+        echo "=== CRITICAL: Fixing PyInstaller's broken app bundle structure ==="
         
-        # Wait a moment for any file system operations to complete
-        sleep 2
+        # PyInstaller incorrectly duplicates content between Frameworks and Resources
+        # We need to keep only one copy and put things in the right places
         
-        # Now clean up problematic files that cause signing issues
-        echo "Cleaning up problematic files after PyInstaller finalization..."
-        find dist/AV-Spex.app/Contents -name "pyproject.toml" -delete 2>/dev/null || true
+        # 1. Remove duplicate Python modules from Frameworks (keep in Resources)
+        echo "Removing duplicate Python modules from Frameworks..."
+        rm -rf "dist/AV-Spex.app/Contents/Frameworks/AV_Spex" 2>/dev/null || true
+        rm -rf "dist/AV-Spex.app/Contents/Frameworks/AppKit" 2>/dev/null || true
+        rm -rf "dist/AV-Spex.app/Contents/Frameworks/CoreFoundation" 2>/dev/null || true
+        rm -rf "dist/AV-Spex.app/Contents/Frameworks/Foundation" 2>/dev/null || true
+        rm -rf "dist/AV-Spex.app/Contents/Frameworks/objc" 2>/dev/null || true
+        rm -rf "dist/AV-Spex.app/Contents/Frameworks/lxml" 2>/dev/null || true
+        rm -rf "dist/AV-Spex.app/Contents/Frameworks/plotly" 2>/dev/null || true
+        rm -rf "dist/AV-Spex.app/Contents/Frameworks/av_spex-"* 2>/dev/null || true
+        rm -f "dist/AV-Spex.app/Contents/Frameworks/pyproject.toml" 2>/dev/null || true
         
-        # Remove ALL Plotly data files that cause signing issues
-        echo "Removing ALL Plotly data files that cause signing issues..."
-        find dist/AV-Spex.app/Contents -path "*/plotly/package_data/*" -type f -delete 2>/dev/null || true
-        find dist/AV-Spex.app/Contents -name "*.json" -path "*/plotly/*" -delete 2>/dev/null || true
-        find dist/AV-Spex.app/Contents -name "*.csv*" -path "*/plotly/*" -delete 2>/dev/null || true
-        find dist/AV-Spex.app/Contents -name "*.js" -path "*/plotly/*" -delete 2>/dev/null || true
-        echo "Removed all plotly package data files"
+        # 2. Move base_library.zip from Frameworks to Resources (if it exists)
+        if [ -f "dist/AV-Spex.app/Contents/Frameworks/base_library.zip" ]; then
+          echo "Moving base_library.zip from Frameworks to Resources..."
+          mv "dist/AV-Spex.app/Contents/Frameworks/base_library.zip" "dist/AV-Spex.app/Contents/Resources/" 2>/dev/null || true
+        fi
         
-        # Verify the app bundle structure
-        echo "Verifying app bundle structure..."
-        ls -la dist/AV-Spex.app/Contents/
-        ls -la dist/AV-Spex.app/Contents/MacOS/
+        # 3. Move lib-dynload from Frameworks to Resources
+        if [ -d "dist/AV-Spex.app/Contents/Frameworks/lib-dynload" ]; then
+          echo "Moving lib-dynload from Frameworks to Resources..."
+          rm -rf "dist/AV-Spex.app/Contents/Resources/lib-dynload" 2>/dev/null || true
+          mv "dist/AV-Spex.app/Contents/Frameworks/lib-dynload" "dist/AV-Spex.app/Contents/Resources/" 2>/dev/null || true
+        fi
         
-        # Set proper permissions
-        chmod -R 755 dist/AV-Spex.app
+        # 4. Fix Qt frameworks - remove Info.plist files that make them look like app bundles
+        echo "Fixing Qt framework structures..."
+        find "dist/AV-Spex.app/Contents" -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
+        find "dist/AV-Spex.app/Contents" -path "*/Qt*.framework/Info.plist" -delete 2>/dev/null || true
         
-        # Create a complete file manifest before signing
-        echo "Creating file manifest for verification..."
-        find dist/AV-Spex.app -type f > /tmp/app_files_before_signing.txt
-        echo "Total files before signing: $(wc -l < /tmp/app_files_before_signing.txt)"
+        # 5. Remove problematic top-level framework binaries (keep only versioned ones)
+        QT_FRAMEWORKS="QtCore QtGui QtWidgets QtNetwork QtSvg QtDBus QtPdf"
+        for framework in $QT_FRAMEWORKS; do
+          # Remove top-level framework binary (keep versioned ones)
+          find "dist/AV-Spex.app/Contents" -path "*/${framework}.framework/${framework}" -not -path "*/Versions/*" -delete 2>/dev/null || true
+          # Remove standalone Qt binaries in Frameworks root
+          rm -f "dist/AV-Spex.app/Contents/Frameworks/${framework}" 2>/dev/null || true
+        done
+        
+        # 6. Fix Python framework structure
+        for location in "dist/AV-Spex.app/Contents/Frameworks" "dist/AV-Spex.app/Contents/Resources"; do
+          if [ -d "$location/Python.framework" ]; then
+            echo "Fixing Python framework in $location"
+            # Remove Info.plist files
+            rm -f "$location/Python.framework/Info.plist" 2>/dev/null || true
+            rm -f "$location/Python.framework/Resources/Info.plist" 2>/dev/null || true
+            # Remove top-level Python binary if it's not a symlink
+            if [ -f "$location/Python.framework/Python" ] && [ ! -L "$location/Python.framework/Python" ]; then
+              rm -f "$location/Python.framework/Python"
+            fi
+            # Remove standalone Python binary
+            rm -f "$location/Python" 2>/dev/null || true
+            # Create proper symlink if needed
+            if [ -f "$location/Python.framework/Versions/Current/Python" ] && [ ! -L "$location/Python.framework/Python" ]; then
+              ln -sf "Versions/Current/Python" "$location/Python.framework/Python"
+            fi
+          fi
+        done
+        
+        # 7. Remove problematic plotly files
+        echo "Removing problematic plotly files..."
+        find "dist/AV-Spex.app/Contents" -path "*/plotly/package_data/*" -type f -delete 2>/dev/null || true
+        find "dist/AV-Spex.app/Contents" -name "*.json" -path "*/plotly/*" -delete 2>/dev/null || true
+        find "dist/AV-Spex.app/Contents" -name "*.csv*" -path "*/plotly/*" -delete 2>/dev/null || true
+        find "dist/AV-Spex.app/Contents" -name "*.js" -path "*/plotly/*" -delete 2>/dev/null || true
+        
+        # 8. Remove any remaining pyproject.toml files
+        find "dist/AV-Spex.app/Contents" -name "pyproject.toml" -delete 2>/dev/null || true
+        
+        # 9. Set proper permissions
+        chmod -R 755 "dist/AV-Spex.app"
+        
+        echo "=== App bundle structure fixed ==="
+        echo "Final structure check:"
+        echo "Frameworks contents:"
+        ls -la "dist/AV-Spex.app/Contents/Frameworks/" | head -10
+        echo "Resources contents:"  
+        ls -la "dist/AV-Spex.app/Contents/Resources/" | head -10
+        echo "MacOS contents:"
+        ls -la "dist/AV-Spex.app/Contents/MacOS/"
+        
+        # Create file manifest for debugging
+        find "dist/AV-Spex.app" -type f > /tmp/app_files_after_fix.txt
+        echo "Total files after structure fix: $(wc -l < /tmp/app_files_after_fix.txt)"
         
     - name: Set up keychain
       env:
@@ -144,77 +198,44 @@ jobs:
         </plist>
         EOF
         
-    - name: Sign app bundle with streamlined approach
+    - name: Code sign app bundle (based on working shell script)
       env:
         DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
       run: |
-        echo "Starting streamlined code signing process..."
+        echo "Starting code signing process (based on working shell script)..."
         echo "Using Developer ID: $DEVELOPER_ID"
         
-        # Fix framework structure issues that cause "bundle format is ambiguous" errors
-        echo "Fixing framework structures..."
+        # Create DMG preparation folder and copy app
+        echo "Creating DMG preparation folder..."
+        mkdir -p dist/dmg
+        cp -R "dist/AV-Spex.app" dist/dmg/
+        chmod -R 755 dist/dmg/AV-Spex.app
         
-        # Fix Python framework - remove problematic top-level binaries
-        for location in "dist/AV-Spex.app/Contents/Frameworks" "dist/AV-Spex.app/Contents/Resources"; do
-          if [ -f "$location/Python.framework/Python" ] && [ ! -L "$location/Python.framework/Python" ]; then
-            echo "Removing problematic Python framework binary: $location/Python.framework/Python"
-            rm -f "$location/Python.framework/Python"
-          fi
-          
-          # Remove Info.plist files that make frameworks look like app bundles
-          rm -f "$location/Python.framework/Info.plist" 2>/dev/null || true
-          rm -f "$location/Python.framework/Resources/Info.plist" 2>/dev/null || true
-          
-          # Ensure proper symlink structure
-          if [ -f "$location/Python.framework/Versions/Current/Python" ] && [ ! -L "$location/Python.framework/Python" ]; then
-            echo "Creating proper symlink for Python framework"
-            ln -sf "Versions/Current/Python" "$location/Python.framework/Python"
-          fi
+        # Sign each framework/library/plugin individually first (like your shell script)
+        echo "Signing frameworks and libraries..."
+        find dist/dmg/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) | while read file; do
+          echo "Signing: $file"
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Warning: Failed to sign $file"
         done
         
-        # Fix Qt frameworks - remove problematic top-level binaries
-        QT_FRAMEWORKS="QtCore QtGui QtWidgets QtNetwork QtSvg QtDBus QtPdf"
-        for framework in $QT_FRAMEWORKS; do
-          for location in "dist/AV-Spex.app/Contents/Frameworks" "dist/AV-Spex.app/Contents/Resources"; do
-            framework_binary="$location/PyQt6/Qt6/lib/${framework}.framework/${framework}"
-            if [ -f "$framework_binary" ] && [ ! -L "$framework_binary" ]; then
-              echo "Removing problematic Qt framework binary: $framework_binary"
-              rm -f "$framework_binary"
-            fi
-          done
+        # Sign Python executables (like your shell script)
+        echo "Signing Python executables..."
+        find dist/dmg/AV-Spex.app/Contents -type f -name "python*" | while read file; do
+          echo "Signing Python executable: $file"
+          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Warning: Failed to sign $file"
         done
         
-        # Sign in proper order: leaf binaries first, then the main bundle
-        echo "Signing leaf binaries first..."
-        
-        # Sign all .so files (Python extensions)
-        find dist/AV-Spex.app/Contents -name "*.so" -type f | while read file; do
-          echo "Signing .so: $file"
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file"
+        # Sign any other executables in MacOS folder (like your shell script)
+        echo "Signing other executables..."
+        find dist/dmg/AV-Spex.app/Contents/MacOS -type f -perm +111 | while read file; do
+          echo "Signing executable: $file"
+          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "$file"
         done
         
-        # Sign all .dylib files
-        find dist/AV-Spex.app/Contents -name "*.dylib" -type f | while read file; do
-          echo "Signing .dylib: $file"
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file"
-        done
-        
-        # Sign framework versioned binaries (not symlinks or top-level binaries)
-        find dist/AV-Spex.app/Contents -path "*/Versions/*/Python" -type f | while read file; do
-          echo "Signing Python framework binary: $file"
-          codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$file" || echo "Failed to sign $file"
-        done
-        
-        # Sign the main executable
-        if [ -f "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ]; then
-          echo "Signing main executable..."
-          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
-        fi
-        
-        # Final step: Sign the entire app bundle
-        echo "Signing the entire app bundle..."
-        if codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/AV-Spex.app; then
-          echo "✓ App bundle signing successful"
+        # Sign the main app bundle with entitlements (like your shell script)
+        echo "Signing main application bundle..."
+        if codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$DEVELOPER_ID" dist/dmg/AV-Spex.app; then
+          echo "✓ App bundle signed successfully"
         else
           echo "❌ App bundle signing failed"
           exit 1
@@ -222,78 +243,28 @@ jobs:
         
         # Verify the signature
         echo "Verifying code signature..."
-        if codesign --verify --deep --verbose dist/AV-Spex.app; then
+        if codesign --verify --deep --verbose dist/dmg/AV-Spex.app; then
           echo "✓ Code signature verification successful"
         else
           echo "❌ Code signature verification failed"
-          codesign --verify --verbose=4 dist/AV-Spex.app 2>&1 || true
+          codesign --verify --verbose=4 dist/dmg/AV-Spex.app 2>&1 || true
           exit 1
         fi
         
-        # Create DMG preparation folder
-        echo "Creating DMG preparation folder..."
-        mkdir -p dist/dmg
-        cp -R "dist/AV-Spex.app" dist/dmg/
-        
-        # Create DMG
-        echo "Creating DMG with hdiutil..."
+        # Create DMG using hdiutil (simpler than create-dmg for GitHub Actions)
+        echo "Creating DMG..."
         if hdiutil create -volname "AV-Spex $APP_VERSION" -srcfolder dist/dmg -ov -format UDZO "dist/AV-Spex-$APP_VERSION.dmg"; then
-          echo "✓ DMG creation successful"
+          echo "✓ DMG created successfully"
         else
           echo "❌ DMG creation failed"
           exit 1
         fi
           
-        # Sign the DMG
+        # Sign the DMG (like your shell script)
         echo "Signing DMG..."
         if codesign --force --timestamp --sign "$DEVELOPER_ID" "dist/AV-Spex-$APP_VERSION.dmg"; then
-          echo "✓ DMG signing successful"
+          echo "✓ DMG signed successfully"
         else
           echo "❌ DMG signing failed"
           exit 1
         fi
-        
-    - name: Notarize DMG
-      run: |
-        echo "Submitting DMG for notarization..."
-        
-        # Submit for notarization and wait
-        if xcrun notarytool submit "dist/AV-Spex-$APP_VERSION.dmg" \
-          --keychain-profile "GITHUB_ACTIONS_PROFILE" \
-          --wait --timeout 1800; then
-          
-          echo "Notarization successful, stapling ticket..."
-          xcrun stapler staple "dist/AV-Spex-$APP_VERSION.dmg"
-          echo "✓ Notarization and stapling completed successfully"
-        else
-          echo "❌ Notarization failed"
-          
-          # Get the submission ID from recent submissions to see the log
-          SUBMISSION_ID=$(xcrun notarytool history --keychain-profile "GITHUB_ACTIONS_PROFILE" | head -3 | tail -1 | awk '{print $1}')
-          if [ ! -z "$SUBMISSION_ID" ]; then
-            echo "Getting notarization log for submission: $SUBMISSION_ID"
-            xcrun notarytool log $SUBMISSION_ID --keychain-profile "GITHUB_ACTIONS_PROFILE" || true
-          fi
-          exit 1
-        fi
-        
-    - name: Upload signed app as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: AV-Spex-Signed-App
-        path: dist/dmg/AV-Spex.app/
-        
-    - name: Upload DMG as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: AV-Spex-DMG
-        path: dist/AV-Spex-${{ env.APP_VERSION }}.dmg
-        
-    - name: Attach to Release
-      if: github.event_name == 'release'
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          dist/AV-Spex-${{ env.APP_VERSION }}.dmg
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
