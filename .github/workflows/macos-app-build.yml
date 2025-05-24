@@ -1,13 +1,18 @@
 name: Build macOS App
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:  # This allows manual triggering as needed
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual triggering
 
 jobs:
   build-macos:
     runs-on: macos-latest
+    
+    outputs:
+      version: ${{ steps.get_version.outputs.VERSION }}
     
     steps:
     - name: Checkout code
@@ -16,184 +21,71 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'  # Adjust this to match your project's Python version
+        python-version: '3.11'
         
-    - name: Install system dependencies
-      run: |
-        # Install create-dmg for later use
-        brew install create-dmg
+    - name: Cache Python dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
         
-    - name: Install Python dependencies
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Install your package in development mode
-        pip install -e .
-        # Install PyInstaller and build dependencies
         pip install pyinstaller
-        # Install PyQt6 explicitly
-        pip install PyQt6
-        # Install macOS-specific dependencies
-        pip install pyobjc-core pyobjc-framework-Cocoa
+        pip install -e .
         
-        # List installed packages for debugging
-        pip list
-        
-    - name: Verify spec file and dependencies
-      run: |
-        # Check if spec file exists
-        ls -la avspex.spec
-        # Check if icon file exists
-        ls -la av_spex_the_logo.icns
-        # Check if launcher exists
-        ls -la av_spex_launcher.py
-        
-    - name: Build macOS App with PyInstaller (minimal changes)
-      run: |
-        echo "Starting PyInstaller build..."
-        # Run PyInstaller to build the app (this should create proper symlinks naturally)
-        pyinstaller --clean avspex.spec
-        
-        echo "Build completed. Checking output..."
-        # Verify the app bundle was created correctly
-        ls -la dist/
-        
-        if [ ! -d "dist/AV-Spex.app" ]; then
-          echo "ERROR: AV-Spex.app directory not found!"
-          echo "Contents of dist/:"
-          find dist/ -type d
-          exit 1
-        fi
-        
-        echo "App bundle created successfully. Checking structure..."
-        ls -la dist/AV-Spex.app/Contents/
-        
-        # Check if we have the proper symlink structure (like your working version)
-        echo "Checking for symlinks in Frameworks:"
-        ls -la dist/AV-Spex.app/Contents/Frameworks/ | grep "^l" | head -5 || echo "No symlinks found in Frameworks"
-        
-        echo "Checking for symlinks in Resources:"
-        ls -la dist/AV-Spex.app/Contents/Resources/ | grep "^l" | head -5 || echo "No symlinks found in Resources"
-        
-        # Ensure proper permissions
-        chmod -R 755 dist/AV-Spex.app
-        
-        # Verify the main executable exists and is executable
-        if [ -f "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ]; then
-          echo "✓ Main executable found and verified"
-          file dist/AV-Spex.app/Contents/MacOS/AV-Spex
-          ls -la dist/AV-Spex.app/Contents/MacOS/
-        else
-          echo "ERROR: Main executable not found!"
-          echo "Contents of MacOS directory:"
-          ls -la dist/AV-Spex.app/Contents/MacOS/ || echo "MacOS directory doesn't exist"
-          echo "Searching for executables..."
-          find dist/AV-Spex.app -name "*AV-Spex*" -type f
-          exit 1
-        fi
-        
-        # Verify Info.plist was created correctly
-        if [ -f "dist/AV-Spex.app/Contents/Info.plist" ]; then
-          echo "✓ Info.plist found"
-        else
-          echo "WARNING: Info.plist not found"
-        fi
-        
-        # Test that the app can at least start (basic smoke test)
-        echo "Running basic smoke test..."
-        timeout 10s dist/AV-Spex.app/Contents/MacOS/AV-Spex --help > /dev/null 2>&1 || echo "App help test completed (timeout expected)"
-        
-        echo "✓ Build completed successfully"
-        
-    - name: Minimal fixes only if needed
-      run: |
-        echo "Checking if PyInstaller created proper structure..."
-        
-        # Check if we already have a good structure with symlinks
-        SYMLINK_COUNT=$(find dist/AV-Spex.app/Contents -type l | wc -l)
-        echo "Found $SYMLINK_COUNT symlinks in app bundle"
-        
-        if [ "$SYMLINK_COUNT" -gt 10 ]; then
-          echo "✓ Good symlink structure detected, minimal fixes needed"
-          
-          # Only do essential fixes for signing
-          echo "Applying minimal fixes for code signing..."
-          
-          # Remove only the most problematic files
-          find dist/AV-Spex.app/Contents -name "pyproject.toml" -delete 2>/dev/null || true
-          
-          # Remove Qt framework Info.plist files that cause "bundle format is ambiguous"
-          find dist/AV-Spex.app/Contents -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
-          find dist/AV-Spex.app/Contents -path "*/Qt*.framework/Info.plist" -delete 2>/dev/null || true
-          
-          # Remove Python framework Info.plist files
-          find dist/AV-Spex.app/Contents -path "*/Python.framework/Resources/Info.plist" -delete 2>/dev/null || true
-          find dist/AV-Spex.app/Contents -path "*/Python.framework/Info.plist" -delete 2>/dev/null || true
-          
-          echo "✓ Minimal fixes applied"
-        else
-          echo "⚠ Poor symlink structure detected, need more extensive fixes"
-          
-          # If PyInstaller didn't create proper symlinks, we need to fix manually
-          # This shouldn't happen with the corrected spec file, but just in case
-          
-          echo "Applying extensive structure fixes..."
-          
-          cd dist/AV-Spex.app/Contents
-          
-          # Move duplicated content and create symlinks
-          if [ -d "Frameworks/AV_Spex" ] && [ -d "Resources/AV_Spex" ]; then
-            rm -rf Frameworks/AV_Spex
-            ln -sf ../Resources/AV_Spex Frameworks/AV_Spex
-            echo "✓ Fixed AV_Spex duplication"
-          fi
-          
-          if [ -f "Frameworks/base_library.zip" ] && [ -f "Resources/base_library.zip" ]; then
-            rm -f Frameworks/base_library.zip
-            ln -sf ../Resources/base_library.zip Frameworks/base_library.zip
-            echo "✓ Fixed base_library.zip duplication"
-          fi
-          
-          # Apply the same minimal fixes as above
-          find . -name "pyproject.toml" -delete 2>/dev/null || true
-          find . -path "*/Qt*.framework/Resources/Info.plist" -delete 2>/dev/null || true
-          find . -path "*/Qt*.framework/Info.plist" -delete 2>/dev/null || true
-          find . -path "*/Python.framework/Resources/Info.plist" -delete 2>/dev/null || true
-          find . -path "*/Python.framework/Info.plist" -delete 2>/dev/null || true
-          
-          cd ../../..
-          
-          echo "✓ Extensive fixes applied"
-        fi
-        
-        # Set proper permissions
-        chmod -R 755 dist/AV-Spex.app
-        
-        # Final verification
-        echo "Final structure verification:"
-        echo "Frameworks symlinks:"
-        ls -la dist/AV-Spex.app/Contents/Frameworks/ | grep "^l" | head -3 || echo "No symlinks in Frameworks"
-        echo "Resources symlinks:"  
-        ls -la dist/AV-Spex.app/Contents/Resources/ | grep "^l" | head -3 || echo "No symlinks in Resources"
-        
-        echo "✓ App bundle structure ready for signing"
-        
-    - name: Upload Fixed App as Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: AV-Spex-App
-        path: dist/AV-Spex.app/
-        retention-days: 5
-        
-    # Extract version and create a version file to pass to the next workflow
-    - name: Extract Version
+    - name: Get version from pyproject.toml
+      id: get_version
       run: |
         VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
-        echo "Extracted version: $VERSION"
-        echo "$VERSION" > dist/version.txt
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building AV-Spex version $VERSION"
         
-    - name: Upload Version Info
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller avspex.spec
+        
+    - name: Verify build output
+      run: |
+        ls -la dist/
+        if [ -d "dist/AV-Spex.app" ]; then
+          echo "✅ App bundle created successfully"
+          ls -la "dist/AV-Spex.app/Contents/"
+        else
+          echo "❌ App bundle not found!"
+          exit 1
+        fi
+        
+    - name: Create build info
+      run: |
+        cat > dist/build-info.json << EOF
+        {
+          "version": "${{ steps.get_version.outputs.VERSION }}",
+          "commit": "${{ github.sha }}",
+          "ref": "${{ github.ref }}",
+          "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "workflow_run_id": "${{ github.run_id }}"
+        }
+        EOF
+        
+    - name: Create app bundle archive
+      run: |
+        cd dist
+        tar -czf AV-Spex-${{ steps.get_version.outputs.VERSION }}-unsigned.tar.gz AV-Spex.app build-info.json
+        
+    - name: Upload unsigned app bundle
       uses: actions/upload-artifact@v4
       with:
-        name: app-version
-        path: dist/version.txt
-        retention-days: 5
+        name: av-spex-${{ steps.get_version.outputs.VERSION }}-unsigned
+        path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-unsigned.tar.gz
+        retention-days: 30
+        
+    - name: Upload build info
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-info-${{ steps.get_version.outputs.VERSION }}
+        path: dist/build-info.json
+        retention-days: 30
