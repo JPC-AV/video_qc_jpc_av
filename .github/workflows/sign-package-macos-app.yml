@@ -26,9 +26,9 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Install create-dmg
+    - name: Install dependencies
       run: |
-        brew install create-dmg
+        brew install create-dmg jq
         
     - name: Download unsigned app bundle
       uses: actions/download-artifact@v4
@@ -66,11 +66,19 @@ jobs:
         # Get version from build info
         BUILD_INFO=$(find artifacts -name "build-info.json" | head -1)
         if [ -n "$BUILD_INFO" ]; then
-          VERSION=$(cat "$BUILD_INFO" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+          echo "📄 Found build info file: $BUILD_INFO"
+          cat "$BUILD_INFO"
+          VERSION=$(cat "$BUILD_INFO" | jq -r '.version')
+          if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
+            # Fallback to grep method
+            VERSION=$(cat "$BUILD_INFO" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+          fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Found version: $VERSION"
+          echo "✅ Found version: $VERSION"
         else
           echo "❌ Build info not found!"
+          echo "Available files in artifacts:"
+          find artifacts -type f
           exit 1
         fi
         
@@ -79,6 +87,12 @@ jobs:
           echo "✅ App bundle extracted successfully"
         else
           echo "❌ App bundle not found after extraction!"
+          exit 1
+        fi
+        
+        # Verify version was set
+        if [ -z "$VERSION" ]; then
+          echo "❌ Version extraction failed!"
           exit 1
         fi
         
@@ -184,6 +198,13 @@ jobs:
         
     - name: Create DMG
       run: |
+        # Verify version is set
+        if [ -z "$VERSION" ]; then
+          echo "❌ VERSION environment variable is not set!"
+          exit 1
+        fi
+        echo "📦 Creating DMG for version: $VERSION"
+        
         # Create a folder (named dmg) to prepare our DMG in
         mkdir -p dist/dmg
         # Copy the signed app bundle to the dmg folder
@@ -202,6 +223,15 @@ jobs:
           --no-internet-enable \
           "dist/AV-Spex-$VERSION.dmg" \
           "dist/dmg"
+
+        # Verify DMG was created
+        if [ -f "dist/AV-Spex-$VERSION.dmg" ]; then
+          echo "✅ DMG created successfully: AV-Spex-$VERSION.dmg"
+          ls -la "dist/AV-Spex-$VERSION.dmg"
+        else
+          echo "❌ DMG creation failed!"
+          exit 1
+        fi
 
         # Sign the DMG itself
         echo "Signing DMG..."
