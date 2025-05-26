@@ -171,10 +171,16 @@ jobs:
         echo "Signing main application bundle..."
         codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$CERT_NAME" dist/AV-Spex.app
 
-        # Verify the signature
-        echo "Verifying signature..."
+        # Verify the signature (before notarization)
+        echo "Verifying code signature..."
         codesign --verify --deep --strict dist/AV-Spex.app
-        spctl --assess --type execute --verbose dist/AV-Spex.app
+        
+        # Check signature details
+        echo "Signature details:"
+        codesign --display --verbose=4 dist/AV-Spex.app
+        
+        # Note: spctl will fail before notarization for Developer ID certs
+        # We'll verify with spctl after notarization instead
         
     - name: Create DMG
       run: |
@@ -210,6 +216,11 @@ jobs:
         # Staple the ticket to the DMG
         echo "Stapling ticket to DMG..."
         xcrun stapler staple "dist/AV-Spex-$VERSION.dmg"
+
+        # Final verification after notarization
+        echo "Final verification after notarization..."
+        spctl --assess --type execute --verbose dist/AV-Spex.app
+        spctl --assess --type install --verbose "dist/AV-Spex-$VERSION.dmg"
 
         echo "✅ Build and notarization process complete for AV-Spex version $VERSION!"
         
