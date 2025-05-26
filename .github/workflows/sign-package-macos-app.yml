@@ -36,6 +36,7 @@ jobs:
         pattern: av-spex-*-unsigned
         path: ./artifacts
         run-id: ${{ github.event.inputs.build_run_id || github.event.workflow_run.id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
         merge-multiple: true
         
     - name: Download build info
@@ -44,6 +45,7 @@ jobs:
         pattern: build-info-*
         path: ./artifacts
         run-id: ${{ github.event.inputs.build_run_id || github.event.workflow_run.id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
         merge-multiple: true
         
     - name: Extract build artifacts
