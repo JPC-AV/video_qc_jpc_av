@@ -2,7 +2,7 @@ name: Build macOS App
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:  # Allow manual triggering
@@ -44,9 +44,13 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "Building AV-Spex version $VERSION"
         
+    - name: Clean previous build artifacts
+      run: |
+        rm -rf dist/ build/
+        
     - name: Build with PyInstaller
       run: |
-        pyinstaller avspex.spec
+        pyinstaller --noconfirm avspex.spec
         
     - name: Verify build output
       run: |
