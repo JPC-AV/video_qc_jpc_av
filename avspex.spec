@@ -10,6 +10,11 @@ src_dir = os.path.join(root_dir, 'src')
 # Define the packaging assets directory for icon files
 icon_path = os.path.join(root_dir, 'av_spex_the_logo.icns')
 
+# Verify icon exists, use fallback if not
+if not os.path.exists(icon_path):
+    print(f"Warning: Icon not found at {icon_path}")
+    icon_path = None
+
 block_cipher = None
 
 a = Analysis(['av_spex_launcher.py'],  # Your launcher file
@@ -52,6 +57,9 @@ a = Analysis(['av_spex_launcher.py'],  # Your launcher file
         'PyQt6.QtGui',
         # Additional imports for macOS support
         'AppKit',
+        # Add any missing imports that might be needed in CI
+        'pkg_resources',
+        'setuptools',
     ],
     hookspath=[],
     hooksconfig={},
@@ -59,7 +67,14 @@ a = Analysis(['av_spex_launcher.py'],  # Your launcher file
     excludes=[
         # Only exclude what you originally excluded
         'PyQt6.QtDBus', 'PyQt6.QtPdf', 'PyQt6.QtSvg', 'PyQt6.QtNetwork',
-        'plotly.matplotlylib', 'plotly.figure_factory'
+        'plotly.matplotlylib', 'plotly.figure_factory',
+        # Additional excludes to reduce bundle size
+        'tkinter',
+        'matplotlib',
+        'scipy',
+        'numpy.testing',
+        'test',
+        'tests',
     ],
     noarchive=False,  # CRITICAL: Keep this False to allow proper symlink structure
     cipher=block_cipher
@@ -79,11 +94,22 @@ exe = EXE(
     upx=True,
     runtime_tmpdir=None,
     console=False,  # Set to False for production
-    codesign_identity=None,
-    entitlements_file=None, 
+    codesign_identity=None,  # Will be handled by GitHub Actions
+    entitlements_file=None,  # Will be handled by GitHub Actions
     target_arch=None,
-    universal2=True,  # Build universal binary
+    universal2=True,  # Build universal binary for Intel and Apple Silicon
     icon=icon_path
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=True,
+    upx=True,
+    upx_exclude=[],
+    name='AV-Spex'
 )
 
 coll = COLLECT(
@@ -100,5 +126,18 @@ coll = COLLECT(
 app = BUNDLE(coll,
     name='AV-Spex.app',
     icon=icon_path,
-    bundle_identifier='com.jpc.avspex'
+    bundle_identifier='com.jpc.avspex',
+    version='0.7.8.5',  # Consider making this dynamic
+    info_plist={
+        'CFBundleName': 'AV-Spex',
+        'CFBundleDisplayName': 'AV-Spex',
+        'CFBundleIdentifier': 'com.jpc.avspex',
+        'CFBundleVersion': '0.7.8.5',
+        'CFBundleShortVersionString': '0.7.8.5',
+        'NSHighResolutionCapable': True,
+        'LSMinimumSystemVersion': '10.12',  # Minimum macOS version
+        'NSAppleEventsUsageDescription': 'AV-Spex needs access to Apple Events for automation features.',
+        'NSCameraUsageDescription': 'AV-Spex may access camera for video processing.',
+        'NSMicrophoneUsageDescription': 'AV-Spex may access microphone for audio processing.',
+    }
 )
