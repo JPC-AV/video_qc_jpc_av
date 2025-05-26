@@ -28,7 +28,8 @@ jobs:
       
     - name: Install dependencies
       run: |
-        brew install create-dmg jq
+        # Install create-dmg (jq is pre-installed on GitHub runners)
+        brew install create-dmg
         
     - name: Download unsigned app bundle
       uses: actions/download-artifact@v4
@@ -157,33 +158,54 @@ jobs:
         </plist>
         EOF
 
+        # Check if main executable is universal
+        echo "Checking architecture of main executable..."
+        file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" || echo "lipo failed - single architecture binary"
+
         # Make sure permissions are correct
         chmod -R 755 dist/AV-Spex.app
 
-        # Sign each framework/library/plugin individually first
+        # Sign frameworks and libraries first (preserve architectures)
         echo "Signing frameworks and libraries..."
-        find dist/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) 2>/dev/null | while read file; do
-          echo "Signing: $file"
-          codesign --force --timestamp --options runtime --sign "$CERT_NAME" "$file"
+        find dist/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" -o -name "*.framework" \) 2>/dev/null | while read file; do
+          if [ -f "$file" ]; then
+            echo "Signing: $file"
+            # Use --preserve-metadata=identifier,entitlements,flags to maintain universal binary
+            codesign --force --timestamp --options runtime --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
+          fi
         done
 
-        # Sign Python executables
+        # Sign nested frameworks
+        echo "Signing nested frameworks..."
+        find dist/AV-Spex.app/Contents/Frameworks -name "*.framework" -type d 2>/dev/null | while read framework; do
+          if [ -d "$framework" ]; then
+            echo "Signing framework: $framework"
+            codesign --force --timestamp --options runtime --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "$framework" || echo "Warning: Failed to sign $framework"
+          fi
+        done
+
+        # Sign Python executables and binaries
         echo "Signing Python executables..."
-        find dist/AV-Spex.app/Contents -type f -name "python*" 2>/dev/null | while read file; do
-          echo "Signing: $file"
-          codesign --force --timestamp --options runtime --sign "$CERT_NAME" "$file"
+        find dist/AV-Spex.app/Contents -type f \( -name "python*" -o -perm +111 \) 2>/dev/null | while read file; do
+          if [ -f "$file" ] && [ "$file" != "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ]; then
+            echo "Signing: $file"
+            codesign --force --timestamp --options runtime --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
+          fi
         done
 
-        # Sign any other executables in MacOS folder
-        echo "Signing other executables..."
-        find dist/AV-Spex.app/Contents/MacOS -type f -perm +111 2>/dev/null | while read file; do
-          echo "Signing: $file"
-          codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$CERT_NAME" "$file"
-        done
+        # Sign the main executable with entitlements (most important for universal binary)
+        echo "Signing main executable..."
+        codesign --force --timestamp --options runtime --entitlements entitlements.plist --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
 
-        # Sign the main app bundle with entitlements
+        # Verify the main executable is still universal after signing
+        echo "Verifying main executable architecture after signing..."
+        file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" || echo "lipo failed - single architecture binary"
+
+        # Sign the main app bundle with entitlements (but not --deep to avoid re-signing components)
         echo "Signing main application bundle..."
-        codesign --force --deep --timestamp --options runtime --entitlements entitlements.plist --sign "$CERT_NAME" dist/AV-Spex.app
+        codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$CERT_NAME" dist/AV-Spex.app
 
         # Verify the signature (before notarization)
         echo "Verifying code signature..."
