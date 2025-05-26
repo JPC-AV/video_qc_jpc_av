@@ -33,16 +33,18 @@ jobs:
     - name: Download unsigned app bundle
       uses: actions/download-artifact@v4
       with:
-        name: av-spex-*-unsigned
+        pattern: av-spex-*-unsigned
         path: ./artifacts
         run-id: ${{ github.event.inputs.build_run_id || github.event.workflow_run.id }}
+        merge-multiple: true
         
     - name: Download build info
       uses: actions/download-artifact@v4
       with:
-        name: build-info-*
+        pattern: build-info-*
         path: ./artifacts
         run-id: ${{ github.event.inputs.build_run_id || github.event.workflow_run.id }}
+        merge-multiple: true
         
     - name: Extract build artifacts
       run: |
