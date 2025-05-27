@@ -45,15 +45,36 @@ jobs:
         echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
         echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
     
-    - name: Tap repository
-      run: brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
+    - name: Clean environment
+      run: |
+        # Clean up any existing Python conflicts
+        brew cleanup || true
+        
+        # Update Homebrew
+        brew update
     
     - name: Install dependencies
-      run: brew install python@3.10 pyqt qt@6
+      run: |
+        # Install dependencies one by one with error handling
+        echo "Installing python@3.10..."
+        brew install python@3.10 || (echo "Python@3.10 install failed, trying to fix..." && brew link --overwrite python@3.10)
+        
+        echo "Installing pyqt..."
+        brew install pyqt
+        
+        echo "Installing qt@6..."
+        brew install qt@6
+    
+    - name: Tap repository
+      run: brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
     
     - name: Build bottle
       id: build
       run: |
+        # Set Python path explicitly
+        export PATH="/usr/local/opt/python@3.10/bin:$PATH"
+        
+        # Build the bottle
         brew install --build-bottle JPC-AV/AV-Spex/av-spex
         brew bottle --verbose --json --root-url=https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.version.outputs.version }} JPC-AV/AV-Spex/av-spex
         
