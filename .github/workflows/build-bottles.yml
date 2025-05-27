@@ -103,8 +103,24 @@ jobs:
           exit 1
         fi
     
-    - name: Tap repository
-      run: brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
+    - name: Tap repository and debug dependencies
+      run: |
+        brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
+        
+        # Get the formula path
+        FORMULA_PATH=$(brew --repository JPC-AV/AV-Spex)/Formula/AV-Spex.rb
+        
+        echo "=== Formula Dependencies ==="
+        grep "depends_on" "$FORMULA_PATH"
+        
+        echo "=== Check PyQt Dependencies ==="
+        brew deps pyqt
+        
+        echo "=== Check Qt@6 Dependencies ==="
+        brew deps qt@6
+        
+        echo "=== Check AV-Spex Dependencies ==="
+        brew deps --tree JPC-AV/AV-Spex/av-spex
     
     - name: Build bottle
       id: build
@@ -131,6 +147,12 @@ jobs:
           echo "Warning: Could not find pip"
         fi
         echo "=========================="
+        
+        echo "=== Checking what Python versions are installed ==="
+        brew list | grep python || echo "No python packages found"
+        
+        echo "=== Attempting to uninstall conflicting Python ==="
+        brew uninstall --ignore-dependencies python@3.13 || echo "python@3.13 not installed or can't remove"
         
         # Build the bottle - let Homebrew handle Python version selection
         brew install --build-bottle JPC-AV/AV-Spex/av-spex
