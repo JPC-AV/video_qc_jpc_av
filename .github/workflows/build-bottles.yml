@@ -55,9 +55,22 @@ jobs:
     
     - name: Install dependencies
       run: |
-        # Install dependencies one by one with error handling
+        # Force remove any conflicting Python versions first
+        brew uninstall --ignore-dependencies python@3.13 || true
+        brew uninstall --ignore-dependencies python3 || true
+        
+        # Install our specific Python version
         echo "Installing python@3.10..."
-        brew install python@3.10 || (echo "Python@3.10 install failed, trying to fix..." && brew link --overwrite python@3.10)
+        brew install python@3.10
+        
+        # Force link python@3.10 and make it the default
+        brew unlink python@3.10 || true
+        brew link --force python@3.10
+        
+        # Verify we're using the right Python
+        echo "Python version check:"
+        /usr/local/opt/python@3.10/bin/python3 --version
+        /usr/local/opt/python@3.10/bin/pip3 --version
         
         echo "Installing pyqt..."
         brew install pyqt
@@ -71,8 +84,17 @@ jobs:
     - name: Build bottle
       id: build
       run: |
-        # Set Python path explicitly
+        # Set environment to force use of python@3.10
         export PATH="/usr/local/opt/python@3.10/bin:$PATH"
+        export HOMEBREW_FORCE_BREWED_PYTHON=1
+        
+        # Verify Python version before building
+        echo "=== Python Environment ==="
+        which python3
+        python3 --version
+        which pip3
+        pip3 --version
+        echo "=========================="
         
         # Build the bottle
         brew install --build-bottle JPC-AV/AV-Spex/av-spex
