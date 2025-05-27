@@ -40,21 +40,21 @@ jobs:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         merge-multiple: true
         
-    - name: Download build info
-      uses: actions/download-artifact@v4
-      with:
-        pattern: build-info-*
-        path: ./artifacts
-        run-id: ${{ github.event.inputs.build_run_id || github.event.workflow_run.id }}
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        merge-multiple: true
-        
-    - name: Extract build artifacts
+    - name: Extract build artifacts and get version
       run: |
         ls -la artifacts/
         
-        # Find and extract the app bundle
-        APP_ARCHIVE=$(find artifacts -name "*.tar.gz" | head -1)
+        # Find the universal build (preferred) or fall back to any build
+        UNIVERSAL_ARCHIVE=$(find artifacts -name "*universal-unsigned.tar.gz" | head -1)
+        if [ -n "$UNIVERSAL_ARCHIVE" ]; then
+          APP_ARCHIVE="$UNIVERSAL_ARCHIVE"
+          echo "✅ Using universal build: $APP_ARCHIVE"
+        else
+          # Fall back to any available archive
+          APP_ARCHIVE=$(find artifacts -name "*.tar.gz" | head -1)
+          echo "⚠️  Universal build not found, using: $APP_ARCHIVE"
+        fi
+        
         if [ -z "$APP_ARCHIVE" ]; then
           echo "❌ No app bundle archive found!"
           exit 1
@@ -64,36 +64,44 @@ jobs:
         mkdir -p dist
         tar -xzf "$APP_ARCHIVE" -C dist/
         
-        # Get version from build info
-        BUILD_INFO=$(find artifacts -name "build-info.json" | head -1)
-        if [ -n "$BUILD_INFO" ]; then
-          echo "📄 Found build info file: $BUILD_INFO"
-          cat "$BUILD_INFO"
-          VERSION=$(cat "$BUILD_INFO" | jq -r '.version')
-          if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
-            # Fallback to grep method
-            VERSION=$(cat "$BUILD_INFO" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+        # The build-info.json should now be in dist/ after extraction
+        if [ -f "dist/build-info.json" ]; then
+          echo "📄 Found build info file: dist/build-info.json"
+          cat "dist/build-info.json"
+          
+          # Extract version from build info
+          if command -v jq > /dev/null; then
+            VERSION=$(cat "dist/build-info.json" | jq -r '.version')
+          else
+            # Fallback method without jq
+            VERSION=$(cat "dist/build-info.json" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
           fi
+          
+          if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
+            echo "❌ Failed to extract version from build info"
+            exit 1
+          fi
+          
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "✅ Found version: $VERSION"
         else
-          echo "❌ Build info not found!"
-          echo "Available files in artifacts:"
-          find artifacts -type f
+          echo "❌ Build info not found in extracted archive!"
+          echo "Contents of dist/:"
+          ls -la dist/
           exit 1
         fi
         
         # Verify app bundle exists
         if [ -d "dist/AV-Spex.app" ]; then
           echo "✅ App bundle extracted successfully"
+          # Show what architecture(s) we have
+          echo "Architecture info:"
+          file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+          lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "(Single architecture binary)"
         else
           echo "❌ App bundle not found after extraction!"
-          exit 1
-        fi
-        
-        # Verify version was set
-        if [ -z "$VERSION" ]; then
-          echo "❌ Version extraction failed!"
+          echo "Contents of dist/:"
+          ls -la dist/
           exit 1
         fi
         
@@ -161,7 +169,7 @@ jobs:
         # Check if main executable is universal
         echo "Checking architecture of main executable..."
         file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
-        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" || echo "lipo failed - single architecture binary"
+        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
 
         # Make sure permissions are correct
         chmod -R 755 dist/AV-Spex.app
@@ -201,7 +209,7 @@ jobs:
         # Verify the main executable is still universal after signing
         echo "Verifying main executable architecture after signing..."
         file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
-        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" || echo "lipo failed - single architecture binary"
+        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
 
         # Sign the main app bundle with entitlements (but not --deep to avoid re-signing components)
         echo "Signing main application bundle..."
