@@ -1,4 +1,37 @@
-- name: Install dependencies with universal PyQt6
+name: Build macOS App
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    
+    outputs:
+      version: ${{ steps.get_version.outputs.VERSION }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Cache Python dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+        
+    - name: Install dependencies with universal PyQt6
       env:
         # Force universal binary compilation
         ARCHFLAGS: "-arch x86_64 -arch arm64"
@@ -32,3 +65,109 @@
         
         # Install remaining dependencies normally
         pip install appdirs colorlog art "lxml>=5.2.0" plotly toml tenacity
+        
+    - name: Get version from pyproject.toml
+      id: get_version
+      run: |
+        VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building AV-Spex version $VERSION"
+        
+    - name: Clean previous build artifacts
+      run: |
+        rm -rf dist/ build/
+        
+    - name: Verify Python architecture
+      run: |
+        echo "Python architecture info:"
+        python -c "import platform; print(f'Platform: {platform.platform()}')"
+        python -c "import platform; print(f'Machine: {platform.machine()}')"
+        python -c "import platform; print(f'Architecture: {platform.architecture()}')"
+        
+        echo "Checking installed packages for universal support:"
+        python -c "import PyQt6; print(f'PyQt6 location: {PyQt6.__file__}')"
+        
+        # Check PyQt6 binary architectures
+        echo "Checking PyQt6 binary architectures:"
+        PYQT6_PATH=$(python -c "import PyQt6; import os; print(os.path.dirname(PyQt6.__file__))")
+        echo "PyQt6 path: $PYQT6_PATH"
+        
+        # Check some key PyQt6 binaries
+        for file in "$PYQT6_PATH"/QtCore.abi3.so "$PYQT6_PATH"/Qt6/lib/QtCore.framework/Versions/A/QtCore; do
+          if [ -f "$file" ]; then
+            echo "Checking: $file"
+            file "$file"
+            lipo -info "$file" 2>/dev/null || echo "Not a universal binary: $file"
+          fi
+        done
+        
+        # Check if we have universal binaries for critical components
+        echo "Checking Python executable architecture:"
+        file $(which python)
+        lipo -info $(which python) || echo "Python is not a universal binary"
+        
+    - name: Build with PyInstaller
+      env:
+        # Ensure PyInstaller uses universal architecture
+        ARCHFLAGS: "-arch x86_64 -arch arm64"
+        # Target both architectures
+        MACOSX_DEPLOYMENT_TARGET: "10.13"
+      run: |
+        echo "Building universal binary with PyInstaller..."
+        pyinstaller --noconfirm avspex.spec
+        
+    - name: Verify build output and architecture
+      run: |
+        ls -la dist/
+        if [ -d "dist/AV-Spex.app" ]; then
+          echo "✅ App bundle created successfully"
+          ls -la "dist/AV-Spex.app/Contents/"
+          
+          # Check the main executable architecture
+          echo "Checking main executable architecture:"
+          file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+          lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" || echo "Single architecture binary detected"
+          
+          # If it's not universal, this is a critical error
+          if ! lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" | grep -q "2 architectures"; then
+            echo "❌ ERROR: App is not a universal binary!"
+            echo "This will only work on the current architecture."
+            echo "Continuing build anyway, but Intel compatibility will be missing."
+          else
+            echo "✅ Universal binary created successfully"
+          fi
+        else
+          echo "❌ App bundle not found!"
+          exit 1
+        fi
+        
+    - name: Create build info
+      run: |
+        cat > dist/build-info.json << EOF
+        {
+          "version": "${{ steps.get_version.outputs.VERSION }}",
+          "commit": "${{ github.sha }}",
+          "ref": "${{ github.ref }}",
+          "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "workflow_run_id": "${{ github.run_id }}"
+        }
+        EOF
+        
+    - name: Create app bundle archive
+      run: |
+        cd dist
+        tar -czf AV-Spex-${{ steps.get_version.outputs.VERSION }}-unsigned.tar.gz AV-Spex.app build-info.json
+        
+    - name: Upload unsigned app bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: av-spex-${{ steps.get_version.outputs.VERSION }}-unsigned
+        path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-unsigned.tar.gz
+        retention-days: 30
+        
+    - name: Upload build info
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-info-${{ steps.get_version.outputs.VERSION }}
+        path: dist/build-info.json
+        retention-days: 30
