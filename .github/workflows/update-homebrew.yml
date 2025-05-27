@@ -65,8 +65,13 @@ jobs:
       run: |
         cd homebrew-tap
         
-        # Update the formula file
-        cat > AV-Spex.rb << 'EOF'
+        # Show current formula before update
+        echo "=== BEFORE UPDATE ==="
+        cat Formula/AV-Spex.rb
+        echo "======================"
+        
+        # Update the formula file in the correct location
+        cat > Formula/AV-Spex.rb << 'EOF'
         class AvSpex < Formula
           include Language::Python::Virtualenv
 
@@ -146,6 +151,11 @@ jobs:
           end
         end
         EOF
+        
+        # Show updated formula
+        echo "=== AFTER UPDATE ==="
+        cat Formula/AV-Spex.rb
+        echo "====================="
     
     - name: Commit and push changes
       run: |
@@ -153,10 +163,23 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         
-        if git diff --quiet; then
+        # Show git status
+        echo "=== GIT STATUS ==="
+        git status
+        echo "=================="
+        
+        # Show git diff
+        echo "=== GIT DIFF ==="
+        git diff Formula/AV-Spex.rb
+        echo "================"
+        
+        # Always add the file and let git decide if there are changes
+        git add Formula/AV-Spex.rb
+        
+        # Check if there are staged changes
+        if git diff --staged --quiet; then
           echo "No changes to commit"
         else
-          git add AV-Spex.rb
           git commit -m "Update AV-Spex to version ${{ steps.get_version.outputs.version }}"
           git push
         fi
