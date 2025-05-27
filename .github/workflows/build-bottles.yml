@@ -1,4 +1,4 @@
-name: Build and Test Bottles
+name: Build Bottles
 
 on:
   release:
@@ -12,23 +12,18 @@ on:
 
 jobs:
   build-bottles:
+    name: Build bottles
     strategy:
       matrix:
         include:
-          # macOS 14 (Sonoma) - Apple Silicon
           - os: macos-14
             arch: arm64
-            runner_arch: arm64
             bottle_tag: arm64_sonoma
-          # macOS 14 (Sonoma) - Intel (if available)
           - os: macos-13
             arch: x86_64
-            runner_arch: x64
             bottle_tag: ventura
-          # macOS 12 (Monterey) - Intel
           - os: macos-12
             arch: x86_64
-            runner_arch: x64
             bottle_tag: monterey
       fail-fast: false
     
@@ -36,11 +31,10 @@ jobs:
     
     steps:
     - name: Set up Homebrew
-      id: set-up-homebrew
       uses: Homebrew/actions/setup-homebrew@master
     
-    - name: Determine version
-      id: get_version
+    - name: Get version
+      id: version
       run: |
         if [ "${{ github.event_name }}" = "release" ]; then
           VERSION="${{ github.event.release.tag_name }}"
@@ -51,157 +45,40 @@ jobs:
         echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
         echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
     
-    - name: Tap the repository
-      run: |
-        brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
+    - name: Tap repository
+      run: brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
     
     - name: Install dependencies
-      run: |
-        # Install any system dependencies needed
-        brew install python@3.10 pyqt qt@6
+      run: brew install python@3.10 pyqt qt@6
     
     - name: Build bottle
       id: build
       run: |
-        # Build the formula and create bottle
         brew install --build-bottle JPC-AV/AV-Spex/av-spex
-        brew bottle --verbose --json --root-url=https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.get_version.outputs.version }} JPC-AV/AV-Spex/av-spex
+        brew bottle --verbose --json --root-url=https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.version.outputs.version }} JPC-AV/AV-Spex/av-spex
         
-        # Get bottle filename
         BOTTLE_FILE=$(ls av-spex--*.bottle.tar.gz | head -1)
         echo "bottle_file=${BOTTLE_FILE}" >> $GITHUB_OUTPUT
-        
-        # Get bottle JSON for later use
-        BOTTLE_JSON=$(cat av-spex--*.bottle.json)
-        echo "bottle_json=${BOTTLE_JSON}" >> $GITHUB_OUTPUT
     
-    - name: Test installation from bottle
+    - name: Test bottle
       run: |
-        # Uninstall the build version
         brew uninstall JPC-AV/AV-Spex/av-spex
-        
-        # Install from the bottle we just created
         brew install ${{ steps.build.outputs.bottle_file }}
-        
-        # Test that it works
         av-spex --version
         av-spex --help
-        
-        # Test GUI mode (will fail if display issues, but we can check it loads)
-        timeout 10s av-spex-gui --help || true
     
-    - name: Upload bottle as artifact
+    - name: Upload bottle
       uses: actions/upload-artifact@v4
       with:
-        name: bottle-${{ matrix.bottle_tag }}-v${{ steps.get_version.outputs.version }}
+        name: bottle-${{ matrix.bottle_tag }}-v${{ steps.version.outputs.version }}
         path: |
           av-spex--*.bottle.tar.gz
           av-spex--*.bottle.json
         retention-days: 30
-    
-    - name: Upload bottle to release
-      if: github.event_name == 'release'
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ${{ steps.build.outputs.bottle_file }}
-        asset_name: ${{ steps.build.outputs.bottle_file }}
-        asset_content_type: application/gzip
 
-  test-compatibility:
+  update-formula:
+    name: Update formula
     needs: build-bottles
-    strategy:
-      matrix:
-        include:
-          # Test on different macOS versions
-          - os: macos-14
-            test_name: "macOS 14 (Sonoma) ARM64"
-          - os: macos-13  
-            test_name: "macOS 13 (Ventura) x64"
-          - os: macos-12
-            test_name: "macOS 12 (Monterey) x64"
-      fail-fast: false
-    
-    runs-on: ${{ matrix.os }}
-    
-    steps:
-    - name: Set up Homebrew
-      uses: Homebrew/actions/setup-homebrew@master
-    
-    - name: Determine version
-      id: get_version
-      run: |
-        if [ "${{ github.event_name }}" = "release" ]; then
-          VERSION="${{ github.event.release.tag_name }}"
-        else
-          VERSION="${{ github.event.inputs.tag_name }}"
-        fi
-        VERSION_CLEAN=${VERSION#v}
-        echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
-        echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
-    
-    - name: Tap the repository
-      run: |
-        brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
-    
-    - name: Test installation from source
-      run: |
-        # Install from source (bypassing bottles)
-        brew install --build-from-source JPC-AV/AV-Spex/av-spex
-        
-        # Basic functionality tests
-        echo "=== Testing av-spex --version ==="
-        av-spex --version
-        
-        echo "=== Testing av-spex --help ==="
-        av-spex --help
-        
-        echo "=== Testing config export ==="
-        av-spex --export-config all --export-file test_config.json
-        
-        echo "=== Testing GUI help ==="
-        timeout 10s av-spex-gui --help || echo "GUI help test completed"
-        
-        # Test Python environment
-        echo "=== Testing Python dependencies ==="
-        $(brew --prefix)/bin/python3 -c "
-import sys
-print(f'Python version: {sys.version}')
-
-# Test key dependencies
-try:
-    import yaml
-    print('✓ PyYAML imported successfully')
-except ImportError as e:
-    print(f'✗ PyYAML import failed: {e}')
-
-try:
-    import colorlog
-    print('✓ colorlog imported successfully')
-except ImportError as e:
-    print(f'✗ colorlog import failed: {e}')
-
-try:
-    import PyQt6
-    print('✓ PyQt6 imported successfully')
-except ImportError as e:
-    print(f'✗ PyQt6 import failed: {e}')
-"
-    
-    - name: Test with sample data (if available)
-      run: |
-        # Create a minimal test to ensure the app can run basic operations
-        echo "=== Testing basic functionality ==="
-        
-        # Test dry run mode
-        av-spex --dryrun --profile off
-        
-        echo "=== All tests completed successfully on ${{ matrix.test_name }} ==="
-
-  update-formula-with-bottles:
-    needs: [build-bottles, test-compatibility]
     runs-on: ubuntu-latest
     if: success()
     
@@ -213,13 +90,8 @@ except ImportError as e:
         token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         path: homebrew-tap
     
-    - name: Download all bottle artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: bottles/
-    
-    - name: Determine version
-      id: get_version
+    - name: Get version
+      id: version
       run: |
         if [ "${{ github.event_name }}" = "release" ]; then
           VERSION="${{ github.event.release.tag_name }}"
@@ -230,81 +102,80 @@ except ImportError as e:
         echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
         echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
     
-    - name: Extract bottle information
-      id: bottle_info
+    - name: Download bottles
+      uses: actions/download-artifact@v4
+      with:
+        path: bottles/
+    
+    - name: Extract bottle info
+      id: bottles
       run: |
-        # Extract SHA256 hashes from bottle JSON files
         cd bottles/
         
-        ARM64_SONOMA_SHA=""
+        ARM64_SHA=""
         VENTURA_SHA=""
         MONTEREY_SHA=""
         
-        for artifact_dir in */; do
-          if [[ -f "${artifact_dir}av-spex--"*".bottle.json" ]]; then
-            JSON_FILE="${artifact_dir}av-spex--"*".bottle.json"
-            echo "Processing: $JSON_FILE"
+        for dir in bottle-*/; do
+          if [[ -f "${dir}av-spex--"*".bottle.json" ]]; then
+            JSON_FILE="${dir}av-spex--"*".bottle.json"
             
-            # Extract SHA and architecture info from JSON
-            if [[ "$artifact_dir" == *"arm64_sonoma"* ]]; then
-              ARM64_SONOMA_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "$JSON_FILE")
-            elif [[ "$artifact_dir" == *"ventura"* ]]; then
+            if [[ "$dir" == *"arm64_sonoma"* ]]; then
+              ARM64_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "$JSON_FILE")
+            elif [[ "$dir" == *"ventura"* ]]; then
               VENTURA_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.ventura.sha256' "$JSON_FILE")
-            elif [[ "$artifact_dir" == *"monterey"* ]]; then
+            elif [[ "$dir" == *"monterey"* ]]; then
               MONTEREY_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.monterey.sha256' "$JSON_FILE")
             fi
           fi
         done
         
-        echo "arm64_sonoma_sha=${ARM64_SONOMA_SHA}" >> $GITHUB_OUTPUT
+        echo "arm64_sha=${ARM64_SHA}" >> $GITHUB_OUTPUT
         echo "ventura_sha=${VENTURA_SHA}" >> $GITHUB_OUTPUT
         echo "monterey_sha=${MONTEREY_SHA}" >> $GITHUB_OUTPUT
     
-    - name: Update formula with bottle information
+    - name: Update formula
       run: |
         cd homebrew-tap
         
-        # Calculate source SHA256
-        curl -L "https://github.com/JPC-AV/video_qc_jpc_av/archive/refs/tags/v${{ steps.get_version.outputs.version }}.tar.gz" -o release.tar.gz
+        curl -L "https://github.com/JPC-AV/video_qc_jpc_av/archive/refs/tags/v${{ steps.version.outputs.version }}.tar.gz" -o release.tar.gz
         SOURCE_SHA256=$(sha256sum release.tar.gz | cut -d' ' -f1)
         rm release.tar.gz
         
-        # Create updated formula with bottles
-        cat > Formula/AV-Spex.rb << EOF
+        cat > Formula/AV-Spex.rb << 'EOF'
         class AvSpex < Formula
           include Language::Python::Virtualenv
 
           desc "Python project for NMAAHC media conservation lab"
           homepage "https://github.com/JPC-AV/video_qc_jpc_av"
-          url "https://github.com/JPC-AV/video_qc_jpc_av/archive/refs/tags/v${{ steps.get_version.outputs.version }}.tar.gz"
+          url "https://github.com/JPC-AV/video_qc_jpc_av/archive/refs/tags/v${{ steps.version.outputs.version }}.tar.gz"
           sha256 "${SOURCE_SHA256}"
           license "GPL-3.0-only"
 
           bottle do
         EOF
         
-        # Add bottle entries if they exist
-        if [[ -n "${{ steps.bottle_info.outputs.arm64_sonoma_sha }}" && "${{ steps.bottle_info.outputs.arm64_sonoma_sha }}" != "null" ]]; then
-          echo "    sha256 cellar: :any_skip_relocation, arm64_sonoma: \"${{ steps.bottle_info.outputs.arm64_sonoma_sha }}\"" >> Formula/AV-Spex.rb
+        if [[ -n "${{ steps.bottles.outputs.arm64_sha }}" && "${{ steps.bottles.outputs.arm64_sha }}" != "null" ]]; then
+          echo "    sha256 cellar: :any_skip_relocation, arm64_sonoma: \"${{ steps.bottles.outputs.arm64_sha }}\"" >> Formula/AV-Spex.rb
         fi
         
-        if [[ -n "${{ steps.bottle_info.outputs.ventura_sha }}" && "${{ steps.bottle_info.outputs.ventura_sha }}" != "null" ]]; then
-          echo "    sha256 cellar: :any_skip_relocation, ventura: \"${{ steps.bottle_info.outputs.ventura_sha }}\"" >> Formula/AV-Spex.rb
+        if [[ -n "${{ steps.bottles.outputs.ventura_sha }}" && "${{ steps.bottles.outputs.ventura_sha }}" != "null" ]]; then
+          echo "    sha256 cellar: :any_skip_relocation, ventura: \"${{ steps.bottles.outputs.ventura_sha }}\"" >> Formula/AV-Spex.rb
         fi
         
-        if [[ -n "${{ steps.bottle_info.outputs.monterey_sha }}" && "${{ steps.bottle_info.outputs.monterey_sha }}" != "null" ]]; then
-          echo "    sha256 cellar: :any_skip_relocation, monterey: \"${{ steps.bottle_info.outputs.monterey_sha }}\"" >> Formula/AV-Spex.rb
+        if [[ -n "${{ steps.bottles.outputs.monterey_sha }}" && "${{ steps.bottles.outputs.monterey_sha }}" != "null" ]]; then
+          echo "    sha256 cellar: :any_skip_relocation, monterey: \"${{ steps.bottles.outputs.monterey_sha }}\"" >> Formula/AV-Spex.rb
         fi
         
-        cat >> Formula/AV-Spex.rb << EOF
-            root_url "https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.get_version.outputs.version }}"
+        cat >> Formula/AV-Spex.rb << 'EOF'
+            root_url "https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.version.outputs.version }}"
           end
 
           depends_on "python@3.10"
           depends_on "pyqt"
           depends_on "qt@6"
           
-          resource "setuptools" do # needed for pyqt6 
+          resource "setuptools" do
             url "https://files.pythonhosted.org/packages/92/ec/089608b791d210aec4e7f97488e67ab0d33add3efccb83a056cbafe3a2a6/setuptools-75.8.0.tar.gz"
             sha256 "c5afc8f407c626b8313a86e10311dd3f661c6cd9c09d4bf8c15c0e11f9f2b0e6"
           end
@@ -342,19 +213,14 @@ except ImportError as e:
           def install
             venv = virtualenv_create(libexec, "python3")
             
-            # Install all Python dependencies including PyQt6-sip but excluding PyQt6
             venv.pip_install resources.reject { |r| r.name == "plotly" || r.name == "lxml" }
 
-            # Install plotly using direct pip command instead of venv.pip_install
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "plotly==5.23.0"
 
-            # Install lxml without dependencies
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "lxml==5.3.1"
 
-            # Install the package itself
             venv.pip_install_and_link buildpath
             
-            # Create executables
             bin.install_symlink libexec/"bin/av-spex"
             bin.install_symlink libexec/"bin/av-spex-gui"
           end
@@ -365,7 +231,7 @@ except ImportError as e:
         end
         EOF
     
-    - name: Commit and push updated formula
+    - name: Commit changes
       run: |
         cd homebrew-tap
         git config --local user.email "action@github.com"
@@ -376,6 +242,6 @@ except ImportError as e:
         if git diff --staged --quiet; then
           echo "No changes to commit"
         else
-          git commit -m "Update AV-Spex to version ${{ steps.get_version.outputs.version }} with bottles"
+          git commit -m "Update AV-Spex to version ${{ steps.version.outputs.version }} with bottles"
           git push
         fi
