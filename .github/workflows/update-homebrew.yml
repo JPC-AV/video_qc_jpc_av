@@ -162,7 +162,7 @@ jobs:
         fi
     
     - name: Create Pull Request (alternative approach)
-      if: ${{ secrets.HOMEBREW_TAP_TOKEN == '' }}
+      if: failure()
       uses: peter-evans/create-pull-request@v5
       with:
         path: homebrew-tap
