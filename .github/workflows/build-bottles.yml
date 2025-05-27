@@ -47,19 +47,25 @@ jobs:
     
     - name: Clean environment
       run: |
+        # Disable auto-updates to prevent conflicts
+        export HOMEBREW_NO_AUTO_UPDATE=1
+        
         # Clean up any existing Python conflicts
         brew cleanup || true
         
-        # Update Homebrew
-        brew update
+        # Don't update Homebrew to avoid pulling in new dependencies
+        echo "Skipping brew update to prevent conflicts"
     
     - name: Install dependencies
       run: |
-        # Force remove any conflicting Python versions first
-        brew uninstall --ignore-dependencies python@3.13 || true
-        brew uninstall --ignore-dependencies python3 || true
+        # Get Homebrew prefix (different on Intel vs ARM)
+        HOMEBREW_PREFIX=$(brew --prefix)
+        echo "Homebrew prefix: $HOMEBREW_PREFIX"
         
-        # Install our specific Python version
+        # Disable auto-updates during install to prevent conflicts
+        export HOMEBREW_NO_AUTO_UPDATE=1
+        
+        # Install our specific Python version first
         echo "Installing python@3.10..."
         brew install python@3.10
         
@@ -69,8 +75,8 @@ jobs:
         
         # Verify we're using the right Python
         echo "Python version check:"
-        /usr/local/opt/python@3.10/bin/python3 --version
-        /usr/local/opt/python@3.10/bin/pip3 --version
+        ${HOMEBREW_PREFIX}/opt/python@3.10/bin/python3 --version
+        ${HOMEBREW_PREFIX}/opt/python@3.10/bin/pip3 --version
         
         echo "Installing pyqt..."
         brew install pyqt
@@ -84,12 +90,17 @@ jobs:
     - name: Build bottle
       id: build
       run: |
+        # Get Homebrew prefix for cross-platform compatibility
+        HOMEBREW_PREFIX=$(brew --prefix)
+        
         # Set environment to force use of python@3.10
-        export PATH="/usr/local/opt/python@3.10/bin:$PATH"
+        export PATH="${HOMEBREW_PREFIX}/opt/python@3.10/bin:$PATH"
         export HOMEBREW_FORCE_BREWED_PYTHON=1
+        export HOMEBREW_NO_AUTO_UPDATE=1
         
         # Verify Python version before building
         echo "=== Python Environment ==="
+        echo "Homebrew prefix: $HOMEBREW_PREFIX"
         which python3
         python3 --version
         which pip3
