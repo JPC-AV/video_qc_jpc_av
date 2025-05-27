@@ -285,18 +285,18 @@ except ImportError as e:
         
         # Add bottle entries if they exist
         if [[ -n "${{ steps.bottle_info.outputs.arm64_sonoma_sha }}" && "${{ steps.bottle_info.outputs.arm64_sonoma_sha }}" != "null" ]]; then
-          echo '    sha256 cellar: :any_skip_relocation, arm64_sonoma: "${{ steps.bottle_info.outputs.arm64_sonoma_sha }}"' >> Formula/AV-Spex.rb
+          echo "    sha256 cellar: :any_skip_relocation, arm64_sonoma: \"${{ steps.bottle_info.outputs.arm64_sonoma_sha }}\"" >> Formula/AV-Spex.rb
         fi
         
         if [[ -n "${{ steps.bottle_info.outputs.ventura_sha }}" && "${{ steps.bottle_info.outputs.ventura_sha }}" != "null" ]]; then
-          echo '    sha256 cellar: :any_skip_relocation, ventura: "${{ steps.bottle_info.outputs.ventura_sha }}"' >> Formula/AV-Spex.rb
+          echo "    sha256 cellar: :any_skip_relocation, ventura: \"${{ steps.bottle_info.outputs.ventura_sha }}\"" >> Formula/AV-Spex.rb
         fi
         
         if [[ -n "${{ steps.bottle_info.outputs.monterey_sha }}" && "${{ steps.bottle_info.outputs.monterey_sha }}" != "null" ]]; then
-          echo '    sha256 cellar: :any_skip_relocation, monterey: "${{ steps.bottle_info.outputs.monterey_sha }}"' >> Formula/AV-Spex.rb
+          echo "    sha256 cellar: :any_skip_relocation, monterey: \"${{ steps.bottle_info.outputs.monterey_sha }}\"" >> Formula/AV-Spex.rb
         fi
         
-        cat >> Formula/AV-Spex.rb << 'EOF'
+        cat >> Formula/AV-Spex.rb << EOF
             root_url "https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.get_version.outputs.version }}"
           end
 
