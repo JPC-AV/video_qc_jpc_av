@@ -96,20 +96,8 @@ exe = EXE(
     console=False,  # Set to False for production
     codesign_identity=None,  # Will be handled by GitHub Actions
     entitlements_file=None,  # Will be handled by GitHub Actions
-    target_arch=None,
-    universal2=True,  # Build universal binary for Intel and Apple Silicon
+    target_arch=None,  # Let each runner build for its native architecture
     icon=icon_path
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=True,
-    upx=True,
-    upx_exclude=[],
-    name='AV-Spex'
 )
 
 coll = COLLECT(
