@@ -45,126 +45,99 @@ jobs:
         echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
         echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
     
-    - name: Clean environment
+    - name: Clean environment and fix Python conflicts
       run: |
         # Disable auto-updates to prevent conflicts
         export HOMEBREW_NO_AUTO_UPDATE=1
+        export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+        export HOMEBREW_NO_INSTALL_UPGRADE=1
         
-        # Clean up any existing Python conflicts
+        echo "=== Initial Python State ==="
+        which python3 || echo "No python3 found"
+        python3 --version || echo "python3 not working"
+        ls -la /usr/local/bin/python* || echo "No python in /usr/local/bin"
+        echo "==========================="
+        
+        # Clean up any existing conflicting symlinks
+        echo "Removing conflicting Python symlinks..."
+        sudo rm -f /usr/local/bin/python3*
+        sudo rm -f /usr/local/bin/pip3*
+        sudo rm -f /usr/local/bin/idle3*
+        sudo rm -f /usr/local/bin/pydoc3*
+        
+        # Clean up any existing Python installations
+        echo "Cleaning up existing Python installations..."
         brew cleanup || true
         
-        # Don't update Homebrew to avoid pulling in new dependencies
-        echo "Skipping brew update to prevent conflicts"
+        # Uninstall any existing Python versions that might conflict
+        for python_ver in python@3.13 python@3.12 python@3.11; do
+          if brew list $python_ver &>/dev/null; then
+            echo "Uninstalling $python_ver..."
+            brew uninstall --ignore-dependencies $python_ver || echo "Could not uninstall $python_ver"
+          fi
+        done
     
-    - name: Install dependencies
+    - name: Install clean Python environment
       run: |
-        # Get Homebrew prefix (different on Intel vs ARM)
-        HOMEBREW_PREFIX=$(brew --prefix)
-        echo "Homebrew prefix: $HOMEBREW_PREFIX"
-        
-        # Completely disable dependency upgrades and auto-updates
         export HOMEBREW_NO_AUTO_UPDATE=1
         export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
         export HOMEBREW_NO_INSTALL_UPGRADE=1
         
-        # Install our specific Python version only if not already present
-        if ! brew list python@3.10 &>/dev/null; then
-          echo "Installing python@3.10..."
-          brew install python@3.10
-        else
-          echo "python@3.10 already installed"
-        fi
+        # Install python@3.10 first
+        echo "Installing python@3.10..."
+        brew install python@3.10
         
-        # Install other dependencies
-        echo "Installing pyqt..."
-        brew install pyqt || echo "PyQt install failed, continuing..."
+        # Force link python@3.10 to ensure it's the primary Python
+        echo "Linking python@3.10..."
+        brew link --overwrite python@3.10
         
-        echo "Installing qt@6..."
-        brew install qt@6 || echo "Qt@6 install failed, continuing..."
-        
-        # Find the actual Python executable
-        if [[ -f "${HOMEBREW_PREFIX}/bin/python3.10" ]]; then
-          PYTHON_PATH="${HOMEBREW_PREFIX}/bin/python3.10"
-        elif [[ -f "${HOMEBREW_PREFIX}/opt/python@3.10/bin/python3.10" ]]; then
-          PYTHON_PATH="${HOMEBREW_PREFIX}/opt/python@3.10/bin/python3.10"
-        else
-          echo "Finding Python..."
-          PYTHON_PATH=$(find ${HOMEBREW_PREFIX} -name "python3.10" -type f 2>/dev/null | head -1)
-        fi
-        
-        echo "Using Python at: $PYTHON_PATH"
-        echo "PYTHON_PATH=$PYTHON_PATH" >> $GITHUB_ENV
-        
-        # Verify Python works
-        if [[ -f "$PYTHON_PATH" ]]; then
-          $PYTHON_PATH --version
-        else
-          echo "ERROR: Could not find working Python 3.10"
-          exit 1
-        fi
-    
-    - name: Tap repository and debug dependencies
-      run: |
-        brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
-        
-        # Get the formula path
-        FORMULA_PATH=$(brew --repository JPC-AV/AV-Spex)/Formula/AV-Spex.rb
-        
-        echo "=== Formula Dependencies ==="
-        grep "depends_on" "$FORMULA_PATH"
-        
-        echo "=== Check PyQt Dependencies ==="
-        brew deps pyqt
-        
-        echo "=== Check Qt@6 Dependencies ==="
-        brew deps qt@6
-        
-        echo "=== Check AV-Spex Dependencies ==="
-        brew deps --tree JPC-AV/AV-Spex/av-spex
-    
-    - name: Build bottle
-      id: build
-      run: |
-        # Use environment variables set in previous step
-        export HOMEBREW_NO_AUTO_UPDATE=1
-        export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
-        export HOMEBREW_NO_INSTALL_UPGRADE=1
-        
-        echo "=== Python Environment ==="
-        echo "Using Python: $PYTHON_PATH"
-        $PYTHON_PATH --version
-        
-        # Find pip for this Python
-        PIP_PATH=$(dirname "$PYTHON_PATH")/pip3
-        if [[ ! -f "$PIP_PATH" ]]; then
-          # Try alternative pip locations
-          PIP_PATH=$(dirname "$PYTHON_PATH")/pip3.10
-        fi
-        if [[ -f "$PIP_PATH" ]]; then
-          echo "Using pip: $PIP_PATH"
-          $PIP_PATH --version
-        else
-          echo "Warning: Could not find pip"
-        fi
+        # Verify Python installation
+        echo "=== Python Verification ==="
+        which python3
+        python3 --version
+        which pip3
+        pip3 --version
         echo "=========================="
         
-        echo "=== Checking what Python versions are installed ==="
-        brew list | grep python || echo "No python packages found"
+        # Install other dependencies
+        echo "Installing PyQt and Qt..."
+        brew install pyqt qt@6
+    
+    - name: Tap repository and build bottle
+      id: build
+      run: |
+        export HOMEBREW_NO_AUTO_UPDATE=1
+        export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+        export HOMEBREW_NO_INSTALL_UPGRADE=1
         
-        echo "=== Attempting to uninstall conflicting Python ==="
-        brew uninstall --ignore-dependencies python@3.13 || echo "python@3.13 not installed or can't remove"
+        # Tap the repository
+        brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
         
-        # Build the bottle - let Homebrew handle Python version selection
+        echo "=== Final Python Check ==="
+        python3 --version
+        pip3 --version
+        brew list | grep python
+        echo "=========================="
+        
+        # Build the bottle
+        echo "Building bottle..."
         brew install --build-bottle JPC-AV/AV-Spex/av-spex
+        
+        echo "Creating bottle..."
         brew bottle --verbose --json --root-url=https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.version.outputs.version }} JPC-AV/AV-Spex/av-spex
         
         BOTTLE_FILE=$(ls av-spex--*.bottle.tar.gz | head -1)
         echo "bottle_file=${BOTTLE_FILE}" >> $GITHUB_OUTPUT
+        
+        echo "Created bottle: $BOTTLE_FILE"
     
     - name: Test bottle
       run: |
+        echo "Testing bottle installation..."
         brew uninstall JPC-AV/AV-Spex/av-spex
         brew install ${{ steps.build.outputs.bottle_file }}
+        
+        echo "Testing av-spex commands..."
         av-spex --version
         av-spex --help
     
@@ -221,6 +194,9 @@ jobs:
           if [[ -f "${dir}av-spex--"*".bottle.json" ]]; then
             JSON_FILE="${dir}av-spex--"*".bottle.json"
             
+            echo "Processing $JSON_FILE"
+            cat "$JSON_FILE"
+            
             if [[ "$dir" == *"arm64_sonoma"* ]]; then
               ARM64_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "$JSON_FILE")
             elif [[ "$dir" == *"ventura"* ]]; then
@@ -234,16 +210,23 @@ jobs:
         echo "arm64_sha=${ARM64_SHA}" >> $GITHUB_OUTPUT
         echo "ventura_sha=${VENTURA_SHA}" >> $GITHUB_OUTPUT
         echo "monterey_sha=${MONTEREY_SHA}" >> $GITHUB_OUTPUT
+        
+        echo "Extracted SHAs:"
+        echo "ARM64: $ARM64_SHA"
+        echo "Ventura: $VENTURA_SHA"
+        echo "Monterey: $MONTEREY_SHA"
     
-    - name: Update formula
+    - name: Update formula with bottles
       run: |
         cd homebrew-tap
         
+        # Get source SHA256
         curl -L "https://github.com/JPC-AV/video_qc_jpc_av/archive/refs/tags/v${{ steps.version.outputs.version }}.tar.gz" -o release.tar.gz
         SOURCE_SHA256=$(sha256sum release.tar.gz | cut -d' ' -f1)
         rm release.tar.gz
         
-        cat > Formula/AV-Spex.rb << 'EOF'
+        # Create the formula with bottle block
+        cat > Formula/AV-Spex.rb << EOF
         class AvSpex < Formula
           include Language::Python::Virtualenv
 
@@ -254,8 +237,10 @@ jobs:
           license "GPL-3.0-only"
 
           bottle do
+            root_url "https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.version.outputs.version }}"
         EOF
         
+        # Add bottle SHAs if they exist
         if [[ -n "${{ steps.bottles.outputs.arm64_sha }}" && "${{ steps.bottles.outputs.arm64_sha }}" != "null" ]]; then
           echo "    sha256 cellar: :any_skip_relocation, arm64_sonoma: \"${{ steps.bottles.outputs.arm64_sha }}\"" >> Formula/AV-Spex.rb
         fi
@@ -268,8 +253,8 @@ jobs:
           echo "    sha256 cellar: :any_skip_relocation, monterey: \"${{ steps.bottles.outputs.monterey_sha }}\"" >> Formula/AV-Spex.rb
         fi
         
+        # Complete the formula
         cat >> Formula/AV-Spex.rb << 'EOF'
-            root_url "https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.version.outputs.version }}"
           end
 
           depends_on "python@3.10"
@@ -331,6 +316,10 @@ jobs:
           end
         end
         EOF
+        
+        echo "=== Updated Formula ==="
+        cat Formula/AV-Spex.rb
+        echo "======================"
     
     - name: Commit changes
       run: |
