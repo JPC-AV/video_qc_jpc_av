@@ -22,9 +22,6 @@ jobs:
           - os: macos-13
             arch: x86_64
             bottle_tag: ventura
-          - os: macos-12
-            arch: x86_64
-            bottle_tag: monterey
       fail-fast: false
     
     runs-on: ${{ matrix.os }}
@@ -188,7 +185,6 @@ jobs:
         
         ARM64_SHA=""
         VENTURA_SHA=""
-        MONTEREY_SHA=""
         
         for dir in bottle-*/; do
           if [[ -f "${dir}av-spex--"*".bottle.json" ]]; then
@@ -201,20 +197,16 @@ jobs:
               ARM64_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "$JSON_FILE")
             elif [[ "$dir" == *"ventura"* ]]; then
               VENTURA_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.ventura.sha256' "$JSON_FILE")
-            elif [[ "$dir" == *"monterey"* ]]; then
-              MONTEREY_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.monterey.sha256' "$JSON_FILE")
             fi
           fi
         done
         
         echo "arm64_sha=${ARM64_SHA}" >> $GITHUB_OUTPUT
         echo "ventura_sha=${VENTURA_SHA}" >> $GITHUB_OUTPUT
-        echo "monterey_sha=${MONTEREY_SHA}" >> $GITHUB_OUTPUT
         
         echo "Extracted SHAs:"
         echo "ARM64: $ARM64_SHA"
         echo "Ventura: $VENTURA_SHA"
-        echo "Monterey: $MONTEREY_SHA"
     
     - name: Update formula with bottles
       run: |
@@ -247,10 +239,6 @@ jobs:
         
         if [[ -n "${{ steps.bottles.outputs.ventura_sha }}" && "${{ steps.bottles.outputs.ventura_sha }}" != "null" ]]; then
           echo "    sha256 cellar: :any_skip_relocation, ventura: \"${{ steps.bottles.outputs.ventura_sha }}\"" >> Formula/AV-Spex.rb
-        fi
-        
-        if [[ -n "${{ steps.bottles.outputs.monterey_sha }}" && "${{ steps.bottles.outputs.monterey_sha }}" != "null" ]]; then
-          echo "    sha256 cellar: :any_skip_relocation, monterey: \"${{ steps.bottles.outputs.monterey_sha }}\"" >> Formula/AV-Spex.rb
         fi
         
         # Complete the formula
