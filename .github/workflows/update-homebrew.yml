@@ -3,8 +3,7 @@ name: Update Homebrew Formula
 # Trigger this workflow when a new release is published
 on:
   release:
-    types: [published]
-  # Allow manual triggering for testing
+    types: [published]  # Only trigger when release is published
   workflow_dispatch:
     inputs:
       tag_name:
