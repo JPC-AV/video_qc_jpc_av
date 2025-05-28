@@ -1,12 +1,11 @@
 JPC_AV_videoQC
 ├── LICENSE
 ├── README.md
-├── app_packaging
-├── build
-├── build_avspex_dmg.sh
+├── av_spex_launcher.py
+├── av_spex_the_logo.icns
 ├── developer_docs
-├── entitlements.plist
 ├── images_for_readme
+├── avspex.spec
 ├── logs
 ├── pyproject.toml
 ├── src/AV_Spex/
