@@ -1,8 +1,10 @@
 name: Build Bottles
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Update Homebrew Formula"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag_name:
@@ -13,16 +15,17 @@ on:
 jobs:
   build-bottles:
     name: Build bottles
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}  # ADD THIS LINE
     strategy:
-      matrix:
-        include:
-          - os: macos-14
-            arch: arm64
-            bottle_tag: arm64_sonoma
-          - os: macos-13
-            arch: x86_64
-            bottle_tag: ventura
-      fail-fast: false
+        matrix:
+          include:
+            - os: macos-14
+              arch: arm64
+              bottle_tag: arm64_sonoma
+            - os: macos-13
+              arch: x86_64
+              bottle_tag: ventura
+        fail-fast: false
     
     runs-on: ${{ matrix.os }}
     
@@ -109,6 +112,10 @@ jobs:
         
         # Tap the repository
         brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
+
+        # Update tap to get the latest formula
+        brew tap --repair
+        brew update
         
         echo "=== Final Python Check ==="
         python3 --version
@@ -164,8 +171,9 @@ jobs:
     - name: Get version
       id: version
       run: |
-        if [ "${{ github.event_name }}" = "release" ]; then
-          VERSION="${{ github.event.release.tag_name }}"
+        if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          # For workflow_run trigger, get the version from the latest release
+          VERSION=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
         else
           VERSION="${{ github.event.inputs.tag_name }}"
         fi
