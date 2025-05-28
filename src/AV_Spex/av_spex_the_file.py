@@ -234,7 +234,7 @@ def apply_filename_profile(config_type: str, profile_name: str):
         return
         
     # Save the last used config
-    config_mgr.save_last_used_config('spex')
+    config_mgr.save_config('spex', is_last_used=True)
 
 def print_av_spex_logo():
     avspex_icon = text2art("A-V Spex", font='5lineoblique')
@@ -247,13 +247,13 @@ def run_cli_mode(args):
     # Update checks config
     if args.selected_profile:
         config_edit.apply_profile(args.selected_profile)
-        config_mgr.save_last_used_config('checks')
+        config_mgr.save_config('checks', is_last_used=True)
     if args.tools_on_names:
         config_edit.toggle_on(args.tools_on_names)
-        config_mgr.save_last_used_config('checks')
+        config_mgr.save_config('checks', is_last_used=True)
     if args.tools_off_names:
         config_edit.toggle_off(args.tools_off_names)
-        config_mgr.save_last_used_config('checks')
+        config_mgr.save_config('checks', is_last_used=True)
 
     if args.mediaconch_policy:
         processing_mgmt.setup_mediaconch_policy(args.mediaconch_policy)
@@ -264,7 +264,7 @@ def run_cli_mode(args):
     if args.fn_config_changes:
         filename_profile = args.fn_config_changes
         config_edit.apply_filename_profile(filename_profile)
-        config_mgr.save_last_used_config('spex')
+        config_mgr.save_config('spex', is_last_used=True)
 
     # Handle config I/O operations
     if args.export_config:
