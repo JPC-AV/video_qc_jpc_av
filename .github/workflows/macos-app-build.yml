@@ -3,6 +3,8 @@ name: Build macOS App
 on:
   push:
     branches: [ main, develop ]
+    tags:
+      - 'v*'
   pull_request:
     branches: [ main ]
   workflow_dispatch:  # Allow manual triggering
