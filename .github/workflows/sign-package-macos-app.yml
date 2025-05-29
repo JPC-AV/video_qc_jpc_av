@@ -5,7 +5,6 @@ on:
     workflows: ["Build macOS App"]
     types:
       - completed
-    branches: [ main ]  # Only sign builds from main branch
   workflow_dispatch:
     inputs:
       build_run_id:
