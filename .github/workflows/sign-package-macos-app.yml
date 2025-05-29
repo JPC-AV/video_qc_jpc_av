@@ -289,6 +289,16 @@ jobs:
         name: AV-Spex-${{ env.VERSION }}-signed-dmg
         path: dist/AV-Spex-${{ env.VERSION }}.dmg
         retention-days: 90
+
+    - name: Debug workflow_run context
+      run: |
+        echo "Event name: ${{ github.event_name }}"
+        echo "Workflow run event: ${{ github.event.workflow_run.event }}"
+        echo "Head branch: ${{ github.event.workflow_run.head_branch }}"
+        echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
+        echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
+        echo "All workflow_run context:"
+        echo '${{ toJson(github.event.workflow_run) }}'
         
     - name: Create Release (for tags)
       if: startsWith(github.event.workflow_run.head_branch, 'v')
