@@ -318,16 +318,16 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: dist/AV-Spex-${{ env.VERSION }}.dmg
-        tag_name: ${{ github.ref_name }}
-        name: AV-Spex ${{ github.ref_name }}
+        tag_name: ${{ github.event.workflow_run.head_branch }}  # <-- Use this instead of github.ref_name
+        name: AV-Spex ${{ github.event.workflow_run.head_branch }}  # <-- And this
         draft: false
         prerelease: false
         body: |
           ## AV-Spex v${{ env.VERSION }}
           
           **Build Information:**
-          - Built from commit: ${{ github.event.workflow_run.head_sha || github.sha }}
-          - Build workflow: ${{ github.event.workflow_run.id || github.run_id }}
+          - Built from commit: ${{ github.event.workflow_run.head_sha }}
+          - Build workflow: ${{ github.event.workflow_run.id }}
           - Signed and notarized: ✅
           
           ### Installation
