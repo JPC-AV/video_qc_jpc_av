@@ -30,15 +30,28 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
+        python-version: '3.10'  # Match your local environment
         
     - name: Install dependencies
       env:
-        MACOSX_DEPLOYMENT_TARGET: "12.0"  # Target macOS 12 (Monterey)
+        MACOSX_DEPLOYMENT_TARGET: "12.0"
       run: |
         python -m pip install --upgrade pip
+        
+        # Install PyInstaller
         pip install pyinstaller
+        
+        # Install your package (this should pull in all dependencies)
         pip install -e .
+        
+        # Verify installation
+        python -c "import AV_Spex; print('AV_Spex imported successfully')"
+        
+    - name: Debug Python environment
+      run: |
+        python --version
+        python -c "import sys; print('Python executable:', sys.executable)"
+        pip list | grep -E "(PyQt6|numpy|pandas|PIL|lxml|plotly)" || echo "Some packages not found"
         
     - name: Get version from pyproject.toml
       id: get_version
@@ -51,100 +64,34 @@ jobs:
       run: |
         rm -rf dist/ build/
         
-    - name: Build with PyInstaller
+    - name: Build with PyInstaller (verbose)
       env:
-        MACOSX_DEPLOYMENT_TARGET: "12.0"  # Target macOS 12 (Monterey)
+        MACOSX_DEPLOYMENT_TARGET: "12.0"
       run: |
         echo "Building for ${{ matrix.arch }} with macOS 12+ compatibility..."
-        pyinstaller --noconfirm avspex.spec
+        pyinstaller --noconfirm --log-level=DEBUG avspex.spec
         
-    - name: Verify build output
+    - name: Verify and debug build
       run: |
+        echo "=== Build output ==="
         ls -la dist/
+        
         if [ -d "dist/AV-Spex.app" ]; then
           echo "✅ App bundle created successfully for ${{ matrix.arch }}"
+          
+          echo "=== Binary info ==="
           file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+          
+          echo "=== Frameworks directory ==="
+          ls -la "dist/AV-Spex.app/Contents/Frameworks/" | head -10
+          
+          echo "=== Testing app launch ==="
+          # Try to run the app and capture any error output
+          timeout 10s ./dist/AV-Spex.app/Contents/MacOS/AV-Spex --help 2>&1 || echo "App test completed (may have timed out)"
+          
         else
           echo "❌ App bundle not found!"
+          echo "Contents of dist/:"
+          ls -la dist/
           exit 1
         fi
-        
-    - name: Create build info
-      run: |
-        cat > dist/build-info.json << EOF
-        {
-          "version": "${{ steps.get_version.outputs.VERSION }}",
-          "commit": "${{ github.sha }}",
-          "ref": "${{ github.ref }}",
-          "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-          "workflow_run_id": "${{ github.run_id }}",
-          "architecture": "${{ matrix.arch }}"
-        }
-        EOF
-        
-    - name: Create app bundle archive
-      run: |
-        cd dist
-        tar -czf AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz AV-Spex.app build-info.json
-        
-    - name: Upload unsigned app bundle
-      uses: actions/upload-artifact@v4
-      with:
-        name: av-spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned
-        path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz
-        retention-days: 30
-        
-  combine-architectures:
-    needs: build-macos
-    runs-on: macos-13
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Download Intel build
-      uses: actions/download-artifact@v4
-      with:
-        name: av-spex-${{ needs.build-macos.outputs.version }}-x86_64-unsigned
-        path: ./intel
-        
-    - name: Download ARM64 build  
-      uses: actions/download-artifact@v4
-      with:
-        name: av-spex-${{ needs.build-macos.outputs.version }}-arm64-unsigned
-        path: ./arm64
-        
-    - name: Extract and combine architectures
-      run: |
-        # Extract both builds
-        cd intel && tar -xzf *.tar.gz && cd ..
-        cd arm64 && tar -xzf *.tar.gz && cd ..
-        
-        # Create combined directory
-        mkdir -p dist
-        cp -R intel/AV-Spex.app dist/
-        
-        # Use lipo to create universal binary
-        lipo -create \
-          intel/AV-Spex.app/Contents/MacOS/AV-Spex \
-          arm64/AV-Spex.app/Contents/MacOS/AV-Spex \
-          -output dist/AV-Spex.app/Contents/MacOS/AV-Spex
-          
-        # Verify universal binary
-        echo "Verifying universal binary:"
-        file dist/AV-Spex.app/Contents/MacOS/AV-Spex
-        lipo -info dist/AV-Spex.app/Contents/MacOS/AV-Spex
-        
-        # Create build info
-        cp intel/build-info.json dist/
-        
-        # Create final archive
-        cd dist
-        tar -czf AV-Spex-${{ needs.build-macos.outputs.version }}-universal-unsigned.tar.gz AV-Spex.app build-info.json
-        
-    - name: Upload universal app bundle
-      uses: actions/upload-artifact@v4
-      with:
-        name: av-spex-${{ needs.build-macos.outputs.version }}-universal-unsigned
-        path: dist/AV-Spex-${{ needs.build-macos.outputs.version }}-universal-unsigned.tar.gz
-        retention-days: 30
