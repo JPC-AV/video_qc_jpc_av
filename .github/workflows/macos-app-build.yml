@@ -27,51 +27,67 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Set up Miniconda
+      uses: conda-incubator/setup-miniconda@v3
       with:
-        python-version: '3.10'  # Match your local environment
+        python-version: '3.10.13'  # Match your exact version
+        miniforge-version: latest
+        activate-environment: JPC_AV  # Match your environment name
+        environment-file: false
+        auto-activate-base: false
         
     - name: Install dependencies
+      shell: bash -el {0}  # Required for conda
       env:
         MACOSX_DEPLOYMENT_TARGET: "12.0"
       run: |
-        python -m pip install --upgrade pip
+        # Verify conda environment
+        conda info
+        which python
+        python --version
         
         # Install PyInstaller
-        pip install pyinstaller
+        conda install -c conda-forge pyinstaller
         
-        # Install your package (this should pull in all dependencies)
+        # Install your package dependencies
         pip install -e .
         
-        # Verify installation
-        python -c "import AV_Spex; print('AV_Spex imported successfully')"
+        # Verify installation and Python structure
+        echo "=== Python Structure Check ==="
+        python -c "
+        import sys
+        import sysconfig
+        print('Python executable:', sys.executable)
+        print('Python prefix:', sys.prefix)
+        print('Platform:', sysconfig.get_platform())
+        print('Framework support:', hasattr(sys, 'base_prefix'))
+        "
         
-    - name: Debug Python environment
-      run: |
-        python --version
-        python -c "import sys; print('Python executable:', sys.executable)"
-        pip list | grep -E "(PyQt6|numpy|pandas|PIL|lxml|plotly)" || echo "Some packages not found"
+        # Verify AV_Spex imports
+        python -c "import AV_Spex; print('✅ AV_Spex imported successfully')"
         
     - name: Get version from pyproject.toml
-      id: get_version
+      shell: bash -el {0}
       run: |
         VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "Building AV-Spex version $VERSION for ${{ matrix.arch }}"
         
     - name: Clean previous build artifacts
+      shell: bash -el {0}
       run: |
         rm -rf dist/ build/
         
-    - name: Build with PyInstaller (verbose)
+    - name: Build with PyInstaller
+      shell: bash -el {0}
       env:
         MACOSX_DEPLOYMENT_TARGET: "12.0"
       run: |
         echo "Building for ${{ matrix.arch }} with macOS 12+ compatibility..."
         pyinstaller --noconfirm --log-level=DEBUG avspex.spec
         
-    - name: Verify and debug build
+    - name: Verify build and Python framework
+      shell: bash -el {0}
       run: |
         echo "=== Build output ==="
         ls -la dist/
@@ -82,17 +98,19 @@ jobs:
           echo "=== Binary info ==="
           file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
           
-          echo "=== Frameworks directory ==="
-          ls -la "dist/AV-Spex.app/Contents/Frameworks/" | head -10
-          
-          echo "=== Testing app launch ==="
-          # Use gtimeout if available, otherwise just try to run briefly
-          if command -v gtimeout >/dev/null 2>&1; then
-            gtimeout 10s ./dist/AV-Spex.app/Contents/MacOS/AV-Spex --help 2>&1 || echo "App test completed"
+          echo "=== Python framework check ==="
+          if [ -d "dist/AV-Spex.app/Contents/Frameworks/Python.framework" ]; then
+            echo "✅ Python.framework structure found"
+            ls -la "dist/AV-Spex.app/Contents/Frameworks/Python"*
+            file "dist/AV-Spex.app/Contents/Frameworks/Python.framework/Versions/3.10/Python"
           else
-            echo "Testing app executable exists and is executable:"
-            test -x ./dist/AV-Spex.app/Contents/MacOS/AV-Spex && echo "✅ Executable is valid" || echo "❌ Executable problem"
+            echo "❌ Python.framework structure missing"
+            echo "Available Python files:"
+            find "dist/AV-Spex.app/Contents/Frameworks/" -name "*python*" -o -name "*Python*" | head -10
           fi
+          
+          echo "=== Testing app executable ==="
+          test -x ./dist/AV-Spex.app/Contents/MacOS/AV-Spex && echo "✅ Executable is valid" || echo "❌ Executable problem"
           
         else
           echo "❌ App bundle not found!"
@@ -102,6 +120,7 @@ jobs:
         fi
         
     - name: Create build info
+      shell: bash -el {0}
       run: |
         cat > dist/build-info.json << EOF
         {
@@ -111,7 +130,8 @@ jobs:
           "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
           "workflow_run_id": "${{ github.run_id }}",
           "architecture": "${{ matrix.arch }}",
-          "python_version": "3.10"
+          "python_version": "3.10.13",
+          "python_type": "conda"
         }
         EOF
         
@@ -119,6 +139,7 @@ jobs:
         cat dist/build-info.json
         
     - name: Create app bundle archive
+      shell: bash -el {0}
       run: |
         cd dist
         echo "Creating archive for version ${{ steps.get_version.outputs.VERSION }}"
@@ -140,70 +161,4 @@ jobs:
       with:
         name: av-spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned
         path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz
-        retention-days: 30
-        
-  combine-architectures:
-    needs: build-macos
-    runs-on: macos-13
-    if: success()  # Only run if both builds succeeded
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Download Intel build
-      uses: actions/download-artifact@v4
-      with:
-        name: av-spex-${{ needs.build-macos.outputs.version }}-x86_64-unsigned
-        path: ./intel
-        
-    - name: Download ARM64 build  
-      uses: actions/download-artifact@v4
-      with:
-        name: av-spex-${{ needs.build-macos.outputs.version }}-arm64-unsigned
-        path: ./arm64
-        
-    - name: Extract and combine architectures
-      run: |
-        echo "=== Extracting builds ==="
-        # Extract both builds
-        cd intel && tar -xzf *.tar.gz && cd ..
-        cd arm64 && tar -xzf *.tar.gz && cd ..
-        
-        echo "Extracted Intel build:"
-        ls -la intel/
-        echo "Extracted ARM64 build:"
-        ls -la arm64/
-        
-        # Create combined directory
-        mkdir -p dist
-        cp -R intel/AV-Spex.app dist/
-        
-        echo "=== Creating universal binary ==="
-        # Use lipo to create universal binary
-        lipo -create \
-          intel/AV-Spex.app/Contents/MacOS/AV-Spex \
-          arm64/AV-Spex.app/Contents/MacOS/AV-Spex \
-          -output dist/AV-Spex.app/Contents/MacOS/AV-Spex
-          
-        # Verify universal binary
-        echo "Verifying universal binary:"
-        file dist/AV-Spex.app/Contents/MacOS/AV-Spex
-        lipo -info dist/AV-Spex.app/Contents/MacOS/AV-Spex
-        
-        # Create build info
-        cp intel/build-info.json dist/
-        
-        # Create final archive
-        cd dist
-        tar -czf AV-Spex-${{ needs.build-macos.outputs.version }}-universal-unsigned.tar.gz AV-Spex.app build-info.json
-        
-        echo "Universal archive created:"
-        ls -la *.tar.gz
-        
-    - name: Upload universal app bundle
-      uses: actions/upload-artifact@v4
-      with:
-        name: av-spex-${{ needs.build-macos.outputs.version }}-universal-unsigned
-        path: dist/AV-Spex-${{ needs.build-macos.outputs.version }}-universal-unsigned.tar.gz
         retention-days: 30
