@@ -24,6 +24,19 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Debug workflow_run context  # <-- ADD THIS DEBUG STEP HERE
+      run: |
+        echo "Event name: ${{ github.event_name }}"
+        echo "Triggering workflow run ID: ${{ github.event.workflow_run.id }}"
+        echo "Triggering workflow name: ${{ github.event.workflow_run.name }}"
+        echo "Triggering workflow conclusion: ${{ github.event.workflow_run.conclusion }}"
+        echo "Head branch: ${{ github.event.workflow_run.head_branch }}"
+        echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
+        echo "Event type: ${{ github.event.workflow_run.event }}"
+        echo "Repository: ${{ github.event.workflow_run.repository.full_name }}"
+        echo "All workflow_run context:"
+        echo '${{ toJson(github.event.workflow_run) }}'
       
     - name: Install dependencies
       run: |
