@@ -60,6 +60,7 @@ a = Analysis(['av_spex_launcher.py'],  # Your launcher file
         # Add any missing imports that might be needed in CI
         'pkg_resources',
         'setuptools',
+        'sqlite3',  # Add this only if you use SQLite
     ],
     hookspath=[],
     hooksconfig={},
