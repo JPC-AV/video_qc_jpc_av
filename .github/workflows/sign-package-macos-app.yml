@@ -19,7 +19,6 @@ on:
 permissions:
   contents: write  # Required to create releases
   actions: read    # Required to download artifacts
-  metadata: read   # Add this explicitly
   id-token: write  # Add this for better token handling
 
 jobs:
