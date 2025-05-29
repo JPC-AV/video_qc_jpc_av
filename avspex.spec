@@ -59,18 +59,7 @@ a = Analysis(['av_spex_launcher.py'],  # Your launcher file
         'PyQt6.QtCore',
         'PyQt6.QtGui',
         
-        # Force inclusion of critical missing dependencies
-        'numpy',
-        'pandas', 
-        'PIL',
-        'PIL.Image',
-        'lxml',
-        'lxml.etree',
-        'yaml',
-        'pytz',
-        
         # System modules
-        'sqlite3',
         'AppKit',
         'pkg_resources',
         'setuptools',
