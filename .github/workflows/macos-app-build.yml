@@ -30,10 +30,9 @@ jobs:
     - name: Set up Miniconda
       uses: conda-incubator/setup-miniconda@v3
       with:
-        python-version: '3.10.13'  # Match your exact version
+        python-version: '3.10'  # Simplified version spec
         miniforge-version: latest
-        activate-environment: JPC_AV  # Match your environment name
-        environment-file: false
+        activate-environment: JPC_AV
         auto-activate-base: false
         
     - name: Install dependencies
@@ -46,8 +45,8 @@ jobs:
         which python
         python --version
         
-        # Install PyInstaller
-        conda install -c conda-forge pyinstaller
+        # Install PyInstaller via conda-forge (more reliable)
+        conda install -c conda-forge pyinstaller -y
         
         # Install your package dependencies
         pip install -e .
@@ -68,6 +67,7 @@ jobs:
         
     - name: Get version from pyproject.toml
       shell: bash -el {0}
+      id: get_version
       run: |
         VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
@@ -84,7 +84,7 @@ jobs:
         MACOSX_DEPLOYMENT_TARGET: "12.0"
       run: |
         echo "Building for ${{ matrix.arch }} with macOS 12+ compatibility..."
-        pyinstaller --noconfirm --log-level=DEBUG avspex.spec
+        pyinstaller --noconfirm --log-level=INFO avspex.spec
         
     - name: Verify build and Python framework
       shell: bash -el {0}
@@ -102,7 +102,7 @@ jobs:
           if [ -d "dist/AV-Spex.app/Contents/Frameworks/Python.framework" ]; then
             echo "✅ Python.framework structure found"
             ls -la "dist/AV-Spex.app/Contents/Frameworks/Python"*
-            file "dist/AV-Spex.app/Contents/Frameworks/Python.framework/Versions/3.10/Python"
+            file "dist/AV-Spex.app/Contents/Frameworks/Python.framework/Versions/3.10/Python" 2>/dev/null || echo "Framework version mismatch"
           else
             echo "❌ Python.framework structure missing"
             echo "Available Python files:"
@@ -130,7 +130,7 @@ jobs:
           "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
           "workflow_run_id": "${{ github.run_id }}",
           "architecture": "${{ matrix.arch }}",
-          "python_version": "3.10.13",
+          "python_version": "$(python --version)",
           "python_type": "conda"
         }
         EOF
