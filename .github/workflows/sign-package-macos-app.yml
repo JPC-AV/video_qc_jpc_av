@@ -19,6 +19,8 @@ on:
 permissions:
   contents: write  # Required to create releases
   actions: read    # Required to download artifacts
+  metadata: read   # Add this explicitly
+  id-token: write  # Add this for better token handling
 
 jobs:
   sign-and-package:
@@ -28,8 +30,11 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        # Ensure we checkout the correct ref when triggered by workflow_run
+        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-    - name: Debug workflow_run context  # <-- ADD THIS DEBUG STEP HERE
+    - name: Debug workflow_run context
       run: |
         echo "Event name: ${{ github.event_name }}"
         echo "Triggering workflow run ID: ${{ github.event.workflow_run.id }}"
@@ -147,6 +152,32 @@ jobs:
         CERT_NAME=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1 | grep -o '"[^"]*"' | sed 's/"//g')
         echo "CERT_NAME=$CERT_NAME" >> $GITHUB_ENV
         echo "Found certificate: $CERT_NAME"
+        
+    - name: Verify Apple credentials before notarization
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        echo "🔍 Verifying Apple credentials..."
+        echo "Apple ID: ${APPLE_ID:0:3}***${APPLE_ID: -3}"
+        echo "Team ID: ${APPLE_TEAM_ID:0:3}***${APPLE_TEAM_ID: -3}"
+        
+        # Test the credentials first
+        echo "Testing notarization credentials..."
+        xcrun notarytool store-credentials "TEMP_TEST_PROFILE" \
+          --apple-id "$APPLE_ID" \
+          --password "$APPLE_ID_PASSWORD" \
+          --team-id "$APPLE_TEAM_ID" || {
+            echo "❌ Notarization credential test failed"
+            echo "Possible issues:"
+            echo "1. Apple ID password might have expired"
+            echo "2. Team ID might be incorrect"
+            echo "3. Two-factor authentication might be required"
+            exit 1
+          }
+        
+        echo "✅ Notarization credentials verified successfully"
         
     - name: Create Notarization Profile
       env:
