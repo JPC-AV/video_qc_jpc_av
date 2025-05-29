@@ -291,7 +291,7 @@ jobs:
         retention-days: 90
         
     - name: Create Release (for tags)
-      if: startsWith(github.event.workflow_run.head_branch, 'refs/tags/v')
+      if: startsWith(github.event.workflow_run.head_branch, 'v')
       uses: softprops/action-gh-release@v1
       with:
         files: dist/AV-Spex-${{ env.VERSION }}.dmg
