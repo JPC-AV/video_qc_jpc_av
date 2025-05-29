@@ -16,6 +16,10 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: write  # Required to create releases
+  actions: read    # Required to download artifacts
+
 jobs:
   sign-and-package:
     runs-on: macos-latest
