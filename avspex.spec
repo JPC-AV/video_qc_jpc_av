@@ -30,6 +30,7 @@ a = Analysis(['av_spex_launcher.py'],  # Your launcher file
         (os.path.join(root_dir, 'pyproject.toml'), '.'),
     ],
     hiddenimports=[
+        # Core AV_Spex modules
         'AV_Spex',
         'AV_Spex.av_spex_the_file',
         'AV_Spex.processing',
@@ -51,16 +52,28 @@ a = Analysis(['av_spex_launcher.py'],  # Your launcher file
         'AV_Spex.gui.gui_checks_tab',
         'AV_Spex.gui.gui_checks_tab.gui_checks_tab',
         'AV_Spex.gui.gui_checks_tab.gui_checks_window',
+        
+        # PyQt6 modules
         'PyQt6',
         'PyQt6.QtWidgets',
         'PyQt6.QtCore',
         'PyQt6.QtGui',
-        # Additional imports for macOS support
+        
+        # Force inclusion of critical missing dependencies
+        'numpy',
+        'pandas', 
+        'PIL',
+        'PIL.Image',
+        'lxml',
+        'lxml.etree',
+        'yaml',
+        'pytz',
+        
+        # System modules
+        'sqlite3',
         'AppKit',
-        # Add any missing imports that might be needed in CI
         'pkg_resources',
         'setuptools',
-        'sqlite3',  # Add this only if you use SQLite
     ],
     hookspath=[],
     hooksconfig={},
@@ -116,13 +129,13 @@ app = BUNDLE(coll,
     name='AV-Spex.app',
     icon=icon_path,
     bundle_identifier='com.jpc.avspex',
-    version='0.7.8.5',  # Consider making this dynamic
+    version='0.7.8.7',  # Updated to match your current version
     info_plist={
         'CFBundleName': 'AV-Spex',
         'CFBundleDisplayName': 'AV-Spex',
         'CFBundleIdentifier': 'com.jpc.avspex',
-        'CFBundleVersion': '0.7.8.5',
-        'CFBundleShortVersionString': '0.7.8.5',
+        'CFBundleVersion': '0.7.8.7',
+        'CFBundleShortVersionString': '0.7.8.7',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.12',  # Minimum macOS version
         'NSAppleEventsUsageDescription': 'AV-Spex needs access to Apple Events for automation features.',
