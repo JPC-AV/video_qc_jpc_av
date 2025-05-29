@@ -86,8 +86,13 @@ jobs:
           ls -la "dist/AV-Spex.app/Contents/Frameworks/" | head -10
           
           echo "=== Testing app launch ==="
-          # Try to run the app and capture any error output
-          timeout 10s ./dist/AV-Spex.app/Contents/MacOS/AV-Spex --help 2>&1 || echo "App test completed (may have timed out)"
+          # Use gtimeout if available, otherwise just try to run briefly
+          if command -v gtimeout >/dev/null 2>&1; then
+            gtimeout 10s ./dist/AV-Spex.app/Contents/MacOS/AV-Spex --help 2>&1 || echo "App test completed"
+          else
+            echo "Testing app executable exists and is executable:"
+            test -x ./dist/AV-Spex.app/Contents/MacOS/AV-Spex && echo "✅ Executable is valid" || echo "❌ Executable problem"
+          fi
           
         else
           echo "❌ App bundle not found!"
@@ -95,3 +100,110 @@ jobs:
           ls -la dist/
           exit 1
         fi
+        
+    - name: Create build info
+      run: |
+        cat > dist/build-info.json << EOF
+        {
+          "version": "${{ steps.get_version.outputs.VERSION }}",
+          "commit": "${{ github.sha }}",
+          "ref": "${{ github.ref }}",
+          "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "workflow_run_id": "${{ github.run_id }}",
+          "architecture": "${{ matrix.arch }}",
+          "python_version": "3.10"
+        }
+        EOF
+        
+        echo "Build info created:"
+        cat dist/build-info.json
+        
+    - name: Create app bundle archive
+      run: |
+        cd dist
+        echo "Creating archive for version ${{ steps.get_version.outputs.VERSION }}"
+        
+        # Verify files exist before archiving
+        ls -la
+        test -d AV-Spex.app || (echo "❌ AV-Spex.app not found" && exit 1)
+        test -f build-info.json || (echo "❌ build-info.json not found" && exit 1)
+        
+        # Create the archive
+        tar -czf AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz AV-Spex.app build-info.json
+        
+        # Verify archive was created
+        ls -la *.tar.gz
+        echo "Archive created successfully"
+        
+    - name: Upload unsigned app bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: av-spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned
+        path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz
+        retention-days: 30
+        
+  combine-architectures:
+    needs: build-macos
+    runs-on: macos-13
+    if: success()  # Only run if both builds succeeded
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Download Intel build
+      uses: actions/download-artifact@v4
+      with:
+        name: av-spex-${{ needs.build-macos.outputs.version }}-x86_64-unsigned
+        path: ./intel
+        
+    - name: Download ARM64 build  
+      uses: actions/download-artifact@v4
+      with:
+        name: av-spex-${{ needs.build-macos.outputs.version }}-arm64-unsigned
+        path: ./arm64
+        
+    - name: Extract and combine architectures
+      run: |
+        echo "=== Extracting builds ==="
+        # Extract both builds
+        cd intel && tar -xzf *.tar.gz && cd ..
+        cd arm64 && tar -xzf *.tar.gz && cd ..
+        
+        echo "Extracted Intel build:"
+        ls -la intel/
+        echo "Extracted ARM64 build:"
+        ls -la arm64/
+        
+        # Create combined directory
+        mkdir -p dist
+        cp -R intel/AV-Spex.app dist/
+        
+        echo "=== Creating universal binary ==="
+        # Use lipo to create universal binary
+        lipo -create \
+          intel/AV-Spex.app/Contents/MacOS/AV-Spex \
+          arm64/AV-Spex.app/Contents/MacOS/AV-Spex \
+          -output dist/AV-Spex.app/Contents/MacOS/AV-Spex
+          
+        # Verify universal binary
+        echo "Verifying universal binary:"
+        file dist/AV-Spex.app/Contents/MacOS/AV-Spex
+        lipo -info dist/AV-Spex.app/Contents/MacOS/AV-Spex
+        
+        # Create build info
+        cp intel/build-info.json dist/
+        
+        # Create final archive
+        cd dist
+        tar -czf AV-Spex-${{ needs.build-macos.outputs.version }}-universal-unsigned.tar.gz AV-Spex.app build-info.json
+        
+        echo "Universal archive created:"
+        ls -la *.tar.gz
+        
+    - name: Upload universal app bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: av-spex-${{ needs.build-macos.outputs.version }}-universal-unsigned
+        path: dist/AV-Spex-${{ needs.build-macos.outputs.version }}-universal-unsigned.tar.gz
+        retention-days: 30
