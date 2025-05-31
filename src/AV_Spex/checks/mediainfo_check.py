@@ -6,9 +6,9 @@ import sys
 import json
 from typing import Dict, Any, Optional, List
 
-from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig, SpexConfig
-from ..utils.config_manager import ConfigManager
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
 checks_config = config_mgr.get_config('checks', ChecksConfig)
@@ -101,7 +101,7 @@ def get_expected_fields(section_type: str) -> List[str]:
     """
     # Import required for introspection
     import dataclasses
-    from ..utils.config_setup import MediainfoGeneralValues, MediainfoVideoValues, MediainfoAudioValues
+    from AV_Spex.utils.config_setup import MediainfoGeneralValues, MediainfoVideoValues, MediainfoAudioValues
     
     # Map section types to their corresponding dataclass types
     dataclass_mapping = {

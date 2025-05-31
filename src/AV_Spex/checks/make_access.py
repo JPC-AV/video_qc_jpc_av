@@ -1,9 +1,9 @@
 import subprocess
 import os
 import sys
-from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig
-from ..utils.config_manager import ConfigManager
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
 checks_config = config_mgr.get_config('checks', ChecksConfig)

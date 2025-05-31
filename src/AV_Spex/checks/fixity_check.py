@@ -4,7 +4,7 @@ import hashlib
 import shutil
 import re
 from datetime import datetime
-from ..utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger
 
 
 def check_fixity(directory, video_id, actual_checksum=None, check_cancelled=None, signals=None):
