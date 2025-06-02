@@ -55,7 +55,7 @@ def safe_gzip_open_with_encoding_fallback(file_path):
         with gzip.open(file_path, 'rb') as gz_file:
             raw_content = gz_file.read()
     except Exception as e:
-        logger.error(f"Error reading gzipped file {file_path}: {e}")
+        logger.error(f"Error reading gzipped file {file_path}: {e}\n")
         return None, None
     
     # Try to decode with different encodings to find the right one
@@ -63,7 +63,7 @@ def safe_gzip_open_with_encoding_fallback(file_path):
         try:
             # Test if we can decode successfully
             decoded_content = raw_content.decode(encoding)
-            logger.debug(f"Successfully decoded {file_path} using {encoding} encoding")
+            # logger.debug(f"Successfully decoded {file_path} using {encoding} encoding\n")
             return raw_content, encoding
         except UnicodeDecodeError:
             continue
@@ -71,10 +71,10 @@ def safe_gzip_open_with_encoding_fallback(file_path):
     # If all encodings fail, try with error handling
     try:
         decoded_content = raw_content.decode('utf-8', errors='replace')
-        logger.warning(f"Used utf-8 with error replacement for {file_path}")
+        logger.warning(f"Used utf-8 with error replacement for {file_path}\n")
         return raw_content, 'utf-8-replace'
     except Exception as e:
-        logger.critical(f"Failed to decode {file_path} with any encoding method: {e}")
+        logger.critical(f"Failed to decode {file_path} with any encoding method: {e}\n")
         return None, None
 
 
@@ -1137,7 +1137,7 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     if qct_parse['barsDetection']:
         durationStart = ""                            # if bar detection is turned on then we have to calculate this
         durationEnd = ""                            # if bar detection is turned on then we have to calculate this
-        logger.debug(f"Starting Bars Detection on {baseName}")
+        logger.debug(f"Starting Bars Detection on {baseName}\n")
         qctools_colorbars_duration_output = os.path.join(report_directory, "qct-parse_colorbars_durations.csv")
         durationStart, durationEnd, barsStartString, barsEndString = detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_depth_10)
         if durationStart == "" and durationEnd == "":
