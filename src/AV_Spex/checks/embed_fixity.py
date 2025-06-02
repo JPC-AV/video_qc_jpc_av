@@ -5,9 +5,10 @@ import os
 import time
 import re
 import json
-from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig
-from ..utils.config_manager import ConfigManager
+
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
 

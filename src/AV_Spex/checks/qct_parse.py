@@ -20,13 +20,11 @@ import csv
 import datetime as dt
 from dataclasses import asdict
 
-from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig, SpexConfig
-from ..utils.config_manager import ConfigManager
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
 
 def load_etree():
     """Helper function to load lxml.etree with error handling"""
@@ -44,8 +42,12 @@ operator_mapping = {
     'gt': operator.gt,
 }
 
-# init variable for config list of QCTools tags
-fullTagList = asdict(spex_config.qct_parse_values.fullTagList)
+def getFullTagList():
+    """Heler function for retrieving tag list"""
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+    # init variable for config list of QCTools tags
+    fullTagList = asdict(spex_config.qct_parse_values.fullTagList)
+    return fullTagList
 
 # Creates timestamp for pkt_dts_time
 def dts2ts(frame_pkt_dts_time):
@@ -466,6 +468,9 @@ def getCompFromConfig(qct_parse, profile, tag):
     Returns:
         callable: Comparison operator (e.g., operator.lt, operator.gt).
    """
+   
+   spex_config = config_mgr.get_config('spex', SpexConfig)
+   
    smpte_color_bars_keys = asdict(spex_config.qct_parse_values.smpte_color_bars).keys()
 
    if qct_parse['profile']:
@@ -606,6 +611,10 @@ def printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_check_o
         None
     """
 
+    
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+    fullTagList = getFullTagList()
+    
     def format_percentage(value):
         percent = value * 100
         if percent == 100:
@@ -883,6 +892,12 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         report_directory (str): Path to {video_id}_report_csvs directory.
 
     """
+    
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+
+    fullTagList = getFullTagList()
+
     # Check if we can load required library
     etree = load_etree()
     if etree is None:

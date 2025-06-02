@@ -1,4 +1,3 @@
-# avspex.spec
 import os
 from pathlib import Path
 
@@ -11,9 +10,14 @@ src_dir = os.path.join(root_dir, 'src')
 # Define the packaging assets directory for icon files
 icon_path = os.path.join(root_dir, 'av_spex_the_logo.icns')
 
+# Verify icon exists, use fallback if not
+if not os.path.exists(icon_path):
+    print(f"Warning: Icon not found at {icon_path}")
+    icon_path = None
+
 block_cipher = None
 
-a = Analysis(['av_spex_launcher.py'],  # New launcher in root directory
+a = Analysis(['av_spex_launcher.py'],  # Your launcher file
     pathex=[
         root_dir,  # Add root to the Python path
         src_dir    # Add source dir to the Python path
@@ -26,8 +30,9 @@ a = Analysis(['av_spex_launcher.py'],  # New launcher in root directory
         (os.path.join(root_dir, 'pyproject.toml'), '.'),
     ],
     hiddenimports=[
+        # Core AV_Spex modules
         'AV_Spex',
-        'AV_Spex.av_spex_the_file',  # Important for main_gui function
+        'AV_Spex.av_spex_the_file',
         'AV_Spex.processing',
         'AV_Spex.utils',
         'AV_Spex.checks',
@@ -47,21 +52,34 @@ a = Analysis(['av_spex_launcher.py'],  # New launcher in root directory
         'AV_Spex.gui.gui_checks_tab',
         'AV_Spex.gui.gui_checks_tab.gui_checks_tab',
         'AV_Spex.gui.gui_checks_tab.gui_checks_window',
+        
+        # PyQt6 modules
         'PyQt6',
         'PyQt6.QtWidgets',
         'PyQt6.QtCore',
         'PyQt6.QtGui',
-        # Additional imports for macOS support
+        
+        # System modules
         'AppKit',
+        'pkg_resources',
+        'setuptools',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # Only exclude what you originally excluded
         'PyQt6.QtDBus', 'PyQt6.QtPdf', 'PyQt6.QtSvg', 'PyQt6.QtNetwork',
-        'plotly.matplotlylib', 'plotly.figure_factory'
+        'plotly.matplotlylib', 'plotly.figure_factory',
+        # Additional excludes to reduce bundle size
+        'tkinter',
+        'matplotlib',
+        'scipy',
+        'numpy.testing',
+        'test',
+        'tests',
     ],
-    noarchive=False,
+    noarchive=False,  # CRITICAL: Keep this False to allow proper symlink structure
     cipher=block_cipher
 )
 
@@ -79,10 +97,9 @@ exe = EXE(
     upx=True,
     runtime_tmpdir=None,
     console=False,  # Set to False for production
-    codesign_identity=None,
-    entitlements_file=None, 
-    target_arch=None,
-    universal2=True,
+    codesign_identity=None,  # Will be handled by GitHub Actions
+    entitlements_file=None,  # Will be handled by GitHub Actions
+    target_arch=None,  # Let each runner build for its native architecture
     icon=icon_path
 )
 
@@ -97,24 +114,21 @@ coll = COLLECT(
     name='AV-Spex'
 )
 
-# Create a full Info.plist with all macOS app requirements
 app = BUNDLE(coll,
     name='AV-Spex.app',
     icon=icon_path,
     bundle_identifier='com.jpc.avspex',
+    version='0.7.8.7',  # Updated to match your current version
     info_plist={
         'CFBundleName': 'AV-Spex',
         'CFBundleDisplayName': 'AV-Spex',
-        'CFBundleExecutable': 'AV-Spex',
-        'CFBundlePackageType': 'APPL',
-        'CFBundleInfoDictionaryVersion': '6.0',
-        'NSHumanReadableCopyright': 'Copyright © 2025',
-        'NSPrincipalClass': 'NSApplication',
+        'CFBundleIdentifier': 'com.jpc.avspex',
+        'CFBundleVersion': '0.7.8.7',
+        'CFBundleShortVersionString': '0.7.8.7',
         'NSHighResolutionCapable': True,
-        'LSMinimumSystemVersion': '10.13.0',
-        'LSApplicationCategoryType': 'public.app-category.utilities',
-        'LSUIElement': False,
-        'LSBackgroundOnly': False,
-        'CFBundleIconFile': 'av_spex_the_logo.icns',
+        'LSMinimumSystemVersion': '10.12',  # Minimum macOS version
+        'NSAppleEventsUsageDescription': 'AV-Spex needs access to Apple Events for automation features.',
+        'NSCameraUsageDescription': 'AV-Spex may access camera for video processing.',
+        'NSMicrophoneUsageDescription': 'AV-Spex may access microphone for audio processing.',
     }
 )

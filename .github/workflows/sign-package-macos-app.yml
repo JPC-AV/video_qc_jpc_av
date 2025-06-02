@@ -1,0 +1,377 @@
+name: Sign and Package macOS App
+
+on:
+  workflow_run:
+    workflows: ["Build macOS App"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: 'Build workflow run ID to sign'
+        required: true
+        type: string
+      version:
+        description: 'Version to sign (optional, will be detected from build)'
+        required: false
+        type: string
+
+permissions:
+  contents: write  # Required to create releases
+  actions: read    # Required to download artifacts
+  id-token: write  # Add this for better token handling
+
+jobs:
+  sign-and-package:
+    runs-on: macos-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        # Ensure we checkout the correct ref when triggered by workflow_run
+        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+    - name: Debug workflow_run context
+      run: |
+        echo "Event name: ${{ github.event_name }}"
+        echo "Triggering workflow run ID: ${{ github.event.workflow_run.id }}"
+        echo "Triggering workflow name: ${{ github.event.workflow_run.name }}"
+        echo "Triggering workflow conclusion: ${{ github.event.workflow_run.conclusion }}"
+        echo "Head branch: ${{ github.event.workflow_run.head_branch }}"
+        echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
+        echo "Event type: ${{ github.event.workflow_run.event }}"
+        echo "Repository: ${{ github.event.workflow_run.repository.full_name }}"
+        echo "All workflow_run context:"
+        echo '${{ toJson(github.event.workflow_run) }}'
+      
+    - name: Install dependencies
+      run: |
+        # Install create-dmg (jq is pre-installed on GitHub runners)
+        brew install create-dmg
+        
+    - name: Download unsigned app bundle
+      uses: actions/download-artifact@v4
+      with:
+        pattern: av-spex-*-unsigned
+        path: ./artifacts
+        run-id: ${{ github.event.inputs.build_run_id || github.event.workflow_run.id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        merge-multiple: true
+        
+    - name: Extract build artifacts and get version
+      run: |
+        ls -la artifacts/
+        
+        # Find the universal build (preferred) or fall back to any build
+        UNIVERSAL_ARCHIVE=$(find artifacts -name "*universal-unsigned.tar.gz" | head -1)
+        if [ -n "$UNIVERSAL_ARCHIVE" ]; then
+          APP_ARCHIVE="$UNIVERSAL_ARCHIVE"
+          echo "✅ Using universal build: $APP_ARCHIVE"
+        else
+          # Fall back to any available archive
+          APP_ARCHIVE=$(find artifacts -name "*.tar.gz" | head -1)
+          echo "⚠️  Universal build not found, using: $APP_ARCHIVE"
+        fi
+        
+        if [ -z "$APP_ARCHIVE" ]; then
+          echo "❌ No app bundle archive found!"
+          exit 1
+        fi
+        
+        echo "Extracting: $APP_ARCHIVE"
+        mkdir -p dist
+        tar -xzf "$APP_ARCHIVE" -C dist/
+        
+        # The build-info.json should now be in dist/ after extraction
+        if [ -f "dist/build-info.json" ]; then
+          echo "📄 Found build info file: dist/build-info.json"
+          cat "dist/build-info.json"
+          
+          # Extract version from build info
+          if command -v jq > /dev/null; then
+            VERSION=$(cat "dist/build-info.json" | jq -r '.version')
+          else
+            # Fallback method without jq
+            VERSION=$(cat "dist/build-info.json" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+          fi
+          
+          if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
+            echo "❌ Failed to extract version from build info"
+            exit 1
+          fi
+          
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "✅ Found version: $VERSION"
+        else
+          echo "❌ Build info not found in extracted archive!"
+          echo "Contents of dist/:"
+          ls -la dist/
+          exit 1
+        fi
+        
+        # Verify app bundle exists
+        if [ -d "dist/AV-Spex.app" ]; then
+          echo "✅ App bundle extracted successfully"
+          # Show what architecture(s) we have
+          echo "Architecture info:"
+          file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+          lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "(Single architecture binary)"
+        else
+          echo "❌ App bundle not found after extraction!"
+          echo "Contents of dist/:"
+          ls -la dist/
+          exit 1
+        fi
+        
+    - name: Import Code Signing Certificate
+      env:
+        APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      run: |
+        # Create variables
+        CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+        KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+        # Import certificate from secrets
+        echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+
+        # Create temporary keychain
+        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+        # Import certificate to keychain
+        security import $CERTIFICATE_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+        security list-keychain -d user -s $KEYCHAIN_PATH
+        
+        # Get the certificate name for signing
+        CERT_NAME=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1 | grep -o '"[^"]*"' | sed 's/"//g')
+        echo "CERT_NAME=$CERT_NAME" >> $GITHUB_ENV
+        echo "Found certificate: $CERT_NAME"
+        
+    - name: Verify Apple credentials before notarization
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        echo "🔍 Verifying Apple credentials..."
+        echo "Apple ID: ${APPLE_ID:0:3}***${APPLE_ID: -3}"
+        echo "Team ID: ${APPLE_TEAM_ID:0:3}***${APPLE_TEAM_ID: -3}"
+        
+        # Test the credentials first
+        echo "Testing notarization credentials..."
+        xcrun notarytool store-credentials "TEMP_TEST_PROFILE" \
+          --apple-id "$APPLE_ID" \
+          --password "$APPLE_ID_PASSWORD" \
+          --team-id "$APPLE_TEAM_ID" || {
+            echo "❌ Notarization credential test failed"
+            echo "Possible issues:"
+            echo "1. Apple ID password might have expired"
+            echo "2. Team ID might be incorrect"
+            echo "3. Two-factor authentication might be required"
+            exit 1
+          }
+        
+        echo "✅ Notarization credentials verified successfully"
+        
+    - name: Create Notarization Profile
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        # Store notarization credentials
+        xcrun notarytool store-credentials "DEV_CERT_PW" \
+          --apple-id "$APPLE_ID" \
+          --password "$APPLE_ID_PASSWORD" \
+          --team-id "$APPLE_TEAM_ID"
+          
+    - name: Sign App Bundle
+      run: |
+        # Create entitlements file
+        cat > entitlements.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+            <key>com.apple.security.cs.disable-library-validation</key>
+            <true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+            <true/>
+            <key>com.apple.security.automation.apple-events</key>
+            <true/>
+        </dict>
+        </plist>
+        EOF
+
+        # Check if main executable is universal
+        echo "Checking architecture of main executable..."
+        file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
+
+        # Make sure permissions are correct
+        chmod -R 755 dist/AV-Spex.app
+
+        # Sign frameworks and libraries first (preserve architectures)
+        echo "Signing frameworks and libraries..."
+        find dist/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" -o -name "*.framework" \) 2>/dev/null | while read file; do
+          if [ -f "$file" ]; then
+            echo "Signing: $file"
+            # Use --preserve-metadata=identifier,entitlements,flags to maintain universal binary
+            codesign --force --timestamp --options runtime --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
+          fi
+        done
+
+        # Sign nested frameworks
+        echo "Signing nested frameworks..."
+        find dist/AV-Spex.app/Contents/Frameworks -name "*.framework" -type d 2>/dev/null | while read framework; do
+          if [ -d "$framework" ]; then
+            echo "Signing framework: $framework"
+            codesign --force --timestamp --options runtime --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "$framework" || echo "Warning: Failed to sign $framework"
+          fi
+        done
+
+        # Sign Python executables and binaries
+        echo "Signing Python executables..."
+        find dist/AV-Spex.app/Contents -type f \( -name "python*" -o -perm +111 \) 2>/dev/null | while read file; do
+          if [ -f "$file" ] && [ "$file" != "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ]; then
+            echo "Signing: $file"
+            codesign --force --timestamp --options runtime --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
+          fi
+        done
+
+        # Sign the main executable with entitlements (most important for universal binary)
+        echo "Signing main executable..."
+        codesign --force --timestamp --options runtime --entitlements entitlements.plist --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+
+        # Verify the main executable is still universal after signing
+        echo "Verifying main executable architecture after signing..."
+        file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
+
+        # Sign the main app bundle with entitlements (but not --deep to avoid re-signing components)
+        echo "Signing main application bundle..."
+        codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$CERT_NAME" dist/AV-Spex.app
+
+        # Verify the signature (before notarization)
+        echo "Verifying code signature..."
+        codesign --verify --deep --strict dist/AV-Spex.app
+        
+        # Check signature details
+        echo "Signature details:"
+        codesign --display --verbose=4 dist/AV-Spex.app
+        
+        # Note: spctl will fail before notarization for Developer ID certs
+        # We'll verify with spctl after notarization instead
+        
+    - name: Create DMG
+      run: |
+        # Verify version is set
+        if [ -z "$VERSION" ]; then
+          echo "❌ VERSION environment variable is not set!"
+          exit 1
+        fi
+        echo "📦 Creating DMG for version: $VERSION"
+        
+        # Create a folder (named dmg) to prepare our DMG in
+        mkdir -p dist/dmg
+        # Copy the signed app bundle to the dmg folder
+        cp -R "dist/AV-Spex.app" dist/dmg/
+
+        # Create the DMG with version number
+        create-dmg \
+          --volname "AV-Spex $VERSION" \
+          --volicon "av_spex_the_logo.icns" \
+          --window-pos 200 120 \
+          --window-size 600 300 \
+          --icon-size 100 \
+          --icon "AV-Spex.app" 175 120 \
+          --hide-extension "AV-Spex.app" \
+          --app-drop-link 425 120 \
+          --no-internet-enable \
+          "dist/AV-Spex-$VERSION.dmg" \
+          "dist/dmg"
+
+        # Verify DMG was created
+        if [ -f "dist/AV-Spex-$VERSION.dmg" ]; then
+          echo "✅ DMG created successfully: AV-Spex-$VERSION.dmg"
+          ls -la "dist/AV-Spex-$VERSION.dmg"
+        else
+          echo "❌ DMG creation failed!"
+          exit 1
+        fi
+
+        # Sign the DMG itself
+        echo "Signing DMG..."
+        codesign --force --timestamp --sign "$CERT_NAME" "dist/AV-Spex-$VERSION.dmg"
+        
+    - name: Notarize DMG
+      run: |
+        # Submit for notarization
+        echo "Submitting DMG for notarization..."
+        xcrun notarytool submit "dist/AV-Spex-$VERSION.dmg" --keychain-profile "DEV_CERT_PW" --wait --timeout 1800
+
+        # Staple the ticket to the DMG
+        echo "Stapling ticket to DMG..."
+        xcrun stapler staple "dist/AV-Spex-$VERSION.dmg"
+
+        # Final verification after notarization
+        echo "Final verification after notarization..."
+        spctl --assess --type execute --verbose dist/AV-Spex.app
+        spctl --assess --type install --verbose "dist/AV-Spex-$VERSION.dmg"
+
+        echo "✅ Build and notarization process complete for AV-Spex version $VERSION!"
+        
+    - name: Upload signed DMG
+      uses: actions/upload-artifact@v4
+      with:
+        name: AV-Spex-${{ env.VERSION }}-signed-dmg
+        path: dist/AV-Spex-${{ env.VERSION }}.dmg
+        retention-days: 90
+
+    - name: Debug workflow_run context
+      run: |
+        echo "Event name: ${{ github.event_name }}"
+        echo "Workflow run event: ${{ github.event.workflow_run.event }}"
+        echo "Head branch: ${{ github.event.workflow_run.head_branch }}"
+        echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
+        echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
+        echo "All workflow_run context:"
+        echo '${{ toJson(github.event.workflow_run) }}'
+        
+    - name: Create Release (for tags)
+      if: startsWith(github.event.workflow_run.head_branch, 'v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/AV-Spex-${{ env.VERSION }}.dmg
+        tag_name: ${{ github.event.workflow_run.head_branch }}  # <-- Use this instead of github.ref_name
+        name: AV-Spex ${{ github.event.workflow_run.head_branch }}  # <-- And this
+        draft: false
+        prerelease: false
+        body: |
+          ## AV-Spex v${{ env.VERSION }}
+          
+          **Build Information:**
+          - Built from commit: ${{ github.event.workflow_run.head_sha }}
+          - Build workflow: ${{ github.event.workflow_run.id }}
+          - Signed and notarized: ✅
+          
+          ### Installation
+          1. Download the DMG file below
+          2. Open the DMG and drag AV-Spex.app to your Applications folder
+          3. The app is signed and notarized for macOS security
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Cleanup Keychain
+      if: always()
+      run: |
+        security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
