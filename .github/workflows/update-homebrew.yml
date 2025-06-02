@@ -2,8 +2,10 @@ name: Update Homebrew Formula
 
 # Trigger this workflow when a new release is published
 on:
-  release:
-    types: [published]  # Only trigger when release is published
+  workflow_run:
+    workflows: ["Sign and Package macOS App"]  # Name of your signing workflow
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       tag_name:
@@ -29,10 +31,12 @@ jobs:
     - name: Determine version and download URL
       id: get_version
       run: |
-        if [ "${{ github.event_name }}" = "release" ]; then
-          VERSION="${{ github.event.release.tag_name }}"
-          DOWNLOAD_URL="${{ github.event.release.tarball_url }}"
+        if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          # Extract version from the tag/branch name
+          VERSION="${{ github.event.workflow_run.head_branch }}"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz"
         else
+          # Manual trigger
           VERSION="${{ github.event.inputs.tag_name }}"
           DOWNLOAD_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz"
         fi
@@ -43,6 +47,9 @@ jobs:
         echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
         echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
         echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
+        
+        echo "📋 Detected version: $VERSION_CLEAN"
+        echo "📥 Download URL: $DOWNLOAD_URL"
     
     - name: Calculate SHA256
       id: get_sha
