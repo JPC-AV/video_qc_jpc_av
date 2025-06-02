@@ -370,6 +370,14 @@ jobs:
           3. The app is signed and notarized for macOS security
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Debug Release Status
+      if: startsWith(github.event.workflow_run.head_branch, 'v')
+      run: |
+        echo "Checking release status for tag: ${{ github.event.workflow_run.head_branch }}"
+        curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.workflow_run.head_branch }}" \
+          | jq '.draft, .prerelease, .published_at, .html_url'
         
     - name: Cleanup Keychain
       if: always()
