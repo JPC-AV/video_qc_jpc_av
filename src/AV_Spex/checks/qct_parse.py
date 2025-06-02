@@ -18,15 +18,14 @@ import operator
 import collections      # for circular buffer
 import csv
 import datetime as dt
+import io
 from dataclasses import asdict
 
-from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig, SpexConfig
-from ..utils.config_manager import ConfigManager
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
 
 def load_etree():
     """Helper function to load lxml.etree with error handling"""
@@ -38,14 +37,89 @@ def load_etree():
         return None
 
 
+def safe_gzip_open_with_encoding_fallback(file_path):
+    """
+    Opens a gzipped file with encoding fallback handling.
+    Returns the raw bytes with encoding information for logging.
+    
+    Parameters:
+        file_path (str): Path to the .gz file
+        
+    Returns:
+        tuple: (raw_bytes, encoding_used) or (None, None) if failed
+    """
+    encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+    
+    try:
+        # Read the raw bytes first
+        with gzip.open(file_path, 'rb') as gz_file:
+            raw_content = gz_file.read()
+    except Exception as e:
+        logger.error(f"Error reading gzipped file {file_path}: {e}\n")
+        return None, None
+    
+    # Try to decode with different encodings to find the right one
+    for encoding in encodings_to_try:
+        try:
+            # Test if we can decode successfully
+            decoded_content = raw_content.decode(encoding)
+            # logger.debug(f"Successfully decoded {file_path} using {encoding} encoding\n")
+            return raw_content, encoding
+        except UnicodeDecodeError:
+            continue
+    
+    # If all encodings fail, try with error handling
+    try:
+        decoded_content = raw_content.decode('utf-8', errors='replace')
+        logger.warning(f"Used utf-8 with error replacement for {file_path}\n")
+        return raw_content, 'utf-8-replace'
+    except Exception as e:
+        logger.critical(f"Failed to decode {file_path} with any encoding method: {e}\n")
+        return None, None
+
+
+def safe_gzip_iterparse(file_path, etree_module):
+    """
+    Safely parse gzipped XML with encoding fallback.
+    
+    Parameters:
+        file_path (str): Path to the .gz file
+        etree_module: The lxml.etree module
+        
+    Returns:
+        iterator: XML parser iterator or None if failed
+    """
+    raw_content, encoding_used = safe_gzip_open_with_encoding_fallback(file_path)
+    
+    if raw_content is None:
+        return None
+    
+    try:
+        # Create a BytesIO object from the raw content
+        # lxml.etree.iterparse expects a file-like object that returns bytes
+        bytes_io = io.BytesIO(raw_content)
+        
+        # Create the iterparse iterator
+        parser_iter = etree_module.iterparse(bytes_io, events=('end',), tag='frame')
+        return parser_iter
+        
+    except Exception as e:
+        logger.error(f"Error creating XML parser for {file_path}: {e}")
+        return None
+
+
 # Dictionary to map the string to the corresponding operator function
 operator_mapping = {
     'lt': operator.lt,
     'gt': operator.gt,
 }
 
-# init variable for config list of QCTools tags
-fullTagList = asdict(spex_config.qct_parse_values.fullTagList)
+def getFullTagList():
+    """Heler function for retrieving tag list"""
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+    # init variable for config list of QCTools tags
+    fullTagList = asdict(spex_config.qct_parse_values.fullTagList)
+    return fullTagList
 
 # Creates timestamp for pkt_dts_time
 def dts2ts(frame_pkt_dts_time):
@@ -230,8 +304,14 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
     barsStartString = None
     barsEndString = None
 
-    with gzip.open(startObj) as xml:
-        for event, elem in etree.iterparse(xml, events=('end',), tag='frame'): #iterparse the xml doc
+    # Use the safe parser with encoding fallback
+    parser_iter = safe_gzip_iterparse(startObj, etree)
+    if parser_iter is None:
+        logger.error(f"Failed to parse {startObj} for bars detection")
+        return "", "", None, None
+
+    try:
+        for event, elem in parser_iter: #iterparse the xml doc
             if elem.attrib['media_type'] == "video": #get just the video frames
                 frame_pkt_dts_time = elem.attrib[pkt] #get the timestamps for the current frame we're looking at
                 frameDict = {}  #start an empty dict for the new frame
@@ -258,7 +338,10 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
                             logger.debug("Bars ended at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")\n")
                             barsEndString = dts2ts(framesList[middleFrame][pkt])
                             break
-            elem.clear() # we're done with that element so let's get it outta memory
+                elem.clear() # we're done with that element so let's get it outta memory
+    except Exception as e:
+        logger.error(f"Error during bars detection parsing: {e}")
+        
     return durationStart, durationEnd, barsStartString, barsEndString
 
 
@@ -291,9 +374,15 @@ def evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize):
             maxBarsDict[key_being_checked] = 0
         elif "MIN" in key_being_checked:
             maxBarsDict[key_being_checked] = 1023
-	
-    with gzip.open(startObj) as xml:
-        for event, elem in etree.iterparse(xml, events=('end',), tag='frame'): # iterparse the xml doc
+
+    # Use the safe parser with encoding fallback
+    parser_iter = safe_gzip_iterparse(startObj, etree)
+    if parser_iter is None:
+        logger.error(f"Failed to parse {startObj} for bars evaluation")
+        return None
+
+    try:
+        for event, elem in parser_iter: # iterparse the xml doc
             if elem.attrib['media_type'] == "video": # get just the video frames
                 frame_pkt_dts_time = elem.attrib[pkt] # get the timestamps for the current frame we're looking at
                 if frame_pkt_dts_time >= str(durationStart): 	# only work on frames that are after the start time   # only work on frames that are after the start time
@@ -322,6 +411,8 @@ def evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize):
                                         maxBarsDict[colorbar_key] = value
                                 # Convert highest values to integer
                                 maxBarsDict = {colorbar_key: int(value) for colorbar_key, value in maxBarsDict.items()}
+    except Exception as e:
+        logger.error(f"Error during bars evaluation parsing: {e}")
 							
     return maxBarsDict
 
@@ -466,6 +557,9 @@ def getCompFromConfig(qct_parse, profile, tag):
     Returns:
         callable: Comparison operator (e.g., operator.lt, operator.gt).
    """
+   
+   spex_config = config_mgr.get_config('spex', SpexConfig)
+   
    smpte_color_bars_keys = asdict(spex_config.qct_parse_values.smpte_color_bars).keys()
 
    if qct_parse['profile']:
@@ -506,6 +600,7 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
             - kbeyond (dict): A dictionary where each tag is associated with a count of how many times its threshold was exceeded.
             - frameCount (int): The total number of frames analyzed.
             - overallFrameFail (int): The total number of frames that exceeded thresholds across all tags.
+            - failureInfo (dict): Dictionary containing failure information.
 
     Behavior:
         - Iteratively parses the input XML file and analyzes frames after `durationStart` and before `durationEnd`.
@@ -527,8 +622,15 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
     failureInfo = {}  # Initialize a new dictionary to store failure information
     for k,v in profile.items(): 
         kbeyond[k] = 0
-    with gzip.open(startObj) as xml:	
-        for event, elem in etree.iterparse(xml, events=('end',), tag='frame'): #iterparse the xml doc
+
+    # Use the safe parser with encoding fallback
+    parser_iter = safe_gzip_iterparse(startObj, etree)
+    if parser_iter is None:
+        logger.error(f"Failed to parse {startObj} for analysis")
+        return {}, 0, 0, {}
+
+    try:
+        for event, elem in parser_iter: #iterparse the xml doc
             if elem.attrib['media_type'] == "video": 	#get just the video frames
                 frameCount = frameCount + 1
                 frame_pkt_dts_time = elem.attrib[pkt] 	#get the timestamps for the current frame we're looking at
@@ -560,7 +662,9 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
                                 overallFrameFail = overallFrameFail + 1
                                 fots = frame_pkt_dts_time # set it again so we don't dupe
                     thumbDelay = thumbDelay + 1				
-            elem.clear() #we're done with that element so let's get it outta memory
+                elem.clear() #we're done with that element so let's get it outta memory
+    except Exception as e:
+        logger.error(f"Error during analysis parsing: {e}")
 
     return kbeyond, frameCount, overallFrameFail, failureInfo
 
@@ -606,6 +710,10 @@ def printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_check_o
         None
     """
 
+    
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+    fullTagList = getFullTagList()
+    
     def format_percentage(value):
         percent = value * 100
         if percent == 100:
@@ -850,8 +958,15 @@ def detectBitdepth(startObj,pkt,framesList,buffSize):
         return False
 
     bit_depth_10 = False
-    with gzip.open(startObj) as xml:
-        for event, elem in etree.iterparse(xml, events=('end',), tag='frame'): # iterparse the xml doc
+    
+    # Use the safe parser with encoding fallback
+    parser_iter = safe_gzip_iterparse(startObj, etree)
+    if parser_iter is None:
+        logger.error(f"Failed to parse {startObj} for bit depth detection")
+        return False
+
+    try:
+        for event, elem in parser_iter: # iterparse the xml doc
             if elem.attrib['media_type'] == "video": # get just the video frames
                 frame_pkt_dts_time = elem.attrib[pkt] # get the timestamps for the current frame we're looking at
                 frameDict = {}  # start an empty dict for the new frame
@@ -868,7 +983,9 @@ def detectBitdepth(startObj,pkt,framesList,buffSize):
                     if float(framesList[middleFrame]['YMAX']) > 250:
                         bit_depth_10 = True
                         break
-            elem.clear() # we're done with that element so let's get it outta memory
+                elem.clear() # we're done with that element so let's get it outta memory
+    except Exception as e:
+        logger.error(f"Error during bit depth detection parsing: {e}")
 
     return bit_depth_10
 
@@ -883,6 +1000,12 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         report_directory (str): Path to {video_id}_report_csvs directory.
 
     """
+    
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+
+    fullTagList = getFullTagList()
+
     # Check if we can load required library
     etree = load_etree()
     if etree is None:
@@ -1014,7 +1137,7 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     if qct_parse['barsDetection']:
         durationStart = ""                            # if bar detection is turned on then we have to calculate this
         durationEnd = ""                            # if bar detection is turned on then we have to calculate this
-        logger.debug(f"Starting Bars Detection on {baseName}")
+        logger.debug(f"Starting Bars Detection on {baseName}\n")
         qctools_colorbars_duration_output = os.path.join(report_directory, "qct-parse_colorbars_durations.csv")
         durationStart, durationEnd, barsStartString, barsEndString = detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_depth_10)
         if durationStart == "" and durationEnd == "":

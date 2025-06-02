@@ -293,7 +293,8 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             return None
 
     # Run QCTools command
-    if checks_config.tools.qctools.run_tool == 'yes':
+    qct_run_tool = getattr(checks_config.tools.qctools, 'run_tool')
+    if qct_run_tool == 'yes':
         run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled)
         logger.debug('')  # Add new line for cleaner terminal output
         results['qctools_output_path'] = qctools_output_path
@@ -301,7 +302,8 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             signals.step_completed.emit("QCTools")
 
     # Check QCTools output if configured
-    if checks_config.tools.qct_parse.run_tool == 'yes':
+    qct_parse_run_tool = getattr(checks_config.tools.qct_parse, 'run_tool')
+    if qct_parse_run_tool == 'yes':
         # Ensure report directory exists
         if not report_directory:
             report_directory = dir_setup.make_report_dir(source_directory, video_id)

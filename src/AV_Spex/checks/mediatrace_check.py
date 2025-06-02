@@ -7,9 +7,9 @@ import os
 import xml.etree.ElementTree as ET
 from dataclasses import asdict
 
-from ..utils.log_setup import logger
-from ..utils.config_setup import ChecksConfig, SpexConfig
-from ..utils.config_manager import ConfigManager
+from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_manager import ConfigManager
 
 
 def parse_mediatrace(xml_file):
