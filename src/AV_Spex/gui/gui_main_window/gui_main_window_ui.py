@@ -19,7 +19,7 @@ class MainWindowUI:
     
     def setup_ui(self):
         """Set up the main UI components"""
-        self.main_window.setMinimumSize(700, 800)
+        self.main_window.setMinimumSize(750, 800)
 
         ## self.main_window.windowFlags() retrieves the current window flags
         ## Qt.WindowType.WindowMaximizeButtonHint enables the maximize button in the window's title bar.
