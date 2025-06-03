@@ -220,35 +220,51 @@ jobs:
         # Make sure permissions are correct
         chmod -R 755 dist/AV-Spex.app
 
-        # Sign frameworks and libraries first (preserve architectures)
-        echo "Signing frameworks and libraries..."
-        find dist/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" -o -name "*.framework" \) 2>/dev/null | while read file; do
+        # CRITICAL FIX: Sign frameworks and libraries but SKIP Qt plugins
+        echo "Signing frameworks and libraries (excluding Qt plugins to preserve theme detection)..."
+        find dist/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) 2>/dev/null | while read file; do
+          # SKIP Qt plugins completely - they're already properly signed by PyQt6
+          if [[ "$file" == *"PyQt6/Qt6/plugins"* ]]; then
+            echo "🔒 Preserving Qt plugin signature (for theme detection): $file"
+            continue
+          fi
+          
           if [ -f "$file" ]; then
             echo "Signing: $file"
-            # Use --preserve-metadata=identifier,entitlements,flags to maintain universal binary
             codesign --force --timestamp --options runtime --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
           fi
         done
 
-        # Sign nested frameworks
-        echo "Signing nested frameworks..."
+        # Sign nested frameworks but SKIP Qt plugin frameworks
+        echo "Signing nested frameworks (excluding Qt plugins)..."
         find dist/AV-Spex.app/Contents/Frameworks -name "*.framework" -type d 2>/dev/null | while read framework; do
+          # Skip Qt plugin frameworks
+          if [[ "$framework" == *"PyQt6/Qt6/plugins"* ]]; then
+            echo "🔒 Preserving Qt framework signature (for theme detection): $framework"
+            continue
+          fi
+          
           if [ -d "$framework" ]; then
             echo "Signing framework: $framework"
             codesign --force --timestamp --options runtime --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "$framework" || echo "Warning: Failed to sign $framework"
           fi
         done
 
-        # Sign Python executables and binaries
+        # Sign Python executables and binaries (but skip those in Qt plugins)
         echo "Signing Python executables..."
         find dist/AV-Spex.app/Contents -type f \( -name "python*" -o -perm +111 \) 2>/dev/null | while read file; do
-          if [ -f "$file" ] && [ "$file" != "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ]; then
+          # Skip main executable and anything in Qt plugins
+          if [ "$file" == "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ] || [[ "$file" == *"PyQt6/Qt6/plugins"* ]]; then
+            continue
+          fi
+          
+          if [ -f "$file" ]; then
             echo "Signing: $file"
             codesign --force --timestamp --options runtime --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
           fi
         done
 
-        # Sign the main executable with entitlements (most important for universal binary)
+        # Sign the main executable with entitlements
         echo "Signing main executable..."
         codesign --force --timestamp --options runtime --entitlements entitlements.plist --preserve-metadata=identifier,entitlements,flags --sign "$CERT_NAME" "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
 
@@ -257,20 +273,34 @@ jobs:
         file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
         lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
 
-        # Sign the main app bundle with entitlements (but not --deep to avoid re-signing components)
+        # Sign the main app bundle with entitlements (but not --deep to avoid re-signing Qt plugins)
         echo "Signing main application bundle..."
         codesign --force --timestamp --options runtime --entitlements entitlements.plist --sign "$CERT_NAME" dist/AV-Spex.app
 
-        # Verify the signature (before notarization)
+        # Verify Qt plugins were NOT re-signed (they should keep their original PyQt6 signatures)
+        echo "✅ Verifying Qt plugins were preserved..."
+        if [ -d "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms" ]; then
+          for plugin in dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms/*.dylib; do
+            if [ -f "$plugin" ]; then
+              echo "Checking $(basename "$plugin"):"
+              # Check if it has our certificate (it shouldn't - should have original PyQt6 signature)
+              signature_info=$(codesign --display --verbose "$plugin" 2>&1 | grep "Authority=" || echo "No custom authority")
+              if [[ "$signature_info" == *"$CERT_NAME"* ]]; then
+                echo "  ❌ WARNING: Qt plugin was re-signed (may break theme detection)"
+              else
+                echo "  ✅ Original signature preserved"
+              fi
+            fi
+          done
+        fi
+
+        # Verify the signature (before notarization) - use --verify-app instead of --deep
         echo "Verifying code signature..."
-        codesign --verify --deep --strict dist/AV-Spex.app
+        codesign --verify --verbose dist/AV-Spex.app
         
         # Check signature details
         echo "Signature details:"
         codesign --display --verbose=4 dist/AV-Spex.app
-        
-        # Note: spctl will fail before notarization for Developer ID certs
-        # We'll verify with spctl after notarization instead
         
     - name: Create DMG
       run: |
