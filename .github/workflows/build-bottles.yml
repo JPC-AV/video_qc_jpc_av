@@ -17,12 +17,10 @@ jobs:
     name: Build bottles
     # Only run if:
     # 1. Manual dispatch (workflow_dispatch), OR
-    # 2. Triggered by successful workflow_run AND that workflow was triggered by a tag push
+    # 2. Triggered by successful workflow_run (the previous workflow already validates it's from a real release)
     if: |
       github.event_name == 'workflow_dispatch' || 
-      (github.event.workflow_run.conclusion == 'success' && 
-       github.event.workflow_run.event == 'workflow_run' && 
-       startsWith(github.event.workflow_run.head_branch, 'v'))
+      github.event.workflow_run.conclusion == 'success'
     strategy:
         matrix:
           include:
@@ -46,7 +44,13 @@ jobs:
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           VERSION="${{ github.event.inputs.tag_name }}"
         elif [ "${{ github.event_name }}" = "workflow_run" ]; then
-          VERSION="${{ github.event.workflow_run.head_branch }}"
+          # Get the tag from the latest release since workflow_run might not have tag info
+          echo "Getting latest release tag..."
+          VERSION=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
+          if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
+            echo "❌ Could not get latest release tag"
+            exit 1
+          fi
         else
           echo "Unexpected event type: ${{ github.event_name }}"
           exit 1
@@ -54,7 +58,7 @@ jobs:
         
         # Validate that we have a version that looks like a tag
         if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-          echo "Invalid version format: $VERSION"
+          echo "❌ Invalid version format: $VERSION"
           echo "Expected format: v1.2.3"
           exit 1
         fi
@@ -63,7 +67,7 @@ jobs:
         echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
         echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
         
-        echo "Building bottles for version: $VERSION_CLEAN"
+        echo "✅ Building bottles for version: $VERSION_CLEAN"
     
     - name: Clean environment and fix Python conflicts
       run: |
