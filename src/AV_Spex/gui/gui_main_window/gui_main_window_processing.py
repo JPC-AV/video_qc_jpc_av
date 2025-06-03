@@ -103,10 +103,6 @@ class MainWindowProcessing:
         # Re-enable the Check Spex button
         if hasattr(self.main_window, 'check_spex_button'):
             self.main_window.check_spex_button.setEnabled(True)
-        
-        # Disable the Open Processing Window button when not processing
-        if hasattr(self.main_window, 'open_processing_button'):
-            self.main_window.open_processing_button.setEnabled(False)
 
         # Disable the Cancel Processing button in the main window
         if hasattr(self.main_window, 'cancel_processing_button'):
