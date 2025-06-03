@@ -16,6 +16,8 @@ on:
 jobs:
   update-homebrew-formula:
     runs-on: ubuntu-latest
+    # Only run if the workflow_run was successful, or if manually triggered
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     
     steps:
     - name: Checkout main repository
@@ -32,13 +34,25 @@ jobs:
       id: get_version
       run: |
         if [ "${{ github.event_name }}" = "workflow_run" ]; then
-          # Extract version from the tag/branch name
-          VERSION="${{ github.event.workflow_run.head_branch }}"
+          # For workflow_run, get the tag from the latest release since head_branch might be 'main'
+          echo "Getting latest release tag..."
+          VERSION=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
+          if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
+            echo "❌ Could not get latest release tag"
+            exit 1
+          fi
           DOWNLOAD_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz"
         else
           # Manual trigger
           VERSION="${{ github.event.inputs.tag_name }}"
           DOWNLOAD_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz"
+        fi
+        
+        # Validate that we have a version that looks like a tag
+        if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+          echo "❌ Invalid version format: $VERSION"
+          echo "Expected format: v1.2.3"
+          exit 1
         fi
         
         # Remove 'v' prefix if present
