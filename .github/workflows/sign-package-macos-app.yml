@@ -189,6 +189,54 @@ jobs:
           --apple-id "$APPLE_ID" \
           --password "$APPLE_ID_PASSWORD" \
           --team-id "$APPLE_TEAM_ID"
+
+    # *** NEW DEBUG STEP: Backup original app and examine Qt plugins ***
+    - name: Debug Qt Plugins Before Signing
+      run: |
+        echo "🔍 DEBUG: Examining Qt plugins BEFORE signing..."
+        
+        # Create backup for comparison
+        echo "Creating backup of original app..."
+        cp -R "dist/AV-Spex.app" "dist/AV-Spex-original.app"
+        
+        # Check Qt plugin structure
+        QT_PLUGINS_DIR="dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins"
+        if [ -d "$QT_PLUGINS_DIR" ]; then
+          echo "✅ Qt plugins directory found: $QT_PLUGINS_DIR"
+          
+          echo "=== Platform plugins (critical for theme detection) ==="
+          if [ -d "$QT_PLUGINS_DIR/platforms" ]; then
+            for plugin in "$QT_PLUGINS_DIR/platforms"/*.dylib; do
+              if [ -f "$plugin" ]; then
+                plugin_name=$(basename "$plugin")
+                echo "  $plugin_name:"
+                echo "    Size: $(stat -f%z "$plugin") bytes"
+                echo "    Architecture: $(file "$plugin" | grep -o 'Mach-O.*')"
+                echo "    Signature: $(codesign --display --verbose=1 "$plugin" 2>&1 | grep "Authority" || echo "unsigned")"
+              fi
+            done
+          else
+            echo "❌ No platforms directory found!"
+          fi
+          
+          echo "=== Style plugins (for theme styling) ==="
+          if [ -d "$QT_PLUGINS_DIR/styles" ]; then
+            find "$QT_PLUGINS_DIR/styles" -name "*.dylib" | while read plugin; do
+              echo "  $(basename "$plugin"): $(stat -f%z "$plugin") bytes"
+            done
+          else
+            echo "ℹ️  No styles directory found (not critical)"
+          fi
+          
+          echo "=== All Qt plugins summary ==="
+          find "$QT_PLUGINS_DIR" -name "*.dylib" | wc -l | xargs echo "Total Qt plugins:"
+          find "$QT_PLUGINS_DIR" -name "*.dylib" | head -10
+          
+        else
+          echo "❌ Qt plugins directory not found!"
+          echo "PyQt6 structure:"
+          find "dist/AV-Spex.app/Contents/Frameworks/PyQt6" -type d | head -10
+        fi
           
     - name: Sign App Bundle
       run: |
@@ -334,6 +382,55 @@ jobs:
         # Check signature details
         echo "Signature details:"
         codesign --display --verbose=4 dist/AV-Spex.app
+
+    # *** NEW DEBUG STEP: Compare before and after signing ***
+    - name: Debug Qt Plugins After Signing
+      run: |
+        echo "🔍 DEBUG: Comparing Qt plugins BEFORE vs AFTER signing..."
+        
+        QT_PLUGINS_DIR="dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins"
+        ORIG_QT_PLUGINS_DIR="dist/AV-Spex-original.app/Contents/Frameworks/PyQt6/Qt6/plugins"
+        
+        echo "=== Platform plugins comparison ==="
+        if [ -d "$QT_PLUGINS_DIR/platforms" ] && [ -d "$ORIG_QT_PLUGINS_DIR/platforms" ]; then
+          for plugin in "$ORIG_QT_PLUGINS_DIR/platforms"/*.dylib; do
+            if [ -f "$plugin" ]; then
+              plugin_name=$(basename "$plugin")
+              signed_plugin="$QT_PLUGINS_DIR/platforms/$plugin_name"
+              
+              echo "Plugin: $plugin_name"
+              if [ -f "$signed_plugin" ]; then
+                orig_size=$(stat -f%z "$plugin")
+                signed_size=$(stat -f%z "$signed_plugin")
+                
+                echo "  Original: $orig_size bytes, $(codesign --display --verbose=1 "$plugin" 2>&1 | grep "Authority" || echo "unsigned")"
+                echo "  Signed:   $signed_size bytes, $(codesign --display --verbose=1 "$signed_plugin" 2>&1 | grep "Authority" || echo "unsigned")"
+                
+                if [ "$orig_size" -eq "$signed_size" ]; then
+                  echo "  ✅ Size unchanged"
+                else
+                  echo "  ⚠️  Size changed by $((signed_size - orig_size)) bytes"
+                fi
+                
+                # Check if it's still a valid Mach-O file
+                if file "$signed_plugin" | grep -q "Mach-O"; then
+                  echo "  ✅ Still valid Mach-O binary"
+                else
+                  echo "  ❌ Binary appears corrupted!"
+                fi
+              else
+                echo "  ❌ Plugin missing after signing!"
+              fi
+              echo ""
+            fi
+          done
+        else
+          echo "❌ Platform plugins directory missing!"
+        fi
+        
+        echo "=== Signing summary ==="
+        echo "Original app signature: $(codesign --display --verbose=1 "dist/AV-Spex-original.app" 2>&1 | grep "Authority" || echo "unsigned")"
+        echo "Signed app signature: $(codesign --display --verbose=1 "dist/AV-Spex.app" 2>&1 | grep "Authority" || echo "signed")"
         
     - name: Create DMG
       run: |
