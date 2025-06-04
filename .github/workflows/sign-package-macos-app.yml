@@ -280,15 +280,14 @@ jobs:
         # Make sure permissions are correct
         chmod -R 755 dist/AV-Spex.app
 
-        # STRATEGY: Sign Qt plugins with minimal entitlements to preserve functionality
+        # CRITICAL FIX: Sign Qt plugins WITHOUT preserving metadata
         echo "🎨 Signing Qt plugins with minimal entitlements to preserve theme detection..."
         if [ -d "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" ]; then
           find "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" -name "*.dylib" | while read plugin; do
             echo "Signing Qt plugin (preserving functionality): $plugin"
-            # Use minimal entitlements and preserve as much as possible
+            # FIXED: Removed --preserve-metadata to allow proper signing
             codesign --force --timestamp --options runtime \
                      --entitlements qt_entitlements.plist \
-                     --preserve-metadata=identifier,requirements,flags \
                      --sign "$CERT_NAME" "$plugin"
           done
         else
@@ -306,7 +305,6 @@ jobs:
           if [ -f "$file" ]; then
             echo "Signing: $file"
             codesign --force --timestamp --options runtime \
-                     --preserve-metadata=identifier,entitlements,flags \
                      --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
           fi
         done
@@ -322,7 +320,6 @@ jobs:
           if [ -d "$framework" ]; then
             echo "Signing framework: $framework"
             codesign --force --timestamp --options runtime \
-                     --preserve-metadata=identifier,entitlements,flags \
                      --sign "$CERT_NAME" "$framework" || echo "Warning: Failed to sign $framework"
           fi
         done
@@ -338,7 +335,6 @@ jobs:
           if [ -f "$file" ]; then
             echo "Signing: $file"
             codesign --force --timestamp --options runtime \
-                     --preserve-metadata=identifier,entitlements,flags \
                      --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
           fi
         done
@@ -347,7 +343,6 @@ jobs:
         echo "Signing main executable..."
         codesign --force --timestamp --options runtime \
                  --entitlements entitlements.plist \
-                 --preserve-metadata=identifier \
                  --sign "$CERT_NAME" "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
 
         # Verify the main executable is still universal after signing
