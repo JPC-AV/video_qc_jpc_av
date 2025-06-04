@@ -335,6 +335,99 @@ jobs:
         echo "Signature details:"
         codesign --display --verbose=4 dist/AV-Spex.app
         
+    - name: Compare App Before and After Signing
+      run: |
+        echo "🔍 Comparing app structure before and after signing..."
+        
+        echo "=== Qt Plugins Comparison ==="
+        echo "Original (working) Qt plugins:"
+        find "dist/AV-Spex-original.app/Contents/Frameworks/PyQt6/Qt6/plugins" -name "*.dylib" 2>/dev/null | head -5
+        
+        echo "Signed (potentially broken) Qt plugins:"
+        find "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" -name "*.dylib" 2>/dev/null | head -5
+        
+        # Check if any plugins were removed or corrupted
+        echo "=== Checking for missing or corrupted plugins ==="
+        for original_plugin in $(find "dist/AV-Spex-original.app/Contents/Frameworks/PyQt6/Qt6/plugins" -name "*.dylib" 2>/dev/null); do
+          signed_plugin=${original_plugin/AV-Spex-original/AV-Spex}
+          if [ ! -f "$signed_plugin" ]; then
+            echo "❌ Missing after signing: $(basename "$original_plugin")"
+          elif [ $(stat -f%z "$original_plugin") -ne $(stat -f%z "$signed_plugin") ]; then
+            echo "⚠️  Size changed: $(basename "$original_plugin")"
+            echo "   Original: $(stat -f%z "$original_plugin") bytes"
+            echo "   Signed: $(stat -f%z "$signed_plugin") bytes"
+          else
+            echo "✅ Unchanged: $(basename "$original_plugin")"
+          fi
+        done
+        
+        # Check critical platform plugins specifically
+        echo "=== Critical Platform Plugins Check ==="
+        for plugin in "libqcocoa.dylib" "libqmacstyle.dylib"; do
+          original="dist/AV-Spex-original.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms/$plugin"
+          signed="dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms/$plugin"
+          
+          if [ -f "$original" ] && [ -f "$signed" ]; then
+            echo "Plugin: $plugin"
+            echo "  Original signature: $(codesign --display --verbose=1 "$original" 2>&1 | grep "Authority" || echo "unsigned")"
+            echo "  Signed signature: $(codesign --display --verbose=1 "$signed" 2>&1 | grep "Authority" || echo "unsigned")"
+            file "$signed" | grep -q "Mach-O" && echo "  ✅ Still valid Mach-O" || echo "  ❌ Corrupted binary"
+          else
+            echo "❌ Critical plugin missing: $plugin"
+          fi
+        done
+        
+    - name: Test Theme Detection After Signing
+      run: |
+        echo "🧪 Testing theme detection functionality..."
+        
+        # Create a minimal test script
+        cat > test_theme.py << 'EOF'
+        import sys
+        import os
+        
+        # Add the app's Python path
+        app_python_path = "dist/AV-Spex.app/Contents/Frameworks/python/lib/python3.10"
+        if os.path.exists(app_python_path):
+            sys.path.insert(0, app_python_path)
+        
+        try:
+            from PyQt6.QtWidgets import QApplication
+            from PyQt6.QtGui import QPalette
+            
+            # Create minimal app instance
+            app = QApplication([])
+            
+            # Test palette access
+            palette = app.palette()
+            window_color = palette.color(QPalette.ColorRole.Window)
+            is_dark = window_color.lightness() < 128
+            
+            print(f"✅ Theme detection test:")
+            print(f"   Window color: {window_color.name()}")
+            print(f"   Dark mode: {is_dark}")
+            print(f"   Lightness: {window_color.lightness()}")
+            
+            # Test palette change signal
+            def on_palette_change(new_palette):
+                print("✅ Palette change signal working")
+            
+            app.paletteChanged.connect(on_palette_change)
+            print("✅ Palette change signal connected successfully")
+            
+            app.quit()
+            print("✅ Theme detection appears to be working")
+            
+        except Exception as e:
+            print(f"❌ Theme detection test failed: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        EOF
+        
+        # Try to run the test (this might not work in CI, but will show errors)
+        cd dist && python ../test_theme.py || echo "⚠️  Could not run theme test in CI environment"
+    
     - name: Create DMG
       run: |
         # Verify version is set
