@@ -16,8 +16,17 @@ on:
 jobs:
   update-homebrew-formula:
     runs-on: ubuntu-latest
-    # Only run if the workflow_run was successful, or if manually triggered
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # Only run if:
+    # 1. Manual dispatch (workflow_dispatch), OR 
+    # 2. Triggered by successful workflow_run that was itself triggered by a push (not manual workflow_dispatch)
+    if: |
+      github.event_name == 'workflow_dispatch' || 
+      (github.event.workflow_run.conclusion == 'success' && 
+       github.event.workflow_run.event == 'push')
+    
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      tag_name: ${{ steps.get_version.outputs.tag_name }}
     
     steps:
     - name: Checkout main repository
@@ -34,13 +43,39 @@ jobs:
       id: get_version
       run: |
         if [ "${{ github.event_name }}" = "workflow_run" ]; then
-          # For workflow_run, get the tag from the latest release since head_branch might be 'main'
-          echo "Getting latest release tag..."
-          VERSION=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
-          if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
-            echo "❌ Could not get latest release tag"
-            exit 1
+          # For workflow_run triggered by tag push, try multiple approaches to get the version
+          echo "🔍 Getting version from workflow_run event..."
+          
+          # First try: check if head_branch looks like a tag
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          echo "Head branch: $HEAD_BRANCH"
+          
+          if [[ "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            VERSION="$HEAD_BRANCH"
+            echo "✅ Found version in head_branch: $VERSION"
+          else
+            # Second try: get from the triggering workflow's repository dispatch or recent tags
+            echo "🔍 Head branch doesn't look like a tag, checking recent tags..."
+            
+            # Get the most recent tag that matches version pattern
+            VERSION=$(git tag -l "v*.*.*" --sort=-version:refname | head -1)
+            
+            if [ -z "$VERSION" ]; then
+              echo "🔍 No local tags found, trying GitHub API for latest release..."
+              VERSION=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
+            fi
+            
+            if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
+              echo "❌ Could not determine version from any source"
+              echo "Head branch: $HEAD_BRANCH"
+              echo "Available tags:"
+              git tag -l "v*.*.*" --sort=-version:refname | head -5
+              exit 1
+            fi
+            
+            echo "✅ Found version: $VERSION"
           fi
+          
           DOWNLOAD_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz"
         else
           # Manual trigger
