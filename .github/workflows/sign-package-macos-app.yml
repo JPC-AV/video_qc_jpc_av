@@ -238,7 +238,7 @@ jobs:
           find "dist/AV-Spex.app/Contents/Frameworks/PyQt6" -type d | head -10
         fi
           
-    - name: Sign App Bundle
+    - name: Sign App Bundle (Enhanced Debug)
       run: |
         # Create entitlements file
         cat > entitlements.plist << EOF
@@ -260,7 +260,7 @@ jobs:
         </plist>
         EOF
 
-        # Create minimal entitlements for Qt plugins (just enough to pass notarization)
+        # Create minimal entitlements for Qt plugins
         cat > qt_entitlements.plist << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -272,111 +272,104 @@ jobs:
         </plist>
         EOF
 
-        # Check if main executable is universal
-        echo "Checking architecture of main executable..."
-        file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
-        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
-
         # Make sure permissions are correct
         chmod -R 755 dist/AV-Spex.app
 
-        # CRITICAL FIX: Sign Qt plugins WITHOUT preserving metadata
-        echo "🎨 Signing Qt plugins with minimal entitlements to preserve theme detection..."
+        # TEST: Try signing ONE Qt plugin with maximum debug output
+        echo "🔍 DEBUGGING: Testing signing on a single Qt plugin with full verbose output..."
+        TEST_PLUGIN="dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms/libqcocoa.dylib"
+        
+        echo "Before signing - plugin status:"
+        ls -la "$TEST_PLUGIN"
+        file "$TEST_PLUGIN"
+        codesign --display --verbose=4 "$TEST_PLUGIN" 2>&1 || echo "No existing signature"
+        
+        echo "Certificate available for signing:"
+        echo "CERT_NAME: $CERT_NAME"
+        
+        echo "Attempting to sign with full debug output..."
+        codesign --force --timestamp --options runtime \
+                 --entitlements qt_entitlements.plist \
+                 --sign "$CERT_NAME" \
+                 --verbose=4 \
+                 "$TEST_PLUGIN" || {
+          echo "❌ SIGNING FAILED! Error details:"
+          codesign --force --timestamp --options runtime \
+                   --entitlements qt_entitlements.plist \
+                   --sign "$CERT_NAME" \
+                   --verbose=4 \
+                   "$TEST_PLUGIN" 2>&1 | head -20
+          echo "Trying without entitlements..."
+          codesign --force --timestamp --options runtime \
+                   --sign "$CERT_NAME" \
+                   --verbose=4 \
+                   "$TEST_PLUGIN" || echo "Still failed without entitlements"
+        }
+        
+        echo "After signing attempt - plugin status:"
+        ls -la "$TEST_PLUGIN"
+        echo "Detailed signature info:"
+        codesign --display --verbose=4 "$TEST_PLUGIN" 2>&1 || echo "Still no signature detected"
+        
+        echo "Verification attempt:"
+        codesign --verify --verbose=4 "$TEST_PLUGIN" 2>&1 || echo "Verification failed"
+        
+        # Now continue with the rest of the Qt plugins (only if the test worked)
+        echo "🎨 Signing remaining Qt plugins..."
         if [ -d "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" ]; then
           find "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" -name "*.dylib" | while read plugin; do
-            echo "Signing Qt plugin (preserving functionality): $plugin"
-            # FIXED: Removed --preserve-metadata to allow proper signing
+            # Skip the test plugin since we already signed it
+            if [ "$plugin" = "$TEST_PLUGIN" ]; then
+              continue
+            fi
+            
+            echo "Signing Qt plugin: $plugin"
             codesign --force --timestamp --options runtime \
                      --entitlements qt_entitlements.plist \
-                     --sign "$CERT_NAME" "$plugin"
+                     --sign "$CERT_NAME" "$plugin" || echo "Failed to sign $plugin"
           done
-        else
-          echo "Warning: Qt plugins directory not found"
         fi
 
-        # Sign other frameworks and libraries (but skip Qt plugins since we handled them above)
+        # Sign other frameworks and libraries (simplified for debugging)
         echo "Signing other frameworks and libraries..."
         find dist/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) 2>/dev/null | while read file; do
-          # Skip Qt plugins as we already signed them with special handling
+          # Skip Qt plugins as we already signed them
           if [[ "$file" == *"PyQt6/Qt6/plugins"* ]]; then
             continue
           fi
           
           if [ -f "$file" ]; then
-            echo "Signing: $file"
             codesign --force --timestamp --options runtime \
                      --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
           fi
         done
 
-        # Sign nested frameworks (but avoid Qt plugins directory since we handled it)
+        # Sign nested frameworks
         echo "Signing nested frameworks..."
         find dist/AV-Spex.app/Contents/Frameworks -name "*.framework" -type d 2>/dev/null | while read framework; do
-          # Skip if this is within Qt plugins
           if [[ "$framework" == *"PyQt6/Qt6/plugins"* ]]; then
             continue
           fi
           
           if [ -d "$framework" ]; then
-            echo "Signing framework: $framework"
             codesign --force --timestamp --options runtime \
                      --sign "$CERT_NAME" "$framework" || echo "Warning: Failed to sign $framework"
           fi
         done
 
-        # Sign Python executables and binaries (but avoid Qt plugins)
-        echo "Signing Python executables..."
-        find dist/AV-Spex.app/Contents -type f \( -name "python*" -o -perm +111 \) 2>/dev/null | while read file; do
-          # Skip main executable and Qt plugins
-          if [ "$file" == "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ] || [[ "$file" == *"PyQt6/Qt6/plugins"* ]]; then
-            continue
-          fi
-          
-          if [ -f "$file" ]; then
-            echo "Signing: $file"
-            codesign --force --timestamp --options runtime \
-                     --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
-          fi
-        done
-
-        # Sign the main executable with full entitlements
+        # Sign the main executable
         echo "Signing main executable..."
         codesign --force --timestamp --options runtime \
                  --entitlements entitlements.plist \
                  --sign "$CERT_NAME" "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
 
-        # Verify the main executable is still universal after signing
-        echo "Verifying main executable architecture after signing..."
-        file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
-        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
-
-        # Sign the main app bundle with entitlements (but not --deep to avoid re-signing components)
+        # Sign the main app bundle
         echo "Signing main application bundle..."
         codesign --force --timestamp --options runtime \
                  --entitlements entitlements.plist \
                  --sign "$CERT_NAME" dist/AV-Spex.app
 
-        # Verify the signature consistency before notarization
-        echo "🔍 Verifying signature consistency..."
-        codesign --verify --deep --strict dist/AV-Spex.app || {
-          echo "❌ Signature verification failed - checking individual components..."
-          
-          # Check Qt plugins specifically
-          if [ -d "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms" ]; then
-            for plugin in dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms/*.dylib; do
-              if [ -f "$plugin" ]; then
-                echo "Checking $(basename "$plugin"):"
-                codesign --verify --verbose "$plugin" 2>&1 || echo "  ❌ Verification failed"
-              fi
-            done
-          fi
-          
-          echo "Continuing despite verification issues - notarization will catch problems..."
-        }
-        
-        # Check signature details
-        echo "Signature details:"
-        codesign --display --verbose=4 dist/AV-Spex.app
+        echo "✅ Signing completed"
 
     # *** NEW DEBUG STEP: Compare before and after signing ***
     - name: Debug Qt Plugins After Signing
