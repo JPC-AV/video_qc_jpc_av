@@ -17,10 +17,11 @@ jobs:
     name: Build bottles
     # Only run if:
     # 1. Manual dispatch (workflow_dispatch), OR
-    # 2. Triggered by successful workflow_run (the previous workflow already validates it's from a real release)
+    # 2. Triggered by successful workflow_run that was itself triggered by a push (not manual workflow_dispatch)
     if: |
       github.event_name == 'workflow_dispatch' || 
-      github.event.workflow_run.conclusion == 'success'
+      (github.event.workflow_run.conclusion == 'success' && 
+       github.event.workflow_run.event == 'push')
     strategy:
         matrix:
           include:
@@ -38,18 +39,46 @@ jobs:
     - name: Set up Homebrew
       uses: Homebrew/actions/setup-homebrew@master
     
+    - name: Checkout repository for git tags
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history and tags
+    
     - name: Get version
       id: version
       run: |
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           VERSION="${{ github.event.inputs.tag_name }}"
         elif [ "${{ github.event_name }}" = "workflow_run" ]; then
-          # Get the tag from the latest release since workflow_run might not have tag info
-          echo "Getting latest release tag..."
-          VERSION=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
-          if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
-            echo "❌ Could not get latest release tag"
-            exit 1
+          # Try to get version from the previous workflow's outputs if available
+          # Otherwise fall back to the same logic as update-homebrew workflow
+          echo "🔍 Getting version from workflow_run event..."
+          
+          # First try: check if head_branch looks like a tag
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          echo "Head branch: $HEAD_BRANCH"
+          
+          if [[ "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            VERSION="$HEAD_BRANCH"
+            echo "✅ Found version in head_branch: $VERSION"
+          else
+            # Second try: get the most recent tag from git
+            echo "🔍 Head branch doesn't look like a tag, checking recent tags..."
+            
+            # Fetch tags to ensure we have the latest
+            git fetch --tags
+            
+            # Get the most recent tag that matches version pattern
+            VERSION=$(git tag -l "v*.*.*" --sort=-version:refname | head -1)
+            
+            if [ -z "$VERSION" ]; then
+              echo "❌ Could not find any version tags"
+              echo "Available tags:"
+              git tag -l --sort=-version:refname | head -10
+              exit 1
+            fi
+            
+            echo "✅ Found version: $VERSION"
           fi
         else
           echo "Unexpected event type: ${{ github.event_name }}"
