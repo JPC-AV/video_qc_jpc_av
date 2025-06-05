@@ -9,7 +9,7 @@ AV Spex is a macOS application written in python. The app is designed to help pr
 
 ## Requirements
 
-macOS 12 (Monterey) and up
+macOS 13 (Ventura) and up
 
 ### Required Command Line Tools
 
