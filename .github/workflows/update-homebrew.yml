@@ -18,11 +18,11 @@ jobs:
     runs-on: ubuntu-latest
     # Only run if:
     # 1. Manual dispatch (workflow_dispatch), OR 
-    # 2. Triggered by successful workflow_run that was itself triggered by a push (not manual workflow_dispatch)
+    # 2. Triggered by successful workflow_run that was triggered by a tag push (head_branch starts with 'v')
     if: |
       github.event_name == 'workflow_dispatch' || 
       (github.event.workflow_run.conclusion == 'success' && 
-       github.event.workflow_run.event == 'push')
+       startsWith(github.event.workflow_run.head_branch, 'v'))
     
     outputs:
       version: ${{ steps.get_version.outputs.version }}
