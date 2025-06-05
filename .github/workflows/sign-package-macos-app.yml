@@ -43,8 +43,6 @@ jobs:
         echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
         echo "Event type: ${{ github.event.workflow_run.event }}"
         echo "Repository: ${{ github.event.workflow_run.repository.full_name }}"
-        echo "All workflow_run context:"
-        echo '${{ toJson(github.event.workflow_run) }}'
       
     - name: Install dependencies
       run: |
@@ -190,56 +188,9 @@ jobs:
           --password "$APPLE_ID_PASSWORD" \
           --team-id "$APPLE_TEAM_ID"
 
-    - name: Debug Qt Plugins Before Signing
+    - name: Sign App Bundle
       run: |
-        echo "🔍 DEBUG: Examining Qt plugins BEFORE signing..."
-        
-        # Create backup for comparison
-        echo "Creating backup of original app..."
-        cp -R "dist/AV-Spex.app" "dist/AV-Spex-original.app"
-        
-        # Check Qt plugin structure
-        QT_PLUGINS_DIR="dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins"
-        if [ -d "$QT_PLUGINS_DIR" ]; then
-          echo "✅ Qt plugins directory found: $QT_PLUGINS_DIR"
-          
-          echo "=== Platform plugins (critical for theme detection) ==="
-          if [ -d "$QT_PLUGINS_DIR/platforms" ]; then
-            for plugin in "$QT_PLUGINS_DIR/platforms"/*.dylib; do
-              if [ -f "$plugin" ]; then
-                plugin_name=$(basename "$plugin")
-                echo "  $plugin_name:"
-                echo "    Size: $(stat -f%z "$plugin") bytes"
-                echo "    Architecture: $(file "$plugin" | grep -o 'Mach-O.*')"
-                echo "    Signature: $(codesign --display --verbose=1 "$plugin" 2>&1 | grep "Authority" || echo "unsigned")"
-              fi
-            done
-          else
-            echo "❌ No platforms directory found!"
-          fi
-          
-          echo "=== Style plugins (for theme styling) ==="
-          if [ -d "$QT_PLUGINS_DIR/styles" ]; then
-            find "$QT_PLUGINS_DIR/styles" -name "*.dylib" | while read plugin; do
-              echo "  $(basename "$plugin"): $(stat -f%z "$plugin") bytes"
-            done
-          else
-            echo "ℹ️  No styles directory found (not critical)"
-          fi
-          
-          echo "=== All Qt plugins summary ==="
-          find "$QT_PLUGINS_DIR" -name "*.dylib" | wc -l | xargs echo "Total Qt plugins:"
-          find "$QT_PLUGINS_DIR" -name "*.dylib" | head -10
-          
-        else
-          echo "❌ Qt plugins directory not found!"
-          echo "PyQt6 structure:"
-          find "dist/AV-Spex.app/Contents/Frameworks/PyQt6" -type d | head -10
-        fi
-          
-    - name: Sign App Bundle (Enhanced Qt Plugin Focus)
-      run: |
-        # Create entitlements file
+        # Create entitlements file (using minimal entitlements for better compatibility)
         cat > entitlements.plist << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -252,8 +203,6 @@ jobs:
             <key>com.apple.security.cs.disable-library-validation</key>
             <true/>
             <key>com.apple.security.cs.allow-dyld-environment-variables</key>
-            <true/>
-            <key>com.apple.security.automation.apple-events</key>
             <true/>
         </dict>
         </plist>
@@ -274,104 +223,19 @@ jobs:
         # Make sure permissions are correct
         chmod -R 755 dist/AV-Spex.app
 
-        # CRITICAL: Sign Qt platform plugins FIRST with maximum care
-        echo "🎯 CRITICAL: Signing Qt platform plugins (required for theme detection)..."
-        QT_PLATFORMS_DIR="dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms"
-        
-        if [ -d "$QT_PLATFORMS_DIR" ]; then
-          echo "✅ Found Qt platforms directory: $QT_PLATFORMS_DIR"
-          
-          # Track signing success for critical plugins
-          CRITICAL_SIGNING_FAILED=false
-          
-          # Sign each platform plugin individually with full error checking
-          for plugin in "$QT_PLATFORMS_DIR"/*.dylib; do
-            if [ -f "$plugin" ]; then
-              plugin_name=$(basename "$plugin")
-              echo "🔑 Signing critical platform plugin: $plugin_name"
-              
-              # Backup the original plugin
-              cp "$plugin" "$plugin.backup"
-              
-              # Attempt signing with detailed error reporting
-              if codesign --force --timestamp --options runtime \
-                         --entitlements qt_entitlements.plist \
-                         --sign "$CERT_NAME" \
-                         --verbose=2 \
-                         "$plugin" 2>&1; then
-                echo "✅ Successfully signed: $plugin_name"
-                
-                # Verify the signature immediately
-                if codesign --verify --verbose=2 "$plugin" 2>&1; then
-                  echo "✅ Signature verified: $plugin_name"
-                  
-                  # Test that the binary is still valid
-                  if file "$plugin" | grep -q "Mach-O"; then
-                    echo "✅ Binary integrity confirmed: $plugin_name"
-                  else
-                    echo "❌ CRITICAL: Binary corrupted after signing: $plugin_name"
-                    mv "$plugin.backup" "$plugin"
-                    CRITICAL_SIGNING_FAILED=true
-                  fi
-                else
-                  echo "❌ CRITICAL: Signature verification failed for $plugin_name"
-                  echo "Restoring from backup..."
-                  mv "$plugin.backup" "$plugin"
-                  CRITICAL_SIGNING_FAILED=true
-                fi
-              else
-                echo "❌ CRITICAL: Failed to sign platform plugin: $plugin_name"
-                echo "Error details from codesign:"
-                codesign --force --timestamp --options runtime \
-                         --entitlements qt_entitlements.plist \
-                         --sign "$CERT_NAME" \
-                         --verbose=4 \
-                         "$plugin" 2>&1 | head -10
-                         
-                echo "Restoring from backup..."
-                mv "$plugin.backup" "$plugin"
-                CRITICAL_SIGNING_FAILED=true
-              fi
-              
-              # Clean up backup if signing succeeded
-              [ -f "$plugin.backup" ] && rm "$plugin.backup"
-            fi
-          done
-          
-          # Check if critical signing failed
-          if [ "$CRITICAL_SIGNING_FAILED" = true ]; then
-            echo "⚠️  Some critical Qt platform plugins failed to sign properly"
-            echo "Theme detection may not work in the signed app"
-            echo "Continuing with build but flagging for investigation..."
-          else
-            echo "✅ All critical Qt platform plugins signed successfully"
-          fi
-          
-        else
-          echo "❌ CRITICAL: Qt platforms directory not found! Theme detection will fail."
-          echo "PyQt6 structure:"
-          find "dist/AV-Spex.app/Contents/Frameworks/PyQt6" -type d 2>/dev/null | head -10
-          echo "This is a critical build issue - theme detection will not work"
-        fi
-
-        # Sign other Qt plugins (less critical but still important)
-        echo "🎨 Signing other Qt plugins..."
+        # Sign Qt plugins with minimal entitlements (preserving theme detection)
+        echo "🎨 Signing Qt plugins..."
         if [ -d "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" ]; then
           find "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" -name "*.dylib" | while read plugin; do
-            # Skip platform plugins as we already handled them
-            if [[ "$plugin" == *"/platforms/"* ]]; then
-              continue
-            fi
-            
-            echo "Signing Qt plugin: $plugin"
-            if codesign --force --timestamp --options runtime \
-                       --entitlements qt_entitlements.plist \
-                       --sign "$CERT_NAME" "$plugin" 2>/dev/null; then
-              echo "✅ Signed: $(basename "$plugin")"
-            else
-              echo "⚠️  Failed to sign $(basename "$plugin") (non-critical)"
-            fi
+            echo "Signing Qt plugin: $(basename "$plugin")"
+            codesign --force --timestamp --options runtime \
+                     --entitlements qt_entitlements.plist \
+                     --preserve-metadata=identifier,requirements,flags \
+                     --sign "$CERT_NAME" "$plugin" 2>/dev/null || echo "⚠️  Failed to sign $(basename "$plugin") (may not be critical)"
           done
+          echo "✅ Qt plugins signed"
+        else
+          echo "⚠️  Qt plugins directory not found"
         fi
 
         # Sign other frameworks and libraries
@@ -384,6 +248,7 @@ jobs:
           
           if [ -f "$file" ]; then
             codesign --force --timestamp --options runtime \
+                     --preserve-metadata=identifier,entitlements,flags \
                      --sign "$CERT_NAME" "$file" 2>/dev/null || echo "⚠️  Failed to sign $(basename "$file") (may not be critical)"
           fi
         done
@@ -397,6 +262,7 @@ jobs:
           
           if [ -d "$framework" ]; then
             codesign --force --timestamp --options runtime \
+                     --preserve-metadata=identifier,entitlements,flags \
                      --sign "$CERT_NAME" "$framework" 2>/dev/null || echo "⚠️  Failed to sign $(basename "$framework") (may not be critical)"
           fi
         done
@@ -405,8 +271,8 @@ jobs:
         echo "🎯 Signing main executable..."
         if codesign --force --timestamp --options runtime \
                    --entitlements entitlements.plist \
+                   --preserve-metadata=identifier \
                    --sign "$CERT_NAME" \
-                   --verbose=2 \
                    "dist/AV-Spex.app/Contents/MacOS/AV-Spex"; then
           echo "✅ Main executable signed successfully"
         else
@@ -419,7 +285,6 @@ jobs:
         if codesign --force --timestamp --options runtime \
                    --entitlements entitlements.plist \
                    --sign "$CERT_NAME" \
-                   --verbose=2 \
                    dist/AV-Spex.app; then
           echo "✅ Main application bundle signed successfully"
         else
@@ -428,132 +293,6 @@ jobs:
         fi
 
         echo "✅ Signing process completed"
-
-    - name: Test Theme Detection After Signing
-      run: |
-        echo "🧪 Testing theme detection in signed app..."
-        
-        # Run the theme diagnostic on the signed app
-        if timeout 30 ./dist/AV-Spex.app/Contents/MacOS/AV-Spex --theme-diagnostic > theme_test.log 2>&1; then
-          echo "✅ Theme diagnostic completed successfully"
-          
-          # Show the results
-          echo "=== Theme Detection Test Results ==="
-          cat theme_test.log
-          echo "==================================="
-          
-          # Check if theme detection is working
-          if grep -q "Theme detection working:" theme_test.log; then
-            DETECTED_THEME=$(grep "Theme detection working:" theme_test.log | cut -d':' -f2 | xargs)
-            echo "✅ Theme detection successful: $DETECTED_THEME"
-            echo "THEME_DETECTION_STATUS=success" >> $GITHUB_ENV
-          else
-            echo "❌ Theme detection appears to be failing"
-            echo "THEME_DETECTION_STATUS=failed" >> $GITHUB_ENV
-            
-            # Check if fallback methods worked
-            if grep -q "Fallback theme detection:" theme_test.log; then
-              FALLBACK_THEME=$(grep "Fallback theme detection:" theme_test.log | cut -d':' -f2 | xargs)
-              echo "✅ Fallback theme detection working: $FALLBACK_THEME"
-              echo "THEME_DETECTION_STATUS=fallback" >> $GITHUB_ENV
-            fi
-          fi
-        else
-          echo "❌ Theme diagnostic failed to run or timed out"
-          echo "=== Error output ==="
-          cat theme_test.log
-          echo "===================="
-          echo "THEME_DETECTION_STATUS=error" >> $GITHUB_ENV
-        fi
-        
-        # Also test Qt platform plugins specifically
-        echo "🔍 Verifying Qt platform plugins after signing..."
-        QT_PLATFORMS_DIR="dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms"
-        if [ -d "$QT_PLATFORMS_DIR" ]; then
-          echo "Platform plugins verification:"
-          for plugin in "$QT_PLATFORMS_DIR"/*.dylib; do
-            if [ -f "$plugin" ]; then
-              plugin_name=$(basename "$plugin")
-              if codesign --verify --verbose=1 "$plugin" 2>/dev/null; then
-                echo "✅ $plugin_name: Signed and verified"
-              else
-                echo "❌ $plugin_name: Signature invalid or missing"
-              fi
-              
-              # Also check binary integrity
-              if file "$plugin" | grep -q "Mach-O"; then
-                echo "  ✅ Binary integrity: OK"
-              else
-                echo "  ❌ Binary integrity: CORRUPTED"
-              fi
-            fi
-          done
-        else
-          echo "❌ Qt platforms directory not found after signing!"
-        fi
-
-    - name: Debug Qt Plugins After Signing (Enhanced)
-      run: |
-        echo "🔍 DEBUG: Comprehensive Qt plugins analysis after signing..."
-        
-        QT_PLUGINS_DIR="dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins"
-        ORIG_QT_PLUGINS_DIR="dist/AV-Spex-original.app/Contents/Frameworks/PyQt6/Qt6/plugins"
-        
-        echo "=== Theme Detection Status Summary ==="
-        echo "Theme detection status: ${THEME_DETECTION_STATUS:-unknown}"
-        echo ""
-        
-        echo "=== Platform plugins comparison ==="
-        if [ -d "$QT_PLUGINS_DIR/platforms" ] && [ -d "$ORIG_QT_PLUGINS_DIR/platforms" ]; then
-          for plugin in "$ORIG_QT_PLUGINS_DIR/platforms"/*.dylib; do
-            if [ -f "$plugin" ]; then
-              plugin_name=$(basename "$plugin")
-              signed_plugin="$QT_PLUGINS_DIR/platforms/$plugin_name"
-              
-              echo "Plugin: $plugin_name"
-              if [ -f "$signed_plugin" ]; then
-                orig_size=$(stat -f%z "$plugin")
-                signed_size=$(stat -f%z "$signed_plugin")
-                
-                echo "  Original: $orig_size bytes, $(codesign --display --verbose=1 "$plugin" 2>&1 | grep "Authority" || echo "unsigned")"
-                echo "  Signed:   $signed_size bytes, $(codesign --display --verbose=1 "$signed_plugin" 2>&1 | grep "Authority" || echo "verification failed")"
-                
-                if [ "$orig_size" -eq "$signed_size" ]; then
-                  echo "  ✅ Size unchanged"
-                else
-                  echo "  ⚠️  Size changed by $((signed_size - orig_size)) bytes"
-                fi
-                
-                # Check if it's still a valid Mach-O file
-                if file "$signed_plugin" | grep -q "Mach-O"; then
-                  echo "  ✅ Still valid Mach-O binary"
-                else
-                  echo "  ❌ Binary appears corrupted!"
-                fi
-                
-                # Test signature verification
-                if codesign --verify "$signed_plugin" 2>/dev/null; then
-                  echo "  ✅ Signature verification: PASSED"
-                else
-                  echo "  ❌ Signature verification: FAILED"
-                fi
-              else
-                echo "  ❌ Plugin missing after signing!"
-              fi
-              echo ""
-            fi
-          done
-        else
-          echo "❌ Platform plugins directory missing!"
-        fi
-        
-        echo "=== Final signing summary ==="
-        echo "Original app signature: $(codesign --display --verbose=1 "dist/AV-Spex-original.app" 2>&1 | grep "Authority" || echo "unsigned")"
-        echo "Signed app signature: $(codesign --display --verbose=1 "dist/AV-Spex.app" 2>&1 | grep "Authority" || echo "verification failed")"
-        
-        # Show entitlements for comparison
-        echo "=== App entitlements ==="
-        codesign --display --entitlements :- "dist/AV-Spex.app" 2>/dev/null || echo "Could not read entitlements"
         
     - name: Create DMG
       run: |
@@ -620,23 +359,13 @@ jobs:
         path: dist/AV-Spex-${{ env.VERSION }}.dmg
         retention-days: 90
 
-    - name: Debug workflow_run context
-      run: |
-        echo "Event name: ${{ github.event_name }}"
-        echo "Workflow run event: ${{ github.event.workflow_run.event }}"
-        echo "Head branch: ${{ github.event.workflow_run.head_branch }}"
-        echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
-        echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
-        echo "All workflow_run context:"
-        echo '${{ toJson(github.event.workflow_run) }}'
-        
     - name: Create Release (for tags)
       if: startsWith(github.event.workflow_run.head_branch, 'v')
       uses: softprops/action-gh-release@v1
       with:
         files: dist/AV-Spex-${{ env.VERSION }}.dmg
-        tag_name: ${{ github.event.workflow_run.head_branch }}  # <-- Use this instead of github.ref_name
-        name: AV-Spex ${{ github.event.workflow_run.head_branch }}  # <-- And this
+        tag_name: ${{ github.event.workflow_run.head_branch }}
+        name: AV-Spex ${{ github.event.workflow_run.head_branch }}
         draft: false
         prerelease: false
         body: |
@@ -647,22 +376,12 @@ jobs:
           - Build workflow: ${{ github.event.workflow_run.id }}
           - Signed and notarized: ✅
           
-          **Theme Detection Status:** ${{ env.THEME_DETECTION_STATUS }}
-          
           ### Installation
           1. Download the DMG file below
           2. Open the DMG and drag AV-Spex.app to your Applications folder
           3. The app is signed and notarized for macOS security
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Debug Release Status
-      if: startsWith(github.event.workflow_run.head_branch, 'v')
-      run: |
-        echo "Checking release status for tag: ${{ github.event.workflow_run.head_branch }}"
-        curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.workflow_run.head_branch }}" \
-          | jq '.draft, .prerelease, .published_at, .html_url'
         
     - name: Cleanup Keychain
       if: always()
