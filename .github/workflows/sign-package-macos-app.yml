@@ -187,10 +187,10 @@ jobs:
           --apple-id "$APPLE_ID" \
           --password "$APPLE_ID_PASSWORD" \
           --team-id "$APPLE_TEAM_ID"
-
-    - name: Sign App Bundle
+          
+    - name: Sign App Bundle (Restore Working Approach)
       run: |
-        # Create entitlements file (using minimal entitlements for better compatibility)
+        # Create entitlements file - EXACTLY like the working version (NO Apple Events)
         cat > entitlements.plist << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -208,7 +208,7 @@ jobs:
         </plist>
         EOF
 
-        # Create minimal entitlements for Qt plugins
+        # Create minimal entitlements for Qt plugins (just enough to pass notarization)
         cat > qt_entitlements.plist << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -220,79 +220,98 @@ jobs:
         </plist>
         EOF
 
+        # Check if main executable is universal
+        echo "Checking architecture of main executable..."
+        file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
+
         # Make sure permissions are correct
         chmod -R 755 dist/AV-Spex.app
 
-        # Sign Qt plugins with minimal entitlements (preserving theme detection)
-        echo "🎨 Signing Qt plugins..."
+        # STRATEGY: Sign Qt plugins with minimal entitlements to preserve functionality (WORKING APPROACH)
+        echo "🎨 Signing Qt plugins with minimal entitlements to preserve theme detection..."
         if [ -d "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" ]; then
           find "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" -name "*.dylib" | while read plugin; do
-            echo "Signing Qt plugin: $(basename "$plugin")"
+            echo "Signing Qt plugin (preserving functionality): $plugin"
+            # Use minimal entitlements and preserve as much as possible - EXACTLY like working version
             codesign --force --timestamp --options runtime \
                      --entitlements qt_entitlements.plist \
                      --preserve-metadata=identifier,requirements,flags \
-                     --sign "$CERT_NAME" "$plugin" 2>/dev/null || echo "⚠️  Failed to sign $(basename "$plugin") (may not be critical)"
+                     --sign "$CERT_NAME" "$plugin"
           done
-          echo "✅ Qt plugins signed"
         else
-          echo "⚠️  Qt plugins directory not found"
+          echo "Warning: Qt plugins directory not found"
         fi
 
-        # Sign other frameworks and libraries
-        echo "📚 Signing other frameworks and libraries..."
+        # Sign other frameworks and libraries (but skip Qt plugins since we handled them above)
+        echo "Signing other frameworks and libraries..."
         find dist/AV-Spex.app/Contents/Frameworks -type f \( -name "*.so" -o -name "*.dylib" \) 2>/dev/null | while read file; do
-          # Skip Qt plugins as we already signed them
+          # Skip Qt plugins as we already signed them with special handling
           if [[ "$file" == *"PyQt6/Qt6/plugins"* ]]; then
             continue
           fi
           
           if [ -f "$file" ]; then
+            echo "Signing: $file"
             codesign --force --timestamp --options runtime \
                      --preserve-metadata=identifier,entitlements,flags \
-                     --sign "$CERT_NAME" "$file" 2>/dev/null || echo "⚠️  Failed to sign $(basename "$file") (may not be critical)"
+                     --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
           fi
         done
 
-        # Sign nested frameworks
-        echo "🏗️ Signing nested frameworks..."
+        # Sign nested frameworks (but avoid Qt plugins directory since we handled it)
+        echo "Signing nested frameworks..."
         find dist/AV-Spex.app/Contents/Frameworks -name "*.framework" -type d 2>/dev/null | while read framework; do
+          # Skip if this is within Qt plugins
           if [[ "$framework" == *"PyQt6/Qt6/plugins"* ]]; then
             continue
           fi
           
           if [ -d "$framework" ]; then
+            echo "Signing framework: $framework"
             codesign --force --timestamp --options runtime \
                      --preserve-metadata=identifier,entitlements,flags \
-                     --sign "$CERT_NAME" "$framework" 2>/dev/null || echo "⚠️  Failed to sign $(basename "$framework") (may not be critical)"
+                     --sign "$CERT_NAME" "$framework" || echo "Warning: Failed to sign $framework"
           fi
         done
 
-        # Sign the main executable
-        echo "🎯 Signing main executable..."
-        if codesign --force --timestamp --options runtime \
-                   --entitlements entitlements.plist \
-                   --preserve-metadata=identifier \
-                   --sign "$CERT_NAME" \
-                   "dist/AV-Spex.app/Contents/MacOS/AV-Spex"; then
-          echo "✅ Main executable signed successfully"
-        else
-          echo "❌ CRITICAL: Failed to sign main executable!"
-          exit 1
-        fi
+        # Sign Python executables and binaries (but avoid Qt plugins)
+        echo "Signing Python executables..."
+        find dist/AV-Spex.app/Contents -type f \( -name "python*" -o -perm +111 \) 2>/dev/null | while read file; do
+          # Skip main executable and Qt plugins
+          if [ "$file" == "dist/AV-Spex.app/Contents/MacOS/AV-Spex" ] || [[ "$file" == *"PyQt6/Qt6/plugins"* ]]; then
+            continue
+          fi
+          
+          if [ -f "$file" ]; then
+            echo "Signing: $file"
+            codesign --force --timestamp --options runtime \
+                     --preserve-metadata=identifier,entitlements,flags \
+                     --sign "$CERT_NAME" "$file" || echo "Warning: Failed to sign $file"
+          fi
+        done
 
-        # Sign the main app bundle
-        echo "📦 Signing main application bundle..."
-        if codesign --force --timestamp --options runtime \
-                   --entitlements entitlements.plist \
-                   --sign "$CERT_NAME" \
-                   dist/AV-Spex.app; then
-          echo "✅ Main application bundle signed successfully"
-        else
-          echo "❌ CRITICAL: Failed to sign main application bundle!"
-          exit 1
-        fi
+        # Sign the main executable with full entitlements
+        echo "Signing main executable..."
+        codesign --force --timestamp --options runtime \
+                 --entitlements entitlements.plist \
+                 --preserve-metadata=identifier \
+                 --sign "$CERT_NAME" "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
 
-        echo "✅ Signing process completed"
+        # Verify the main executable is still universal after signing
+        echo "Verifying main executable architecture after signing..."
+        file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+        lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
+
+        # Sign the main app bundle with entitlements (but not --deep to avoid re-signing components)
+        echo "Signing main application bundle..."
+        codesign --force --timestamp --options runtime \
+                 --entitlements entitlements.plist \
+                 --sign "$CERT_NAME" dist/AV-Spex.app
+
+        # Check signature details
+        echo "Signature details:"
+        codesign --display --verbose=4 dist/AV-Spex.app
         
     - name: Create DMG
       run: |
