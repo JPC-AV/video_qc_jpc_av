@@ -73,6 +73,50 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         # Setup theme handling
         self.setup_theme_handling()
+        
+        # Optional: Run theme diagnostic on startup (only in debug builds)
+        if self._should_run_diagnostic():
+            self._run_startup_diagnostic()
+
+    def _should_run_diagnostic(self):
+        """Determine if we should run theme diagnostic on startup"""
+        # Only run diagnostic if:
+        # 1. App is signed (potential issue environment)
+        # 2. Debug flag is set
+        # 3. Or environment variable is set
+        
+        import os
+        
+        # Check environment variable
+        if os.environ.get('AVSPEX_DEBUG_THEME'):
+            return True
+        
+        # Check if running as signed bundle
+        try:
+            import subprocess
+            if getattr(sys, 'frozen', False):
+                result = subprocess.run([
+                    'codesign', '-dv', sys.executable
+                ], capture_output=True, text=True, timeout=5)
+                return result.returncode == 0
+        except:
+            pass
+        
+        return False
+
+    def _run_startup_diagnostic(self):
+        """Run theme diagnostic at startup and log results"""
+        try:
+            theme_manager = ThemeManager.instance()
+            
+            # Run quick diagnostic in a separate thread to avoid blocking UI
+            from PyQt6.QtCore import QTimer
+            
+            # Delay diagnostic slightly to let UI fully initialize
+            QTimer.singleShot(1000, lambda: theme_manager.run_theme_diagnostic())
+            
+        except Exception as e:
+            logger.warning(f"Startup theme diagnostic failed: {e}")
     
     def closeEvent(self, event):
         """Handle application shutdown and clean up resources."""
@@ -104,4 +148,15 @@ class MainWindow(QMainWindow, ThemeableMixin):
         
         # Call parent implementation
         super().closeEvent(event)
+
+    def run_theme_diagnostic_manually(self):
+        """Manual theme diagnostic trigger (can be bound to menu item or shortcut)"""
+        theme_manager = ThemeManager.instance()
+        results = theme_manager.run_theme_diagnostic()
+        
+        if results:
+            # Optionally show results in a dialog or console
+            logger.info("Theme diagnostic completed - check logs for details")
+        else:
+            logger.error("Theme diagnostic failed to run")
     

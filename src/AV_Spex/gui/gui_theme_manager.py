@@ -4,6 +4,8 @@ from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
 
 import os
 
+from AV_Spex.utils.log_setup import logger
+
 class ThemeManager(QObject):
     """
     Singleton manager for handling theme changes in a PyQt6 application.
@@ -333,6 +335,7 @@ class ThemeManager(QObject):
     def style_console_text(self, text_edit):
         """
         Apply consistent styling to a ConsoleTextEdit based on current theme.
+        Uses robust theme detection.
         
         Args:
             text_edit: The ConsoleTextEdit or QTextEdit to style
@@ -345,24 +348,54 @@ class ThemeManager(QObject):
         base_color = palette.color(QPalette.ColorRole.Base).name()
         text_color = palette.color(QPalette.ColorRole.Text).name()
         
-        # Define darker/lighter background based on theme
-        is_dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
+        # Use robust theme detection instead of palette-based detection
+        theme = self.detect_system_theme()
+        is_dark = theme == 'Dark'
+        
+        # Define background based on theme
         if is_dark:
             # For dark themes, use slightly lighter than base
-            bg_color = f"rgba({min(palette.color(QPalette.ColorRole.Base).red() + 15, 255)}, "\
-                      f"{min(palette.color(QPalette.ColorRole.Base).green() + 15, 255)}, "\
-                      f"{min(palette.color(QPalette.ColorRole.Base).blue() + 15, 255)}, 255)"
+            try:
+                bg_color = f"rgba({min(palette.color(QPalette.ColorRole.Base).red() + 15, 255)}, "\
+                        f"{min(palette.color(QPalette.ColorRole.Base).green() + 15, 255)}, "\
+                        f"{min(palette.color(QPalette.ColorRole.Base).blue() + 15, 255)}, 255)"
+            except:
+                bg_color = "#2a2a2a"  # Fallback dark color
             # Border for dark theme
-            border_color = palette.color(QPalette.ColorRole.Mid).name()
+            try:
+                border_color = palette.color(QPalette.ColorRole.Mid).name()
+            except:
+                border_color = "#555555"  # Fallback border
         else:
             # For light themes, use slightly darker than base
-            bg_color = f"rgba({max(palette.color(QPalette.ColorRole.Base).red() - 15, 0)}, "\
-                      f"{max(palette.color(QPalette.ColorRole.Base).green() - 15, 0)}, "\
-                      f"{max(palette.color(QPalette.ColorRole.Base).blue() - 15, 0)}, 255)"
+            try:
+                bg_color = f"rgba({max(palette.color(QPalette.ColorRole.Base).red() - 15, 0)}, "\
+                        f"{max(palette.color(QPalette.ColorRole.Base).green() - 15, 0)}, "\
+                        f"{max(palette.color(QPalette.ColorRole.Base).blue() - 15, 0)}, 255)"
+            except:
+                bg_color = "#f0f0f0"  # Fallback light color
             # Border for light theme
-            border_color = palette.color(QPalette.ColorRole.Mid).name()
-            
-        # Create console-like style
+            try:
+                border_color = palette.color(QPalette.ColorRole.Mid).name()
+            except:
+                border_color = "#cccccc"  # Fallback border
+        
+        # Get highlight colors with fallbacks
+        try:
+            highlight_color = palette.color(palette.ColorRole.Highlight).name()
+            highlight_text_color = palette.color(palette.ColorRole.HighlightedText).name()
+            mid_color = palette.color(palette.ColorRole.Mid).name()
+        except:
+            if is_dark:
+                highlight_color = "#3b82f6"
+                highlight_text_color = "#ffffff"
+                mid_color = "#666666"
+            else:
+                highlight_color = "#0066cc"
+                highlight_text_color = "#ffffff"
+                mid_color = "#999999"
+                
+        # Create console-like style with fallback-safe colors
         text_edit.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {bg_color};
@@ -370,8 +403,8 @@ class ThemeManager(QObject):
                 border: 1px solid {border_color};
                 border-radius: 5px;
                 padding: 5px;
-                selection-background-color: {palette.color(palette.ColorRole.Highlight).name()};
-                selection-color: {palette.color(palette.ColorRole.HighlightedText).name()};
+                selection-background-color: {highlight_color};
+                selection-color: {highlight_text_color};
             }}
             QScrollBar:vertical {{
                 background: {bg_color};
@@ -379,7 +412,7 @@ class ThemeManager(QObject):
                 margin: 0px;
             }}
             QScrollBar::handle:vertical {{
-                background: {palette.color(palette.ColorRole.Mid).name()};
+                background: {mid_color};
                 min-height: 20px;
                 border-radius: 7px;
             }}
@@ -389,7 +422,7 @@ class ThemeManager(QObject):
                 margin: 0px;
             }}
             QScrollBar::handle:horizontal {{
-                background: {palette.color(palette.ColorRole.Mid).name()};
+                background: {mid_color};
                 min-width: 20px;
                 border-radius: 7px;
             }}
@@ -515,6 +548,209 @@ class ThemeManager(QObject):
         # Find and style text edits
         for text_edit in widget.findChildren(QTextEdit):
             self.style_console_text(text_edit)
+
+    def detect_system_theme(self):
+        """
+        Robust theme detection with multiple fallback methods.
+        Specifically designed to work around signing issues in production builds.
+        Returns 'Dark' or 'Light'
+        """
+        import subprocess
+        import sys
+        
+        # Method 1: Try PyQt6 palette detection
+        try:
+            if self.app:
+                palette = self.app.palette()
+                window_color = palette.color(palette.ColorRole.Window)
+                lightness = window_color.lightness()
+                
+                # Validate that we got a reasonable result
+                if 0 <= lightness <= 255:
+                    is_dark = lightness < 128
+                    theme = 'Dark' if is_dark else 'Light'
+                    logger.debug(f"PyQt6 theme detection successful: {theme} (lightness: {lightness})")
+                    return theme
+                else:
+                    logger.warning(f"PyQt6 returned invalid lightness value: {lightness}")
+        except Exception as e:
+            logger.warning(f"PyQt6 theme detection failed: {e}")
+        
+        # Method 2: Direct system call (most reliable fallback)
+        try:
+            result = subprocess.run([
+                'defaults', 'read', '-g', 'AppleInterfaceStyle'
+            ], capture_output=True, text=True, timeout=3)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                theme = 'Dark'
+                logger.info(f"Fallback theme detection (defaults): {theme}")
+                return theme
+            else:
+                theme = 'Light'
+                logger.info(f"Fallback theme detection (defaults): {theme} (no dark mode setting)")
+                return theme
+                
+        except Exception as e:
+            logger.warning(f"Fallback theme detection (defaults) failed: {e}")
+        
+        # Method 3: Try AppleScript for theme detection (works when subprocess fails)
+        try:
+            result = subprocess.run([
+                'osascript', '-e', 
+                'tell application "System Events" to tell appearance preferences to get dark mode'
+            ], capture_output=True, text=True, timeout=3)
+            
+            if result.returncode == 0:
+                is_dark = result.stdout.strip().lower() == 'true'
+                theme = 'Dark' if is_dark else 'Light'
+                logger.info(f"Fallback theme detection (AppleScript): {theme}")
+                return theme
+            
+        except Exception as e:
+            logger.warning(f"AppleScript theme detection failed: {e}")
+        
+        # Method 4: Final fallback - assume Light theme
+        logger.warning("All theme detection methods failed, defaulting to Light theme")
+        return 'Light'
+
+
+    def get_theme_with_fallback(self):
+        """
+        Get current theme with fallback detection methods.
+        Returns 'Dark' or 'Light'
+        """
+        # Method 1: Try PyQt6 palette (your current method)
+        try:
+            if self.app:
+                palette = self.app.palette()
+                is_dark = palette.color(palette.ColorRole.Window).lightness() < 128
+                theme = 'Dark' if is_dark else 'Light'
+                
+                # Log success for debugging
+                
+                logger.debug(f"PyQt6 theme detection: {theme}")
+                return theme
+        except Exception as e:
+            logger.warning(f"PyQt6 theme detection failed: {e}")
+        
+        # Method 2: Fallback to system defaults
+        try:
+            import subprocess
+            result = subprocess.run([
+                'defaults', 'read', '-g', 'AppleInterfaceStyle'
+            ], capture_output=True, text=True, timeout=2)
+            
+            if result.returncode == 0:
+                theme = 'Dark'
+            else:
+                theme = 'Light'
+                
+            logger.info(f"Fallback theme detection: {theme}")
+            return theme
+            
+        except Exception as e:
+            
+            logger.warning(f"Fallback theme detection failed: {e}")
+        
+        # Method 3: Final fallback - assume Light theme
+        
+        logger.warning("All theme detection methods failed, defaulting to Light theme")
+        return 'Light'
+
+
+    def get_theme_appropriate_logo(self, light_logo_path, dark_logo_path):
+        """
+        Returns the appropriate logo path based on the current theme.
+        Uses robust theme detection with multiple fallbacks.
+        
+        Args:
+            light_logo_path: Path to the logo for light theme
+            dark_logo_path: Path to the logo for dark theme
+            
+        Returns:
+            str: Path to the appropriate logo for current theme
+        """
+        theme = self.detect_system_theme()
+        return dark_logo_path if theme == 'Dark' else light_logo_path
+
+
+    def run_theme_diagnostic(self):
+        """
+        Run the theme diagnostic and log results.
+        Useful for troubleshooting theme detection issues.
+        """
+        try:
+            from AV_Spex.utils.theme_diagnostic import run_full_diagnostic
+            logger.info("Running theme diagnostic...")
+            results = run_full_diagnostic()
+            
+            # Log key findings
+            if results['pyqt_theme'].get('pyqt_success'):
+                logger.info(f"Theme detection working: {results['pyqt_theme']['detected_theme']}")
+            else:
+                logger.error("Theme detection failed")
+                
+            return results
+        except Exception as e:
+            
+            logger.error(f"Theme diagnostic failed: {e}")
+            return None
+        
+    def debug_theme_detection(self):
+        """
+        Debug method to test all theme detection methods and report results.
+        Useful for troubleshooting in different environments.
+        """
+        logger.info("=== Theme Detection Debug ===")
+        
+        # Test PyQt6 method
+        try:
+            if self.app:
+                palette = self.app.palette()
+                window_color = palette.color(palette.ColorRole.Window)
+                lightness = window_color.lightness()
+                logger.info(f"PyQt6 method: lightness={lightness}, theme={'Dark' if lightness < 128 else 'Light'}")
+            else:
+                logger.info("PyQt6 method: No QApplication available")
+        except Exception as e:
+            logger.warning(f"PyQt6 method: Error - {e}")
+        
+        # Test subprocess method
+        try:
+            import subprocess
+            result = subprocess.run([
+                'defaults', 'read', '-g', 'AppleInterfaceStyle'
+            ], capture_output=True, text=True, timeout=3)
+            
+            if result.returncode == 0:
+                logger.info("Subprocess method: Dark theme detected")
+            else:
+                logger.info("Subprocess method: Light theme (no setting)")
+        except Exception as e:
+            logger.warning(f"Subprocess method: Error - {e}")
+        
+        # Test AppleScript method
+        try:
+            result = subprocess.run([
+                'osascript', '-e', 
+                'tell application "System Events" to tell appearance preferences to get dark mode'
+            ], capture_output=True, text=True, timeout=3)
+            
+            if result.returncode == 0:
+                is_dark = result.stdout.strip().lower() == 'true'
+                logger.info(f"AppleScript method: {'Dark' if is_dark else 'Light'} theme detected")
+            else:
+                logger.info("AppleScript method: Failed to get result")
+        except Exception as e:
+            logger.warning(f"AppleScript method: Error - {e}")
+        
+        # Final result
+        final_theme = self.detect_system_theme()
+        logger.info(f"Final detected theme: {final_theme}")
+        logger.info("=== End Debug ===")
+        
+        return final_theme
 
 
 class ThemeableMixin:

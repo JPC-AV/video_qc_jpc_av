@@ -78,6 +78,7 @@ class ParsedArguments:
     import_config: Optional[str]
     mediaconch_policy: Optional[str]
     use_default_config: bool
+    theme_diagnostic: bool 
 
 
 PROFILE_MAPPING = {
@@ -168,6 +169,9 @@ The scripts will confirm that the digital files conform to predetermined specifi
                     help='Import configs from JSON file')
     parser.add_argument("--mediaconch-policy",
                     help="Path to custom MediaConch policy XML file")
+    
+    parser.add_argument('--theme-diagnostic', action='store_true',
+                   help='Run theme detection diagnostic and exit')
 
     args = parser.parse_args()
 
@@ -211,7 +215,8 @@ The scripts will confirm that the digital files conform to predetermined specifi
         export_file=args.export_file,
         import_config=args.import_config,
         mediaconch_policy=args.mediaconch_policy,
-        use_default_config=args.use_default_config
+        use_default_config=args.use_default_config,
+        theme_diagnostic=args.theme_diagnostic
     )
 
 
@@ -301,6 +306,11 @@ def run_avspex(source_directories, signals=None):
 
 def main_gui():
     args = parse_arguments()
+
+    if args.theme_diagnostic:
+        from AV_Spex.utils.theme_diagnostic import run_full_diagnostic
+        run_full_diagnostic()
+        return
     
     # Get application (will show splash screen)
     app = LazyGUILoader.get_application()
@@ -325,6 +335,11 @@ def main_cli():
 
 def main():
     args = parse_arguments()
+
+    if args.theme_diagnostic:
+        from AV_Spex.utils.theme_diagnostic import run_full_diagnostic
+        run_full_diagnostic()
+        sys.exit(0)
 
     if args.gui or (args.source_directories is None and not sys.argv[1:]):
         main_gui()
