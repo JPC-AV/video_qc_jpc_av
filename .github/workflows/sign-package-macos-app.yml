@@ -43,6 +43,8 @@ jobs:
         echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
         echo "Event type: ${{ github.event.workflow_run.event }}"
         echo "Repository: ${{ github.event.workflow_run.repository.full_name }}"
+        echo "All workflow_run context:"
+        echo '${{ toJson(github.event.workflow_run) }}'
       
     - name: Install dependencies
       run: |
@@ -188,9 +190,9 @@ jobs:
           --password "$APPLE_ID_PASSWORD" \
           --team-id "$APPLE_TEAM_ID"
           
-    - name: Sign App Bundle (Restore Working Approach)
+    - name: Sign App Bundle
       run: |
-        # Create entitlements file - EXACTLY like the working version (NO Apple Events)
+        # Create entitlements file
         cat > entitlements.plist << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -203,6 +205,8 @@ jobs:
             <key>com.apple.security.cs.disable-library-validation</key>
             <true/>
             <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+            <true/>
+            <key>com.apple.security.automation.apple-events</key>
             <true/>
         </dict>
         </plist>
@@ -228,12 +232,12 @@ jobs:
         # Make sure permissions are correct
         chmod -R 755 dist/AV-Spex.app
 
-        # STRATEGY: Sign Qt plugins with minimal entitlements to preserve functionality (WORKING APPROACH)
+        # STRATEGY: Sign Qt plugins with minimal entitlements to preserve functionality
         echo "🎨 Signing Qt plugins with minimal entitlements to preserve theme detection..."
         if [ -d "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" ]; then
           find "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins" -name "*.dylib" | while read plugin; do
             echo "Signing Qt plugin (preserving functionality): $plugin"
-            # Use minimal entitlements and preserve as much as possible - EXACTLY like working version
+            # Use minimal entitlements and preserve as much as possible
             codesign --force --timestamp --options runtime \
                      --entitlements qt_entitlements.plist \
                      --preserve-metadata=identifier,requirements,flags \
@@ -309,6 +313,24 @@ jobs:
                  --entitlements entitlements.plist \
                  --sign "$CERT_NAME" dist/AV-Spex.app
 
+        # Verify the signature consistency before notarization
+        echo "🔍 Verifying signature consistency..."
+        codesign --verify --deep --strict dist/AV-Spex.app || {
+          echo "❌ Signature verification failed - checking individual components..."
+          
+          # Check Qt plugins specifically
+          if [ -d "dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms" ]; then
+            for plugin in dist/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms/*.dylib; do
+              if [ -f "$plugin" ]; then
+                echo "Checking $(basename "$plugin"):"
+                codesign --verify --verbose "$plugin" 2>&1 || echo "  ❌ Verification failed"
+              fi
+            done
+          fi
+          
+          echo "Continuing despite verification issues - notarization will catch problems..."
+        }
+        
         # Check signature details
         echo "Signature details:"
         codesign --display --verbose=4 dist/AV-Spex.app
@@ -378,13 +400,23 @@ jobs:
         path: dist/AV-Spex-${{ env.VERSION }}.dmg
         retention-days: 90
 
+    - name: Debug workflow_run context
+      run: |
+        echo "Event name: ${{ github.event_name }}"
+        echo "Workflow run event: ${{ github.event.workflow_run.event }}"
+        echo "Head branch: ${{ github.event.workflow_run.head_branch }}"
+        echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
+        echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
+        echo "All workflow_run context:"
+        echo '${{ toJson(github.event.workflow_run) }}'
+        
     - name: Create Release (for tags)
       if: startsWith(github.event.workflow_run.head_branch, 'v')
       uses: softprops/action-gh-release@v1
       with:
         files: dist/AV-Spex-${{ env.VERSION }}.dmg
-        tag_name: ${{ github.event.workflow_run.head_branch }}
-        name: AV-Spex ${{ github.event.workflow_run.head_branch }}
+        tag_name: ${{ github.event.workflow_run.head_branch }}  # <-- Use this instead of github.ref_name
+        name: AV-Spex ${{ github.event.workflow_run.head_branch }}  # <-- And this
         draft: false
         prerelease: false
         body: |
@@ -401,6 +433,14 @@ jobs:
           3. The app is signed and notarized for macOS security
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Debug Release Status
+      if: startsWith(github.event.workflow_run.head_branch, 'v')
+      run: |
+        echo "Checking release status for tag: ${{ github.event.workflow_run.head_branch }}"
+        curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.workflow_run.head_branch }}" \
+          | jq '.draft, .prerelease, .published_at, .html_url'
         
     - name: Cleanup Keychain
       if: always()
