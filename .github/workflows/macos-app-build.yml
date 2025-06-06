@@ -163,8 +163,6 @@ jobs:
         path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz
         retention-days: 30
 
-  # Add this job to your macos-app-build.yml file after the build-macos job
-
   create-universal:
     runs-on: macos-latest
     needs: build-macos
@@ -301,6 +299,52 @@ jobs:
         done
         
         echo "✅ PyQt6 modules processed"
+        
+    - name: Create universal Qt frameworks
+      run: |
+        echo "=== Creating universal Qt frameworks ==="
+        
+        # List of Qt frameworks that need to be universal
+        QT_FRAMEWORKS=(
+          "QtCore"
+          "QtGui" 
+          "QtWidgets"
+          "QtDBus"
+          "QtNetwork"
+          "QtSvg"
+          "QtPdf"
+        )
+        
+        FRAMEWORKS_DIR="universal/AV-Spex.app/Contents/Frameworks"
+        
+        for framework in "${QT_FRAMEWORKS[@]}"; do
+          X86_FRAMEWORK="builds/x86_64/AV-Spex.app/Contents/Frameworks/$framework"
+          ARM_FRAMEWORK="builds/arm64/AV-Spex.app/Contents/Frameworks/$framework"
+          UNIVERSAL_FRAMEWORK="$FRAMEWORKS_DIR/$framework"
+          
+          if [ -f "$X86_FRAMEWORK" ] && [ -f "$ARM_FRAMEWORK" ]; then
+            echo "Creating universal Qt framework: $framework"
+            lipo -create "$X86_FRAMEWORK" "$ARM_FRAMEWORK" -output "$UNIVERSAL_FRAMEWORK"
+            
+            # Verify it worked
+            if lipo -info "$UNIVERSAL_FRAMEWORK" | grep -q "x86_64 arm64"; then
+              echo "✅ $framework is now universal"
+            else
+              echo "⚠️ $framework may not be properly universal"
+              lipo -info "$UNIVERSAL_FRAMEWORK"
+            fi
+          else
+            echo "⚠️ Skipping $framework - not found in both architectures"
+            if [ -f "$X86_FRAMEWORK" ]; then
+              echo "  Found x86_64 version only"
+            fi
+            if [ -f "$ARM_FRAMEWORK" ]; then
+              echo "  Found arm64 version only"
+            fi
+          fi
+        done
+        
+        echo "✅ Qt frameworks processed"
         
     - name: Create universal Qt plugins
       run: |
@@ -480,6 +524,19 @@ jobs:
             echo "✅ pyexpat is properly universal"
           else
             echo "❌ pyexpat is not universal!"
+            exit 1
+          fi
+        fi
+        
+        # Check critical Qt framework
+        QT_FRAMEWORK="universal/AV-Spex.app/Contents/Frameworks/QtCore"
+        if [ -f "$QT_FRAMEWORK" ]; then
+          echo "Critical Qt framework:"
+          lipo -info "$QT_FRAMEWORK"
+          if lipo -info "$QT_FRAMEWORK" | grep -q "x86_64 arm64"; then
+            echo "✅ QtCore framework is properly universal"
+          else
+            echo "❌ QtCore framework is not universal!"
             exit 1
           fi
         fi
