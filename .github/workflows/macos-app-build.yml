@@ -163,7 +163,6 @@ jobs:
         path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz
         retention-days: 30
 
-
   create-universal:
     runs-on: macos-latest
     needs: build-macos
@@ -335,6 +334,42 @@ jobs:
         
         echo "✅ lib-dynload libraries processed"
         
+    - name: Fix library compatibility for older macOS
+      run: |
+        echo "=== Fixing library compatibility for macOS 12+ ==="
+        
+        # For critical libraries that might have compatibility issues,
+        # prefer the x86_64 (macos-13) version which targets older macOS
+        COMPAT_LIBS=(
+          "pyexpat.cpython-310-darwin.so"
+          "_ssl.cpython-310-darwin.so"
+          "_hashlib.cpython-310-darwin.so"
+          "_datetime.cpython-310-darwin.so"
+        )
+        
+        LIB_DYNLOAD_DIR="universal/AV-Spex.app/Contents/Frameworks/lib-dynload"
+        
+        for lib in "${COMPAT_LIBS[@]}"; do
+          X86_LIB="builds/x86_64/AV-Spex.app/Contents/Frameworks/lib-dynload/$lib"
+          UNIVERSAL_LIB="$LIB_DYNLOAD_DIR/$lib"
+          
+          if [ -f "$X86_LIB" ] && [ -f "$UNIVERSAL_LIB" ]; then
+            echo "Using x86_64 version of $lib for better compatibility"
+            cp "$X86_LIB" "$UNIVERSAL_LIB"
+          fi
+        done
+        
+        # Also copy the bundled libexpat from x86_64 build if it exists
+        X86_EXPAT="builds/x86_64/AV-Spex.app/Contents/Frameworks/libexpat.1.dylib"
+        UNIVERSAL_EXPAT="universal/AV-Spex.app/Contents/Frameworks/libexpat.1.dylib"
+        
+        if [ -f "$X86_EXPAT" ]; then
+          echo "Using bundled x86_64 libexpat for compatibility"
+          cp "$X86_EXPAT" "$UNIVERSAL_EXPAT"
+        fi
+        
+        echo "✅ Library compatibility fixes applied"
+        
     - name: Handle other critical libraries  
       run: |
         echo "=== Processing other critical libraries ==="
@@ -346,6 +381,7 @@ jobs:
           "libcrypto.3.dylib"
           "libz.1.dylib"
           "libffi.8.dylib"
+          "libexpat.1.dylib"
         )
         
         FRAMEWORKS_DIR="universal/AV-Spex.app/Contents/Frameworks"
