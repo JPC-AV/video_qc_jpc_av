@@ -162,3 +162,262 @@ jobs:
         name: av-spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned
         path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz
         retention-days: 30
+
+
+  create-universal:
+    runs-on: macos-latest
+    needs: build-macos
+    if: success() # Only run if both builds succeeded
+    
+    steps:
+    - name: Download x86_64 build
+      uses: actions/download-artifact@v4
+      with:
+        name: av-spex-${{ needs.build-macos.outputs.version }}-x86_64-unsigned
+        path: ./builds/x86_64/
+        
+    - name: Download arm64 build
+      uses: actions/download-artifact@v4
+      with:
+        name: av-spex-${{ needs.build-macos.outputs.version }}-arm64-unsigned
+        path: ./builds/arm64/
+        
+    - name: Extract and prepare builds
+      run: |
+        echo "=== Extracting builds ==="
+        cd builds/x86_64 && tar -xzf *.tar.gz && cd ../..
+        cd builds/arm64 && tar -xzf *.tar.gz && cd ../..
+        
+        echo "=== Verifying extractions ==="
+        ls -la builds/x86_64/
+        ls -la builds/arm64/
+        
+        # Verify both apps exist
+        test -d builds/x86_64/AV-Spex.app || (echo "❌ x86_64 app not found" && exit 1)
+        test -d builds/arm64/AV-Spex.app || (echo "❌ arm64 app not found" && exit 1)
+        
+        echo "✅ Both builds extracted successfully"
+        
+    - name: Create universal binary structure
+      run: |
+        echo "=== Creating universal app structure ==="
+        
+        # Use arm64 as the base (more recent structure)
+        mkdir -p universal
+        cp -R builds/arm64/AV-Spex.app universal/
+        cp builds/arm64/build-info.json universal/
+        
+        # Update build info to reflect universal binary
+        if command -v jq > /dev/null; then
+          jq '.architecture = "universal"' builds/arm64/build-info.json > universal/build-info.json
+        else
+          # Fallback without jq
+          sed 's/"architecture": "arm64"/"architecture": "universal"/' builds/arm64/build-info.json > universal/build-info.json
+        fi
+        
+        echo "✅ Base structure created"
+        
+    - name: Create universal main executable
+      run: |
+        echo "=== Creating universal main executable ==="
+        
+        X86_EXEC="builds/x86_64/AV-Spex.app/Contents/MacOS/AV-Spex"
+        ARM_EXEC="builds/arm64/AV-Spex.app/Contents/MacOS/AV-Spex" 
+        UNIVERSAL_EXEC="universal/AV-Spex.app/Contents/MacOS/AV-Spex"
+        
+        # Verify source files exist
+        test -f "$X86_EXEC" || (echo "❌ x86_64 executable not found" && exit 1)
+        test -f "$ARM_EXEC" || (echo "❌ arm64 executable not found" && exit 1)
+        
+        # Check architectures before combining
+        echo "x86_64 executable:"
+        file "$X86_EXEC"
+        echo "arm64 executable:"
+        file "$ARM_EXEC"
+        
+        # Create universal binary
+        lipo -create "$X86_EXEC" "$ARM_EXEC" -output "$UNIVERSAL_EXEC"
+        
+        # Verify universal binary was created correctly
+        echo "Universal executable created:"
+        file "$UNIVERSAL_EXEC"
+        lipo -info "$UNIVERSAL_EXEC"
+        
+        # Ensure it's executable
+        chmod +x "$UNIVERSAL_EXEC"
+        
+        echo "✅ Universal main executable created"
+        
+    - name: Create universal Python library
+      run: |
+        echo "=== Creating universal Python library ==="
+        
+        X86_PYTHON="builds/x86_64/AV-Spex.app/Contents/Frameworks/libpython3.10.dylib"
+        ARM_PYTHON="builds/arm64/AV-Spex.app/Contents/Frameworks/libpython3.10.dylib"
+        UNIVERSAL_PYTHON="universal/AV-Spex.app/Contents/Frameworks/libpython3.10.dylib"
+        
+        if [ -f "$X86_PYTHON" ] && [ -f "$ARM_PYTHON" ]; then
+          echo "Creating universal Python library..."
+          lipo -create "$X86_PYTHON" "$ARM_PYTHON" -output "$UNIVERSAL_PYTHON"
+          echo "✅ Universal Python library created"
+        else
+          echo "⚠️ Python library not found in expected location, skipping"
+        fi
+        
+    - name: Create universal Qt plugins
+      run: |
+        echo "=== Creating universal Qt plugins ==="
+        
+        QT_PLUGINS_DIR="universal/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins"
+        
+        # List of critical Qt plugins to make universal
+        PLUGINS=(
+          "platforms/libqcocoa.dylib"
+          "platforms/libqminimal.dylib" 
+          "platforms/libqoffscreen.dylib"
+          "styles/libqmacstyle.dylib"
+          "iconengines/libqsvgicon.dylib"
+        )
+        
+        for plugin in "${PLUGINS[@]}"; do
+          X86_PLUGIN="builds/x86_64/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/$plugin"
+          ARM_PLUGIN="builds/arm64/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/$plugin"
+          UNIVERSAL_PLUGIN="$QT_PLUGINS_DIR/$plugin"
+          
+          if [ -f "$X86_PLUGIN" ] && [ -f "$ARM_PLUGIN" ]; then
+            echo "Creating universal plugin: $plugin"
+            
+            # Ensure directory exists
+            mkdir -p "$(dirname "$UNIVERSAL_PLUGIN")"
+            
+            # Create universal binary
+            lipo -create "$X86_PLUGIN" "$ARM_PLUGIN" -output "$UNIVERSAL_PLUGIN"
+            
+            # Verify it worked
+            if lipo -info "$UNIVERSAL_PLUGIN" | grep -q "are: x86_64 arm64"; then
+              echo "✅ $plugin is now universal"
+            else
+              echo "⚠️ $plugin may not be properly universal"
+              lipo -info "$UNIVERSAL_PLUGIN"
+            fi
+          else
+            echo "⚠️ Skipping $plugin - not found in both architectures"
+          fi
+        done
+        
+    - name: Create universal libraries in lib-dynload
+      run: |
+        echo "=== Creating universal lib-dynload libraries ==="
+        
+        LIB_DYNLOAD_DIR="universal/AV-Spex.app/Contents/Frameworks/lib-dynload"
+        
+        # Get list of .so files from both builds
+        X86_LIBS=($(find builds/x86_64/AV-Spex.app/Contents/Frameworks/lib-dynload -name "*.so" -exec basename {} \; | sort))
+        ARM_LIBS=($(find builds/arm64/AV-Spex.app/Contents/Frameworks/lib-dynload -name "*.so" -exec basename {} \; | sort))
+        
+        # Find common libraries
+        COMMON_LIBS=($(comm -12 <(printf '%s\n' "${X86_LIBS[@]}") <(printf '%s\n' "${ARM_LIBS[@]}")))
+        
+        echo "Found ${#COMMON_LIBS[@]} common libraries to make universal"
+        
+        for lib in "${COMMON_LIBS[@]}"; do
+          X86_LIB="builds/x86_64/AV-Spex.app/Contents/Frameworks/lib-dynload/$lib"
+          ARM_LIB="builds/arm64/AV-Spex.app/Contents/Frameworks/lib-dynload/$lib" 
+          UNIVERSAL_LIB="$LIB_DYNLOAD_DIR/$lib"
+          
+          if [ -f "$X86_LIB" ] && [ -f "$ARM_LIB" ]; then
+            lipo -create "$X86_LIB" "$ARM_LIB" -output "$UNIVERSAL_LIB" 2>/dev/null || {
+              echo "⚠️ Could not create universal $lib - using arm64 version"
+              cp "$ARM_LIB" "$UNIVERSAL_LIB"
+            }
+          fi
+        done
+        
+        echo "✅ lib-dynload libraries processed"
+        
+    - name: Handle other critical libraries  
+      run: |
+        echo "=== Processing other critical libraries ==="
+        
+        # List of other important dylibs to make universal
+        OTHER_LIBS=(
+          "libpython3.10.dylib"
+          "libssl.3.dylib"
+          "libcrypto.3.dylib"
+          "libz.1.dylib"
+          "libffi.8.dylib"
+        )
+        
+        FRAMEWORKS_DIR="universal/AV-Spex.app/Contents/Frameworks"
+        
+        for lib in "${OTHER_LIBS[@]}"; do
+          X86_LIB="builds/x86_64/AV-Spex.app/Contents/Frameworks/$lib"
+          ARM_LIB="builds/arm64/AV-Spex.app/Contents/Frameworks/$lib"
+          UNIVERSAL_LIB="$FRAMEWORKS_DIR/$lib"
+          
+          if [ -f "$X86_LIB" ] && [ -f "$ARM_LIB" ]; then
+            echo "Making $lib universal..."
+            lipo -create "$X86_LIB" "$ARM_LIB" -output "$UNIVERSAL_LIB" 2>/dev/null || {
+              echo "⚠️ Could not create universal $lib - keeping arm64 version"
+            }
+          fi
+        done
+        
+        echo "✅ Other libraries processed"
+        
+    - name: Verify universal binary
+      run: |
+        echo "=== Verifying universal binary ==="
+        
+        UNIVERSAL_EXEC="universal/AV-Spex.app/Contents/MacOS/AV-Spex"
+        
+        # Check main executable
+        echo "Main executable:"
+        file "$UNIVERSAL_EXEC"
+        lipo -info "$UNIVERSAL_EXEC"
+        
+        # Verify it contains both architectures
+        if lipo -info "$UNIVERSAL_EXEC" | grep -q "x86_64 arm64"; then
+          echo "✅ Main executable is properly universal"
+        else
+          echo "❌ Main executable is not universal!"
+          exit 1
+        fi
+        
+        # Check critical Qt plugin
+        QT_PLUGIN="universal/AV-Spex.app/Contents/Frameworks/PyQt6/Qt6/plugins/platforms/libqcocoa.dylib"
+        if [ -f "$QT_PLUGIN" ]; then
+          echo "Critical Qt plugin:"
+          lipo -info "$QT_PLUGIN"
+          if lipo -info "$QT_PLUGIN" | grep -q "x86_64 arm64"; then
+            echo "✅ Qt plugin is properly universal"
+          else
+            echo "⚠️ Qt plugin is not universal - may impact compatibility"
+          fi
+        fi
+        
+        echo "✅ Universal binary verification complete"
+        
+    - name: Create universal archive
+      run: |
+        echo "=== Creating universal archive ==="
+        
+        cd universal
+        
+        # Verify contents before archiving
+        echo "Contents to archive:"
+        ls -la
+        
+        # Create the archive
+        tar -czf "AV-Spex-${{ needs.build-macos.outputs.version }}-universal-unsigned.tar.gz" AV-Spex.app build-info.json
+        
+        # Verify archive was created and show size
+        ls -lh *.tar.gz
+        echo "✅ Universal archive created successfully"
+        
+    - name: Upload universal build
+      uses: actions/upload-artifact@v4
+      with:
+        name: av-spex-${{ needs.build-macos.outputs.version }}-universal-unsigned
+        path: universal/AV-Spex-${{ needs.build-macos.outputs.version }}-universal-unsigned.tar.gz
+        retention-days: 30
