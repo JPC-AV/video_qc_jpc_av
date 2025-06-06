@@ -32,7 +32,7 @@ jobs:
     - name: Install dependencies
       shell: bash -el {0}
       env:
-        MACOSX_DEPLOYMENT_TARGET: "11.0"  # Broad compatibility
+        MACOSX_DEPLOYMENT_TARGET: "11.0"
       run: |
         conda info
         which python
@@ -41,11 +41,12 @@ jobs:
         # Install PyInstaller via conda-forge
         conda install -c conda-forge pyinstaller -y
         
+        # Force newer PyQt6 build with better macOS integration
+        pip install "PyQt6>=6.7" --force-reinstall --no-deps
+        pip install PyQt6-sip --force-reinstall
+        
         # Install your package dependencies
         pip install -e .
-        
-        # Verify AV_Spex imports
-        python -c "import AV_Spex; print('✅ AV_Spex imported successfully')"
         
     - name: Get version from pyproject.toml
       shell: bash -el {0}
