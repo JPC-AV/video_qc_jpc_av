@@ -163,6 +163,8 @@ jobs:
         path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz
         retention-days: 30
 
+  # Add this job to your macos-app-build.yml file after the build-macos job
+
   create-universal:
     runs-on: macos-latest
     needs: build-macos
@@ -263,6 +265,43 @@ jobs:
           echo "⚠️ Python library not found in expected location, skipping"
         fi
         
+    - name: Create universal PyQt6 modules
+      run: |
+        echo "=== Creating universal PyQt6 modules ==="
+        
+        # List of PyQt6 .so modules that need to be universal
+        PYQT6_MODULES=(
+          "QtCore.abi3.so"
+          "QtGui.abi3.so"
+          "QtWidgets.abi3.so"
+          "sip.cpython-310-darwin.so"
+        )
+        
+        PYQT6_DIR="universal/AV-Spex.app/Contents/Frameworks/PyQt6"
+        
+        for module in "${PYQT6_MODULES[@]}"; do
+          X86_MODULE="builds/x86_64/AV-Spex.app/Contents/Frameworks/PyQt6/$module"
+          ARM_MODULE="builds/arm64/AV-Spex.app/Contents/Frameworks/PyQt6/$module"
+          UNIVERSAL_MODULE="$PYQT6_DIR/$module"
+          
+          if [ -f "$X86_MODULE" ] && [ -f "$ARM_MODULE" ]; then
+            echo "Creating universal PyQt6 module: $module"
+            lipo -create "$X86_MODULE" "$ARM_MODULE" -output "$UNIVERSAL_MODULE"
+            
+            # Verify it worked
+            if lipo -info "$UNIVERSAL_MODULE" | grep -q "x86_64 arm64"; then
+              echo "✅ $module is now universal"
+            else
+              echo "⚠️ $module may not be properly universal"
+              lipo -info "$UNIVERSAL_MODULE"
+            fi
+          else
+            echo "⚠️ Skipping $module - not found in both architectures"
+          fi
+        done
+        
+        echo "✅ PyQt6 modules processed"
+        
     - name: Create universal Qt plugins
       run: |
         echo "=== Creating universal Qt plugins ==="
@@ -304,71 +343,70 @@ jobs:
           fi
         done
         
-    - name: Create universal libraries in lib-dynload
+        echo "✅ Qt plugins processed"
+        
+    - name: Create universal libraries in lib-dynload (ALL of them)
       run: |
-        echo "=== Creating universal lib-dynload libraries ==="
+        echo "=== Creating universal lib-dynload libraries (comprehensive) ==="
         
         LIB_DYNLOAD_DIR="universal/AV-Spex.app/Contents/Frameworks/lib-dynload"
         
-        # Get list of .so files from both builds
+        # Get list of ALL .so files from both builds
+        echo "Getting list of .so files from both architectures..."
         X86_LIBS=($(find builds/x86_64/AV-Spex.app/Contents/Frameworks/lib-dynload -name "*.so" -exec basename {} \; | sort))
         ARM_LIBS=($(find builds/arm64/AV-Spex.app/Contents/Frameworks/lib-dynload -name "*.so" -exec basename {} \; | sort))
         
-        # Find common libraries
+        # Find common libraries (intersection)
         COMMON_LIBS=($(comm -12 <(printf '%s\n' "${X86_LIBS[@]}") <(printf '%s\n' "${ARM_LIBS[@]}")))
         
-        echo "Found ${#COMMON_LIBS[@]} common libraries to make universal"
+        echo "Found ${#COMMON_LIBS[@]} common libraries to make universal:"
+        printf '%s\n' "${COMMON_LIBS[@]}"
         
+        # Process each common library
         for lib in "${COMMON_LIBS[@]}"; do
           X86_LIB="builds/x86_64/AV-Spex.app/Contents/Frameworks/lib-dynload/$lib"
           ARM_LIB="builds/arm64/AV-Spex.app/Contents/Frameworks/lib-dynload/$lib" 
           UNIVERSAL_LIB="$LIB_DYNLOAD_DIR/$lib"
           
           if [ -f "$X86_LIB" ] && [ -f "$ARM_LIB" ]; then
-            lipo -create "$X86_LIB" "$ARM_LIB" -output "$UNIVERSAL_LIB" 2>/dev/null || {
-              echo "⚠️ Could not create universal $lib - using arm64 version"
+            echo "Making $lib universal..."
+            if lipo -create "$X86_LIB" "$ARM_LIB" -output "$UNIVERSAL_LIB" 2>/dev/null; then
+              # Verify it worked
+              if lipo -info "$UNIVERSAL_LIB" | grep -q "x86_64 arm64"; then
+                echo "✅ $lib is now universal"
+              else
+                echo "⚠️ $lib: lipo succeeded but not showing as universal"
+                lipo -info "$UNIVERSAL_LIB"
+              fi
+            else
+              echo "❌ Failed to create universal $lib - using arm64 version"
               cp "$ARM_LIB" "$UNIVERSAL_LIB"
-            }
+            fi
           fi
         done
         
-        echo "✅ lib-dynload libraries processed"
-        
-    - name: Fix library compatibility for older macOS
-      run: |
-        echo "=== Fixing library compatibility for macOS 12+ ==="
-        
-        # For critical libraries that might have compatibility issues,
-        # prefer the x86_64 (macos-13) version which targets older macOS
-        COMPAT_LIBS=(
-          "pyexpat.cpython-310-darwin.so"
-          "_ssl.cpython-310-darwin.so"
-          "_hashlib.cpython-310-darwin.so"
-          "_datetime.cpython-310-darwin.so"
-        )
-        
-        LIB_DYNLOAD_DIR="universal/AV-Spex.app/Contents/Frameworks/lib-dynload"
-        
-        for lib in "${COMPAT_LIBS[@]}"; do
-          X86_LIB="builds/x86_64/AV-Spex.app/Contents/Frameworks/lib-dynload/$lib"
-          UNIVERSAL_LIB="$LIB_DYNLOAD_DIR/$lib"
-          
-          if [ -f "$X86_LIB" ] && [ -f "$UNIVERSAL_LIB" ]; then
-            echo "Using x86_64 version of $lib for better compatibility"
-            cp "$X86_LIB" "$UNIVERSAL_LIB"
-          fi
-        done
-        
-        # Also copy the bundled libexpat from x86_64 build if it exists
-        X86_EXPAT="builds/x86_64/AV-Spex.app/Contents/Frameworks/libexpat.1.dylib"
-        UNIVERSAL_EXPAT="universal/AV-Spex.app/Contents/Frameworks/libexpat.1.dylib"
-        
-        if [ -f "$X86_EXPAT" ]; then
-          echo "Using bundled x86_64 libexpat for compatibility"
-          cp "$X86_EXPAT" "$UNIVERSAL_EXPAT"
+        # Handle libraries that exist in only one architecture
+        echo "Checking for x86_64-only libraries..."
+        X86_ONLY=($(comm -23 <(printf '%s\n' "${X86_LIBS[@]}") <(printf '%s\n' "${ARM_LIBS[@]}")))
+        if [ ${#X86_ONLY[@]} -gt 0 ]; then
+          echo "x86_64-only libraries: ${X86_ONLY[@]}"
+          for lib in "${X86_ONLY[@]}"; do
+            echo "⚠️ Copying x86_64-only: $lib"
+            cp "builds/x86_64/AV-Spex.app/Contents/Frameworks/lib-dynload/$lib" "$LIB_DYNLOAD_DIR/$lib"
+          done
         fi
         
-        echo "✅ Library compatibility fixes applied"
+        echo "Checking for arm64-only libraries..."
+        ARM_ONLY=($(comm -13 <(printf '%s\n' "${X86_LIBS[@]}") <(printf '%s\n' "${ARM_LIBS[@]}")))
+        if [ ${#ARM_ONLY[@]} -gt 0 ]; then
+          echo "arm64-only libraries: ${ARM_ONLY[@]}"
+          for lib in "${ARM_ONLY[@]}"; do
+            echo "⚠️ Copying arm64-only: $lib"
+            cp "builds/arm64/AV-Spex.app/Contents/Frameworks/lib-dynload/$lib" "$LIB_DYNLOAD_DIR/$lib"
+          done
+        fi
+        
+        echo "✅ lib-dynload libraries processed"
         
     - name: Handle other critical libraries  
       run: |
@@ -418,6 +456,32 @@ jobs:
         else
           echo "❌ Main executable is not universal!"
           exit 1
+        fi
+        
+        # Check critical PyQt6 module
+        PYQT6_MODULE="universal/AV-Spex.app/Contents/Frameworks/PyQt6/QtCore.abi3.so"
+        if [ -f "$PYQT6_MODULE" ]; then
+          echo "Critical PyQt6 module:"
+          lipo -info "$PYQT6_MODULE"
+          if lipo -info "$PYQT6_MODULE" | grep -q "x86_64 arm64"; then
+            echo "✅ PyQt6 QtCore is properly universal"
+          else
+            echo "❌ PyQt6 QtCore is not universal!"
+            exit 1
+          fi
+        fi
+        
+        # Check critical Python extension module
+        PYEXPAT_MODULE="universal/AV-Spex.app/Contents/Frameworks/lib-dynload/pyexpat.cpython-310-darwin.so"
+        if [ -f "$PYEXPAT_MODULE" ]; then
+          echo "Critical Python extension module:"
+          lipo -info "$PYEXPAT_MODULE"
+          if lipo -info "$PYEXPAT_MODULE" | grep -q "x86_64 arm64"; then
+            echo "✅ pyexpat is properly universal"
+          else
+            echo "❌ pyexpat is not universal!"
+            exit 1
+          fi
         fi
         
         # Check critical Qt plugin
