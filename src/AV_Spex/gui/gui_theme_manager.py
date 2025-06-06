@@ -3,6 +3,8 @@ from PyQt6.QtGui import QPalette, QFont, QPixmap
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
 
 import os
+import sys
+import platform
 
 from AV_Spex.utils.log_setup import logger
 
@@ -475,9 +477,9 @@ class ThemeManager(QObject):
         if not self.app:
             return light_logo_path  # Default to light theme if no app
             
-        # Determine if we're in dark mode
-        palette = self.app.palette()
-        is_dark = palette.color(palette.ColorRole.Window).lightness() < 128
+        # Use robust theme detection
+        theme = self.detect_system_theme()
+        is_dark = theme == 'Dark'
         
         # Return appropriate logo path
         return dark_logo_path if is_dark else light_logo_path
@@ -550,89 +552,140 @@ class ThemeManager(QObject):
 
     def detect_system_theme(self):
         """
-        Theme detection using direct system calls (works with older PyQt6)
+        Robust theme detection that works in packaged apps
         """
-        import subprocess
-        import sys
-        
-        # Method 1: Direct system call first (most reliable)
-        try:
-            result = subprocess.run([
-                'defaults', 'read', '-g', 'AppleInterfaceStyle'
-            ], capture_output=True, text=True, timeout=3)
-            
-            if result.returncode == 0 and result.stdout.strip():
-                theme = 'Dark'
-                logger.info(f"System theme detection: {theme}")
-                return theme
-            else:
-                theme = 'Light'
-                logger.info(f"System theme detection: {theme} (no dark mode)")
-                return theme
-                
-        except Exception as e:
-            logger.warning(f"System theme detection failed: {e}")
-        
-        # Method 2: Try PyQt6 as fallback (might not work with old PyQt6)
+        # Method 1: PyQt6 palette detection (most reliable for packaged apps)
         try:
             if self.app:
                 palette = self.app.palette()
                 window_color = palette.color(palette.ColorRole.Window)
-                lightness = window_color.lightness()
                 
-                if 0 <= lightness <= 255:
-                    is_dark = lightness < 128
-                    theme = 'Dark' if is_dark else 'Light'
-                    logger.info(f"PyQt6 theme detection: {theme}")
-                    return theme
+                # Get RGB values
+                r, g, b = window_color.red(), window_color.green(), window_color.blue()
+                
+                # Calculate luminance using the relative luminance formula
+                # This is more accurate than just using lightness()
+                luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+                
+                # Debug the actual color values
+                logger.debug(f"Window color RGB: ({r}, {g}, {b}), Luminance: {luminance:.3f}")
+                
+                # Threshold for dark mode detection
+                # Lower threshold = more likely to detect as dark
+                is_dark = luminance < 0.5  # Adjust this threshold if needed
+                
+                theme = 'Dark' if is_dark else 'Light'
+                logger.info(f"PyQt6 palette detection: {theme} (luminance: {luminance:.3f})")
+                return theme
+                
         except Exception as e:
             logger.warning(f"PyQt6 theme detection failed: {e}")
         
-        # Method 3: Default to Dark (user preference)
-        logger.warning("All theme detection failed, defaulting to Dark (user preference)")
-        return 'Dark'
+        # Method 2: Check if we're on macOS and try Cocoa directly
+        try:
+            if platform.system() == 'Darwin':
+                # Try using PyObjC to access macOS appearance directly
+                try:
+                    from Foundation import NSUserDefaults
+                    
+                    defaults = NSUserDefaults.standardUserDefaults()
+                    appearance_name = defaults.stringForKey_('AppleInterfaceStyle')
+                    
+                    if appearance_name:
+                        theme = 'Dark' if 'Dark' in appearance_name else 'Light'
+                        logger.info(f"macOS NSUserDefaults detection: {theme}")
+                        return theme
+                    else:
+                        # No dark mode key means light mode
+                        logger.info("macOS NSUserDefaults detection: Light (no dark mode key)")
+                        return 'Light'
+                        
+                except ImportError:
+                    logger.debug("PyObjC not available, skipping NSUserDefaults method")
+                    
+        except Exception as e:
+            logger.debug(f"macOS detection failed: {e}")
+        
+        # Method 3: Check for packaged app environment
+        try:
+            # Check if we're in a PyInstaller packaged app
+            if hasattr(sys, '_MEIPASS'):
+                # In packaged app, check for environment variable or config
+                packaged_theme = os.environ.get('AVSPEX_THEME', None)
+                if packaged_theme in ['Dark', 'Light']:
+                    logger.info(f"Packaged app theme override: {packaged_theme}")
+                    return packaged_theme
+                    
+        except Exception as e:
+            logger.debug(f"Packaged app check failed: {e}")
+        
+        # Method 4: Environment-based detection for CI/CD
+        try:
+            # Check for CI environment variables that might indicate theme
+            if os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS'):
+                # In CI, we might want to default to a specific theme
+                # or check for a theme preference environment variable
+                ci_theme = os.environ.get('PREFERRED_THEME', 'Light')
+                logger.info(f"CI environment detected, using theme: {ci_theme}")
+                return ci_theme
+                
+        except Exception as e:
+            logger.debug(f"Environment check failed: {e}")
+        
+        # Method 5: Subprocess as last resort (won't work in some packaged apps)
+        if platform.system() == 'Darwin':
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['defaults', 'read', '-g', 'AppleInterfaceStyle'],
+                    capture_output=True,
+                    text=True,
+                    timeout=1  # Shorter timeout for packaged apps
+                )
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    theme = 'Dark'
+                    logger.info(f"Subprocess detection: {theme}")
+                    return theme
+                else:
+                    theme = 'Light'
+                    logger.info(f"Subprocess detection: {theme} (no dark mode)")
+                    return theme
+                    
+            except Exception as e:
+                logger.debug(f"Subprocess failed: {e}")
+        
+        # Method 6: Time-based heuristic as creative fallback
+        try:
+            from datetime import datetime
+            current_hour = datetime.now().hour
+            
+            # Assume dark mode during evening/night hours
+            if 18 <= current_hour or current_hour < 6:
+                theme = 'Dark'
+                logger.info(f"Time-based fallback: {theme} (hour: {current_hour})")
+            else:
+                theme = 'Light'
+                logger.info(f"Time-based fallback: {theme} (hour: {current_hour})")
+                
+            return theme
+            
+        except Exception as e:
+            logger.debug(f"Time-based detection failed: {e}")
+        
+        # Ultimate fallback
+        default_theme = 'Light'
+        logger.warning(f"All theme detection methods failed, using default: {default_theme}")
+        return default_theme
     
     def get_theme_with_fallback(self):
         """
         Get current theme with fallback detection methods.
         Returns 'Dark' or 'Light'
+        
+        This is an alias for detect_system_theme() for backward compatibility.
         """
-        # Method 1: Try PyQt6 palette (your current method)
-        try:
-            if self.app:
-                palette = self.app.palette()
-                is_dark = palette.color(palette.ColorRole.Window).lightness() < 128
-                theme = 'Dark' if is_dark else 'Light'
-                
-                # Log success for debugging
-                # logger.debug(f"PyQt6 theme detection: {theme}")
-                return theme
-        except Exception as e:
-            logger.warning(f"PyQt6 theme detection failed: {e}")
-        
-        # Method 2: Fallback to system defaults
-        try:
-            import subprocess
-            result = subprocess.run([
-                'defaults', 'read', '-g', 'AppleInterfaceStyle'
-            ], capture_output=True, text=True, timeout=2)
-            
-            if result.returncode == 0:
-                theme = 'Dark'
-            else:
-                theme = 'Light'
-                
-            logger.info(f"Fallback theme detection: {theme}")
-            return theme
-            
-        except Exception as e:
-            
-            logger.warning(f"Fallback theme detection failed: {e}")
-        
-        # Method 3: Final fallback - assume Light theme
-        
-        logger.warning("All theme detection methods failed, defaulting to Light theme")
-        return 'Light'
+        return self.detect_system_theme()
 
 
 
