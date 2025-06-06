@@ -550,32 +550,12 @@ class ThemeManager(QObject):
 
     def detect_system_theme(self):
         """
-        Robust theme detection with multiple fallback methods.
-        Specifically designed to work around signing issues in production builds.
-        Returns 'Dark' or 'Light'
+        Theme detection using direct system calls (works with older PyQt6)
         """
         import subprocess
         import sys
         
-        # Method 1: Try PyQt6 palette detection
-        try:
-            if self.app:
-                palette = self.app.palette()
-                window_color = palette.color(palette.ColorRole.Window)
-                lightness = window_color.lightness()
-                
-                # Validate that we got a reasonable result
-                if 0 <= lightness <= 255:
-                    is_dark = lightness < 128
-                    theme = 'Dark' if is_dark else 'Light'
-                    # logger.debug(f"PyQt6 theme detection successful: {theme} (lightness: {lightness})")
-                    return theme
-                else:
-                    logger.warning(f"PyQt6 returned invalid lightness value: {lightness}")
-        except Exception as e:
-            logger.warning(f"PyQt6 theme detection failed: {e}")
-        
-        # Method 2: Direct system call (most reliable fallback)
+        # Method 1: Direct system call first (most reliable)
         try:
             result = subprocess.run([
                 'defaults', 'read', '-g', 'AppleInterfaceStyle'
@@ -583,35 +563,34 @@ class ThemeManager(QObject):
             
             if result.returncode == 0 and result.stdout.strip():
                 theme = 'Dark'
-                logger.info(f"Fallback theme detection (defaults): {theme}")
+                logger.info(f"System theme detection: {theme}")
                 return theme
             else:
                 theme = 'Light'
-                logger.info(f"Fallback theme detection (defaults): {theme} (no dark mode setting)")
+                logger.info(f"System theme detection: {theme} (no dark mode)")
                 return theme
                 
         except Exception as e:
-            logger.warning(f"Fallback theme detection (defaults) failed: {e}")
+            logger.warning(f"System theme detection failed: {e}")
         
-        # Method 3: Try AppleScript for theme detection (works when subprocess fails)
+        # Method 2: Try PyQt6 as fallback (might not work with old PyQt6)
         try:
-            result = subprocess.run([
-                'osascript', '-e', 
-                'tell application "System Events" to tell appearance preferences to get dark mode'
-            ], capture_output=True, text=True, timeout=3)
-            
-            if result.returncode == 0:
-                is_dark = result.stdout.strip().lower() == 'true'
-                theme = 'Dark' if is_dark else 'Light'
-                logger.info(f"Fallback theme detection (AppleScript): {theme}")
-                return theme
-            
+            if self.app:
+                palette = self.app.palette()
+                window_color = palette.color(palette.ColorRole.Window)
+                lightness = window_color.lightness()
+                
+                if 0 <= lightness <= 255:
+                    is_dark = lightness < 128
+                    theme = 'Dark' if is_dark else 'Light'
+                    logger.info(f"PyQt6 theme detection: {theme}")
+                    return theme
         except Exception as e:
-            logger.warning(f"AppleScript theme detection failed: {e}")
+            logger.warning(f"PyQt6 theme detection failed: {e}")
         
-        # Method 4: Final fallback - assume Light theme
-        logger.warning("All theme detection methods failed, defaulting to Light theme")
-        return 'Light'
+        # Method 3: Default to Dark (user preference)
+        logger.warning("All theme detection failed, defaulting to Dark (user preference)")
+        return 'Dark'
     
     def get_theme_with_fallback(self):
         """
