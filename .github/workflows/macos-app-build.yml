@@ -10,15 +10,7 @@ on:
 
 jobs:
   build-macos:
-    strategy:
-      matrix:
-        include:
-          - runner: macos-13      # Intel
-            arch: x86_64
-          - runner: macos-14      # Apple Silicon  
-            arch: arm64
-    
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-13  # Intel runner for maximum compatibility
     
     outputs:
       version: ${{ steps.get_version.outputs.VERSION }}
@@ -30,37 +22,25 @@ jobs:
     - name: Set up Miniconda
       uses: conda-incubator/setup-miniconda@v3
       with:
-        python-version: '3.10'  # Simplified version spec
+        python-version: '3.10'
         miniforge-version: latest
         activate-environment: JPC_AV
         auto-activate-base: false
         
     - name: Install dependencies
-      shell: bash -el {0}  # Required for conda
+      shell: bash -el {0}
       env:
-        MACOSX_DEPLOYMENT_TARGET: "12.0"
+        MACOSX_DEPLOYMENT_TARGET: "11.0"  # Broad compatibility
       run: |
-        # Verify conda environment
         conda info
         which python
         python --version
         
-        # Install PyInstaller via conda-forge (more reliable)
+        # Install PyInstaller via conda-forge
         conda install -c conda-forge pyinstaller -y
         
         # Install your package dependencies
         pip install -e .
-        
-        # Verify installation and Python structure
-        echo "=== Python Structure Check ==="
-        python -c "
-        import sys
-        import sysconfig
-        print('Python executable:', sys.executable)
-        print('Python prefix:', sys.prefix)
-        print('Platform:', sysconfig.get_platform())
-        print('Framework support:', hasattr(sys, 'base_prefix'))
-        "
         
         # Verify AV_Spex imports
         python -c "import AV_Spex; print('✅ AV_Spex imported successfully')"
@@ -71,7 +51,7 @@ jobs:
       run: |
         VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building AV-Spex version $VERSION for ${{ matrix.arch }}"
+        echo "Building AV-Spex version $VERSION for Intel (x86_64) with Rosetta 2 support"
         
     - name: Clean previous build artifacts
       shell: bash -el {0}
@@ -81,41 +61,29 @@ jobs:
     - name: Build with PyInstaller
       shell: bash -el {0}
       env:
-        MACOSX_DEPLOYMENT_TARGET: "12.0"
+        MACOSX_DEPLOYMENT_TARGET: "11.0"
       run: |
-        echo "Building for ${{ matrix.arch }} with macOS 12+ compatibility..."
+        echo "Building Intel binary with macOS 11+ compatibility (Rosetta 2 on Apple Silicon)..."
         pyinstaller --noconfirm --log-level=INFO avspex.spec
         
-    - name: Verify build and Python framework
+    - name: Verify build
       shell: bash -el {0}
       run: |
         echo "=== Build output ==="
         ls -la dist/
         
         if [ -d "dist/AV-Spex.app" ]; then
-          echo "✅ App bundle created successfully for ${{ matrix.arch }}"
+          echo "✅ App bundle created successfully"
           
           echo "=== Binary info ==="
           file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
-          
-          echo "=== Python framework check ==="
-          if [ -d "dist/AV-Spex.app/Contents/Frameworks/Python.framework" ]; then
-            echo "✅ Python.framework structure found"
-            ls -la "dist/AV-Spex.app/Contents/Frameworks/Python"*
-            file "dist/AV-Spex.app/Contents/Frameworks/Python.framework/Versions/3.10/Python" 2>/dev/null || echo "Framework version mismatch"
-          else
-            echo "❌ Python.framework structure missing"
-            echo "Available Python files:"
-            find "dist/AV-Spex.app/Contents/Frameworks/" -name "*python*" -o -name "*Python*" | head -10
-          fi
+          lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
           
           echo "=== Testing app executable ==="
           test -x ./dist/AV-Spex.app/Contents/MacOS/AV-Spex && echo "✅ Executable is valid" || echo "❌ Executable problem"
           
         else
           echo "❌ App bundle not found!"
-          echo "Contents of dist/:"
-          ls -la dist/
           exit 1
         fi
         
@@ -129,9 +97,10 @@ jobs:
           "ref": "${{ github.ref }}",
           "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
           "workflow_run_id": "${{ github.run_id }}",
-          "architecture": "${{ matrix.arch }}",
+          "architecture": "x86_64",
           "python_version": "$(python --version)",
-          "python_type": "conda"
+          "python_type": "conda",
+          "compatibility": "Intel Macs native, Apple Silicon via Rosetta 2"
         }
         EOF
         
@@ -144,21 +113,15 @@ jobs:
         cd dist
         echo "Creating archive for version ${{ steps.get_version.outputs.VERSION }}"
         
-        # Verify files exist before archiving
-        ls -la
-        test -d AV-Spex.app || (echo "❌ AV-Spex.app not found" && exit 1)
-        test -f build-info.json || (echo "❌ build-info.json not found" && exit 1)
+        tar -czf AV-Spex-${{ steps.get_version.outputs.VERSION }}-x86_64-unsigned.tar.gz AV-Spex.app build-info.json
         
-        # Create the archive
-        tar -czf AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz AV-Spex.app build-info.json
-        
-        # Verify archive was created
         ls -la *.tar.gz
         echo "Archive created successfully"
         
-    - name: Upload unsigned app bundle
+    - name: Upload app bundle
       uses: actions/upload-artifact@v4
       with:
-        name: av-spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned
-        path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz
+        name: av-spex-${{ steps.get_version.outputs.VERSION }}-x86_64-unsigned
+        path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-x86_64-unsigned.tar.gz
         retention-days: 30
+
