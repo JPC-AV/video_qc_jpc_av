@@ -1,27 +1,16 @@
 name: Build Bottles
 
 on:
-  workflow_run:
-    workflows: ["Update Homebrew Formula"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Tag name to build bottles for'
+        description: 'Tag name to build bottles for (e.g., v1.2.3)'
         required: true
         type: string
 
 jobs:
   build-bottles:
     name: Build bottles
-    # Only run if:
-    # 1. Manual dispatch (workflow_dispatch), OR
-    # 2. Triggered by successful workflow_run that was triggered by a tag push (head_branch starts with 'v')
-    if: |
-      github.event_name == 'workflow_dispatch' || 
-      (github.event.workflow_run.conclusion == 'success' && 
-       startsWith(github.event.workflow_run.head_branch, 'v'))
     strategy:
         matrix:
           include:
@@ -42,48 +31,14 @@ jobs:
     - name: Checkout repository for git tags
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Fetch all history and tags
+        fetch-depth: 0
     
-    - name: Get version
+    - name: Get and validate version
       id: version
       run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          VERSION="${{ github.event.inputs.tag_name }}"
-        elif [ "${{ github.event_name }}" = "workflow_run" ]; then
-          # Try to get version from the previous workflow's outputs if available
-          # Otherwise fall back to the same logic as update-homebrew workflow
-          echo "🔍 Getting version from workflow_run event..."
-          
-          # First try: check if head_branch looks like a tag
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
-          echo "Head branch: $HEAD_BRANCH"
-          
-          if [[ "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            VERSION="$HEAD_BRANCH"
-            echo "✅ Found version in head_branch: $VERSION"
-          else
-            # Second try: get the most recent tag from git
-            echo "🔍 Head branch doesn't look like a tag, checking recent tags..."
-            
-            # Fetch tags to ensure we have the latest
-            git fetch --tags
-            
-            # Get the most recent tag that matches version pattern
-            VERSION=$(git tag -l "v*.*.*" --sort=-version:refname | head -1)
-            
-            if [ -z "$VERSION" ]; then
-              echo "❌ Could not find any version tags"
-              echo "Available tags:"
-              git tag -l --sort=-version:refname | head -10
-              exit 1
-            fi
-            
-            echo "✅ Found version: $VERSION"
-          fi
-        else
-          echo "Unexpected event type: ${{ github.event_name }}"
-          exit 1
-        fi
+        VERSION="${{ github.event.inputs.tag_name }}"
+        
+        echo "📥 Input version: $VERSION"
         
         # Validate that we have a version that looks like a tag
         if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
@@ -208,7 +163,7 @@ jobs:
         retention-days: 30
 
   update-formula:
-    name: Update formula
+    name: Update formula with bottles
     needs: build-bottles
     runs-on: ubuntu-latest
     if: success()
@@ -224,18 +179,11 @@ jobs:
     - name: Get version
       id: version
       run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          VERSION="${{ github.event.inputs.tag_name }}"
-        elif [ "${{ github.event_name }}" = "workflow_run" ]; then
-          VERSION="${{ github.event.workflow_run.head_branch }}"
-        else
-          # Fallback - get from latest release
-          VERSION=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
-        fi
-        
+        VERSION="${{ github.event.inputs.tag_name }}"
         VERSION_CLEAN=${VERSION#v}
         echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
         echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
+        echo "✅ Updating formula for version: $VERSION_CLEAN"
     
     - name: Download bottles
       uses: actions/download-artifact@v4
@@ -250,7 +198,14 @@ jobs:
         ARM64_SHA=""
         VENTURA_SHA=""
         
+        echo "=== Available bottle artifacts ==="
+        ls -la
+        echo "================================="
+        
         for dir in bottle-*/; do
+          echo "Processing directory: $dir"
+          ls -la "$dir"
+          
           if [[ -f "${dir}av-spex--"*".bottle.json" ]]; then
             JSON_FILE="${dir}av-spex--"*".bottle.json"
             
@@ -259,8 +214,10 @@ jobs:
             
             if [[ "$dir" == *"arm64_sonoma"* ]]; then
               ARM64_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "$JSON_FILE")
+              echo "Found ARM64 SHA: $ARM64_SHA"
             elif [[ "$dir" == *"ventura"* ]]; then
               VENTURA_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.ventura.sha256' "$JSON_FILE")
+              echo "Found Ventura SHA: $VENTURA_SHA"
             fi
           fi
         done
@@ -268,18 +225,20 @@ jobs:
         echo "arm64_sha=${ARM64_SHA}" >> $GITHUB_OUTPUT
         echo "ventura_sha=${VENTURA_SHA}" >> $GITHUB_OUTPUT
         
-        echo "Extracted SHAs:"
-        echo "ARM64: $ARM64_SHA"
+        echo "📋 Final extracted SHAs:"
+        echo "ARM64 (arm64_sonoma): $ARM64_SHA"
         echo "Ventura: $VENTURA_SHA"
     
     - name: Update formula with bottles
       run: |
         cd homebrew-tap
         
-        # Get source SHA256
+        echo "📦 Downloading source archive to get SHA256..."
         curl -L "https://github.com/JPC-AV/video_qc_jpc_av/archive/refs/tags/v${{ steps.version.outputs.version }}.tar.gz" -o release.tar.gz
         SOURCE_SHA256=$(sha256sum release.tar.gz | cut -d' ' -f1)
         rm release.tar.gz
+        
+        echo "📝 Creating formula with bottle block..."
         
         # Create the formula with bottle block
         cat > Formula/AV-Spex.rb << EOF
@@ -297,12 +256,18 @@ jobs:
         EOF
         
         # Add bottle SHAs if they exist
-        if [[ -n "${{ steps.bottles.outputs.arm64_sha }}" && "${{ steps.bottles.outputs.arm64_sha }}" != "null" ]]; then
+        if [[ -n "${{ steps.bottles.outputs.arm64_sha }}" && "${{ steps.bottles.outputs.arm64_sha }}" != "null" && "${{ steps.bottles.outputs.arm64_sha }}" != "" ]]; then
           echo "    sha256 cellar: :any_skip_relocation, arm64_sonoma: \"${{ steps.bottles.outputs.arm64_sha }}\"" >> Formula/AV-Spex.rb
+          echo "✅ Added ARM64 bottle SHA"
+        else
+          echo "⚠️ No ARM64 bottle SHA found"
         fi
         
-        if [[ -n "${{ steps.bottles.outputs.ventura_sha }}" && "${{ steps.bottles.outputs.ventura_sha }}" != "null" ]]; then
+        if [[ -n "${{ steps.bottles.outputs.ventura_sha }}" && "${{ steps.bottles.outputs.ventura_sha }}" != "null" && "${{ steps.bottles.outputs.ventura_sha }}" != "" ]]; then
           echo "    sha256 cellar: :any_skip_relocation, ventura: \"${{ steps.bottles.outputs.ventura_sha }}\"" >> Formula/AV-Spex.rb
+          echo "✅ Added Ventura bottle SHA"
+        else
+          echo "⚠️ No Ventura bottle SHA found"
         fi
         
         # Complete the formula
@@ -370,20 +335,39 @@ jobs:
         EOF
         
         echo "=== Updated Formula ==="
-        cat Formula/AV-Spex.rb
+        head -30 Formula/AV-Spex.rb
+        echo "... (truncated for brevity) ..."
         echo "======================"
     
-    - name: Commit changes
+    - name: Commit and push changes
       run: |
         cd homebrew-tap
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         
+        # Show what we're about to commit
+        echo "=== GIT STATUS ==="
+        git status
+        echo "=================="
+        
+        echo "=== GIT DIFF ==="
+        git diff Formula/AV-Spex.rb
+        echo "================"
+        
         git add Formula/AV-Spex.rb
         
         if git diff --staged --quiet; then
-          echo "No changes to commit"
+          echo "ℹ️ No changes to commit - formula already up to date"
         else
-          git commit -m "Update AV-Spex to version ${{ steps.version.outputs.version }} with bottles"
+          echo "📝 Committing formula with bottles..."
+          git commit -m "Update AV-Spex to version ${{ steps.version.outputs.version }} with bottles
+
+- Updated source to tag v${{ steps.version.outputs.version }}
+- Added ARM64 bottle: ${{ steps.bottles.outputs.arm64_sha }}
+- Added Ventura bottle: ${{ steps.bottles.outputs.ventura_sha }}
+- Automated update with bottle builds"
+          
+          echo "🚀 Pushing changes..."
           git push
+          echo "✅ Formula with bottles updated successfully!"
         fi
