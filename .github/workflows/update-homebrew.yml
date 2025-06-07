@@ -2,10 +2,6 @@ name: Update Homebrew Formula
 
 # Trigger this workflow when a new release is published
 on:
-  workflow_run:
-    workflows: ["Sign and Package macOS App"]  # Name of your signing workflow
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       tag_name:
