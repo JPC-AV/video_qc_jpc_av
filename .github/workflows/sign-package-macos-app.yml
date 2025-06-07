@@ -284,3 +284,14 @@ jobs:
       if: always()
       run: |
         security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+
+    - name: Manually trigger Homebrew formula update
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: |
+        TAG_NAME=${GITHUB_REF#refs/tags/}
+        curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/${{ github.repository }}/actions/workflows/update-homebrew.yml/dispatches \
+          -d '{"ref":"main", "inputs": { "tag_name": "'"$TAG_NAME"'" }}'
+
