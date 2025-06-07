@@ -12,6 +12,10 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   update-homebrew-formula:
     runs-on: ubuntu-latest
