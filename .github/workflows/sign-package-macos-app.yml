@@ -285,13 +285,32 @@ jobs:
       run: |
         security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
 
-    - name: Manually trigger Homebrew formula update
-      if: startsWith(github.ref, 'refs/tags/v')
+    - name: Trigger Homebrew formula update
+      if: startsWith(github.event.workflow_run.head_branch, 'v') || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v'))
       run: |
-        TAG_NAME=${GITHUB_REF#refs/tags/}
+        # Determine the tag name based on trigger type
+        if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          TAG_NAME="${{ github.event.workflow_run.head_branch }}"
+        else
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+        fi
+        
+        echo "Triggering Homebrew update for tag: $TAG_NAME"
+        echo "Version from environment: ${{ env.VERSION }}"
+        
+        # Trigger the homebrew workflow with proper parameters
         curl -X POST \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
           https://api.github.com/repos/${{ github.repository }}/actions/workflows/update-homebrew.yml/dispatches \
-          -d '{"ref":"main", "inputs": { "tag_name": "'"$TAG_NAME"'" }}'
+          -d "{\"ref\":\"main\", \"inputs\": {\"tag_name\": \"$TAG_NAME\", \"version\": \"${{ env.VERSION }}\"}}"
+        
+        # Verify the API call
+        if [ $? -eq 0 ]; then
+          echo "✅ Successfully triggered Homebrew workflow"
+        else
+          echo "❌ Failed to trigger Homebrew workflow"
+          exit 1
+        fi
 
