@@ -201,6 +201,46 @@ jobs:
           Install with: `brew install JPC-AV/AV-Spex/av-spex`
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-bottles-to-release:
+    name: Upload bottles to GitHub release
+    needs: build-bottles
+    runs-on: ubuntu-latest
+    if: success()
+    
+    steps:
+    - name: Get version
+      id: version
+      run: |
+        VERSION="${{ github.event.inputs.tag_name }}"
+        VERSION_CLEAN=${VERSION#v}
+        echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
+        echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
+        echo "✅ Uploading bottles for version: $VERSION_CLEAN"
+    
+    - name: Download all bottles
+      uses: actions/download-artifact@v4
+      with:
+        path: bottles/
+    
+    - name: Upload bottles to release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.tag_name }}
+        files: |
+          bottles/bottle-*/av-spex--*.bottle.tar.gz
+        append_body: true
+        body: |
+          
+          ## Homebrew Bottles
+          
+          Pre-built bottles are available for:
+          - macOS ARM64 (Apple Silicon)
+          - macOS x86_64 (Intel)
+          
+          Install with: `brew install JPC-AV/AV-Spex/av-spex`
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   
   update-formula:
     name: Update formula with bottles
