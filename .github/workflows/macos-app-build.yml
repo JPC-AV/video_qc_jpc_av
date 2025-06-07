@@ -6,13 +6,11 @@ on:
       - 'v*'
   pull_request:
     branches: [ main ]
-  workflow_dispatch:  # Allow manual triggering
+  workflow_dispatch:
 
 jobs:
-  # Replace your build-macos job with this Intel-only build for maximum compatibility:
-
   build-macos:
-    runs-on: macos-13  # Intel runner for maximum compatibility
+    runs-on: macos-13  # Intel for maximum compatibility
     
     outputs:
       version: ${{ steps.get_version.outputs.VERSION }}
@@ -32,7 +30,7 @@ jobs:
     - name: Install dependencies
       shell: bash -el {0}
       env:
-        MACOSX_DEPLOYMENT_TARGET: "11.0"
+        MACOSX_DEPLOYMENT_TARGET: "11.0"  # Better compatibility
       run: |
         conda info
         which python
@@ -41,12 +39,15 @@ jobs:
         # Install PyInstaller via conda-forge
         conda install -c conda-forge pyinstaller -y
         
-        # Force newer PyQt6 build with better macOS integration
+        # Force newer PyQt6 build (keeps your improvement)
         pip install "PyQt6>=6.7" --force-reinstall --no-deps
         pip install PyQt6-sip --force-reinstall
         
         # Install your package dependencies
         pip install -e .
+        
+        # Quick verification
+        python -c "import AV_Spex; print('✅ AV_Spex imported successfully')"
         
     - name: Get version from pyproject.toml
       shell: bash -el {0}
@@ -54,7 +55,7 @@ jobs:
       run: |
         VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building AV-Spex version $VERSION for Intel (x86_64) with Rosetta 2 support"
+        echo "Building AV-Spex version $VERSION for Intel with Rosetta 2 support"
         
     - name: Clean previous build artifacts
       shell: bash -el {0}
@@ -66,25 +67,16 @@ jobs:
       env:
         MACOSX_DEPLOYMENT_TARGET: "11.0"
       run: |
-        echo "Building Intel binary with macOS 11+ compatibility (Rosetta 2 on Apple Silicon)..."
+        echo "Building Intel binary with macOS 11+ compatibility..."
         pyinstaller --noconfirm --log-level=INFO avspex.spec
         
     - name: Verify build
       shell: bash -el {0}
       run: |
-        echo "=== Build output ==="
-        ls -la dist/
-        
         if [ -d "dist/AV-Spex.app" ]; then
           echo "✅ App bundle created successfully"
-          
-          echo "=== Binary info ==="
           file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
-          lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex" 2>/dev/null || echo "Single architecture binary"
-          
-          echo "=== Testing app executable ==="
-          test -x ./dist/AV-Spex.app/Contents/MacOS/AV-Spex && echo "✅ Executable is valid" || echo "❌ Executable problem"
-          
+          test -x ./dist/AV-Spex.app/Contents/MacOS/AV-Spex && echo "✅ Executable is valid"
         else
           echo "❌ App bundle not found!"
           exit 1
@@ -103,22 +95,15 @@ jobs:
           "architecture": "x86_64",
           "python_version": "$(python --version)",
           "python_type": "conda",
-          "compatibility": "Intel Macs native, Apple Silicon via Rosetta 2"
+          "compatibility": "Intel native, Apple Silicon via Rosetta 2"
         }
         EOF
-        
-        echo "Build info created:"
-        cat dist/build-info.json
         
     - name: Create app bundle archive
       shell: bash -el {0}
       run: |
         cd dist
-        echo "Creating archive for version ${{ steps.get_version.outputs.VERSION }}"
-        
         tar -czf AV-Spex-${{ steps.get_version.outputs.VERSION }}-x86_64-unsigned.tar.gz AV-Spex.app build-info.json
-        
-        ls -la *.tar.gz
         echo "Archive created successfully"
         
     - name: Upload app bundle
@@ -127,4 +112,3 @@ jobs:
         name: av-spex-${{ steps.get_version.outputs.VERSION }}-x86_64-unsigned
         path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-x86_64-unsigned.tar.gz
         retention-days: 30
-

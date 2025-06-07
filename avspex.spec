@@ -130,5 +130,6 @@ app = BUNDLE(coll,
         'NSAppleEventsUsageDescription': 'AV-Spex needs access to Apple Events for automation features.',
         'NSCameraUsageDescription': 'AV-Spex may access camera for video processing.',
         'NSMicrophoneUsageDescription': 'AV-Spex may access microphone for audio processing.',
+        'NSRequiresAquaSystemAppearance': False,
     }
 )
