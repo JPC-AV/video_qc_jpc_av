@@ -19,7 +19,6 @@ class MainWindowUI:
     
     def setup_ui(self):
         """Set up the main UI components"""
-        print("🔍 DEBUG: MainWindowUI.setup_ui() called")
         self.main_window.setMinimumSize(750, 800)
 
         ## self.main_window.windowFlags() retrieves the current window flags
@@ -74,12 +73,9 @@ class MainWindowUI:
         self.logo_setup()
 
         self.setup_tabs()
-        
-        print("🔍 DEBUG: MainWindowUI.setup_ui() completed")
     
     def setup_main_layout(self):
         """Set up the main window layout structure"""
-        print("🔍 DEBUG: Setting up main layout")
         # Create and set central widget
         self.main_window.central_widget = QWidget()
         self.main_window.setCentralWidget(self.main_window.central_widget)
@@ -96,12 +92,10 @@ class MainWindowUI:
     
     def logo_setup(self):
         """Set up the logo display"""
-        print("🔍 DEBUG: Setting up logo")
         self.main_window.theme._load_logo()
     
     def setup_tabs(self):
         """Set up tab styling"""
-        print("🔍 DEBUG: Setting up tabs")
         theme_manager = ThemeManager.instance()
         
         # Create new tabs
@@ -111,9 +105,6 @@ class MainWindowUI:
         self.main_window.main_layout.addWidget(self.main_window.tabs)
 
         # Set up individual tabs
-        print("🔍 DEBUG: Setting up import tab")
         self.main_window.import_tab.setup_import_tab()
-        print("🔍 DEBUG: Setting up checks tab")
         self.main_window.checks_tab.setup_checks_tab()
-        print("🔍 DEBUG: Setting up spex tab")
         self.main_window.spex_tab.setup_spex_tab()
