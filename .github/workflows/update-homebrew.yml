@@ -1,24 +1,21 @@
 name: Update Homebrew Formula
 
-# Trigger this workflow when a new release is published
+# Simplified trigger - only workflow_dispatch since we're manually triggering it
 on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Tag name to update formula for'
+        description: 'Tag name to update formula for (e.g., v1.2.3)'
         required: true
+        type: string
+      version:
+        description: 'Version number (optional, will be derived from tag_name if not provided)'
+        required: false
         type: string
 
 jobs:
   update-homebrew-formula:
     runs-on: ubuntu-latest
-    # Only run if:
-    # 1. Manual dispatch (workflow_dispatch), OR 
-    # 2. Triggered by successful workflow_run that was triggered by a tag push (head_branch starts with 'v')
-    if: |
-      github.event_name == 'workflow_dispatch' || 
-      (github.event.workflow_run.conclusion == 'success' && 
-       startsWith(github.event.workflow_run.head_branch, 'v'))
     
     outputs:
       version: ${{ steps.get_version.outputs.version }}
@@ -41,71 +38,81 @@ jobs:
     - name: Determine version and download URL
       id: get_version
       run: |
-        if [ "${{ github.event_name }}" = "workflow_run" ]; then
-          # For workflow_run triggered by tag push, try multiple approaches to get the version
-          echo "🔍 Getting version from workflow_run event..."
-          
-          # First try: check if head_branch looks like a tag
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
-          echo "Head branch: $HEAD_BRANCH"
-          
-          if [[ "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            VERSION="$HEAD_BRANCH"
-            echo "✅ Found version in head_branch: $VERSION"
-          else
-            # Second try: get from the triggering workflow's repository dispatch or recent tags
-            echo "🔍 Head branch doesn't look like a tag, checking recent tags..."
-            
-            # Get the most recent tag that matches version pattern
-            VERSION=$(git tag -l "v*.*.*" --sort=-version:refname | head -1)
-            
-            if [ -z "$VERSION" ]; then
-              echo "🔍 No local tags found, trying GitHub API for latest release..."
-              VERSION=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
-            fi
-            
-            if [ "$VERSION" = "null" ] || [ -z "$VERSION" ]; then
-              echo "❌ Could not determine version from any source"
-              echo "Head branch: $HEAD_BRANCH"
-              echo "Available tags:"
-              git tag -l "v*.*.*" --sort=-version:refname | head -5
-              exit 1
-            fi
-            
-            echo "✅ Found version: $VERSION"
-          fi
-          
-          DOWNLOAD_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz"
-        else
-          # Manual trigger
-          VERSION="${{ github.event.inputs.tag_name }}"
-          DOWNLOAD_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz"
-        fi
+        TAG_NAME="${{ github.event.inputs.tag_name }}"
+        PROVIDED_VERSION="${{ github.event.inputs.version }}"
+        
+        echo "📥 Input tag name: $TAG_NAME"
+        echo "📥 Input version: $PROVIDED_VERSION"
         
         # Validate that we have a version that looks like a tag
-        if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-          echo "❌ Invalid version format: $VERSION"
+        if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+          echo "❌ Invalid tag format: $TAG_NAME"
           echo "Expected format: v1.2.3"
           exit 1
         fi
         
-        # Remove 'v' prefix if present
-        VERSION_CLEAN=${VERSION#v}
+        # Use provided version or derive from tag
+        if [ -n "$PROVIDED_VERSION" ]; then
+          VERSION_CLEAN="$PROVIDED_VERSION"
+        else
+          # Remove 'v' prefix from tag name
+          VERSION_CLEAN=${TAG_NAME#v}
+        fi
+        
+        DOWNLOAD_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG_NAME}.tar.gz"
         
         echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
         echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
-        echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
+        echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
         
-        echo "📋 Detected version: $VERSION_CLEAN"
+        echo "📋 Final version: $VERSION_CLEAN"
         echo "📥 Download URL: $DOWNLOAD_URL"
+        echo "🏷️ Tag name: $TAG_NAME"
+    
+    - name: Verify release exists
+      run: |
+        echo "🔍 Verifying that release ${{ steps.get_version.outputs.tag_name }} exists..."
+        
+        # Check if the release exists on GitHub
+        RELEASE_CHECK=$(curl -s -o /dev/null -w "%{http_code}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ steps.get_version.outputs.tag_name }}")
+        
+        if [ "$RELEASE_CHECK" = "200" ]; then
+          echo "✅ Release ${{ steps.get_version.outputs.tag_name }} exists"
+        else
+          echo "⚠️ Release ${{ steps.get_version.outputs.tag_name }} not found (HTTP $RELEASE_CHECK)"
+          echo "This might be expected if the release is still being created"
+        fi
+        
+        # Check if the archive URL is accessible
+        ARCHIVE_CHECK=$(curl -s -o /dev/null -w "%{http_code}" -L "${{ steps.get_version.outputs.download_url }}")
+        
+        if [ "$ARCHIVE_CHECK" = "200" ]; then
+          echo "✅ Archive URL is accessible"
+        else
+          echo "❌ Archive URL returned HTTP $ARCHIVE_CHECK"
+          echo "URL: ${{ steps.get_version.outputs.download_url }}"
+          exit 1
+        fi
     
     - name: Calculate SHA256
       id: get_sha
       run: |
-        # Download and calculate SHA256
+        echo "📦 Downloading archive to calculate SHA256..."
         curl -L "${{ steps.get_version.outputs.download_url }}" -o release.tar.gz
+        
+        if [ ! -f release.tar.gz ]; then
+          echo "❌ Failed to download release archive"
+          exit 1
+        fi
+        
         SHA256=$(sha256sum release.tar.gz | cut -d' ' -f1)
+        FILE_SIZE=$(stat -f%z release.tar.gz 2>/dev/null || stat -c%s release.tar.gz)
+        
         echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+        echo "📋 SHA256: $SHA256"
+        echo "📋 File size: $FILE_SIZE bytes"
+        
         rm release.tar.gz
     
     - name: Checkout Homebrew tap repository
@@ -119,19 +126,25 @@ jobs:
       run: |
         cd homebrew-tap
         
+        echo "📝 Updating formula for version ${{ steps.get_version.outputs.version }}..."
+        
         # Show current formula before update
         echo "=== BEFORE UPDATE ==="
-        cat Formula/AV-Spex.rb
+        if [ -f Formula/AV-Spex.rb ]; then
+          head -20 Formula/AV-Spex.rb
+        else
+          echo "Formula file not found!"
+        fi
         echo "======================"
         
-        # Update the formula file in the correct location
+        # Create the updated formula
         cat > Formula/AV-Spex.rb << 'EOF'
         class AvSpex < Formula
           include Language::Python::Virtualenv
 
           desc "Python project for NMAAHC media conservation lab"
           homepage "https://github.com/JPC-AV/video_qc_jpc_av"
-          url "https://github.com/JPC-AV/video_qc_jpc_av/archive/refs/tags/v${{ steps.get_version.outputs.version }}.tar.gz"
+          url "https://github.com/JPC-AV/video_qc_jpc_av/archive/refs/tags/${{ steps.get_version.outputs.tag_name }}.tar.gz"
           sha256 "${{ steps.get_sha.outputs.sha256 }}"
           license "GPL-3.0-only"
 
@@ -174,7 +187,6 @@ jobs:
             sha256 "89e57d003a116303a34de6700862391367dd564222ab71f8531df70279fc0193"
           end
 
-
           def install
             venv = virtualenv_create(libexec, "python3")
             
@@ -203,7 +215,7 @@ jobs:
         
         # Show updated formula
         echo "=== AFTER UPDATE ==="
-        cat Formula/AV-Spex.rb
+        head -20 Formula/AV-Spex.rb
         echo "====================="
     
     - name: Commit and push changes
@@ -219,34 +231,45 @@ jobs:
         
         # Show git diff
         echo "=== GIT DIFF ==="
-        git diff Formula/AV-Spex.rb
+        git diff Formula/AV-Spex.rb || echo "No existing formula to diff against"
         echo "================"
         
-        # Always add the file and let git decide if there are changes
+        # Add the file
         git add Formula/AV-Spex.rb
         
         # Check if there are staged changes
         if git diff --staged --quiet; then
-          echo "No changes to commit"
+          echo "ℹ️ No changes to commit - formula already up to date"
         else
-          git commit -m "Update AV-Spex to version ${{ steps.get_version.outputs.version }}"
+          echo "📝 Committing changes..."
+          git commit -m "Update AV-Spex to version ${{ steps.get_version.outputs.version }}
+
+- Updated URL to tag ${{ steps.get_version.outputs.tag_name }}
+- Updated SHA256 to ${{ steps.get_sha.outputs.sha256 }}
+- Automated update from GitHub Actions"
+          
+          echo "🚀 Pushing changes..."
           git push
+          echo "✅ Formula updated successfully!"
         fi
-    
-    - name: Create Pull Request (alternative approach)
-      if: failure()
-      uses: peter-evans/create-pull-request@v5
-      with:
-        path: homebrew-tap
-        token: ${{ secrets.GITHUB_TOKEN }}
-        commit-message: "Update AV-Spex to version ${{ steps.get_version.outputs.version }}"
-        title: "Update AV-Spex to version ${{ steps.get_version.outputs.version }}"
-        body: |
-          Automatically generated PR to update AV-Spex formula to version ${{ steps.get_version.outputs.version }}.
-          
-          Changes:
-          - Updated URL to point to version ${{ steps.get_version.outputs.version }}
-          - Updated SHA256 hash to ${{ steps.get_sha.outputs.sha256 }}
-          
-          This PR was created automatically by the Homebrew update workflow.
-        branch: update-formula-v${{ steps.get_version.outputs.version }}
+        
+    - name: Trigger Homebrew bottle build
+      if: success()
+      run: |
+        echo "🍺 Triggering Homebrew bottle build for version ${{ steps.get_version.outputs.version }}..."
+        
+        # Trigger the bottle build workflow
+        curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/${{ github.repository }}/actions/workflows/build-bottles.yml/dispatches \
+          -d "{\"ref\":\"main\", \"inputs\": {\"tag_name\": \"${{ steps.get_version.outputs.tag_name }}\"}}"
+        
+        # Verify the API call
+        if [ $? -eq 0 ]; then
+          echo "✅ Successfully triggered bottle build workflow"
+        else
+          echo "❌ Failed to trigger bottle build workflow"
+          exit 1
+        fi
