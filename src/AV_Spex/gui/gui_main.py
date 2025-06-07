@@ -74,15 +74,10 @@ class MainWindow(QMainWindow, ThemeableMixin):
         # Setup theme handling
         self.setup_theme_handling()
 
-        # Apply initial theme to all widgets
-        print("🔍 DEBUG: Applying initial theme in MainWindow.__init__")
-        theme_manager = ThemeManager.instance()
-        theme_manager.apply_theme_to_all(self)
 
     def on_theme_changed(self, palette):
         """Override the ThemeableMixin method to properly handle theme changes"""
-        print(f"🔍 DEBUG: MainWindow.on_theme_changed() called")
-        
+
         # Call the parent implementation first
         super().on_theme_changed(palette)
         
@@ -90,9 +85,6 @@ class MainWindow(QMainWindow, ThemeableMixin):
         if hasattr(self, 'theme'):
             self.theme.on_theme_changed(palette)
             
-        # Apply theme to all widgets under this window
-        theme_manager = ThemeManager.instance()
-        theme_manager.apply_theme_to_all(self)
     
     def closeEvent(self, event):
         """Handle application shutdown and clean up resources."""
