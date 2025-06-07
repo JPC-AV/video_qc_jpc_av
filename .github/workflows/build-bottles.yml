@@ -360,12 +360,11 @@ jobs:
           echo "ℹ️ No changes to commit - formula already up to date"
         else
           echo "📝 Committing formula with bottles..."
-          git commit -m "Update AV-Spex to version ${{ steps.version.outputs.version }} with bottles
-
-- Updated source to tag v${{ steps.version.outputs.version }}
-- Added ARM64 bottle: ${{ steps.bottles.outputs.arm64_sha }}
-- Added Ventura bottle: ${{ steps.bottles.outputs.ventura_sha }}
-- Automated update with bottle builds"
+          git commit -m "Update AV-Spex to version ${{ steps.version.outputs.version }} with bottles" \
+                     -m "- Updated source to tag v${{ steps.version.outputs.version }}" \
+                     -m "- Added ARM64 bottle: ${{ steps.bottles.outputs.arm64_sha }}" \
+                     -m "- Added Ventura bottle: ${{ steps.bottles.outputs.ventura_sha }}" \
+                     -m "- Automated update with bottle builds"
           
           echo "🚀 Pushing changes..."
           git push
