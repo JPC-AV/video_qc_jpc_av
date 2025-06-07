@@ -398,12 +398,22 @@ class ImportTab(ThemeableMixin):
         if hasattr(self.main_window, 'export_config_dropdown'):
             theme_manager.style_combobox(self.main_window.export_config_dropdown)
             
-        # Update buttons in groups
+        # Update buttons in groups (this will override special styling)
         if hasattr(self, 'import_group'):
             theme_manager.style_buttons(self.import_group)
             
         if hasattr(self, 'config_import_group'):
             theme_manager.style_buttons(self.config_import_group)
+        
+        # Re-apply special button styling after theme changes
+        if hasattr(self.main_window, 'check_spex_button'):
+            theme_manager.style_button(self.main_window.check_spex_button, special_style="check_spex")
+        
+        if hasattr(self.main_window, 'open_processing_button'):
+            theme_manager.style_button(self.main_window.open_processing_button, special_style="processing_window")
+            
+        if hasattr(self.main_window, 'cancel_processing_button'):
+            theme_manager.style_button(self.main_window.cancel_processing_button, special_style="cancel_processing")
     
     def setup_import_tab(self):
         """Set up the Import tab for directory selection"""
