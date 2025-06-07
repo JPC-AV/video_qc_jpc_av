@@ -1,6 +1,5 @@
 name: Update Homebrew Formula
 
-# Simplified trigger - only workflow_dispatch since we're manually triggering it
 on:
   workflow_dispatch:
     inputs:
@@ -242,17 +241,16 @@ jobs:
           echo "ℹ️ No changes to commit - formula already up to date"
         else
           echo "📝 Committing changes..."
-          git commit -m "Update AV-Spex to version ${{ steps.get_version.outputs.version }}
-
-- Updated URL to tag ${{ steps.get_version.outputs.tag_name }}
-- Updated SHA256 to ${{ steps.get_sha.outputs.sha256 }}
-- Automated update from GitHub Actions"
+          git commit -m "Update AV-Spex to version ${{ steps.get_version.outputs.version }}" \
+                     -m "- Updated URL to tag ${{ steps.get_version.outputs.tag_name }}" \
+                     -m "- Updated SHA256 to ${{ steps.get_sha.outputs.sha256 }}" \
+                     -m "- Automated update from GitHub Actions"
           
           echo "🚀 Pushing changes..."
           git push
           echo "✅ Formula updated successfully!"
         fi
-        
+
     - name: Trigger Homebrew bottle build
       if: success()
       run: |
