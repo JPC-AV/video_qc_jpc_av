@@ -239,41 +239,30 @@ jobs:
       run: |
         cd bottles/
         
-        echo "=== DEBUGGING FILE MATCHING ==="
+        ARM64_SHA=""
+        VENTURA_SHA=""
         
-        for dir in bottle-*/; do
-          echo "Processing directory: $dir"
-          
-          # Debug: Show what files are in the directory
-          echo "Files in $dir:"
-          ls -la "$dir"
-          
-          # Debug: Test the file pattern
-          echo "Testing pattern: ${dir}av-spex--*.bottle.json"
-          ls "${dir}av-spex--"*".bottle.json" 2>/dev/null || echo "Pattern did not match any files"
-          
-          # Try to find ANY json file
-          echo "All JSON files in $dir:"
-          find "$dir" -name "*.json"
-          
-        done
+        echo "=== Available bottle artifacts ==="
+        ls -la
+        echo "================================="
         
-        echo "=== TESTING DIRECT ACCESS ==="
-        
-        # Try direct file access
+        # Direct file access since we know the pattern works
         if [[ -f "bottle-arm64_sonoma-v0.7.9.3/av-spex--0.7.9.3.arm64_sonoma.bottle.json" ]]; then
-          echo "✅ ARM64 file exists, testing extraction:"
-          jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "bottle-arm64_sonoma-v0.7.9.3/av-spex--0.7.9.3.arm64_sonoma.bottle.json"
-        else
-          echo "❌ ARM64 file not found"
+          ARM64_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "bottle-arm64_sonoma-v0.7.9.3/av-spex--0.7.9.3.arm64_sonoma.bottle.json")
+          echo "Found ARM64 SHA: $ARM64_SHA"
         fi
         
         if [[ -f "bottle-ventura-v0.7.9.3/av-spex--0.7.9.3.ventura.bottle.json" ]]; then
-          echo "✅ Ventura file exists, testing extraction:"
-          jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.ventura.sha256' "bottle-ventura-v0.7.9.3/av-spex--0.7.9.3.ventura.bottle.json"
-        else
-          echo "❌ Ventura file not found"
+          VENTURA_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.ventura.sha256' "bottle-ventura-v0.7.9.3/av-spex--0.7.9.3.ventura.bottle.json")
+          echo "Found Ventura SHA: $VENTURA_SHA"
         fi
+        
+        echo "arm64_sha=${ARM64_SHA}" >> $GITHUB_OUTPUT
+        echo "ventura_sha=${VENTURA_SHA}" >> $GITHUB_OUTPUT
+        
+        echo "📋 Final extracted SHAs:"
+        echo "ARM64 (arm64_sonoma): $ARM64_SHA"
+        echo "Ventura: $VENTURA_SHA"
     
     - name: Update formula with bottles
       run: |
