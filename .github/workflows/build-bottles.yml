@@ -254,46 +254,12 @@ jobs:
             JSON_FILE="${dir}av-spex--"*".bottle.json"
             
             echo "Processing $JSON_FILE"
-            echo "=== FULL JSON CONTENT ==="
-            cat "$JSON_FILE"
-            echo "========================="
-            
-            # Debug: Show top-level keys
-            echo "=== TOP-LEVEL KEYS ==="
-            jq 'keys' "$JSON_FILE"
-            echo "======================"
-            
-            # Try different possible key formats
-            echo "=== TRYING DIFFERENT KEY FORMATS ==="
-            
-            # Try 1: Original format
-            SHA_TRY1=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "$JSON_FILE" 2>/dev/null || echo "null")
-            echo "Try 1 (JPC-AV/AV-Spex/av-spex): $SHA_TRY1"
-            
-            # Try 2: Just av-spex
-            SHA_TRY2=$(jq -r '.["av-spex"].bottle.tags.arm64_sonoma.sha256' "$JSON_FILE" 2>/dev/null || echo "null")
-            echo "Try 2 (av-spex): $SHA_TRY2"
-            
-            # Try 3: Show all possible paths
-            echo "=== ALL BOTTLE PATHS ==="
-            jq -r 'to_entries[] | "\(.key): \(.value | type)"' "$JSON_FILE"
-            echo "========================="
             
             if [[ "$dir" == *"arm64_sonoma"* ]]; then
-              # Use whichever extraction worked
-              if [[ "$SHA_TRY1" != "null" && -n "$SHA_TRY1" ]]; then
-                ARM64_SHA="$SHA_TRY1"
-              elif [[ "$SHA_TRY2" != "null" && -n "$SHA_TRY2" ]]; then
-                ARM64_SHA="$SHA_TRY2"
-              fi
+              ARM64_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "$JSON_FILE")
               echo "Found ARM64 SHA: $ARM64_SHA"
             elif [[ "$dir" == *"ventura"* ]]; then
-              # Same logic for ventura
-              if [[ "$SHA_TRY1" != "null" && -n "$SHA_TRY1" ]]; then
-                VENTURA_SHA=$(jq -r '.["JPC-AV/AV-Spex/av-spex"].bottle.tags.ventura.sha256' "$JSON_FILE")
-              elif [[ "$SHA_TRY2" != "null" && -n "$SHA_TRY2" ]]; then
-                VENTURA_SHA=$(jq -r '.["av-spex"].bottle.tags.ventura.sha256' "$JSON_FILE")
-              fi
+              VENTURA_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.ventura.sha256' "$JSON_FILE")
               echo "Found Ventura SHA: $VENTURA_SHA"
             fi
           fi
