@@ -89,7 +89,7 @@ jobs:
           fi
         done
     
-   - name: Install clean Python environment
+    - name: Install clean Python environment
       run: |
         export HOMEBREW_NO_AUTO_UPDATE=1
         export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
