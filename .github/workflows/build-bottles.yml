@@ -142,6 +142,16 @@ jobs:
         echo "Creating bottle..."
         brew bottle --verbose --json --root-url=https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.version.outputs.version }} JPC-AV/AV-Spex/av-spex
         
+        # Create copies with names that Homebrew expects
+        echo "Creating Homebrew-compatible copies..."
+        for bottle_file in av-spex--*.bottle.tar.gz; do
+          if [[ -f "$bottle_file" ]]; then
+            new_name=$(echo "$bottle_file" | sed 's/av-spex--/av-spex-/')
+            cp "$bottle_file" "$new_name"
+            echo "Created copy: $bottle_file → $new_name"
+          fi
+        done
+        
         BOTTLE_FILE=$(ls av-spex--*.bottle.tar.gz | head -1)
         echo "bottle_file=${BOTTLE_FILE}" >> $GITHUB_OUTPUT
         
@@ -193,6 +203,7 @@ jobs:
         tag_name: ${{ steps.version.outputs.tag_name }}
         files: |
           bottles/bottle-*/av-spex--*.bottle.tar.gz
+          bottles/bottle-*/av-spex-*.bottle.tar.gz
         append_body: true
         body: |
           
@@ -290,9 +301,8 @@ jobs:
             root_url "https://github.com/JPC-AV/video_qc_jpc_av/releases/download/v${{ steps.version.outputs.version }}"
         EOF
         
-        # Add bottle SHAs with explicit filenames
+        # Add bottle SHAs if they exist
         if [[ -n "${{ steps.bottles.outputs.arm64_sha }}" && "${{ steps.bottles.outputs.arm64_sha }}" != "null" && "${{ steps.bottles.outputs.arm64_sha }}" != "" ]]; then
-          echo "    sha256 \"av-spex--${{ steps.version.outputs.version }}.arm64_sonoma.bottle.tar.gz\" => :arm64_sonoma" >> Formula/AV-Spex.rb
           echo "    sha256 cellar: :any_skip_relocation, arm64_sonoma: \"${{ steps.bottles.outputs.arm64_sha }}\"" >> Formula/AV-Spex.rb
           echo "✅ Added ARM64 bottle SHA"
         else
@@ -300,7 +310,6 @@ jobs:
         fi
         
         if [[ -n "${{ steps.bottles.outputs.ventura_sha }}" && "${{ steps.bottles.outputs.ventura_sha }}" != "null" && "${{ steps.bottles.outputs.ventura_sha }}" != "" ]]; then
-          echo "    sha256 \"av-spex--${{ steps.version.outputs.version }}.ventura.bottle.tar.gz\" => :ventura" >> Formula/AV-Spex.rb
           echo "    sha256 cellar: :any_skip_relocation, ventura: \"${{ steps.bottles.outputs.ventura_sha }}\"" >> Formula/AV-Spex.rb
           echo "✅ Added Ventura bottle SHA"
         else
