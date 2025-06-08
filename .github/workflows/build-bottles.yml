@@ -236,7 +236,7 @@ jobs:
           av-spex--*.bottle.tar.gz
           av-spex--*.bottle.json
         retention-days: 30
-
+ 
   upload-bottles-to-release:
     name: Upload bottles to GitHub release
     needs: build-bottles
@@ -270,9 +270,21 @@ jobs:
         # Create a flat structure for upload
         mkdir -p ../upload-bottles/
         
-        # Copy all bottle files to upload directory
-        find . -name "*.bottle.tar.gz" -exec cp {} ../upload-bottles/ \;
-        find . -name "*.bottle.json" -exec cp {} ../upload-bottles/ \;
+        # Copy all bottle files and rename them to use single hyphen format
+        find . -name "*.bottle.tar.gz" | while read file; do
+          basename_file=$(basename "$file")
+          # Convert av-spex--X.Y.Z.arch.bottle.tar.gz to av-spex-X.Y.Z.arch.bottle.tar.gz
+          new_name=$(echo "$basename_file" | sed 's/av-spex--/av-spex-/')
+          cp "$file" "../upload-bottles/$new_name"
+          echo "Copied: $basename_file → $new_name"
+        done
+        
+        # Also copy JSON files for reference (though they're not uploaded)
+        find . -name "*.bottle.json" | while read file; do
+          basename_file=$(basename "$file")
+          new_name=$(echo "$basename_file" | sed 's/av-spex--/av-spex-/')
+          cp "$file" "../upload-bottles/$new_name"
+        done
         
         echo "Files ready for upload:"
         ls -la ../upload-bottles/
