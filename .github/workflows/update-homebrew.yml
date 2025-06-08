@@ -140,7 +140,10 @@ jobs:
         fi
         echo "======================"
         
-        # Create the updated formula
+        # Ensure Formula directory exists
+        mkdir -p Formula
+        
+        # Create the updated formula  
         cat > Formula/AV-Spex.rb << 'EOF'
         class AvSpex < Formula
           include Language::Python::Virtualenv
