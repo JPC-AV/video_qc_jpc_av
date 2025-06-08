@@ -99,9 +99,22 @@ jobs:
         echo "Installing python@3.10..."
         brew install python@3.10
         
-        # Force link python@3.10 to ensure it's the primary Python
-        echo "Linking python@3.10..."
-        brew link --overwrite python@3.10
+        # Force unlink any existing python and link python@3.10
+        echo "Unlinking existing python installations..."
+        brew unlink python@3.13 python@3.12 python@3.11 || true
+        
+        echo "Force linking python@3.10..."
+        brew unlink python@3.10 || true
+        brew link --force --overwrite python@3.10
+        
+        # Update PATH to prioritize Homebrew Python 3.10
+        if [[ "${{ matrix.os }}" == "macos-14" ]]; then
+          export PATH="/opt/homebrew/opt/python@3.10/bin:$PATH"
+          echo "/opt/homebrew/opt/python@3.10/bin" >> $GITHUB_PATH
+        else
+          export PATH="/usr/local/opt/python@3.10/bin:$PATH"
+          echo "/usr/local/opt/python@3.10/bin" >> $GITHUB_PATH
+        fi
         
         # Verify Python installation
         echo "=== Python Verification ==="
@@ -110,6 +123,17 @@ jobs:
         which pip3
         pip3 --version
         echo "=========================="
+        
+        # Verify we're actually using 3.10
+        PYTHON_VERSION=$(python3 --version | grep -o "3\.10\.")
+        if [[ -z "$PYTHON_VERSION" ]]; then
+          echo "❌ ERROR: Still not using Python 3.10!"
+          echo "Current python3 path: $(which python3)"
+          echo "Current python3 version: $(python3 --version)"
+          exit 1
+        fi
+        
+        echo "✅ Successfully using Python 3.10"
         
         # Install other dependencies
         echo "Installing PyQt and Qt..."
@@ -121,6 +145,13 @@ jobs:
         export HOMEBREW_NO_AUTO_UPDATE=1
         export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
         export HOMEBREW_NO_INSTALL_UPGRADE=1
+        
+        # Ensure we're using the correct Python path
+        if [[ "${{ matrix.os }}" == "macos-14" ]]; then
+          export PATH="/opt/homebrew/opt/python@3.10/bin:$PATH"
+        else
+          export PATH="/usr/local/opt/python@3.10/bin:$PATH"
+        fi
         
         # Tap the repository
         brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
@@ -134,6 +165,13 @@ jobs:
         pip3 --version
         brew list | grep python
         echo "=========================="
+        
+        # Verify we're using Python 3.10 before building
+        PYTHON_VERSION=$(python3 --version | grep -o "3\.10\.")
+        if [[ -z "$PYTHON_VERSION" ]]; then
+          echo "❌ ERROR: Not using Python 3.10 for bottle build!"
+          exit 1
+        fi
         
         # Build the bottle
         echo "Building bottle..."
@@ -250,6 +288,7 @@ jobs:
       run: |
         cd bottles/
         
+        VERSION="${{ steps.version.outputs.version }}"
         ARM64_SHA=""
         VENTURA_SHA=""
         
@@ -257,14 +296,14 @@ jobs:
         ls -la
         echo "================================="
         
-        # Direct file access since we know the pattern works
-        if [[ -f "bottle-arm64_sonoma-v0.7.9.3/av-spex--0.7.9.3.arm64_sonoma.bottle.json" ]]; then
-          ARM64_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "bottle-arm64_sonoma-v0.7.9.3/av-spex--0.7.9.3.arm64_sonoma.bottle.json")
+        # Use dynamic version instead of hardcoded
+        if [[ -f "bottle-arm64_sonoma-v${VERSION}/av-spex--${VERSION}.arm64_sonoma.bottle.json" ]]; then
+          ARM64_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "bottle-arm64_sonoma-v${VERSION}/av-spex--${VERSION}.arm64_sonoma.bottle.json")
           echo "Found ARM64 SHA: $ARM64_SHA"
         fi
         
-        if [[ -f "bottle-ventura-v0.7.9.3/av-spex--0.7.9.3.ventura.bottle.json" ]]; then
-          VENTURA_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.ventura.sha256' "bottle-ventura-v0.7.9.3/av-spex--0.7.9.3.ventura.bottle.json")
+        if [[ -f "bottle-ventura-v${VERSION}/av-spex--${VERSION}.ventura.bottle.json" ]]; then
+          VENTURA_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.ventura.sha256' "bottle-ventura-v${VERSION}/av-spex--${VERSION}.ventura.bottle.json")
           echo "Found Ventura SHA: $VENTURA_SHA"
         fi
         
