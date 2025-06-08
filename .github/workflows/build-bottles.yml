@@ -174,7 +174,6 @@ jobs:
         path: |
           av-spex--*.bottle.tar.gz
           av-spex--*.bottle.json
-          av-spex-*.bottle.tar.gz
         retention-days: 30
 
   upload-bottles-to-release:
