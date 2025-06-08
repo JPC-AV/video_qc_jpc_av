@@ -89,7 +89,7 @@ jobs:
           fi
         done
     
-    - name: Install clean Python environment
+   - name: Install clean Python environment
       run: |
         export HOMEBREW_NO_AUTO_UPDATE=1
         export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
@@ -107,21 +107,36 @@ jobs:
         brew unlink python@3.10 || true
         brew link --force --overwrite python@3.10
         
-        # Update PATH to prioritize Homebrew Python 3.10
+        # Set up paths based on architecture
         if [[ "${{ matrix.os }}" == "macos-14" ]]; then
-          export PATH="/opt/homebrew/opt/python@3.10/bin:$PATH"
-          echo "/opt/homebrew/opt/python@3.10/bin" >> $GITHUB_PATH
+          HOMEBREW_PREFIX="/opt/homebrew"
         else
-          export PATH="/usr/local/opt/python@3.10/bin:$PATH"
-          echo "/usr/local/opt/python@3.10/bin" >> $GITHUB_PATH
+          HOMEBREW_PREFIX="/usr/local"
         fi
+        
+        # Create a temporary directory for our Python symlinks
+        mkdir -p ~/temp-python-bin
+        
+        # Create symlinks that will override system Python
+        ln -sf "${HOMEBREW_PREFIX}/opt/python@3.10/bin/python3.10" ~/temp-python-bin/python3
+        ln -sf "${HOMEBREW_PREFIX}/opt/python@3.10/bin/pip3.10" ~/temp-python-bin/pip3
+        
+        # Put our temp directory at the front of PATH
+        export PATH="$HOME/temp-python-bin:$PATH"
+        echo "$HOME/temp-python-bin" >> $GITHUB_PATH
+        
+        # Also add the Homebrew Python bin directory
+        export PATH="${HOMEBREW_PREFIX}/opt/python@3.10/bin:$PATH"
+        echo "${HOMEBREW_PREFIX}/opt/python@3.10/bin" >> $GITHUB_PATH
         
         # Verify Python installation
         echo "=== Python Verification ==="
+        echo "PATH: $PATH"
         which python3
         python3 --version
         which pip3
         pip3 --version
+        echo "Real python3 path: $(readlink -f $(which python3))"
         echo "=========================="
         
         # Verify we're actually using 3.10
@@ -130,6 +145,8 @@ jobs:
           echo "❌ ERROR: Still not using Python 3.10!"
           echo "Current python3 path: $(which python3)"
           echo "Current python3 version: $(python3 --version)"
+          echo "Available Python versions:"
+          ls -la "${HOMEBREW_PREFIX}/opt/python@3.10/bin/"
           exit 1
         fi
         
@@ -146,12 +163,15 @@ jobs:
         export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
         export HOMEBREW_NO_INSTALL_UPGRADE=1
         
-        # Ensure we're using the correct Python path
+        # Set up paths based on architecture
         if [[ "${{ matrix.os }}" == "macos-14" ]]; then
-          export PATH="/opt/homebrew/opt/python@3.10/bin:$PATH"
+          HOMEBREW_PREFIX="/opt/homebrew"
         else
-          export PATH="/usr/local/opt/python@3.10/bin:$PATH"
+          HOMEBREW_PREFIX="/usr/local"
         fi
+        
+        # Ensure our custom Python path is still at the front
+        export PATH="$HOME/temp-python-bin:${HOMEBREW_PREFIX}/opt/python@3.10/bin:$PATH"
         
         # Tap the repository
         brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
@@ -161,6 +181,7 @@ jobs:
         brew update
         
         echo "=== Final Python Check ==="
+        echo "PATH: $PATH"
         python3 --version
         pip3 --version
         brew list | grep python
@@ -170,6 +191,8 @@ jobs:
         PYTHON_VERSION=$(python3 --version | grep -o "3\.10\.")
         if [[ -z "$PYTHON_VERSION" ]]; then
           echo "❌ ERROR: Not using Python 3.10 for bottle build!"
+          echo "Current python3: $(which python3)"
+          echo "Current version: $(python3 --version)"
           exit 1
         fi
         
