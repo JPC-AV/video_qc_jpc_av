@@ -239,47 +239,41 @@ jobs:
       run: |
         cd bottles/
         
-        ARM64_SHA=""
-        VENTURA_SHA=""
-        
-        echo "=== Available bottle artifacts ==="
-        ls -la
-        echo "================================="
+        echo "=== DEBUGGING FILE MATCHING ==="
         
         for dir in bottle-*/; do
           echo "Processing directory: $dir"
+          
+          # Debug: Show what files are in the directory
+          echo "Files in $dir:"
           ls -la "$dir"
           
-          if [[ -f "${dir}av-spex--"*".bottle.json" ]]; then
-            JSON_FILE="${dir}av-spex--"*".bottle.json"
-            
-            echo "Processing $JSON_FILE"
-            
-            # Debug: Show what keys exist
-            echo "=== KEYS IN JSON ==="
-            jq 'keys' "$JSON_FILE"
-            echo "==================="
-            
-            if [[ "$dir" == *"arm64_sonoma"* ]]; then
-              echo "Extracting ARM64 SHA..."
-              ARM64_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "$JSON_FILE")
-              echo "Raw jq result: '$ARM64_SHA'"
-              echo "Found ARM64 SHA: $ARM64_SHA"
-            elif [[ "$dir" == *"ventura"* ]]; then
-              echo "Extracting Ventura SHA..."
-              VENTURA_SHA=$(jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.ventura.sha256' "$JSON_FILE")
-              echo "Raw jq result: '$VENTURA_SHA'"
-              echo "Found Ventura SHA: $VENTURA_SHA"
-            fi
-          fi
+          # Debug: Test the file pattern
+          echo "Testing pattern: ${dir}av-spex--*.bottle.json"
+          ls "${dir}av-spex--"*".bottle.json" 2>/dev/null || echo "Pattern did not match any files"
+          
+          # Try to find ANY json file
+          echo "All JSON files in $dir:"
+          find "$dir" -name "*.json"
+          
         done
         
-        echo "arm64_sha=${ARM64_SHA}" >> $GITHUB_OUTPUT
-        echo "ventura_sha=${VENTURA_SHA}" >> $GITHUB_OUTPUT
+        echo "=== TESTING DIRECT ACCESS ==="
         
-        echo "📋 Final extracted SHAs:"
-        echo "ARM64 (arm64_sonoma): $ARM64_SHA"
-        echo "Ventura: $VENTURA_SHA"
+        # Try direct file access
+        if [[ -f "bottle-arm64_sonoma-v0.7.9.3/av-spex--0.7.9.3.arm64_sonoma.bottle.json" ]]; then
+          echo "✅ ARM64 file exists, testing extraction:"
+          jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.arm64_sonoma.sha256' "bottle-arm64_sonoma-v0.7.9.3/av-spex--0.7.9.3.arm64_sonoma.bottle.json"
+        else
+          echo "❌ ARM64 file not found"
+        fi
+        
+        if [[ -f "bottle-ventura-v0.7.9.3/av-spex--0.7.9.3.ventura.bottle.json" ]]; then
+          echo "✅ Ventura file exists, testing extraction:"
+          jq -r '.["jpc-av/av-spex/av-spex"].bottle.tags.ventura.sha256' "bottle-ventura-v0.7.9.3/av-spex--0.7.9.3.ventura.bottle.json"
+        else
+          echo "❌ Ventura file not found"
+        fi
     
     - name: Update formula with bottles
       run: |
