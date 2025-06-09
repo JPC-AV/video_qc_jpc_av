@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QFont, QIcon
 
+from AV_Spex.utils.log_setup import logger
+
 class DependencyStatus(Enum):
     FOUND = "found"
     NOT_FOUND = "not_found"
@@ -146,6 +148,13 @@ class DependencyCheckDialog(QDialog):
                 version_command="mediaconch --version",
                 description="Required for media conformance checking",
                 install_hint="Install via: brew install mediaconch (macOS) or visit https://mediaarea.net/MediaConch"
+            ),
+            DependencyInfo(
+                name="QCTools",
+                command="qcli",
+                version_command="qcli --version",
+                description="Required for quality control analysis and video QC metrics",
+                install_hint="Install via: brew install qcli (macOS) or visit https://mediaarea.net/QCTools"
             )
         ]
     
@@ -358,6 +367,13 @@ class DependencyManager:
                 name="MediaConch",
                 command="mediaconch",
                 install_hint="Install via: brew install mediaconch (macOS)"
+            ),
+            DependencyInfo(
+                name="QCTools",
+                command="qcli",
+                version_command="qcli --version",
+                description="Required for quality control analysis and video QC metrics",
+                install_hint="Install via: brew install qcli (macOS) or visit https://mediaarea.net/QCTools"
             )
         ]
 
@@ -374,14 +390,13 @@ def check_external_dependency(command):
 
 def cli_deps_check():
     """Check all prerequisites before processing"""
-
+    
     check_py_version()
     
-    required_commands = ['ffmpeg', 'mediainfo', 'exiftool', 'mediaconch']
+    required_commands = ['ffmpeg', 'mediainfo', 'exiftool', 'mediaconch', 'qcli']
     for command in required_commands:
-            
         if not check_external_dependency(command):
-            error_msg = f"Error: {command} not found. Please install it."
-            raise RuntimeError(error_msg)
-
+            logger.critical(f"Error: {command} not found. Please install it.")
+            return False
+    
     return True
