@@ -17,6 +17,7 @@ from .utils.log_setup import logger
 from .utils.config_setup import SpexConfig, FilenameConfig
 from .utils.config_manager import ConfigManager
 from .utils.config_io import ConfigIO
+from .utils.dependency_checker import DependencyManager, cli_deps_check
 
 # Create lazy loader for GUI components
 class LazyGUILoader:
@@ -244,6 +245,8 @@ def print_av_spex_logo():
 def run_cli_mode(args):
     print_av_spex_logo()
 
+    cli_deps_check()
+
     # Update checks config
     if args.selected_profile:
         config_edit.apply_profile(args.selected_profile)
@@ -291,7 +294,6 @@ def run_cli_mode(args):
 def run_avspex(source_directories, signals=None):
     processor = AVSpexProcessor(signals=signals)
     try:
-        processor.initialize()
         formatted_time = processor.process_directories(source_directories)
         return True
     except Exception as e:
@@ -304,6 +306,11 @@ def main_gui():
     
     # Get application (will show splash screen)
     app = LazyGUILoader.get_application()
+
+    # Check dependencies before showing main window
+    if not DependencyManager.check_dependencies_gui():
+        # User chose to close the application
+        sys.exit(0)
     
     # Get main window (will close splash screen after delay)
     window = LazyGUILoader.get_main_window()

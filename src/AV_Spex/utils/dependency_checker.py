@@ -361,7 +361,7 @@ class DependencyManager:
             )
         ]
 
-# Enhanced version of your original functions
+
 def check_py_version():
     """Check Python version requirement"""
     if sys.version_info[:2] < (3, 10):
@@ -371,3 +371,17 @@ def check_py_version():
 def check_external_dependency(command):
     """Original function - kept for backward compatibility"""
     return shutil.which(command) is not None
+
+def cli_deps_check():
+    """Check all prerequisites before processing"""
+
+    check_py_version()
+    
+    required_commands = ['ffmpeg', 'mediainfo', 'exiftool', 'mediaconch']
+    for command in required_commands:
+            
+        if not check_external_dependency(command):
+            error_msg = f"Error: {command} not found. Please install it."
+            raise RuntimeError(error_msg)
+
+    return True
