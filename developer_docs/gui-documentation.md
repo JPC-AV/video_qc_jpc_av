@@ -565,16 +565,110 @@ def setup_ui(self):
     theme_manager.style_buttons(self)
 ```
 
-## Best Practices
+# Dependency Manager
 
-1. **Always call setup_theme_handling()** during widget initialization
-2. **Always call cleanup_theme_handling()** in the closeEvent method
-3. **Override on_theme_changed()** to customize theme response
-4. **Use ThemeManager's styling methods** for consistent appearance
-5. **Apply specific styling after calling parent implementation** of on_theme_changed
-6. **Keep styling logic centralized** in ThemeManager where possible
+The Dependency Manager system provides a robust mechanism for checking external CLI tool dependencies required by the AV Spex application. It offers both GUI and CLI checking modes, with detailed feedback about missing dependencies and installation guidance for users.
 
-## Conclusion
+## Architecture
 
-The Theme Manager system provides a robust and flexible way to maintain consistent styling across the application, with automatic adaptation to system theme changes. By using the ThemeableMixin and ThemeManager classes, widgets can easily integrate with the theme system and maintain a polished, consistent appearance in both light and dark modes.
+The dependency management system consists of three core components:
+
+1. **DependencyInfo**: A dataclass that encapsulates information about each required dependency
+2. **DependencyCheckWorker**: A QThread worker that performs non-blocking dependency checks in the GUI
+3. **DependencyManager**: A static class that orchestrates dependency checking for both GUI and CLI modes
+
+### Class Diagram
+
+```
+┌───────────────────┐     Creates     ┌──────────────────┐
+│                   │                 │                  │
+│ DependencyManager │────────────────▶│ DependencyInfo   │
+│                   │                 │                  │
+└─────────┬─────────┘                 └──────────────────┘
+          │
+          │ Creates (GUI mode)
+          ▼
+┌───────────────────┐    Runs checks   ┌──────────────────┐
+│ DependencyCheck   │─────────────────▶│ DependencyCheck  │
+│     Dialog        │                  │     Worker       │
+└───────────────────┘                  └──────────────────┘
+```
+
+## Key Components
+
+### DependencyInfo Class
+
+The `DependencyInfo` dataclass encapsulates all information about a single dependency:
+
+```python
+@dataclass
+class DependencyInfo:
+    name: str                           # Display name (e.g., "FFmpeg")
+    command: str                        # CLI command (e.g., "ffmpeg")
+    version_command: Optional[str]      # Version check command
+    min_version: Optional[str]          # Minimum required version
+    description: str                    # User-friendly description
+    install_hint: str                   # Installation instructions
+    status: DependencyStatus            # Current check status
+    version_found: Optional[str]        # Detected version
+    error_message: Optional[str]        # Error details if check failed
+```
+
+### DependencyCheckWorker Class
+
+The worker thread performs dependency checks without blocking the GUI:
+
+- **Non-blocking Checks**: Runs in separate thread to maintain UI responsiveness
+- **Real-time Updates**: Emits signals as each dependency is checked
+- **Version Validation**: Checks both existence and version requirements when specified
+- **Cancellation Support**: Can be interrupted if user cancels the operation
+
+### DependencyCheckDialog Class
+
+The GUI dialog provides these options dependency checking:
+
+- **Progress Tracking**: Shows real-time progress bar and status updates
+- **Color-coded Results**: Uses visual indicators (✅❌⚠️) for dependency status
+- **Installation Guidance**: Displays installation hints for missing dependencies
+- **User Choice**: Continue anyway or exit to install missing tools
+
+## Signal Flow Sequence
+
+```
+┌─────────────┐    1. Creates    ┌─────────────┐
+│ Application │────────────────▶ │ DependencyCheck │
+│  Startup    │                 │    Dialog       │
+└─────────────┘                 └───────┬─────────┘
+                                        │
+                                        │ 2. Creates
+                                        ▼
+                                ┌─────────────┐
+                                │ DependencyCheck │
+                                │    Worker       │
+                                └───────┬─────────┘
+                                        │
+                                        │ 3. Emits check results
+                                        │
+                                        ▼
+                                ┌─────────────────────┐
+                                │    Signal Bus       │
+                                └─────────┬───────────┘
+                                          │
+                                          │ 4. Updates UI
+                                          │
+                                          ▼
+                                ┌─────────────────────┐
+                                │  Dialog UI Updates  │
+                                └─────────────────────┘
+```
+
+## Required Dependencies
+
+The system currently checks for five external CLI tools:
+
+1. **FFmpeg** (`ffmpeg`) - Video/audio processing
+2. **MediaInfo** (`mediainfo`) - Media metadata extraction  
+3. **ExifTool** (`exiftool`) - Metadata extraction
+4. **MediaConch** (`mediaconch`) - Media conformance checking
+5. **QCTools** (`qcli`) - Quality control analysis and video QC metrics
 
