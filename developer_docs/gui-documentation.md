@@ -220,75 +220,142 @@ As described in the [ConfigManager documentation](https://github.com/JPC-AV/JPC_
 
 ## Processing Window and Console Text Box
 
-The processing window functionality is split between two modules:
+The processing window functionality is split between two modules that work together to provide comprehensive real-time visualization of processing operations:
 
-- **`gui_processing_window.py`**: Contains the `ProcessingWindow` class for real-time visualization of processing operations
-- **`gui_processing_window_console.py`**: Handles console text output and logging display
+- **`gui_processing_window.py`**: Contains the `ProcessingWindow` class for overall window management and status display
+- **`gui_processing_window_console.py`**: Contains the `ConsoleTextEdit` class for specialized console text output and logging display
 
-### Status Display Methods:
+### ProcessingWindow Class
 
-#### file_status_label
-- `update_file_status(filename, current_index=None, total_files=None)`: Updates the main file processing label with current file and progress count
+The `ProcessingWindow` class serves as a comprehensive status display interface with multiple components for tracking processing progress.
 
-#### progress_bar
-- `update_file_status(filename, current_index=None, total_files=None)`: Updates main progress bar based on file count
-- `update_progress(current, total)`: Sets progress bar value and maximum 
+#### Core UI Components:
 
-#### steps_list
-- `populate_steps_list()`: Builds the processing checklist based on `ChecksConfig`
-- `mark_step_complete(step_name)`: Marks a step as completed with checkmark and bold formatting
-- `reset_steps_list()`: Resets all steps to initial state when processing a new file
-- `_add_step_item(step_name)`: Helper method that adds unchecked steps to the list
+**File Status Display:**
+- `file_status_label`: Shows current file being processed with progress count
+- `progress_bar`: Main progress bar showing overall file processing progress
+- Displays format: "Processing (current/total): filename"
 
-#### details_text
-- `update_status(message, msg_type=None)`: Adds color-coded messages to the console output
-  - Automatically detects message type (error, warning, command, success, info)
+**Steps Tracking System:**
+- `steps_list`: QListWidget showing all enabled processing steps based on current `ChecksConfig`
+- `populate_steps_list()`: Dynamically builds step list from configuration (fixity, tools, outputs)
+- `mark_step_complete(step_name)`: Updates steps with checkmarks and bold formatting
+- `reset_steps_list()`: Clears and repopulates steps for new file processing
 
-The `details_text` component is an instance of `ConsoleTextEdit`, a customized `QTextEdit` widget defined in `gui_processing_window_console.py`.
+**Console Output System:**
+- `details_text`: Instance of custom `ConsoleTextEdit` class for styled console output
+- `update_status(message, msg_type=None)`: Main method for adding messages with automatic type detection
+- Intelligent message type detection based on content (error, warning, command, success, info)
 
-The ProcessingWindow's `update_status()` function is imported into the logger (`AV_Spex.utils.log_setup`) to push logging messages to the text box:
+**Detailed Progress Tracking:**
+- `detailed_status`: QLabel for current operation status messages
+- `detail_progress_bar`: Secondary progress bar with overlay percentage display
+- `update_detail_progress(percentage)`: Updates detailed progress with percentage overlay
+- Modern overlay styling with theme-aware colors
 
+#### Advanced Features:
+
+**Window Management:**
+- Custom close behavior: hides window instead of closing when user clicks X
+- Proper cleanup during application shutdown
+- Window positioning and activation control
+- Splitter layout between steps list and console output
+
+**Theme Integration:**
+- Comprehensive theme support through `ThemeableMixin`
+- Dynamic progress bar styling based on current palette
+- Console text styling integration
+- Real-time theme updates for all components
+
+**Logger Integration:**
+- Direct integration with application logging system through `connect_logger_to_ui()`
+- Automatic routing of log messages to console display
+- Maintains separate logger instance for processing window
+
+### ConsoleTextEdit Class
+
+The `ConsoleTextEdit` class provides a sophisticated console-like interface with advanced text formatting and theme support.
+
+#### Message Type System:
+
+**Supported Message Types:**
 ```python
-# Initialize logger once on module import
-logger = setup_logger() 
-
-def connect_logger_to_ui(ui_component):
-    """
-    Connect the existing logger to a UI component without recreating the logger.
-    Only adds a QtLogHandler to the existing logger.
-    
-    Args:
-        ui_component: The UI component with update_status method
-    
-    Returns:
-        The logger instance with the added Qt handler
-    """
-    if ui_component is not None and hasattr(ui_component, 'update_status'):
-        # Check if a Qt handler is already connected to prevent duplicates
-        for handler in logger.handlers:
-            if isinstance(handler, QtLogHandler):
-                # If there's already a Qt handler, disconnect old signals and connect new one
-                handler.log_message.disconnect()
-                handler.log_message.connect(ui_component.update_status)
-                return logger
-                
-        # If no Qt handler exists, create and add a new one
-        qt_handler = QtLogHandler()
-        qt_handler.log_message.connect(ui_component.update_status)
-        # Set log level - can adjust this to control what appears in the UI
-        qt_handler.setLevel(logging.DEBUG)  
-        # Add Qt handler to logger
-        logger.addHandler(qt_handler)
+class MessageType(Enum):
+    NORMAL = auto()    # Regular output
+    SUCCESS = auto()   # Success messages (green, bold)
+    ERROR = auto()     # Error messages (red, bold)
+    WARNING = auto()   # Warning messages (orange, bold)
+    INFO = auto()      # Informational messages (blue, bold)
+    COMMAND = auto()   # Command being executed (bold)
 ```
 
-#### detailed_status
-- `update_detailed_status(message)`: Updates the detailed status message below the console
-- `update_detail_progress(percentage)`: Updates the detailed progress bar with percentage
-  - Sets progress value and updates overlay percentage text
-  - Resets progress when starting new operations
-  - Uses theme-aware colors for bar and text
+**Advanced Text Formatting:**
+- `append_message(text, msg_type)`: Adds styled text with appropriate formatting
+- `_get_format_for_type(msg_type)`: Creates and caches QTextCharFormat for each message type
+- Monospace font support (Courier New) for console-like appearance
+- Color-coded messages with distinct styling for each type
 
-The progress tracking uses signals defined in the signals system documented in the [Processing Signals Flow section](#av-spex-gui-processing-signals-flow).
+**Performance Optimization:**
+- Format caching system to avoid recreating text formats
+- `clear_formats()`: Clears format cache during theme changes
+- Efficient cursor management and text insertion
+
+**Special Features:**
+- `add_processing_divider(text)`: Creates visual dividers between processing runs
+- Horizontal scrolling support with no word wrapping
+- Automatic scrolling to bottom for new messages
+- Document margin settings for improved readability
+
+#### Display Configuration:
+
+**Layout and Sizing:**
+- Minimum height: 300px, Maximum height: 900px
+- Horizontal scrollbar as needed for long lines
+- Minimum width: 300px with horizontal scrolling capability
+- Read-only mode for console-like behavior
+
+**Text Styling:**
+- Base font: Courier New, monospace, 14pt
+- Bold formatting for non-normal message types
+- Distinct color scheme for each message type
+- Preserved text formatting across theme changes
+
+### Integration with Main Application:
+
+**Signal Flow Integration:**
+The processing window integrates with the main application through multiple signal connections:
+
+```python
+# Status updates from processing signals
+self.main_window.signals.status_update.connect(processing_window.update_status)
+self.main_window.signals.file_started.connect(processing_window.update_file_status)
+self.main_window.signals.step_completed.connect(processing_window.mark_step_complete)
+
+# Progress tracking signals
+self.main_window.signals.stream_hash_progress.connect(processing_window.update_detail_progress)
+self.main_window.signals.md5_progress.connect(processing_window.update_detail_progress)
+self.main_window.signals.access_file_progress.connect(processing_window.update_detail_progress)
+```
+
+**Configuration-Driven Display:**
+The processing window dynamically adapts its step display based on the current `ChecksConfig`:
+- Automatically includes only enabled fixity operations
+- Shows only configured tools and their run/check status
+- Adapts output generation steps based on configuration
+- Updates step list when configuration changes
+
+**Logger Integration Pattern:**
+The ProcessingWindow's `update_status()` function integrates with the application logger system:
+
+```python
+# Logger connection established during initialization
+self.logger = connect_logger_to_ui(self)
+
+# Messages automatically routed from logging system to console display
+# Supports all standard logging levels with appropriate formatting
+```
+
+This integrated system provides users with comprehensive, real-time feedback about processing operations while maintaining clean separation between window management, console display, and logging systems.
 
 ## AV Spex GUI Processing Signals Flow
 
