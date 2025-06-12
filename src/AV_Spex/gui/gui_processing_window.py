@@ -173,9 +173,6 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
                 self.update_status("Warning: Could not load checks configuration")
                 return
 
-            # Dependencies check (always shown)
-            self._add_step_item("Dependencies Check")
-
             # Fixity Steps
             if checks_config.fixity.validate_stream_fixity == "yes":
                 self._add_step_item("Validate Stream Fixity")
@@ -249,29 +246,16 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
 
     def reset_steps_list(self):
         """Reset the steps list when processing a new file, but preserve dependency check status."""
-        # Store the dependency check status before clearing
-        dependency_checked = False
         for i in range(self.steps_list.count()):
             item = self.steps_list.item(i)
             item_text = item.text()
-            if "Dependencies Check" in item_text and "✅" in item_text:
-                dependency_checked = True
-                break
         
         # Clear the list widget
         self.steps_list.clear()
         
         # Repopulate with fresh steps
         self.populate_steps_list()
-        
-        # If dependency check was completed, restore its checked status
-        if dependency_checked:
-            for i in range(self.steps_list.count()):
-                item = self.steps_list.item(i)
-                if "Dependencies Check" in item.text():
-                    item.setText("✅ Dependencies Check")
-                    item.setFont(QFont("Arial", weight=QFont.Weight.Bold))
-                    break
+
 
     def update_detailed_status(self, message):
         """Update the detailed status message."""

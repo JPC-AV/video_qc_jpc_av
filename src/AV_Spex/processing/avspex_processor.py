@@ -10,7 +10,6 @@ from dataclasses import asdict
 from AV_Spex.processing.processing_mgmt import ProcessingManager
 from AV_Spex.utils import dir_setup
 from AV_Spex.utils.log_setup import logger
-from AV_Spex.utils.deps_setup import required_commands, check_external_dependency, check_py_version
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -84,31 +83,6 @@ class AVSpexProcessor:
             self.signals.cancelled.emit()
             self._cancel_emitted = True
         return self._cancelled
-
-    def initialize(self):
-        """Check all prerequisites before processing"""
-        if self.check_cancelled():
-            return False
-
-        check_py_version()
-        
-        if self.check_cancelled():
-            return False
-        
-        for command in required_commands:
-            if self.check_cancelled():
-                return False
-                
-            if not check_external_dependency(command):
-                error_msg = f"Error: {command} not found. Please install it."
-                if self.signals:
-                    self.signals.error.emit(error_msg)
-                raise RuntimeError(error_msg)
-        
-        if self.signals:
-            self.signals.step_completed.emit("Dependencies Check")
-        
-        return True
 
     def process_directories(self, source_directories):
         if self.check_cancelled():
