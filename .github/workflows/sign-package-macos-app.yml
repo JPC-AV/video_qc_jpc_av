@@ -276,7 +276,7 @@ jobs:
           ### Installation
           1. Download the DMG file below
           2. Open the DMG and drag AV-Spex.app to your Applications folder
-          3. The app is signed and notarized for macOS security
+
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
