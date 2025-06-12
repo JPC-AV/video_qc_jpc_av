@@ -24,7 +24,7 @@ PyQt6's import structure is organized into several modules, the main ones are:
     from PyQt6.QtGui import QIcon, QFont, QColor, QPainter, QPixmap
     ```
 
-The AV Spex GUI code is organized into a modular structure with subdirectories and multiple focused modules:
+The AV Spex GUI code is organized into a modular structure with subdirectories:
 
 ### Main GUI Directory Structure:
 ```
@@ -53,29 +53,29 @@ gui/
 
 **Core GUI Modules:**
 - `gui_main.py` - Main GUI entry point and launcher
-- `gui_signals.py` - Signal definitions for inter-component communication
+- `gui_signals.py` - Signal definitions for communication throughout gui
 - `gui_theme_manager.py` - Theme management and styling
 
 **Main Window Module (`gui_main_window/`):**
 - `gui_main_window_ui.py` - UI layout and component setup
 - `gui_main_window_processing.py` - Processing workflow management
-- `gui_main_window_signals.py` - Signal handling and connections
-- `gui_main_window_theme.py` - Theme-specific styling and updates
+- `gui_main_window_signals.py` - Signal handling and connections for processing workflow
+- `gui_main_window_theme.py` - Window specific styling and connection to theme manager
 
 **Checks Tab Module (`gui_checks_tab/`):**
-- `gui_checks_window.py` - ChecksWindow class implementation
-- `gui_checks_tab.py` - Checks tab integration and setup
+- `gui_checks_tab.py` - Checks tab "profiles" section with "ProfileHandlers" class for managing profile changes
+- `gui_checks_window.py` - Checks tab "output" section
 
 **Tab Modules:**
-- `gui_import_tab.py` - Import tab with directory selection and configuration management
-- `gui_spex_tab.py` - Spex configuration interface
+- `gui_import_tab.py` - Import tab with directory selection and config import/export
+- `gui_spex_tab.py` - Spex tab which uses a similar ProfileHandlers class for managing file name and signal flow profiles
 
 **Other GUI Components:**
 - `gui_processing_window.py` - Processing status and progress display
-- `gui_processing_window_console.py` - Console text output functionality
+- `gui_processing_window_console.py` - Console text output, prints the logging messages to the processing window
 
 ## Entry Point: 
-The GUI is now launched from `gui_main.py`, which contains the main `MainWindow` class and serves as the primary entry point for the application. The `MainWindow` class coordinates all the modular components:
+The GUI is launched from `gui_main.py`, which contains the main `MainWindow` class and serves as the primary entry point for the application. The `MainWindow` class coordinates all the modular components:
 
 ```python
 from AV_Spex.gui.gui_main_window.gui_main_window_ui import MainWindowUI
@@ -128,11 +128,9 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.setup_theme_handling()
 ```
 
-This centralized approach replaces the previous LazyGUILoader pattern, with the `MainWindow` class directly instantiating and coordinating all its helper classes and tab components during initialization.
-
 ## Main Window
 
-The Main Window functionality is now distributed across multiple modules in the `gui_main_window/` directory, which serves as the central UI component for the AV Spex application. This modular approach separates concerns for better maintainability:
+The Main Window functionality is distributed across multiple modules in the `gui_main_window/` directory, which serves as the central UI component for the AV Spex gui:
 
 - **`gui_main_window_ui.py`**: Contains the `MainWindowUI` class with UI setup and layout management
 - **`gui_main_window_processing.py`**: Contains the `MainWindowProcessing` class for processing workflows and worker thread management  
@@ -183,8 +181,8 @@ This design allows each module to focus on its specific responsibilities while m
 
 The Checks Window functionality is organized within the `gui_checks_tab/` directory:
 
-- **`gui_checks_window.py`**: Contains the `ChecksWindow` class implementation
-- **`gui_checks_tab.py`**: Handles integration and setup of the checks tab
+- `gui_checks_tab.py` - Checks tab "profiles" section with "ProfileHandlers" class for managing profile changes
+- `gui_checks_window.py` - Checks tab "output" section
 
 The `ChecksWindow` class provides an interface for displaying and editing the `ChecksConfig`. The window is added as a widget to the `MainWindow` in `setup_checks_tab()` function.
 
@@ -220,7 +218,7 @@ As described in the [ConfigManager documentation](https://github.com/JPC-AV/JPC_
 
 ## Processing Window and Console Text Box
 
-The processing window functionality is split between two modules that work together to provide comprehensive real-time visualization of processing operations:
+The processing window functionality is split between two modules that work together to provide visualization of processing operations:
 
 - **`gui_processing_window.py`**: Contains the `ProcessingWindow` class for overall window management and status display
 - **`gui_processing_window_console.py`**: Contains the `ConsoleTextEdit` class for specialized console text output and logging display
@@ -258,8 +256,6 @@ The `ProcessingWindow` class serves as a comprehensive status display interface 
 **Window Management:**
 - Custom close behavior: hides window instead of closing when user clicks X
 - Proper cleanup during application shutdown
-- Window positioning and activation control
-- Splitter layout between steps list and console output
 
 **Theme Integration:**
 - Comprehensive theme support through `ThemeableMixin`
@@ -274,7 +270,7 @@ The `ProcessingWindow` class serves as a comprehensive status display interface 
 
 ### ConsoleTextEdit Class
 
-The `ConsoleTextEdit` class provides a sophisticated console-like interface with advanced text formatting and theme support.
+The `ConsoleTextEdit` class provides a console-like interface to output log messages to the processing window.
 
 #### Message Type System:
 
@@ -304,26 +300,16 @@ class MessageType(Enum):
 - `add_processing_divider(text)`: Creates visual dividers between processing runs
 - Horizontal scrolling support with no word wrapping
 - Automatic scrolling to bottom for new messages
-- Document margin settings for improved readability
-
-#### Display Configuration:
-
-**Layout and Sizing:**
-- Minimum height: 300px, Maximum height: 900px
-- Horizontal scrollbar as needed for long lines
-- Minimum width: 300px with horizontal scrolling capability
-- Read-only mode for console-like behavior
 
 **Text Styling:**
 - Base font: Courier New, monospace, 14pt
 - Bold formatting for non-normal message types
-- Distinct color scheme for each message type
 - Preserved text formatting across theme changes
 
 ### Integration with Main Application:
 
 **Signal Flow Integration:**
-The processing window integrates with the main application through multiple signal connections:
+The processing window integrates with the main application through signal connections:
 
 ```python
 # Status updates from processing signals
@@ -341,7 +327,6 @@ self.main_window.signals.access_file_progress.connect(processing_window.update_d
 The processing window dynamically adapts its step display based on the current `ChecksConfig`:
 - Automatically includes only enabled fixity operations
 - Shows only configured tools and their run/check status
-- Adapts output generation steps based on configuration
 - Updates step list when configuration changes
 
 **Logger Integration Pattern:**
@@ -367,23 +352,23 @@ The `ProcessingSignals` class (in `gui_signals.py`) defines all the custom signa
 
 ```python
 class ProcessingSignals(QObject):
-    started = pyqtSignal(str)           # Processing started
-    completed = pyqtSignal(str)         # Processing completed
-    error = pyqtSignal(str)             # Error occurred
-    cancelled = pyqtSignal()            # Processing cancelled
+    started = pyqtSignal(str)               # Processing started
+    completed = pyqtSignal(str)             # Processing completed
+    error = pyqtSignal(str)                 # Error occurred
+    cancelled = pyqtSignal()                # Processing cancelled
     
-    status_update = pyqtSignal(str)     # General status updates
-    progress = pyqtSignal(int, int)     # Numerical progress (current, total)
+    status_update = pyqtSignal(str)         # General status updates
+    progress = pyqtSignal(int, int)         # Numerical progress (current, total)
 
-    file_started = pyqtSignal(str)      # File processing started
-    tool_started = pyqtSignal(str)      # Tool processing started
-    tool_completed = pyqtSignal(str)    # Tool processing completed
-    step_completed = pyqtSignal(str)    # Processing step completed
+    file_started = pyqtSignal(str)          # File processing started
+    tool_started = pyqtSignal(str)          # Tool processing started
+    tool_completed = pyqtSignal(str)        # Tool processing completed
+    step_completed = pyqtSignal(str)        # Processing step completed
     
-    fixity_progress = pyqtSignal(str)   # Fixity status updates
-    mediaconch_progress = pyqtSignal(str) # MediaConch status updates
-    metadata_progress = pyqtSignal(str) # Metadata status updates
-    output_progress = pyqtSignal(str)   # Output creation status updates
+    fixity_progress = pyqtSignal(str)       # Fixity status updates
+    mediaconch_progress = pyqtSignal(str)   # MediaConch status updates
+    metadata_progress = pyqtSignal(str)     # Metadata status updates
+    output_progress = pyqtSignal(str)       # Output creation status updates
 
     stream_hash_progress = pyqtSignal(int)  # Signal for stream hash progress percentage
     md5_progress = pyqtSignal(int)          # Signal for MD5 calculation progress percentage
@@ -456,7 +441,7 @@ The `AVSpexProcessor` class:
 
 ## Signal Connection Setup
 
-In the `MainWindow` class (now in `gui_main_window_signals.py`), the `setup_signal_connections` method connects signals to their respective handler methods:
+In the `MainWindow` class (in `gui_main_window_signals.py`), the `setup_signal_connections` method connects signals to their respective handler methods:
 
 ```python
 def setup_signal_connections(self):
@@ -599,8 +584,8 @@ The `ThemeManager` class is implemented as a singleton to ensure that only one i
 - **Singleton Pattern**: Only one instance of ThemeManager exists at any time
 - **System Palette Monitoring**: Connects to QApplication's paletteChanged signal
 - **Theme Change Notifications**: Emits signals when theme changes are detected
-- **Comprehensive Styling Utilities**: Provides methods for consistent styling of all UI component types
-- **Robust Theme Detection**: Multiple fallback methods for detecting system theme, including macOS-specific detection
+- **Styling Utilities**: Provides methods for consistent styling of UI component types
+- **Fallback Theme Detection**: Multiple fallback methods for detecting system theme, including macOS-specific detection
 
 ### ThemeableMixin Class
 
@@ -608,9 +593,9 @@ The `ThemeableMixin` class is a mixin that can be applied to any QWidget-derived
 
 #### Key Features:
 
-- **Automatic Theme Change Handling**: Automatically responds to theme changes and propagates to child components
-- **Simple Integration**: Easy to add to any PyQt widget class
-- **Customizable Response**: Can be overridden to customize theme behavior
+- **Theme Change Handling**: Automatically responds to theme changes and propagates to child components
+- **Simple Integration**: Can be added to any PyQt widget class
+- **Customizable Response**: Can be overridden to customize theme behavior (for 'Checks Spex' and other buttons)
 - **Proper Cleanup**: Includes methods to disconnect from theme signals
 - **Child Component Propagation**: Automatically finds and updates child components with theme handlers
 
@@ -657,7 +642,7 @@ Applies consistent styling to QGroupBox widgets with support for title positioni
 - Preserves existing title position if none specified
 
 #### style_button(button, special_style)
-Applies styling to individual buttons with support for special button types:
+Applies styling to individual buttons with special button types:
 - **Standard buttons**: Uses palette-based colors for consistency
 - **Special styles**: 
   - `"check_spex"`: Green styling for the main Check Spex button
@@ -782,7 +767,7 @@ success = theme_manager.load_logo(self.logo_label, logo_path, width=400)
 
 # Dependency Manager
 
-The Dependency Manager system provides a robust mechanism for checking external CLI tool dependencies required by the AV Spex application. It offers both GUI and CLI checking modes, with detailed feedback about missing dependencies and installation guidance for users.
+The Dependency Manager system provides a mechanism for checking external CLI tool dependencies required by the AV Spex application. It offers both GUI and CLI checking modes, with detailed feedback about missing dependencies and installation guidance for users.
 
 ## Architecture
 
@@ -813,7 +798,7 @@ The dependency management system consists of three core components:
 
 ### DependencyInfo Class
 
-The `DependencyInfo` dataclass encapsulates all information about a single dependency:
+The `DependencyInfo` dataclass describes a single dependency:
 
 ```python
 @dataclass
@@ -837,15 +822,6 @@ The worker thread performs dependency checks without blocking the GUI:
 - **Real-time Updates**: Emits signals as each dependency is checked
 - **Version Validation**: Checks both existence and version requirements when specified
 - **Cancellation Support**: Can be interrupted if user cancels the operation
-
-### DependencyCheckDialog Class
-
-The GUI dialog provides these options dependency checking:
-
-- **Progress Tracking**: Shows real-time progress bar and status updates
-- **Color-coded Results**: Uses visual indicators (✅❌⚠️) for dependency status
-- **Installation Guidance**: Displays installation hints for missing dependencies
-- **User Choice**: Continue anyway or exit to install missing tools
 
 ## Signal Flow Sequence
 
@@ -881,8 +857,8 @@ The GUI dialog provides these options dependency checking:
 
 The system currently checks for five external CLI tools:
 
-1. **FFmpeg** (`ffmpeg`) - Video/audio processing
-2. **MediaInfo** (`mediainfo`) - Media metadata extraction  
-3. **ExifTool** (`exiftool`) - Metadata extraction
-4. **MediaConch** (`mediaconch`) - Media conformance checking
-5. **QCTools** (`qcli`) - Quality control analysis and video QC metrics
+1. **FFmpeg** (`ffmpeg`)
+2. **MediaInfo** (`mediainfo`)
+3. **ExifTool** (`exiftool`)
+4. **MediaConch** (`mediaconch`)
+5. **QCTools** (`qcli`)
