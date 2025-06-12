@@ -304,7 +304,11 @@ jobs:
           - macOS ARM64 (Apple Silicon)
           - macOS x86_64 (Intel)
           
-          Install with: `brew install JPC-AV/AV-Spex/av-spex`
+          To install av-spex with homebrew first tap the formula's git repo:
+          `brew tap JPC-AV/AV-Spex`
+          Then install the app:
+          `brew install av-spex`
+
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   
