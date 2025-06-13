@@ -74,56 +74,150 @@ The main entry point to the CLI application is `av_spex_the_file.py`, which init
 
 ### Initialization Sequence
 (Simplified code for brevity)
+
 ```python
 def main():
-    """Main entry point for the AV Spex application."""
     args = parse_arguments()
-    
-    if args:
-        # Apply configuration changes from command line flags
+
+    if args.gui or (args.source_directories is None and not sys.argv[1:]):
+        main_gui()
+    else:
+        main_cli()
+````
+
+* If no paths are provided or `--gui` is passed, the application launches in GUI mode.
+* Otherwise, it proceeds in CLI mode, updating configuration settings and running processing.
+
+```python
+def main_cli():
+    args = parse_arguments()
+
+    if args.gui:
+        main_gui()
+    else:
         run_cli_mode(args)
-        # If input directory provided, 
         if args.source_directories:
-            # Run the processing workflow
             run_avspex(args.source_directories)
-    
 ```
 
 ### Command-Line Argument Processing
 
-The application uses Python's `argparse` module to define and parse command-line arguments:
+The application uses Python's `argparse` module to define and parse command-line arguments. These are parsed and assembled into a `ParsedArguments` dataclass.
 
 ```python
-def parse_arguments():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='AV Spex: Process and analyze video files')
-    
-    # Input directories or files
-    parser.add_argument("paths", nargs='*', help="Path to the input -f: video file(s) or -d: directory(ies)")
-
+@dataclass
+class ParsedArguments:
+    source_directories: List[str]
+    selected_profile: Optional[Any]
+    sn_config_changes: Optional[Any]
+    fn_config_changes: Optional[Any]
+    print_config_profile: Optional[str]
+    dry_run_only: bool
+    tools_on_names: List[str]
+    tools_off_names: List[str]
+    gui: Optional[Any]
+    export_config: Optional[str]
+    export_file: Optional[str] 
+    import_config: Optional[str]
+    mediaconch_policy: Optional[str]
+    use_default_config: bool
 ```
+
+Examples of supported CLI flags:
+
+* `--profile`: applies a predefined processing profile
+* `--on` / `--off`: selectively toggle individual tools
+* `--signalflow` / `--filename`: apply specialized configuration structures
+* `--export-config` / `--import-config`: serialize and load JSON-based configurations
+* `--dryrun`: skip processing and apply config changes only
+* `--printprofile`: print selected config values for review
+
+The parsed values are passed downstream as a `ParsedArguments` instance.
 
 ### Configuration Application
 
-Before starting the processing, any command-line configuration changes are applied to the configs via the ConfigManager.    
-For more details on the ConfigManger, see the [config manager documentation](https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/developer_docs/cli-documentation.md)   
+Before starting the processing, any command-line configuration changes are applied to the configs via the `ConfigManager`.
+The application can also export or import configuration files, and reset saved user configurations.
 
 ```python
-    parser.add_argument('--profile', choices=['step1', 'step2', 'off'], 
-                            help='Select preset processing profile')
-    
-    # Configuration toggles
-    parser.add_argument("--on", 
-                        action='append', 
-                         metavar="{tool_name.run_tool, tool_name.check_tool}",
-                         help="Turns on specific tool run_ or check_ option (format: tool.check_tool or tool.run_tool, e.g. mediainfo.run_tool)")
-    parser.add_argument("--off", 
-                        action='append', 
-                         metavar="{tool_name.run_tool, tool_name.check_tool}",
-                         help="Turns off specific tool run_ or check_ option (format: tool.check_tool or tool.run_tool, e.g. mediainfo.run_tool)")
+def run_cli_mode(args):
+    print_av_spex_logo()
+
+    cli_deps_check()
+
+    if args.selected_profile:
+        config_edit.apply_profile(args.selected_profile)
+        config_mgr.save_config('checks', is_last_used=True)
+
+    if args.tools_on_names:
+        config_edit.toggle_on(args.tools_on_names)
+        config_mgr.save_config('checks', is_last_used=True)
+
+    if args.tools_off_names:
+        config_edit.toggle_off(args.tools_off_names)
+        config_mgr.save_config('checks', is_last_used=True)
+
+    if args.mediaconch_policy:
+        processing_mgmt.setup_mediaconch_policy(args.mediaconch_policy)
+
+    if args.sn_config_changes:
+        config_edit.apply_signalflow_profile(args.sn_config_changes)
+
+    if args.fn_config_changes:
+        filename_profile = args.fn_config_changes
+        config_edit.apply_filename_profile(filename_profile)
+        config_mgr.save_config('spex', is_last_used=True)
+
+    if args.export_config:
+        config_types = ['spex', 'checks'] if args.export_config == 'all' else [args.export_config]
+        config_io = ConfigIO(config_mgr)
+        filename = config_io.save_configs(args.export_file, config_types)
+        print(f"Configs exported to: {filename}")
+        if args.dry_run_only:
+            sys.exit(0)
+
+    if args.import_config:
+        config_io = ConfigIO(config_mgr)
+        config_io.import_configs(args.import_config)
+        print(f"Configs imported from: {args.import_config}")
+
+    if args.print_config_profile:
+        config_edit.print_config(args.print_config_profile)
+
+    if args.dry_run_only:
+        logger.critical("Dry run selected. Exiting now.")
+        sys.exit(1)
 ```
 
+This function performs the following:
+
+* Verifies external dependencies
+* Updates and persists configuration changes
+* Handles config import/export
+* Optionally skips processing if `--dryrun` is used
+
 ### Processing Initiation
+
+The `run_avspex()` function acts as the bridge between the command-line interface and the core processing logic:
+
+```python
+def run_avspex(source_directories, signals=None):
+    processor = AVSpexProcessor(signals=signals)
+    try:
+        formatted_time = processor.process_directories(source_directories)
+        return True
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        sys.exit(1)
+```
+
+This function:
+
+* Creates an instance of the `AVSpexProcessor` class
+* Runs the `process_directories()` method
+* Exits with an error if processing fails
+
+Since the CLI application does not pass signals to `run_avspex()`, the `signals` parameter is `None`.
 
 The `run_avspex()` function acts as the bridge between the command-line interface and the core processing logic:
 
@@ -138,307 +232,618 @@ def run_avspex(source_directories, signals=None):
 
 This function creates an instance of the `AVSpexProcessor` class, and then runs the `initialize()` and `process_directories()` functions defined in that class. Since the CLI application does not pass signals to `run_avspex()` the `signals` variable is `None`.
 
-## The AVSpexProcessor Class
 
-The `AVSpexProcessor` class in `avspex_processor.py` serves as the orchestrator for the processing workflow.
+## The ProcessingManager Class
 
-### Benefits of Using a Class-Based Design
+The `ProcessingManager` class in `processing_mgmt.py` is responsible for executing the individual processing steps delegated by the `AVSpexProcessor`.
 
-- **State maintenance**: Tracks overall processing state
-- **Configuration access**: Centralized access to configuration data
-- **Modular processing**: Clean separation of initialization and processing logic
-- **Extensibility**: Easily add new processing steps or modify existing ones
+While `AVSpexProcessor` handles input flow, signal routing, and configuration loading, `ProcessingManager` performs the actual **execution** logic for fixity checks, tool runs, and output creation.
 
-### Initialization
+The class is initialized per directory and maintains no persistent state across runs.
 
-The `initialize()` method verifies all required dependencies, using functions from the `utils.deps_setup.py` script.
-
-From avspex_processor.py:
 ```python
-from ..utils.deps_setup import required_commands, check_external_dependency, check_py_version
+processing_mgmt = ProcessingManager(signals=self.signals, check_cancelled_fn=self.check_cancelled)
+````
 
-def initialize(self):
-        """Check all prerequisites before processing"""
-        check_py_version()
-        
-        for command in required_commands:
-                
-            if not check_external_dependency(command):
-                error_msg = f"Error: {command} not found. Please install it."
-                raise RuntimeError(error_msg)
-        
-        return True
+It accepts:
+
+* A `signals` object (optional, used to emit updates in GUI mode)
+* A `check_cancelled_fn` callback (used to cooperatively halt execution)
+
+---
+
+### Responsibilities
+
+`ProcessingManager` encapsulates the *how* of processing. Its key responsibilities include:
+
+#### 1. Fixity Processing
+
+```python
+def process_fixity(self, source_directory, video_path, video_id):
+    ...
 ```
 
-This method:
-- Checks Python version compatibility
-- Verifies external command-line tools existence
-- Returns False if any check fails
+* Computes and optionally embeds checksums
+* Verifies against stored checksums if configured
+* Uses modules like `embed_fixity.py`, `fixity_check.py`
 
-### Directory Processing
+#### 2. MediaConch Validation
+
+```python
+def validate_video_with_mediaconch(self, video_path, dest_dir, video_id):
+    ...
+```
+
+* Runs MediaConch using a policy file defined in the config
+* Parses output and emits GUI progress signals (if present)
+
+#### 3. Metadata Tool Execution
+
+```python
+def process_video_metadata(self, video_path, destination_directory, video_id):
+    ...
+```
+
+* Runs tools like `mediainfo`, `mediatrace`, `exiftool`, and `ffprobe`
+* Each tool's output is parsed via a corresponding function in `AV_Spex.checks.*`
+* Returns a dictionary of metadata differences (used for reporting)
+
+#### 4. Output Creation
+
+```python
+def process_video_outputs(self, video_path, source_directory, destination_directory, video_id, metadata_differences):
+    ...
+```
+
+* Generates:
+
+  * HTML reports
+  * Access copies
+  * QCTools graphs and analysis
+* Steps are enabled individually via config options
+
+---
+
+### Coordination with AVSpexProcessor
+
+The `AVSpexProcessor` delegates all file-level work to `ProcessingManager`, maintaining a clean separation of duties:
+
+| Task                         | Owner               |
+| ---------------------------- | ------------------- |
+| Load and refresh config      | `AVSpexProcessor`   |
+| Determine which steps to run | `AVSpexProcessor`   |
+| Emit progress/cancel signals | `AVSpexProcessor`   |
+| Run tools and parse output   | `ProcessingManager` |
+| Generate outputs             | `ProcessingManager` |
+
+This structure supports:
+
+* GUI responsiveness via `signals`
+* Reuse of `ProcessingManager` methods in other entry points
+* Easier unit testing of isolated processing logic
+
+---
+
+### Summary
+
+* `AVSpexProcessor` is the high-level workflow controller.
+* `ProcessingManager` is the low-level executor of tools and tasks.
+* Together they modularize CLI behavior, separate concerns, and allow flexible reuse in GUI and headless workflows.
+
+
+## Directory Processing
 
 Once initialized, processing begins with:
 
 ```python
 def process_directories(self, source_directories):
-        overall_start_time = time.time()
-        total_dirs = len(source_directories)
+    if self.check_cancelled():
+        return False
 
-        for idx, source_directory in enumerate(source_directories, 1):
-            
-            source_directory = os.path.normpath(source_directory)
-            self.process_single_directory(source_directory)
+    overall_start_time = time.time()
+    total_dirs = len(source_directories)
 
-        overall_end_time = time.time()
-        formatted_time =  log_overall_time(overall_start_time, overall_end_time)
-            
-        return formatted_time
+    for idx, source_directory in enumerate(source_directories, 1):
+        if self.check_cancelled():
+            return False
+
+        if self.signals:
+            self.signals.file_started.emit(source_directory, idx, total_dirs)
+
+        source_directory = os.path.normpath(source_directory)
+        self.process_single_directory(source_directory)
+
+    overall_end_time = time.time()
+    formatted_time = log_overall_time(overall_start_time, overall_end_time)
+
+    if self.signals:
+        self.signals.step_completed.emit("All Processing")
+
+    return formatted_time
 ```
 
 This method:
 
-- Records the overall start time
-- Iterates through each source directory
-- Calls `process_single_directory()` for each path
-- Records the overall end time
-- Returns the formatted processing time
+* Performs an initial cancellation check before starting
+* Records the overall start time
+* Iterates through each source directory:
 
-### Processing Steps
+  * Checks for cancellation before processing each one
+  * Emits a `file_started` signal with current progress (if GUI-connected)
+  * Normalizes the directory path
+  * Passes the directory to `process_single_directory()`
+* After processing all directories:
+
+  * Records the overall end time
+  * Logs the total processing duration
+  * Emits a final `step_completed` signal
+
+If cancellation occurs at any point, the method returns early with `False`.
+
+## Processing Steps
 
 1. **Directory Initialization**
    ```python
    init_dir_result = dir_setup.initialize_directory(source_directory)
+   if init_dir_result is None:
+       return False
    video_path, video_id, destination_directory, access_file_found = init_dir_result
-   ```
-   - Initializes the directory structure
-   - Extracts relevant paths and importantly, the Video ID (the file name without extension), which is used as an identifier throughout. 
-   - Returns `False` if initialization fails
+    ```
+
+* Validates and prepares the input directory for processing.
+* Extracts the absolute path to the input video, the derived `video_id`, the target destination directory, and whether an access file already exists.
+* The `video_id` (typically the filename without extension) is used for log banners, file naming, and output report generation.
+* Returns `False` if the directory is invalid or cannot be prepared (e.g., missing expected video file).
 
 2. **Processing Manager Setup**
-   ```python
-   processing_mgmt = ProcessingManager(signals=None, check_cancelled_fn=self.check_cancelled)
-   ```
-   - Creates a processing manager instance to handle tool execution.
-   - Signals that can be passed to the ProcessingManager dataclass pertain to reporting status to the GUI.
-
-   Unlike the more structural `AVSpexProcessor`, the `ProcessingManager` focuses on the _how_ of processing, implementing the specific workflow steps.
-
-   The `ProcessingManager` contains functions that are then called in the `AVSpexProcessor`.
-
-3. **Checks - Fixity Processing**
-    The `AVSpexProcessor` passes the identifying information extracted from initialization to functions in the `ProcessingManager` if enabled in the Checks Config.   
 
    ```python
-   fixity_enabled = False
-   fixity_config = self.checks_config.fixity
-   
-   if (fixity_config.check_fixity == "yes" or 
-       fixity_config.validate_stream_fixity == "yes" or 
-       fixity_config.embed_stream_fixity == "yes" or 
-       fixity_config.output_fixity == "yes"):
-       fixity_enabled = True
-       
-   if fixity_enabled:
-       processing_mgmt.process_fixity(source_directory, video_path, video_id)
+   processing_mgmt = ProcessingManager(signals=self.signals, check_cancelled_fn=self.check_cancelled)
    ```
 
-   The `ProcessingManager` function in turn runs individual fixity checks, based on selected options in the Checks Config. These checks are stored in the AVSpex.checks module. GUI related signals removed for clarity.
+   * Instantiates a `ProcessingManager` to handle all file-level processing tasks for the current directory.
+   * The `signals` parameter is passed from `AVSpexProcessor`, allowing `ProcessingManager` to emit GUI updates during each step if applicable.
+   * The `check_cancelled_fn` allows `ProcessingManager` to poll for cancellation requests during long-running subprocess calls.
+   * While `AVSpexProcessor` controls the high-level flow and state, `ProcessingManager` handles the tool-specific execution logic, including fixity checking, metadata analysis, and output generation.
 
-   ```python
-   from ..checks.fixity_check import check_fixity, output_fixity
-   from ..checks.embed_fixity import validate_embedded_md5, process_embedded_fixity
-   def process_fixity(self, source_directory, video_path, video_id):
-        """
-        Orchestrates the entire fixity process, including embedded and file-level operations.
+3. **Checks – Fixity Processing**
 
-        Args:
-            source_directory (str): Directory containing source files
-            video_path (str): Path to the video file
-            video_id (str): Unique identifier for the video
-        """
-        
-        if self.check_cancelled():
-            return None
-        
-        # Embed stream fixity if required  
-        if checks_config.fixity.embed_stream_fixity == 'yes':
-            process_embedded_fixity(video_path)
+If any fixity-related options are enabled in the Checks Config, the `AVSpexProcessor` initiates fixity processing through the `ProcessingManager`. These options include:
 
-        # Validate stream hashes if required
-        if checks_config.fixity.validate_stream_fixity == 'yes':
-            if checks_config.fixity.embed_stream_fixity == 'yes':
-                logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
-            else:
-                validate_embedded_md5(video_path)
+- `check_fixity`
+- `validate_stream_fixity`
+- `embed_stream_fixity`
+- `output_fixity`
 
-        # Initialize md5_checksum variable
-        md5_checksum = None
+Fixity checks confirm data integrity by comparing current checksums against prior values or by embedding stream-level hashes directly into MKV metadata.
 
-        # Create checksum for video file and output results
-        if checks_config.fixity.output_fixity == 'yes':
-            md5_checksum = output_fixity(source_directory, video_path, )
+#### AVSpexProcessor
 
-        # Verify stored checksum and write results  
-        if checks_config.fixity.check_fixity == 'yes':
-            check_fixity(source_directory, video_id, actual_checksum=md5_checksum, )
-    ```
+```python
+fixity_enabled = False
+fixity_config = self.checks_config.fixity
 
+if (fixity_config.check_fixity == "yes" or 
+    fixity_config.validate_stream_fixity == "yes" or 
+    fixity_config.embed_stream_fixity == "yes" or 
+    fixity_config.output_fixity == "yes"):
+    fixity_enabled = True
 
-4. **Checks - MediaConch Validation**
-   The other Checks in the workflow run by `AVSpexProcessor` are similarly passed to `ProcessingManager`.
-   
-   ```python
-   mediaconch_enabled = self.checks_config.tools.mediaconch.run_mediaconch == "yes"
-   if mediaconch_enabled:
-       mediaconch_results = processing_mgmt.validate_video_with_mediaconch(
-           video_path, destination_directory, video_id
-       )
-   ```
-   Because MediaConch takes a policy XML file and requires a separate function for parsing MediaConch's CSV output, it is handled separately from the other metadata tools.  
+if fixity_enabled:
+    processing_mgmt.process_fixity(source_directory, video_path, video_id)
+```
 
-5. **Checks - Metadata Tool Processing**
+* Detects whether any fixity operation is configured
+* If so, delegates execution to `ProcessingManager.process_fixity()`
 
-    ```mermaid
-    flowchart TD
-        A[process_video_metadata] --> D[Initialize tools list]
-        
-        D --> E[For each tool: exiftool, mediainfo, mediatrace, ffprobe]
-        
-        subgraph "Tool Processing Loop"
-        E --> F[run_tool_command]
-        F --> G[Get output path]
-        G --> H{Check tool enabled?}
-        H -->|Yes| I[Parse tool output]
-        H -->|No| J[Skip checking]
-        I --> K[Store differences]
-        J --> L[Continue to next tool]
-        K --> L
-        L --> E
-        end
-        
-        E --> M[Return metadata_differences]
-    ```
+---
 
-    The command line metadata applications that produces text file "Sidecars" are run in a group. Once again, enabled in the `AVSpexProcessor`, and then passed to functions from the `ProcessingManager`.
+#### ProcessingManager
 
-   ```python
-   metadata_tools_enabled = False
-   tools_config = self.checks_config.tools
-   
-   if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool == "yes" or
-       hasattr(tools_config.mediatrace, 'check_tool') and tools_config.mediatrace.check_tool == "yes" or
-       hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool == "yes" or
-       hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool == "yes"):
-       metadata_tools_enabled = True
-   
-   metadata_differences = None
-   if metadata_tools_enabled:
-       metadata_differences = processing_mgmt.process_video_metadata(
-           video_path, destination_directory, video_id
-       )
-   ```
-   The `process_video_metadata()` function handles calls to subprocess to run the different CLI tools, with various helper functions stored in the `run_tools.py` script managing the required command-line arguments. 
-   The text file sidecar outputs from the CLI tools are then parsed using tool specific functions defined in the `AV_Spex.checks` module:
-
-    ```python
-    from ..checks.exiftool_check import parse_exiftool
-    from ..checks.ffprobe_check import parse_ffprobe
-    from ..checks.mediainfo_check import parse_mediainfo
-    from ..checks.mediatrace_check import parse_mediatrace
-
-        def check_tool_metadata(tool_name, output_path):
-        """
-        Check metadata for a specific tool if configured.
-        
-        Args:
-            tool_name (str): Name of the tool
-            output_path (str): Path to the tool's output file
-            
-        Returns:
-            dict or None: Differences found by parsing the tool's output, or None
-        """
-        # Mapping of tool names to their parsing functions
-        parse_functions = {
-            'exiftool': parse_exiftool,
-            'mediainfo': parse_mediainfo,
-            'mediatrace': parse_mediatrace,
-            'ffprobe': parse_ffprobe
-        }
-
-        # Check if tool metadata checking is enabled
-        tool = getattr(checks_config.tools, tool_name)
-        if output_path and tool.check_tool == 'yes':
-            parse_function = parse_functions.get(tool_name)
-            if parse_function:
-                return parse_function(output_path)
-        
+```python
+def process_fixity(self, source_directory, video_path, video_id):
+    if self.check_cancelled():
         return None
-    ```
 
-    These parsing functions compare the outputs of the "Checks" to the expected values stored in the "Spex". 
+    if checks_config.fixity.embed_stream_fixity == 'yes':
+        process_embedded_fixity(video_path)
+
+    if checks_config.fixity.validate_stream_fixity == 'yes':
+        if checks_config.fixity.embed_stream_fixity == 'yes':
+            logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
+        else:
+            validate_embedded_md5(video_path)
+
+    md5_checksum = None
+    if checks_config.fixity.output_fixity == 'yes':
+        md5_checksum = output_fixity(source_directory, video_path)
+
+    if checks_config.fixity.check_fixity == 'yes':
+        check_fixity(source_directory, video_id, actual_checksum=md5_checksum)
+```
+
+This method orchestrates four distinct operations depending on the config:
+
+* **`embed_stream_fixity`**
+
+  * Runs `process_embedded_fixity()` to calculate and embed MD5 stream hashes into MKV XML tags.
+  * Uses `ffmpeg`, `mkvextract`, and `mkvpropedit`.
+
+* **`validate_stream_fixity`**
+
+  * Extracts hashes from existing MKV tags and compares them against freshly calculated ones.
+  * If tags are missing, it falls back to `embed_fixity()`.
+
+* **`output_fixity`**
+
+  * Generates a file-level MD5 checksum and writes the result to both `.txt` and `.md5` output files.
+  * Uses a modified version of `hashlib_md5()` from IFIscripts.
+
+* **`check_fixity`**
+
+  * Searches for past checksum files in the directory.
+  * Compares historical checksums against current values.
+  * Logs result to a fixity report file.
+
+Each function uses cooperative cancellation checks and emits progress either via GUI signals or console output.
+
+---
+
+#### Summary
+
+Fixity processing is designed for both archival verification and integrity preservation, and includes the following layers:
+
+| Function                  | Purpose                                       |
+| ------------------------- | --------------------------------------------- |
+| `embed_fixity()`          | Embed stream MD5s into MKV metadata tags      |
+| `validate_embedded_md5()` | Compare embedded MD5s with regenerated values |
+| `output_fixity()`         | Save current MD5 checksum to file             |
+| `check_fixity()`          | Compare MD5 against prior fixity logs         |
+
+These tools combine to provide comprehensive integrity checking across stream and file levels.
+
+
+````markdown
+4. **Checks – MediaConch Validation**
+
+The MediaConch check is triggered if it is enabled in the Checks Config:
+
+```python
+mediaconch_enabled = self.checks_config.tools.mediaconch.run_mediaconch == "yes"
+if mediaconch_enabled:
+    mediaconch_results = processing_mgmt.validate_video_with_mediaconch(
+        video_path, destination_directory, video_id
+    )
+````
+
+MediaConch differs from the other tools in that it:
+
+* Requires an external XML-based policy file
+* Produces structured CSV output
+* Involves additional parsing logic to determine pass/fail results
+
+For this reason, MediaConch logic is separated from the generic metadata checks and handled in a dedicated step.
+
+---
+
+#### `ProcessingManager.validate_video_with_mediaconch()`
+
+This function internally:
+
+1. Retrieves the policy file from the config:
+
+   ```python
+   policy_path = find_mediaconch_policy()
+   ```
+
+2. Constructs and runs the MediaConch CLI command:
+
+   ```python
+   run_mediaconch_command(
+       command="mediaconch -p", 
+       input_path=video_path,
+       output_type="-oc",  # CSV output
+       output_path=output_file_path,
+       policy_path=policy_path
+   )
+   ```
+
+3. Parses the output:
+
+   ```python
+   results = parse_mediaconch_output(output_file_path)
+   ```
+
+Each step includes error handling and cancellation checks, and will emit a critical log message if validation fails.
+
+---
+
+#### Example Output Parsing
+
+The CSV output is parsed into a dictionary of results:
+
+```python
+def parse_mediaconch_output(output_path):
+    ...
+    for mc_field, mc_value in zip(mc_header, mc_values):
+        validation_results[mc_field] = mc_value
+        if mc_value == "fail":
+            logger.critical(f"{mc_field}: {mc_value}")
+```
+
+* Each row maps a policy check to a `"pass"` or `"fail"` result
+* Failures are logged immediately and prominently
+* If no failures are found, a success message is logged
+
+---
+
+#### Summary
+
+| Task                     | Function                                                  |
+| ------------------------ | --------------------------------------------------------- |
+| Load policy config       | `find_mediaconch_policy()`                                |
+| Run validation command   | `run_mediaconch_command()`                                |
+| Parse and report results | `parse_mediaconch_output()`                               |
+| Entry point (per file)   | `validate_video_with_mediaconch()` in `ProcessingManager` |
+
+MediaConch validation ensures that the input video conforms to formal policies, often defined by preservation or institutional standards. It operates as a distinct tool in the CLI pipeline and is only invoked if explicitly enabled in the config.
+
+
+````markdown
+5. **Checks – Metadata Tool Processing**
+
+This stage runs a set of command-line tools—`exiftool`, `mediainfo`, `mediatrace`, and `ffprobe`—to extract technical metadata from the input video file. Each tool produces a sidecar output file (e.g., `.json`, `.xml`, or `.txt`) which is parsed and validated against expectations defined in the Spex configuration.
+
+Each tool must be explicitly enabled in the Checks configuration (`checks_config.tools`) using its `run_tool` and `check_tool` flags.
+
+```python
+metadata_tools_enabled = False
+tools_config = self.checks_config.tools
+
+if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool == "yes" or
+    hasattr(tools_config.mediatrace, 'check_tool') and tools_config.mediatrace.check_tool == "yes" or
+    hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool == "yes" or
+    hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool == "yes"):
+    metadata_tools_enabled = True
+
+metadata_differences = None
+if metadata_tools_enabled:
+    metadata_differences = processing_mgmt.process_video_metadata(
+        video_path, destination_directory, video_id
+    )
+````
+
+---
+
+### Workflow Diagram
+
+```mermaid
+flowchart TD
+    A[process_video_metadata] --> D[Initialize tools list]
+    
+    D --> E[For each tool: exiftool, mediainfo, mediatrace, ffprobe]
+    
+    subgraph "Tool Processing Loop"
+    E --> F[run_tool_command]
+    F --> G[Get output path]
+    G --> H{Check tool enabled?}
+    H -->|Yes| I[Parse tool output]
+    H -->|No| J[Skip checking]
+    I --> K[Store differences]
+    J --> L[Continue to next tool]
+    K --> L
+    L --> E
+    end
+    
+    E --> M[Return metadata_differences]
+```
+
+---
+
+### Tool Execution
+
+Each tool is executed via `run_tool_command()`, which assembles the appropriate shell command and captures the output into a file:
+
+```python
+run_tool_command(tool_name, video_path, destination_directory, video_id)
+```
+
+Supported tools and their output formats:
+
+| Tool         | Command Preview                      | Output Format |
+| ------------ | ------------------------------------ | ------------- |
+| `exiftool`   | `exiftool -j`                        | `.json`       |
+| `mediainfo`  | `mediainfo -f --Output=JSON`         | `.json`       |
+| `mediatrace` | `mediainfo --Details=1 --Output=XML` | `.xml`        |
+| `ffprobe`    | `ffprobe ... -print_format json`     | `.txt`        |
+
+---
+
+### Parsing and Validation
+
+Each tool's output is parsed and validated by a tool-specific function, located in `AV_Spex.checks`. Parsing is only performed if the tool’s `check_tool` flag is set to `"yes"`.
+
+```python
+from ..checks.exiftool_check import parse_exiftool
+from ..checks.ffprobe_check import parse_ffprobe
+from ..checks.mediainfo_check import parse_mediainfo
+from ..checks.mediatrace_check import parse_mediatrace
+
+def check_tool_metadata(tool_name, output_path):
+    ...
+```
+
+These parsers:
+
+* Normalize actual values using `str()` and `.strip()`
+* Coerce expected values (from Spex config) into lists to allow multiple valid options
+* Compare parsed output to expected values
+* Log mismatches with both the actual and expected value
+* Return a dictionary of differences, which is passed upstream to influence later output processing
+
+---
+
+### Spex Configuration Reference
+
+Each parser draws expected values from the Spex config:
+
+| Tool        | Spex Source                                                |
+| ----------- | ---------------------------------------------------------- |
+| `exiftool`  | `spex_config.exiftool_values` (dataclass `ExiftoolValues`) |
+| `mediainfo` | `spex_config.mediainfo_values` (dict of dataclasses)       |
+| `ffprobe`   | `spex_config.ffmpeg_values` (nested dict)                  |
+
+The Checks config (`checks_config`) controls whether a tool runs, but the Spex config defines what to expect.
+
+---
+
+### Tool-Specific Highlights
+
+#### ExifTool
+
+* JSON output is parsed and flattened into a dictionary.
+* Values are compared to those defined in the `ExiftoolValues` dataclass.
+* Supports both single expected values and lists of valid options.
+* Only the first object in the output array is used.
+
+#### FFprobe
+
+* Parses nested dictionaries for `streams[0]`, `streams[1]`, and `format`.
+* Handles missing keys (`"metadata field not found"`) and empty fields (`"no metadata value found"`).
+* Checks for specific embedded tags such as `ENCODER_SETTINGS`.
+* Logs differences using field-specific exceptions to improve readability.
+
+---
+
+### Summary
+
+| Stage                      | Purpose                                                  |
+| -------------------------- | -------------------------------------------------------- |
+| `run_tool_command()`       | Executes configured CLI tool                             |
+| `check_tool_metadata()`    | Delegates parsing based on tool name                     |
+| `parse_*` functions        | Extract, normalize, and compare output                   |
+| `process_video_metadata()` | Coordinates full metadata workflow, collects differences |
+
+This modular structure supports flexible validation of media metadata across tools and formats while keeping parsing logic isolated and reusable.
 
 6. **Output Generation**
-    Finally any selected outputs stored in the Checks Config are created.
+
+After metadata checks are complete, the application can optionally generate additional output files depending on which tools and features are enabled in the Checks configuration.
+
+```python
+outputs_enabled = (
+    self.checks_config.outputs.access_file == "yes" or
+    self.checks_config.outputs.report == "yes" or
+    self.checks_config.tools.qctools.run_tool == "yes" or
+    self.checks_config.tools.qct_parse.run_tool == "yes"
+)
+
+if outputs_enabled:
+    processing_results = processing_mgmt.process_video_outputs(
+        video_path, source_directory, destination_directory,
+        video_id, metadata_differences
+    )
+```
+
+---
+
+### Workflow Overview
+
+```mermaid
+flowchart TD
+    A[process_video_outputs] --> B{Report enabled?}
+    
+    B -->|Yes| E[Create report directory]
+    B -->|No| F[Skip report]
+    
+    E --> G[Create metadata difference report]
+    F --> H{QCTools enabled?}
+    G --> H
+    
+    H -->|Yes| I[Process QCTools output]
+    H -->|No| J[Skip QCTools]
+    
+    I --> K{Access file enabled?}
+    J --> K
+    
+    K -->|Yes| L[Process access file]
+    K -->|No| M[Skip access file]
+    
+    L --> N{Report enabled?}
+    M --> N
+    
+    N -->|Yes| O[Generate final HTML report]
+    N -->|No| P[Skip final report]
+    
+    O --> Q[Return processing results]
+    P --> Q
+```
+
+---
+
+### Step-by-Step Behavior
+
+1. **Report Directory & Metadata Differences**
+
+   * If metadata difference reporting is enabled, a CSV is created.
+   * Differences from `exiftool`, `mediainfo`, `mediatrace`, and `ffprobe` are written to `videoid_metadata_difference.csv`.
+
    ```python
-   outputs_enabled = (
-       self.checks_config.outputs.access_file == "yes" or
-       self.checks_config.outputs.report == "yes" or
-       self.checks_config.tools.qctools.run_tool == "yes" or
-       self.checks_config.tools.qct_parse.run_tool == "yes"
-   )
-   
-   if outputs_enabled:
-       processing_results = processing_mgmt.process_video_outputs(
-           video_path, source_directory, destination_directory,
-           video_id, metadata_differences
-       )
+   create_metadata_difference_report(metadata_differences, report_directory, video_id)
    ```
-    ```mermaid
-    flowchart TD
-        A[process_video_outputs] --> B{Report enabled?}
-        
-        B -->|Yes| E[Create report directory]
-        B -->|No| F[Skip report]
-        
-        E --> G[Create metadata difference report]
-        F --> H{QCTools enabled?}
-        G --> H
-        
-        H -->|Yes| I[Process QCTools output]
-        H -->|No| J[Skip QCTools]
-        
-        I --> K{Access file enabled?}
-        J --> K
-        
-        K -->|Yes| L[Process access file]
-        K -->|No| M[Skip access file]
-        
-        L --> N{Report enabled?}
-        M --> N
-        
-        N -->|Yes| O[Generate final HTML report]
-        N -->|No| P[Skip final report]
-        
-        O --> Q[Return processing results]
-        P --> Q
-    ```
 
-    The `process_video_outputs()` function in the processing manager follows this sequence:
+2. **QCTools Output**
 
-    1. Check if report generation is enabled in the configuration
-    - If enabled, create a report directory and generate a metadata difference report
-    - If disabled, skip report generation
+   * If enabled, QCTools XML and visual artifacts (like graphs or thumbnails) are processed.
+   * This may include `qct-parse` results and summary images, stored in the report directory.
 
-    2. Check if QCTools processing is enabled
-    - If enabled, process the QCTools output (generate graphs, extract frames)
-    - If disabled, skip QCTools processing
+3. **Access File Generation**
 
-    3. Check if access file creation is enabled
-    - If enabled, create a lower-resolution access copy of the video
-    - If disabled, skip access file creation
+   * If enabled, a low-resolution `.mp4` access copy is created using `ffmpeg`.
+   * Access file creation includes a cancel-aware progress monitor.
 
-    4. If reporting is enabled, generate a final HTML report with all findings
-    5. Return the processing results
+   ```python
+   make_access_file(video_path, output_path, check_cancelled=..., signals=...)
+   ```
+
+   * Avoids duplicate generation by checking for existing `.mp4` files in the source directory.
+
+4. **HTML Report Generation**
+
+   * If the `report` option is enabled, an HTML file is generated to summarize:
+
+     * Metadata differences
+     * MediaConch results
+     * Stream hashes
+     * Fixity reports
+     * QCTools thumbnails and frame evaluations
+   * HTML content is dynamically assembled based on what exists in the report directory.
+
+   ```python
+   generate_final_report(video_id, source_directory, report_directory, destination_directory)
+   ```
+
+---
+
+### Supporting Functions
+
+* `write_to_csv()` and `create_metadata_difference_report()` handle CSV logging for tool mismatches.
+* `make_access_file()` wraps `ffmpeg` subprocess execution and tracks percent completion.
+* `write_html_report()` builds the full HTML report from gathered outputs and analysis files.
+* All outputs are cancel-aware and emit GUI signals where applicable.
+
+---
+
+### Summary
+
+| Output Type            | Enabled by                    | File(s) Created              |
+| ---------------------- | ----------------------------- | ---------------------------- |
+| Metadata Differences   | `outputs.report`              | `*_metadata_difference.csv`  |
+| QCTools XML/Thumbnails | `tools.qctools` / `qct_parse` | `.xml`, `.jpg`, `.png`, etc. |
+| Access Copy            | `outputs.access_file`         | `*_access.mp4`               |
+| Final HTML Report      | `outputs.report`              | `*_avspex_report.html`       |
+
+All outputs are conditional and respect the configuration state and any user cancellations. If all selected outputs succeed, a results dictionary is returned from `process_video_outputs()`.
 
 7. **Completion**
     Upon completion of the single directory loop, the CLI app outputs the video ID in ASCII art, and, if additional source directories were provided, begins the loop again.
