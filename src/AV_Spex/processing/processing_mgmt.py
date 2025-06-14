@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import time
+import re
 
 from AV_Spex.processing import run_tools
 from AV_Spex.utils import dir_setup
@@ -295,7 +296,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     # Run QCTools command
     qct_run_tool = getattr(checks_config.tools.qctools, 'run_tool')
     if qct_run_tool == 'yes':
-        run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled)
+        run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled, signals=signals)
         logger.debug('')  # Add new line for cleaner terminal output
         results['qctools_output_path'] = qctools_output_path
         if signals:
@@ -320,30 +321,100 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
 
     return results
 
-def run_qctools_command(command, input_path, output_type, output_path, check_cancelled=None):
+def run_qctools_command(command, input_path, output_type, output_path, check_cancelled=None, signals=None):
     
     if check_cancelled():
         return None
     
     env = os.environ.copy()
     env['PATH'] = '/usr/local/bin:' + env.get('PATH', '')
-
     full_command = f"{command} \"{input_path}\" {output_type} {output_path}"
     logger.debug(f'Running command: {full_command}\n')
     
-    process = subprocess.Popen(full_command, shell=True, env=env)
+    # Use subprocess.Popen with stdout and stderr capture
+    process = subprocess.Popen(
+        full_command, 
+        shell=True, 
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # Redirect stderr to stdout to catch all output
+        text=True,
+        bufsize=1,  # Line buffered
+        universal_newlines=True
+    )
     
-    while process.poll() is None:  # While process is running
-        if check_cancelled():
-            process.terminate()  # Send SIGTERM
-            try:
-                process.wait(timeout=5)  # Wait up to 5 seconds for graceful termination
-            except subprocess.TimeoutExpired:
-                process.kill()  # Force kill if process doesn't terminate
-            return None
-        time.sleep(1)  # Check cancel status every 0.5 seconds
+    try:
+        while True:
+            if check_cancelled():
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                return None
+            
+            # Read output line by line
+            output = process.stdout.readline()
+            
+            if output == '' and process.poll() is not None:
+                # Process has finished and no more output
+                break
+                
+            if output:
+                # Log the output for debugging
+                logger.debug(f"QCTools output: {output.strip()}")
+                
+                # Extract percentage from output
+                # Common patterns: "50%", "Progress: 50%", "50.5%", etc.
+                percentage = extract_percentage(output.strip())
+                
+                if percentage is not None and signals:
+                    # Emit the progress signal
+                    safe_percent = min(100, max(0, int(percentage)))
+                    print(f"About to emit QCTools progress: {safe_percent}%")  # Add this debug line
+                    signals.qctools_progress.emit(safe_percent)
     
-    #return process.returncode
+    except Exception as e:
+        logger.error(f"Error reading QCTools output: {str(e)}")
+    
+    # Wait for process to complete and get return code
+    return_code = process.wait()
+    
+    # Emit 100% completion if signals available
+    if signals:
+        signals.qctools_progress.emit(100)
+    
+    return return_code
+
+def extract_percentage(output_line):
+    """
+    Extract percentage value from QCTools output line.
+    Handles QCTools specific format: "dots + spaces + X of 100 %"
+    """
+    # QCTools specific pattern: any number of dots, then spaces, then "X of 100 %"
+    pattern = r'\.+\s+(\d+)\s+of\s+100\s+%'
+    
+    match = re.search(pattern, output_line)
+    if match:
+        try:
+            percentage = int(match.group(1))
+            print(f"QCTools emitting progress: {percentage}%")  # Debug print
+            return percentage
+        except (ValueError, IndexError):
+            pass
+    
+    # Also try without requiring dots (for cases where dots might be missing)
+    pattern2 = r'(\d+)\s+of\s+100\s+%'
+    match2 = re.search(pattern2, output_line)
+    if match2:
+        try:
+            percentage = int(match2.group(1))
+            print(f"QCTools emitting progress: {percentage}%")  # Debug print
+            return percentage
+        except (ValueError, IndexError):
+            pass
+    
+    return None
 
 
 def check_tool_metadata(tool_name, output_path):

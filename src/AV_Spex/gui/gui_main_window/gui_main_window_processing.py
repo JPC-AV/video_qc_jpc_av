@@ -50,6 +50,8 @@ class MainWindowProcessing:
         self.main_window.signals.stream_hash_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.md5_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.access_file_progress.connect(self.main_window.processing_window.update_detail_progress)
+        self.main_window.signals.qctools_progress.connect(self.main_window.processing_window.update_detail_progress)
+        print("QCTools progress signal connected!")  # ADD THIS DEBUG LINE
             
         # Connect the step_completed signal
         self.main_window.signals.step_completed.connect(self.main_window.processing_window.mark_step_complete)
