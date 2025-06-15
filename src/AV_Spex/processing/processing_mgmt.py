@@ -362,7 +362,7 @@ def run_qctools_command(command, input_path, output_type, output_path, check_can
                 
             if output:
                 # Log the output for debugging
-                logger.debug(f"QCTools output: {output.strip()}")
+                #logger.debug(f"QCTools output: {output.strip()}")
                 
                 # Extract percentage from output
                 # Common patterns: "50%", "Progress: 50%", "50.5%", etc.
@@ -371,7 +371,7 @@ def run_qctools_command(command, input_path, output_type, output_path, check_can
                 if percentage is not None and signals:
                     # Emit the progress signal
                     safe_percent = min(100, max(0, int(percentage)))
-                    print(f"About to emit QCTools progress: {safe_percent}%")  # Add this debug line
+                    #logger.debug(f"About to emit QCTools progress: {safe_percent}%")  # Add this debug line
                     signals.qctools_progress.emit(safe_percent)
     
     except Exception as e:
@@ -393,28 +393,26 @@ def extract_percentage(output_line):
     """
     # QCTools specific pattern: any number of dots, then spaces, then "X of 100 %"
     pattern = r'\.+\s+(\d+)\s+of\s+100\s+%'
-    
+
     match = re.search(pattern, output_line)
     if match:
         try:
             percentage = int(match.group(1))
-            print(f"QCTools emitting progress: {percentage}%")  # Debug print
+            #logger.debug(f"QCTools emitting progress: {percentage}%")
             return percentage
         except (ValueError, IndexError):
             pass
-    
-    # Also try without requiring dots (for cases where dots might be missing)
-    pattern2 = r'(\d+)\s+of\s+100\s+%'
-    match2 = re.search(pattern2, output_line)
-    if match2:
-        try:
-            percentage = int(match2.group(1))
-            print(f"QCTools emitting progress: {percentage}%")  # Debug print
-            return percentage
-        except (ValueError, IndexError):
-            pass
-    
-    return None
+    else:
+        # Try without dots (for early progress like 1%)
+        pattern2 = r'(\d+)\s+of\s+100\s+%'
+        match2 = re.search(pattern2, output_line)
+        if match2:
+            try:
+                percentage = int(match2.group(1))
+                #logger.debug(f"QCTools emitting progress: {percentage}%")
+                return percentage
+            except (ValueError, IndexError):
+                pass
 
 
 def check_tool_metadata(tool_name, output_path):
