@@ -22,4 +22,4 @@ class ProcessingSignals(QObject):
     stream_hash_progress = pyqtSignal(int)  # Signal for stream hash progress percentage
     md5_progress = pyqtSignal(int)          # Signal for MD5 calculation progress percentage
     access_file_progress = pyqtSignal(int)  # Signal for access file creation progress percentage
-    
+    qctools_progress = pyqtSignal(int)       # Signal for qctools xml creation progress percentage
