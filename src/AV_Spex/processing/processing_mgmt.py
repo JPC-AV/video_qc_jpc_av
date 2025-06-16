@@ -366,7 +366,7 @@ def run_qctools_command(command, input_path, output_type, output_path, check_can
                 
                 # Extract percentage from output
                 # Common patterns: "50%", "Progress: 50%", "50.5%", etc.
-                percentage = extract_percentage(output.strip())
+                percentage = extract_percentage(output.strip(), signals=signals)
                 
                 if percentage is not None and signals:
                     # Emit the progress signal
@@ -386,7 +386,7 @@ def run_qctools_command(command, input_path, output_type, output_path, check_can
     
     return return_code
 
-def extract_percentage(output_line):
+def extract_percentage(output_line, signals=None):
     """
     Extract percentage value from QCTools output line.
     Handles QCTools specific format: "dots + spaces + X of 100 %"
@@ -398,8 +398,12 @@ def extract_percentage(output_line):
     if match:
         try:
             percentage = int(match.group(1))
-            #logger.debug(f"QCTools emitting progress: {percentage}%")
-            return percentage
+            if signals:
+                # logger.debug(f"QCTools emitting progress: {percentage}%")
+                return percentage
+            elif signals is None:
+                print(f"\rQCTools progress: {percentage}%", end='', flush=True)
+                return percentage
         except (ValueError, IndexError):
             pass
     else:
@@ -409,8 +413,12 @@ def extract_percentage(output_line):
         if match2:
             try:
                 percentage = int(match2.group(1))
-                #logger.debug(f"QCTools emitting progress: {percentage}%")
-                return percentage
+                if signals:
+                    # logger.debug(f"QCTools emitting progress: {percentage}%")
+                    return percentage
+                elif signals is None:
+                    print(f"\rQCTools progress: {percentage}%", end='', flush=True)
+                    return percentage
             except (ValueError, IndexError):
                 pass
 
