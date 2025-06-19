@@ -296,9 +296,13 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     # Run QCTools command
     qct_run_tool = getattr(checks_config.tools.qctools, 'run_tool')
     if qct_run_tool == 'yes':
-        run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled, signals=signals)
-        logger.debug('')  # Add new line for cleaner terminal output
-        results['qctools_output_path'] = qctools_output_path
+        if os.path.exists(qctools_output_path):
+            logger.warning("QCTools report already exists, not overwriting...\n")
+            results['qctools_output_path'] = qctools_output_path
+        else:
+            run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled, signals=signals)
+            logger.debug('')  # Add new line for cleaner terminal output
+            results['qctools_output_path'] = qctools_output_path
         if signals:
             signals.step_completed.emit("QCTools")
 
