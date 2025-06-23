@@ -56,6 +56,17 @@ class AVSpexProcessor:
         self._cancelled = False
         self._cancel_emitted = False 
 
+        # ADD THESE LINES:
+        self._paused = False
+        self._pause_requested = False
+        self._current_step = 'fixity'
+        self._completed_steps = set()
+        self._processing_context = None
+
+        if self.signals:
+            self.signals.pause_requested.connect(self.request_pause)
+            self.signals.resume_requested.connect(self.request_resume)
+
         self.config_mgr = ConfigManager()
         # logger.debug("==== PROCESSOR INITIALIZATION DEBUGGING ====")
         
@@ -78,13 +89,41 @@ class AVSpexProcessor:
         self._cancelled = True
 
     def check_cancelled(self):
-        """Check if processing was cancelled and emit signal if needed"""
+        """Check for cancellation OR pause - reuse existing mechanism"""
+        # Handle actual cancellation
         if self._cancelled and self.signals and not self._cancel_emitted:
             self.signals.cancelled.emit()
             self._cancel_emitted = True
-        return self._cancelled
+            return True
+        
+        # Handle pause request
+        if self._pause_requested and not self._paused:
+            self._paused = True
+            self._pause_requested = False
+            if self.signals:
+                self.signals.paused.emit()
+                self.signals.status_update.emit("Processing paused")
+            print(f"DEBUG: Paused during step")
+        
+        # Return True for BOTH cancel AND pause
+        # This makes all existing check_cancelled() calls automatically respect pause
+        return self._cancelled or self._paused
+    
+    def request_pause(self):
+        """Request pause - will pause at next check_cancelled call"""
+        print("DEBUG: Pause requested!")
+        self._pause_requested = True
+
+    def request_resume(self):
+        """Resume processing"""
+        print("DEBUG: Resume requested!")
+        self._paused = False
+        self._pause_requested = False
+        if self.signals:
+            self.signals.resumed.emit()
 
     def process_directories(self, source_directories):
+        """Process directories with step-level resume"""
         if self.check_cancelled():
             return False
 
@@ -99,111 +138,193 @@ class AVSpexProcessor:
                 self.signals.file_started.emit(source_directory, idx, total_dirs)
             
             source_directory = os.path.normpath(source_directory)
-            self.process_single_directory(source_directory)
+            
+            # Keep processing this directory until completed or cancelled
+            while True:
+                result = self.process_single_directory(source_directory)
+                
+                if result == "paused":
+                    print(f"DEBUG: Directory processing paused at step {self._current_step}")
+                    # Wait for resume
+                    while self._paused and not self._cancelled:
+                        if self.signals:
+                            QApplication.processEvents()
+                        time.sleep(0.1)
+                    # Continue from where we left off
+                    continue
+                elif result == False:
+                    return False
+                else:
+                    break  # Directory completed
 
         overall_end_time = time.time()
-        formatted_time =  log_overall_time(overall_start_time, overall_end_time)
+        formatted_time = log_overall_time(overall_start_time, overall_end_time)
 
         if self.signals:
-            # Signal that all processing is complete
             self.signals.step_completed.emit("All Processing")
             
         return formatted_time
 
     def process_single_directory(self, source_directory):
-        if self.check_cancelled():
-            return False
+        """Process directory with step-level pause/resume using existing check_cancelled"""
+        
+        # Initialize directory context (only once)
+        if not hasattr(self, '_processing_context') or self._processing_context is None:
+            init_dir_result = dir_setup.initialize_directory(source_directory)
+            if init_dir_result is None:
+                if self.signals:
+                    self.signals.error.emit(f"Failed to initialize directory: {source_directory}")
+                return False
 
-        init_dir_result = dir_setup.initialize_directory(source_directory)
-        if init_dir_result is None:
-            if self.signals:
-                self.signals.error.emit(f"Failed to initialize directory: {source_directory}")
-            return False
+            video_path, video_id, destination_directory, access_file_found = init_dir_result
+            
+            self._processing_context = {
+                'source_directory': source_directory,
+                'video_path': video_path,
+                'video_id': video_id,
+                'destination_directory': destination_directory,
+                'access_file_found': access_file_found
+            }
+            
+            # Initialize step tracking
+            self._completed_steps = getattr(self, '_completed_steps', set())
+            self._current_step = getattr(self, '_current_step', 'fixity')
 
-        video_path, video_id, destination_directory, access_file_found = init_dir_result
         processing_mgmt = ProcessingManager(signals=self.signals, check_cancelled_fn=self.check_cancelled)
 
-        if self.check_cancelled():
-            return False
+        # STEP 1: Fixity
+        if 'fixity' not in self._completed_steps:
+            self._current_step = 'fixity'
+            if self._run_fixity_step(processing_mgmt):
+                self._completed_steps.add('fixity')
+            elif self.check_cancelled():
+                if self._paused:
+                    print("DEBUG: Fixity step paused")
+                    return "paused"  # Will restart this step on resume
+                else:
+                    return False  # Actual cancellation
 
-        # Check if fixity is enabled in config
-        fixity_enabled = False
-        fixity_config = self.checks_config.fixity
+        # STEP 2: MediaConch  
+        if 'mediaconch' not in self._completed_steps:
+            self._current_step = 'mediaconch'
+            if self._run_mediaconch_step(processing_mgmt):
+                self._completed_steps.add('mediaconch')
+            elif self.check_cancelled():
+                if self._paused:
+                    print("DEBUG: MediaConch step paused")
+                    return "paused"
+                else:
+                    return False
 
-        # Check each relevant attribute directly
-        if (fixity_config.check_fixity == "yes" or 
-            fixity_config.validate_stream_fixity == "yes" or 
-            fixity_config.embed_stream_fixity == "yes" or 
-            fixity_config.output_fixity == "yes"):
-            fixity_enabled = True
+        # STEP 3: Metadata
+        if 'metadata' not in self._completed_steps:
+            self._current_step = 'metadata'
+            if self._run_metadata_step(processing_mgmt):
+                self._completed_steps.add('metadata')
+            elif self.check_cancelled():
+                if self._paused:
+                    print("DEBUG: Metadata step paused")
+                    return "paused"
+                else:
+                    return False
+
+        # STEP 4: Outputs
+        if 'outputs' not in self._completed_steps:
+            self._current_step = 'outputs'
+            if self._run_outputs_step(processing_mgmt):
+                self._completed_steps.add('outputs')
+            elif self.check_cancelled():
+                if self._paused:
+                    print("DEBUG: Outputs step paused")
+                    return "paused"
+                else:
+                    return False
+
+        # All steps completed successfully
+        self._complete_processing()
+        return True
+
+    def _run_fixity_step(self, processing_mgmt):
+        """Run fixity step - existing logic, just returns success/failure"""
+        fixity_enabled = (
+            self.checks_config.fixity.check_fixity == "yes" or 
+            self.checks_config.fixity.validate_stream_fixity == "yes" or 
+            self.checks_config.fixity.embed_stream_fixity == "yes" or 
+            self.checks_config.fixity.output_fixity == "yes"
+        )
+        
+        if not fixity_enabled:
+            return True
+
+        if self.signals:
+            self.signals.tool_started.emit("Fixity...")
+        
+        try:
+            ctx = self._processing_context
+            processing_mgmt.process_fixity(ctx['source_directory'], ctx['video_path'], ctx['video_id'])
             
-        if fixity_enabled:
-            if self.signals:
-                self.signals.tool_started.emit("Fixity...")
-            processing_mgmt.process_fixity(source_directory, video_path, video_id)
+            # If we get here without check_cancelled() returning True, step completed
             if self.signals:
                 self.signals.tool_completed.emit("Fixity processing complete")
-                
-
-        if self.check_cancelled():
+            return True
+            
+        except Exception as e:
+            print(f"DEBUG: Fixity step error: {e}")
             return False
 
-        # Check if mediaconch is enabled
-        mediaconch_enabled = self.checks_config.tools.mediaconch.run_mediaconch == "yes"
-        if mediaconch_enabled:
-            if self.signals:
-                self.signals.tool_started.emit("MediaConch")
-                
-            mediaconch_results = processing_mgmt.validate_video_with_mediaconch(
-                video_path, destination_directory, video_id
-            )
+    def _run_mediaconch_step(self, processing_mgmt):
+        """Run MediaConch step"""
+        if self.checks_config.tools.mediaconch.run_mediaconch != "yes":
+            return True
+
+        if self.signals:
+            self.signals.tool_started.emit("MediaConch")
+        
+        try:
+            ctx = self._processing_context
+            processing_mgmt.validate_video_with_mediaconch(ctx['video_path'], ctx['destination_directory'], ctx['video_id'])
             
             if self.signals:
                 self.signals.tool_completed.emit("MediaConch validation complete")
                 self.signals.step_completed.emit("MediaConch Validation")
-
-        if self.check_cancelled():
+            return True
+            
+        except Exception as e:
+            print(f"DEBUG: MediaConch step error: {e}")
             return False
 
-         # Process metadata tools (mediainfo, ffprobe, exiftool, etc.)
-        metadata_tools_enabled = False
-        tools_config = self.checks_config.tools
+    def _run_metadata_step(self, processing_mgmt):
+        """Run metadata step"""
+        metadata_tools_enabled = (
+            hasattr(self.checks_config.tools.mediainfo, 'check_tool') and self.checks_config.tools.mediainfo.check_tool == "yes" or
+            hasattr(self.checks_config.tools.mediatrace, 'check_tool') and self.checks_config.tools.mediatrace.check_tool == "yes" or
+            hasattr(self.checks_config.tools.exiftool, 'check_tool') and self.checks_config.tools.exiftool.check_tool == "yes" or
+            hasattr(self.checks_config.tools.ffprobe, 'check_tool') and self.checks_config.tools.ffprobe.check_tool == "yes"
+        )
 
-        # Check if any metadata tools are enabled
-        if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool == "yes" or
-            hasattr(tools_config.mediatrace, 'check_tool') and tools_config.mediatrace.check_tool == "yes" or
-            hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool == "yes" or
-            hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool == "yes"):
-            metadata_tools_enabled = True
-                    
-        # Initialize metadata_differences
-        # Needed for process_video_outputs, if not created in process_video_metadata
-        metadata_differences = None
+        if not metadata_tools_enabled:
+            return True
 
-        if metadata_tools_enabled:
-            if self.signals:
-                self.signals.tool_started.emit("Metadata Tools")
+        if self.signals:
+            self.signals.tool_started.emit("Metadata Tools")
+        
+        try:
+            ctx = self._processing_context
+            metadata_differences = processing_mgmt.process_video_metadata(ctx['video_path'], ctx['destination_directory'], ctx['video_id'])
             
-            metadata_differences = processing_mgmt.process_video_metadata(
-                video_path, destination_directory, video_id
-            )
+            # Store for outputs step
+            ctx['metadata_differences'] = metadata_differences
             
             if self.signals:
                 self.signals.tool_completed.emit("Metadata tools complete")
-                # Emit signals for each completed metadata tool
-                if tools_config.mediainfo.check_tool == "yes":
-                    self.signals.step_completed.emit("Mediainfo")
-                if tools_config.mediatrace.check_tool == "yes":
-                    self.signals.step_completed.emit("Mediatrace")
-                if tools_config.exiftool.check_tool == "yes":
-                    self.signals.step_completed.emit("Exiftool")
-                if tools_config.ffprobe.check_tool == "yes":
-                    self.signals.step_completed.emit("FFprobe")
-
-        if self.check_cancelled():
+            return True
+            
+        except Exception as e:
+            print(f"DEBUG: Metadata step error: {e}")
             return False
 
-        # Process output tools (QCTools, report generation, etc.)
+    def _run_outputs_step(self, processing_mgmt):
+        """Run outputs step"""
         outputs_enabled = (
             self.checks_config.outputs.access_file == "yes" or
             self.checks_config.outputs.report == "yes" or
@@ -211,28 +332,41 @@ class AVSpexProcessor:
             self.checks_config.tools.qct_parse.run_tool == "yes"
         )
         
-        if outputs_enabled:
-            if self.signals:
-                self.signals.tool_started.emit("Output Processing")
-            
-            processing_results = processing_mgmt.process_video_outputs(
-                video_path, source_directory, destination_directory,
-                video_id, metadata_differences
+        if not outputs_enabled:
+            return True
+
+        if self.signals:
+            self.signals.tool_started.emit("Output Processing")
+        
+        try:
+            ctx = self._processing_context
+            metadata_differences = ctx.get('metadata_differences')
+            processing_mgmt.process_video_outputs(
+                ctx['video_path'], ctx['source_directory'], ctx['destination_directory'],
+                ctx['video_id'], metadata_differences
             )
             
             if self.signals:
                 self.signals.tool_completed.emit("Outputs complete")
-
-        if self.check_cancelled():
+            return True
+            
+        except Exception as e:
+            print(f"DEBUG: Outputs step error: {e}")
             return False
+
+    def _complete_processing(self):
+        """Complete processing and reset state"""
+        ctx = self._processing_context
         
         if self.signals:
             self.signals.tool_completed.emit("All processing for this directory complete")
-        if self.signals:
             self.signals.step_completed.emit("All Processing")
-            time.sleep(0.1) # pause for a ms to let the list update before the QMessage box pops up
+            time.sleep(0.1)
         
         logger.debug('Please note that any warnings on metadata are just used to help any issues with your file. If they are not relevant at this point in your workflow, just ignore this. Thanks!\n')
+        display_processing_banner(ctx['video_id'])
         
-        display_processing_banner(video_id)
-        return True
+        # Reset state for next directory
+        self._completed_steps = set()
+        self._processing_context = None
+        self._current_step = 'fixity'

@@ -5,6 +5,12 @@ class ProcessingSignals(QObject):
     completed = pyqtSignal(str)  # Signal for when processing completes
     error = pyqtSignal(str)  # Signal for when an error occurs
     cancelled = pyqtSignal() # For cancel button
+
+    # New pause/resume signals
+    pause_requested = pyqtSignal()  # Signal to request pause
+    resume_requested = pyqtSignal()  # Signal to request resume
+    paused = pyqtSignal()  # Signal when actually paused
+    resumed = pyqtSignal()  # Signal when resumed
     
     status_update = pyqtSignal(str)  # Signal for general status updates
     progress = pyqtSignal(int, int)  # Signal for numerical progress (current, total)
