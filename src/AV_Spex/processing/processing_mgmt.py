@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import time
 import re
+from pathlib import Path
 
 from AV_Spex.processing import run_tools
 from AV_Spex.utils import dir_setup
@@ -263,17 +264,57 @@ class ProcessingManager:
         )
 
         return processing_results
+    
+
+def find_qctools_report(source_directory, video_id):
+    """
+    Search for existing qctools files in both _qc_metadata and _vrecord_metadata folders.
+    
+    Args:
+        source_directory (str): Path to the source directory containing metadata folders
+        video_id (str): Video identifier (e.g., "JPC_AV_01581")
+        
+    Returns:
+        str or None: Path to the qctools report if found, None otherwise
+    """
+    source_path = Path(source_directory)
+    
+    # Define the folders to search in
+    search_folders = [
+        source_path / f"{video_id}_qc_metadata",
+        source_path / f"{video_id}_vrecord_metadata"
+    ]
+    
+    # Search patterns for qctools files
+    qctools_patterns = [
+        "*.qctools.xml.gz",
+        "*.qctools.mkv"
+    ]
+    
+    # Search in each folder
+    for folder in search_folders:
+        if folder.exists() and folder.is_dir():
+            for pattern in qctools_patterns:
+                matches = list(folder.glob(pattern))
+                if matches:
+                    return str(matches[0])  # Return the first match
+    
+    return None
 
 
 def process_qctools_output(video_path, source_directory, destination_directory, video_id, report_directory=None, check_cancelled=None, signals=None):
     """
     Process QCTools output, including running QCTools and optional parsing.
+    Now searches for existing QCTools reports in both _qc_metadata and _vrecord_metadata folders.
     
     Args:
         video_path (str): Path to the input video file
+        source_directory (str): Source directory for the video
         destination_directory (str): Directory to store output files
         video_id (str): Unique identifier for the video
         report_directory (str, optional): Directory to save reports
+        check_cancelled (callable, optional): Function to check if operation was cancelled
+        signals (object, optional): Signal object for progress updates
         
     Returns:
         dict: Processing results and paths
@@ -286,27 +327,45 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         'qctools_check_output': None
     }
 
-    # Prepare QCTools output path
-    qctools_ext = checks_config.outputs.qctools_ext
-    qctools_output_path = os.path.join(destination_directory, f'{video_id}.{qctools_ext}')
+    if check_cancelled and check_cancelled():
+        return None
 
-    if check_cancelled():
-            return None
-
-    # Run QCTools command
+    # Check if QCTools should be run
     qct_run_tool = getattr(checks_config.tools.qctools, 'run_tool')
-    if qct_run_tool == 'yes':
+    if qct_run_tool != 'yes':
+        logger.info("QCTools processing skipped per configuration")
+        return results
+
+    # First, search for existing QCTools reports in metadata folders
+    existing_qctools_path = find_qctools_report(source_directory, video_id)
+    
+    if existing_qctools_path:
+        logger.info(f"Found existing QCTools report: {existing_qctools_path}")
+        results['qctools_output_path'] = existing_qctools_path
+        
+        # Mark step as completed since we found an existing report
+        if signals:
+            signals.step_completed.emit("QCTools")
+    else:
+        # No existing report found, create a new one in the destination directory
+        qctools_ext = checks_config.outputs.qctools_ext
+        qctools_output_path = os.path.join(destination_directory, f'{video_id}.{qctools_ext}')
+        
+        # Check if we already created one in the destination directory
         if os.path.exists(qctools_output_path):
-            logger.warning("QCTools report already exists, not overwriting...\n")
+            logger.warning("QCTools report already exists in destination directory, not overwriting...")
             results['qctools_output_path'] = qctools_output_path
         else:
+            # Create new QCTools report
+            logger.info(f"No existing QCTools report found. Creating new report: {qctools_output_path}")
             run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled, signals=signals)
             logger.debug('')  # Add new line for cleaner terminal output
             results['qctools_output_path'] = qctools_output_path
+        
         if signals:
             signals.step_completed.emit("QCTools")
 
-    # Check QCTools output if configured
+    # Check QCTools output if configured (works with both existing and newly created reports)
     qct_parse_run_tool = getattr(checks_config.tools.qct_parse, 'run_tool')
     if qct_parse_run_tool == 'yes':
         # Ensure report directory exists
@@ -314,12 +373,13 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             report_directory = dir_setup.make_report_dir(source_directory, video_id)
 
         # Verify QCTools output file exists
-        if not os.path.isfile(qctools_output_path):
-            logger.critical(f"Unable to check qctools report. No file found at: {qctools_output_path}\n")
+        if not results['qctools_output_path'] or not os.path.isfile(results['qctools_output_path']):
+            logger.critical(f"Unable to check qctools report. No file found at: {results['qctools_output_path']}")
             return results
 
         # Run QCTools parsing
-        run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=check_cancelled)
+        logger.info(f"Running qct-parse on: {results['qctools_output_path']}")
+        run_qctparse(video_path, results['qctools_output_path'], report_directory, check_cancelled=check_cancelled)
         if signals:
             signals.step_completed.emit("QCT Parse")
 
