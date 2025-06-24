@@ -170,11 +170,14 @@ class AVSpexProcessor:
         tools_config = self.checks_config.tools
 
         # Check if any metadata tools are enabled
-        if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool == "yes" or
-            hasattr(tools_config.mediatrace, 'check_tool') and tools_config.mediatrace.check_tool == "yes" or
-            hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool == "yes" or
-            hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool == "yes"):
-            metadata_tools_enabled = True
+        tools_to_check = ['mediainfo', 'mediatrace', 'exiftool', 'ffprobe']
+        metadata_tools_enabled = False
+
+        for tool_name in tools_to_check:
+            tool = getattr(tools_config, tool_name, None)
+            if tool and (getattr(tool, 'check_tool', 'no') == 'yes' or 
+                        getattr(tool, 'run_tool', 'no') == 'yes'):
+                metadata_tools_enabled = True
                     
         # Initialize metadata_differences
         # Needed for process_video_outputs, if not created in process_video_metadata
@@ -191,14 +194,20 @@ class AVSpexProcessor:
             if self.signals:
                 self.signals.tool_completed.emit("Metadata tools complete")
                 # Emit signals for each completed metadata tool
-                if tools_config.mediainfo.check_tool == "yes":
-                    self.signals.step_completed.emit("Mediainfo")
-                if tools_config.mediatrace.check_tool == "yes":
-                    self.signals.step_completed.emit("Mediatrace")
-                if tools_config.exiftool.check_tool == "yes":
-                    self.signals.step_completed.emit("Exiftool")
-                if tools_config.ffprobe.check_tool == "yes":
-                    self.signals.step_completed.emit("FFprobe")
+                tools_to_signal = [
+                    ('mediainfo', 'Mediainfo'),
+                    ('mediatrace', 'Mediatrace'), 
+                    ('exiftool', 'Exiftool'),
+                    ('ffprobe', 'FFprobe')
+                ]
+                
+                for tool_name, display_name in tools_to_signal:
+                    tool = getattr(tools_config, tool_name)
+                    if tool.check_tool == "yes" or tool.run_tool == "yes":
+                        self.signals.step_completed.emit(display_name)
+
+            if self.signals:
+                self.signals.clear_status.emit()
 
         if self.check_cancelled():
             return False
@@ -233,6 +242,9 @@ class AVSpexProcessor:
             time.sleep(0.1) # pause for a ms to let the list update before the QMessage box pops up
         
         logger.debug('Please note that any warnings on metadata are just used to help any issues with your file. If they are not relevant at this point in your workflow, just ignore this. Thanks!\n')
+
+        if self.signals:
+            self.signals.clear_status.emit()
         
         display_processing_banner(video_id)
         return True
