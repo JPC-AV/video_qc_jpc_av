@@ -23,3 +23,5 @@ class ProcessingSignals(QObject):
     md5_progress = pyqtSignal(int)          # Signal for MD5 calculation progress percentage
     access_file_progress = pyqtSignal(int)  # Signal for access file creation progress percentage
     qctools_progress = pyqtSignal(int)       # Signal for qctools xml creation progress percentage
+
+    clear_status = pyqtSignal()  # Signal to clear status message
