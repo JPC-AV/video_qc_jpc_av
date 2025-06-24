@@ -74,8 +74,21 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         self.setup_details_progress_bar(main_layout)
 
         # Add cancel button
+        button_layout = QHBoxLayout()
+        
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.setEnabled(False)  # Disabled until processing starts
+        button_layout.addWidget(self.pause_button)
+        
+        self.resume_button = QPushButton("Resume")
+        self.resume_button.setEnabled(False)
+        self.resume_button.setVisible(False)  # Hidden until paused
+        button_layout.addWidget(self.resume_button)
+        
         self.cancel_button = QPushButton("Cancel")
-        main_layout.addWidget(self.cancel_button)
+        button_layout.addWidget(self.cancel_button)
+        
+        main_layout.addLayout(button_layout)
 
         # Load the configuration and populate steps
         checks_config = config_mgr.get_config('checks', ChecksConfig)
@@ -96,6 +109,19 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         self.details_text.append_message("Ready to process files", MessageType.SUCCESS)
 
         self.logger = connect_logger_to_ui(self)
+
+        # ADD DEBUG OUTPUT:
+        print("DEBUG: ProcessingWindow buttons created")
+        print(f"DEBUG: Pause button type: {type(self.pause_button)}")
+        print(f"DEBUG: Pause button enabled: {self.pause_button.isEnabled()}")
+        print(f"DEBUG: Pause button visible: {self.pause_button.isVisible()}")
+        print(f"DEBUG: Pause button text: '{self.pause_button.text()}'")
+        
+        # Test if button can be manually enabled
+        print("DEBUG: Testing manual button enable...")
+        self.pause_button.setEnabled(True)
+        print(f"DEBUG: After manual enable - Pause button enabled: {self.pause_button.isEnabled()}")
+        self.pause_button.setEnabled(False)  # Set back to disabled
 
     def sizeHint(self):
         """Override size hint to provide default window size"""
@@ -369,6 +395,82 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         
         # Force repaint
         self.update()
+
+    def on_processing_started(self):
+        """Called when processing starts - CORRECT VERSION"""
+        print("DEBUG: ProcessingWindow.on_processing_started called")
+        print(f"DEBUG: Before state change - Pause enabled: {self.pause_button.isEnabled()}")
+        
+        # Only modify THIS window's buttons
+        self.pause_button.setEnabled(True)
+        self.resume_button.setEnabled(False)
+        self.resume_button.setVisible(False)
+        self.pause_button.setVisible(True)
+        
+        print(f"DEBUG: After state change - Pause enabled: {self.pause_button.isEnabled()}")
+        print(f"DEBUG: Pause visible: {self.pause_button.isVisible()}")
+        
+        # Force a repaint to make sure changes are visible
+        self.pause_button.repaint()
+        self.update()
+
+    
+    def on_processing_paused(self):
+        """Called when processing is paused"""
+        print("DEBUG: ProcessingWindow.on_processing_paused called")
+        
+        self.pause_button.setEnabled(False)
+        self.pause_button.setVisible(False)
+        self.resume_button.setEnabled(True)
+        self.resume_button.setVisible(True)
+        self.update_status("Processing paused", MessageType.WARNING)
+        
+        # Force repaint
+        self.repaint()
+
+    def on_processing_resumed(self):
+        """Called when processing is resumed"""
+        print("DEBUG: ProcessingWindow.on_processing_resumed called")
+        
+        self.pause_button.setEnabled(True)
+        self.pause_button.setVisible(True)
+        self.resume_button.setEnabled(False)
+        self.resume_button.setVisible(False)
+        self.update_status("Processing resumed", MessageType.SUCCESS)
+        
+        # Force repaint
+        self.repaint()
+
+    def on_processing_completed(self):
+        """Called when processing completes"""
+        print("DEBUG: ProcessingWindow.on_processing_completed called")
+        
+        self.pause_button.setEnabled(False)
+        self.resume_button.setEnabled(False)
+        self.resume_button.setVisible(False)
+        self.pause_button.setVisible(True)
+        
+        # Force repaint
+        self.repaint()
+
+    def test_pause_button_manually(self):
+        """Manual test to see if pause button works"""
+        print("DEBUG: Manual pause button test")
+        print(f"DEBUG: Button enabled: {self.pause_button.isEnabled()}")
+        print(f"DEBUG: Button visible: {self.pause_button.isVisible()}")
+        print(f"DEBUG: Button size: {self.pause_button.size()}")
+        print(f"DEBUG: Button geometry: {self.pause_button.geometry()}")
+        
+        # Enable and test click
+        self.pause_button.setEnabled(True)
+        print("DEBUG: Button manually enabled")
+        
+        # Try to programmatically click it
+        try:
+            self.pause_button.click()
+            print("DEBUG: Programmatic click succeeded")
+        except Exception as e:
+            print(f"DEBUG: Programmatic click failed: {e}")
 
 
 class DirectoryListWidget(QListWidget):

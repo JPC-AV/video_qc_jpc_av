@@ -74,6 +74,14 @@ class MainWindow(QMainWindow, ThemeableMixin):
         # Setup theme handling
         self.setup_theme_handling()
 
+        # ADD KEYBOARD SHORTCUT FOR TESTING:
+        from PyQt6.QtGui import QShortcut, QKeySequence
+        
+        # Ctrl+T to test pause button
+        test_shortcut = QShortcut(QKeySequence("Ctrl+T"), self)
+        test_shortcut.activated.connect(self.debug_pause_button_state)
+        print("DEBUG: Added Ctrl+T shortcut to test pause button")
+
 
     def on_theme_changed(self, palette):
         """Override the ThemeableMixin method to properly handle theme changes"""
@@ -84,6 +92,18 @@ class MainWindow(QMainWindow, ThemeableMixin):
         # Now delegate to our theme helper
         if hasattr(self, 'theme'):
             self.theme.on_theme_changed(palette)
+
+    def debug_pause_button_state(self):
+        """Debug the pause button state"""
+        print("=== PAUSE BUTTON DEBUG ===")
+        
+        if hasattr(self, 'processing_window') and self.processing_window:
+            print("✓ Processing window exists")
+            self.processing_window.test_pause_button_manually()
+        else:
+            print("✗ No processing window")
+        
+        print("=== END DEBUG ===")
             
     
     def closeEvent(self, event):

@@ -13,6 +13,8 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
+from PyQt6.QtWidgets import QApplication
+
 def display_processing_banner(video_id=None):
     """
     Display ASCII art banners before and after processing.
@@ -103,16 +105,23 @@ class AVSpexProcessor:
             if self.signals:
                 self.signals.paused.emit()
                 self.signals.status_update.emit("Processing paused")
-            print(f"DEBUG: Paused during step")
+            print(f"DEBUG: Paused during step {self._current_step}")
         
         # Return True for BOTH cancel AND pause
-        # This makes all existing check_cancelled() calls automatically respect pause
-        return self._cancelled or self._paused
+        return_value = self._cancelled or self._paused
+        if return_value:
+            print(f"DEBUG: check_cancelled returning True - cancelled: {self._cancelled}, paused: {self._paused}")
+        return return_value
+
     
     def request_pause(self):
         """Request pause - will pause at next check_cancelled call"""
         print("DEBUG: Pause requested!")
         self._pause_requested = True
+        # Add debug about current state
+        print(f"DEBUG: _pause_requested = {self._pause_requested}")
+        print(f"DEBUG: _paused = {self._paused}")
+        print(f"DEBUG: Current step: {self._current_step}")
 
     def request_resume(self):
         """Resume processing"""
@@ -246,6 +255,8 @@ class AVSpexProcessor:
 
     def _run_fixity_step(self, processing_mgmt):
         """Run fixity step - existing logic, just returns success/failure"""
+        print("DEBUG: _run_fixity_step starting")
+        
         fixity_enabled = (
             self.checks_config.fixity.check_fixity == "yes" or 
             self.checks_config.fixity.validate_stream_fixity == "yes" or 
@@ -254,16 +265,29 @@ class AVSpexProcessor:
         )
         
         if not fixity_enabled:
+            print("DEBUG: Fixity not enabled, returning True")
             return True
 
         if self.signals:
             self.signals.tool_started.emit("Fixity...")
         
+        print("DEBUG: About to call processing_mgmt.process_fixity")
+        
         try:
             ctx = self._processing_context
             processing_mgmt.process_fixity(ctx['source_directory'], ctx['video_path'], ctx['video_id'])
             
-            # If we get here without check_cancelled() returning True, step completed
+            # CHECK FOR PAUSE AFTER THE OPERATION
+            if self.check_cancelled():
+                if self._paused:
+                    print("DEBUG: Fixity step was paused, not completed")
+                    return False  # Return False so the step isn't marked complete
+                else:
+                    print("DEBUG: Fixity step was cancelled")
+                    return False
+            
+            print("DEBUG: process_fixity completed normally")
+            
             if self.signals:
                 self.signals.tool_completed.emit("Fixity processing complete")
             return True
@@ -283,6 +307,15 @@ class AVSpexProcessor:
         try:
             ctx = self._processing_context
             processing_mgmt.validate_video_with_mediaconch(ctx['video_path'], ctx['destination_directory'], ctx['video_id'])
+            
+            # CHECK FOR PAUSE AFTER THE OPERATION
+            if self.check_cancelled():
+                if self._paused:
+                    print("DEBUG: MediaConch step was paused, not completed")
+                    return False  # Return False so the step isn't marked complete
+                else:
+                    print("DEBUG: MediaConch step was cancelled")
+                    return False
             
             if self.signals:
                 self.signals.tool_completed.emit("MediaConch validation complete")
@@ -311,6 +344,15 @@ class AVSpexProcessor:
         try:
             ctx = self._processing_context
             metadata_differences = processing_mgmt.process_video_metadata(ctx['video_path'], ctx['destination_directory'], ctx['video_id'])
+            
+            # CHECK FOR PAUSE AFTER THE OPERATION
+            if self.check_cancelled():
+                if self._paused:
+                    print("DEBUG: Metadata step was paused, not completed")
+                    return False  # Return False so the step isn't marked complete
+                else:
+                    print("DEBUG: Metadata step was cancelled")
+                    return False
             
             # Store for outputs step
             ctx['metadata_differences'] = metadata_differences
@@ -345,6 +387,15 @@ class AVSpexProcessor:
                 ctx['video_path'], ctx['source_directory'], ctx['destination_directory'],
                 ctx['video_id'], metadata_differences
             )
+            
+            # CHECK FOR PAUSE AFTER THE OPERATION
+            if self.check_cancelled():
+                if self._paused:
+                    print("DEBUG: Outputs step was paused, not completed")
+                    return False  # Return False so the step isn't marked complete
+                else:
+                    print("DEBUG: Outputs step was cancelled")
+                    return False
             
             if self.signals:
                 self.signals.tool_completed.emit("Outputs complete")

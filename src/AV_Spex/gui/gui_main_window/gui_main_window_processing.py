@@ -37,35 +37,76 @@ class MainWindowProcessing:
         """Create and configure the processing window and connect signals"""
         self.main_window.processing_window = ProcessingWindow(self.main_window)
             
-        # Connect signals to the processing window 
+        # Signal connections
         self.main_window.signals.status_update.connect(self.main_window.processing_window.update_status)
         self.main_window.signals.error.connect(self.main_window.processing_window.update_status)
         self.main_window.signals.progress.connect(self.update_progress)
         self.main_window.signals.file_started.connect(self.main_window.processing_window.update_file_status)
-
-        # reset steps list when a new file starts
         self.main_window.signals.file_started.connect(self.main_window.processing_window.reset_steps_list)
-
-        # Progress bar signal connections
         self.main_window.signals.stream_hash_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.md5_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.access_file_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.qctools_progress.connect(self.main_window.processing_window.update_detail_progress)
-        print("QCTools progress signal connected!")  # ADD THIS DEBUG LINE
-            
-        # Connect the step_completed signal
         self.main_window.signals.step_completed.connect(self.main_window.processing_window.mark_step_complete)
-            
-        # Connect the cancel button
+        
+        print("DEBUG: About to connect pause/resume button signals")
+        print(f"DEBUG: Pause button exists: {hasattr(self.main_window.processing_window, 'pause_button')}")
+        print(f"DEBUG: Resume button exists: {hasattr(self.main_window.processing_window, 'resume_button')}")
+        
+        if hasattr(self.main_window.processing_window, 'pause_button'):
+            print(f"DEBUG: Pause button enabled: {self.main_window.processing_window.pause_button.isEnabled()}")
+            print(f"DEBUG: Pause button visible: {self.main_window.processing_window.pause_button.isVisible()}")
+        
+        # Cancel button connection
         self.main_window.processing_window.cancel_button.clicked.connect(self.cancel_processing)
 
-        # Connect open processing button
+        # Connect pause/resume button signals
+        try:
+            self.main_window.processing_window.pause_button.clicked.connect(
+                self.main_window.signals.pause_requested.emit
+            )
+            print("DEBUG: Pause button signal connected successfully")
+        except Exception as e:
+            print(f"DEBUG: Error connecting pause button: {e}")
+
+        try:
+            self.main_window.processing_window.resume_button.clicked.connect(
+                self.main_window.signals.resume_requested.emit
+            )
+            print("DEBUG: Resume button signal connected successfully")
+        except Exception as e:
+            print(f"DEBUG: Error connecting resume button: {e}")
+        
+        # Test the signal connection by connecting to a debug function
+        try:
+            self.main_window.processing_window.pause_button.clicked.connect(
+                lambda: print("DEBUG: Pause button clicked!")
+            )
+            print("DEBUG: Debug pause button click handler connected")
+        except Exception as e:
+            print(f"DEBUG: Error connecting debug handler: {e}")
+        
+        # Connect pause/resume status signals
+        self.main_window.signals.paused.connect(
+            self.main_window.processing_window.on_processing_paused
+        )
+        self.main_window.signals.resumed.connect(
+            self.main_window.processing_window.on_processing_resumed
+        )
+        self.main_window.signals.started.connect(
+            self.main_window.processing_window.on_processing_started
+        )
+        self.main_window.signals.completed.connect(
+            self.main_window.processing_window.on_processing_completed
+        )
+
         if hasattr(self.main_window, 'open_processing_button'):
             self.main_window.open_processing_button.setText("Show Processing Window")
         
-        # Show the window
         self.main_window.processing_window.show()
         self.main_window.processing_window.raise_()
+
+        print("DEBUG: All signal connections completed")
     
     def update_progress(self, current, total):
         """Update progress bar in the processing window."""
@@ -115,6 +156,8 @@ class MainWindowProcessing:
 
     def on_processing_started(self, message=None):
         """Handle processing start"""
+        print("DEBUG: MainWindowProcessing.on_processing_started called")
+        
         # Reset the status label
         if hasattr(self.main_window, 'main_status_label'):
             self.main_window.main_status_label.setText("Starting processing...")
@@ -213,6 +256,41 @@ class MainWindowProcessing:
             self.main_window.open_processing_button.setEnabled(False)
         
         QMessageBox.information(self.main_window, "Complete", message)
+
+    def on_processing_paused(self):
+        """Handle when processing is paused"""
+        print("DEBUG: Processing paused - checking state")
+        
+        if hasattr(self.main_window, 'processing_window') and self.main_window.processing_window:
+            self.main_window.processing_window.on_processing_paused()
+        
+        # Update main window status if needed
+        if hasattr(self.main_window, 'main_status_label'):
+            current_text = self.main_window.main_status_label.text()
+            if not current_text.endswith(" (PAUSED)"):
+                self.main_window.main_status_label.setText(f"{current_text} (PAUSED)")
+        
+        # Disable cancel button during pause
+        if hasattr(self.main_window, 'cancel_processing_button'):
+            self.main_window.cancel_processing_button.setEnabled(False)
+    
+    def on_processing_resumed(self):
+        """Handle when processing is resumed"""
+        print("DEBUG: Processing resumed - checking state")
+        
+        if hasattr(self.main_window, 'processing_window') and self.main_window.processing_window:
+            self.main_window.processing_window.on_processing_resumed()
+        
+        # Update main window status if needed
+        if hasattr(self.main_window, 'main_status_label'):
+            current_text = self.main_window.main_status_label.text()
+            # Remove the (PAUSED) suffix if it exists
+            if current_text.endswith(" (PAUSED)"):
+                self.main_window.main_status_label.setText(current_text[:-9])
+        
+        # Re-enable cancel button after resume
+        if hasattr(self.main_window, 'cancel_processing_button'):
+            self.main_window.cancel_processing_button.setEnabled(True)
     
     def on_processing_time(self, processing_time):
         """Handle processing time message from worker"""

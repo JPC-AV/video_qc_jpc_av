@@ -22,24 +22,38 @@ class ProcessingWorker(QThread):
         self.user_cancelled = False
         
     def run(self):
-        """Run the worker thread."""
+        """Worker thread run method with pause handling"""
         try:
-            # Emit that we started
-            self.started_processing.emit()
+            if self.signals:
+                self.signals.started.emit("Processing started")
+
             
-            # Process the directories
-            processing_time = self.processor.process_directories(self.source_directories)
+            # Process directories
+            result = self.processor.process_directories(self.source_directories)
             
-            if processing_time:
-                self.processing_time.emit(processing_time)
-            
-            self.finished.emit()
-        
+            if result == "paused":
+                print("DEBUG: Worker detected pause, not emitting completion")
+                # Don't emit any completion signals for pause
+                return
+            elif result and not self.processor._cancelled:  # ADD THIS CHECK
+                # Only emit completion if not cancelled
+                self.processing_time.emit(result)
+                if self.signals:
+                    self.signals.completed.emit("Processing completed successfully!")
+            elif self.processor._cancelled:
+                print("DEBUG: Processing was cancelled, not emitting completion")
+                # Don't emit completion signal for cancellation
+                return
+            else:
+                # Failure case
+                if self.signals:
+                    self.signals.error.emit("Processing failed")
+                    
         except Exception as e:
-            logger.exception("Error in processing worker")
-            self.error.emit(f"Processing error: {str(e)}")
-            # Commenting this out to keep the window open after an error
-            # self.finished.emit()
+            error_msg = f"Processing error: {str(e)}"
+            print(f"DEBUG: Worker exception: {error_msg}")
+            if self.signals:
+                self.signals.error.emit(error_msg)
     
     def cancel(self):
         """Cancel the processing."""

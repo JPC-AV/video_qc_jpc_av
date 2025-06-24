@@ -17,6 +17,8 @@ class MainWindowSignals:
         self.main_window.signals.completed.connect(self.main_window.processing.on_processing_completed)
         self.main_window.signals.error.connect(self.main_window.processing.on_error)
         self.main_window.signals.cancelled.connect(self.main_window.processing.on_processing_cancelled)
+        self.main_window.signals.paused.connect(self.main_window.processing.on_processing_paused)
+        self.main_window.signals.resumed.connect(self.main_window.processing.on_processing_resumed)
 
         # Connect file_started signal to update main status label
         self.main_window.signals.file_started.connect(self.update_main_status_label)
