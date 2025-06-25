@@ -2,6 +2,8 @@ import os
 import shutil
 import subprocess
 import time
+import re
+from pathlib import Path
 
 from AV_Spex.processing import run_tools
 from AV_Spex.utils import dir_setup
@@ -262,17 +264,57 @@ class ProcessingManager:
         )
 
         return processing_results
+    
+
+def find_qctools_report(source_directory, video_id):
+    """
+    Search for existing qctools files in both _qc_metadata and _vrecord_metadata folders.
+    
+    Args:
+        source_directory (str): Path to the source directory containing metadata folders
+        video_id (str): Video identifier (e.g., "JPC_AV_01581")
+        
+    Returns:
+        str or None: Path to the qctools report if found, None otherwise
+    """
+    source_path = Path(source_directory)
+    
+    # Define the folders to search in
+    search_folders = [
+        source_path / f"{video_id}_qc_metadata",
+        source_path / f"{video_id}_vrecord_metadata"
+    ]
+    
+    # Search patterns for qctools files
+    qctools_patterns = [
+        "*.qctools.xml.gz",
+        "*.qctools.mkv"
+    ]
+    
+    # Search in each folder
+    for folder in search_folders:
+        if folder.exists() and folder.is_dir():
+            for pattern in qctools_patterns:
+                matches = list(folder.glob(pattern))
+                if matches:
+                    return str(matches[0])  # Return the first match
+    
+    return None
 
 
 def process_qctools_output(video_path, source_directory, destination_directory, video_id, report_directory=None, check_cancelled=None, signals=None):
     """
     Process QCTools output, including running QCTools and optional parsing.
+    Now searches for existing QCTools reports in both _qc_metadata and _vrecord_metadata folders.
     
     Args:
         video_path (str): Path to the input video file
+        source_directory (str): Source directory for the video
         destination_directory (str): Directory to store output files
         video_id (str): Unique identifier for the video
         report_directory (str, optional): Directory to save reports
+        check_cancelled (callable, optional): Function to check if operation was cancelled
+        signals (object, optional): Signal object for progress updates
         
     Returns:
         dict: Processing results and paths
@@ -285,23 +327,45 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         'qctools_check_output': None
     }
 
-    # Prepare QCTools output path
-    qctools_ext = checks_config.outputs.qctools_ext
-    qctools_output_path = os.path.join(destination_directory, f'{video_id}.{qctools_ext}')
+    if check_cancelled and check_cancelled():
+        return None
 
-    if check_cancelled():
-            return None
-
-    # Run QCTools command
+    # Check if QCTools should be run
     qct_run_tool = getattr(checks_config.tools.qctools, 'run_tool')
-    if qct_run_tool == 'yes':
-        run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled)
-        logger.debug('')  # Add new line for cleaner terminal output
-        results['qctools_output_path'] = qctools_output_path
+    if qct_run_tool != 'yes':
+        logger.info("QCTools processing skipped per configuration")
+        return results
+
+    # First, search for existing QCTools reports in metadata folders
+    existing_qctools_path = find_qctools_report(source_directory, video_id)
+    
+    if existing_qctools_path:
+        logger.info(f"Found existing QCTools report: {existing_qctools_path}")
+        results['qctools_output_path'] = existing_qctools_path
+        
+        # Mark step as completed since we found an existing report
+        if signals:
+            signals.step_completed.emit("QCTools")
+    else:
+        # No existing report found, create a new one in the destination directory
+        qctools_ext = checks_config.outputs.qctools_ext
+        qctools_output_path = os.path.join(destination_directory, f'{video_id}.{qctools_ext}')
+        
+        # Check if we already created one in the destination directory
+        if os.path.exists(qctools_output_path):
+            logger.warning("QCTools report already exists in destination directory, not overwriting...")
+            results['qctools_output_path'] = qctools_output_path
+        else:
+            # Create new QCTools report
+            logger.info(f"No existing QCTools report found. Creating new report: {qctools_output_path}")
+            run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled, signals=signals)
+            logger.debug('')  # Add new line for cleaner terminal output
+            results['qctools_output_path'] = qctools_output_path
+        
         if signals:
             signals.step_completed.emit("QCTools")
 
-    # Check QCTools output if configured
+    # Check QCTools output if configured (works with both existing and newly created reports)
     qct_parse_run_tool = getattr(checks_config.tools.qct_parse, 'run_tool')
     if qct_parse_run_tool == 'yes':
         # Ensure report directory exists
@@ -309,41 +373,118 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             report_directory = dir_setup.make_report_dir(source_directory, video_id)
 
         # Verify QCTools output file exists
-        if not os.path.isfile(qctools_output_path):
-            logger.critical(f"Unable to check qctools report. No file found at: {qctools_output_path}\n")
+        if not results['qctools_output_path'] or not os.path.isfile(results['qctools_output_path']):
+            logger.critical(f"Unable to check qctools report. No file found at: {results['qctools_output_path']}")
             return results
 
         # Run QCTools parsing
-        run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=check_cancelled)
+        logger.info(f"Running qct-parse on: {results['qctools_output_path']}")
+        run_qctparse(video_path, results['qctools_output_path'], report_directory, check_cancelled=check_cancelled)
         if signals:
             signals.step_completed.emit("QCT Parse")
 
     return results
 
-def run_qctools_command(command, input_path, output_type, output_path, check_cancelled=None):
+def run_qctools_command(command, input_path, output_type, output_path, check_cancelled=None, signals=None):
     
     if check_cancelled():
         return None
     
     env = os.environ.copy()
     env['PATH'] = '/usr/local/bin:' + env.get('PATH', '')
-
     full_command = f"{command} \"{input_path}\" {output_type} {output_path}"
     logger.debug(f'Running command: {full_command}\n')
     
-    process = subprocess.Popen(full_command, shell=True, env=env)
+    # Use subprocess.Popen with stdout and stderr capture
+    process = subprocess.Popen(
+        full_command, 
+        shell=True, 
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # Redirect stderr to stdout to catch all output
+        text=True,
+        bufsize=1,  # Line buffered
+        universal_newlines=True
+    )
     
-    while process.poll() is None:  # While process is running
-        if check_cancelled():
-            process.terminate()  # Send SIGTERM
+    try:
+        while True:
+            if check_cancelled():
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                return None
+            
+            # Read output line by line
+            output = process.stdout.readline()
+            
+            if output == '' and process.poll() is not None:
+                # Process has finished and no more output
+                break
+                
+            if output:
+                # Log the output for debugging
+                #logger.debug(f"QCTools output: {output.strip()}")
+                
+                # Extract percentage from output
+                # Common patterns: "50%", "Progress: 50%", "50.5%", etc.
+                percentage = extract_percentage(output.strip(), signals=signals)
+                
+                if percentage is not None and signals:
+                    # Emit the progress signal
+                    safe_percent = min(100, max(0, int(percentage)))
+                    #logger.debug(f"About to emit QCTools progress: {safe_percent}%")  # Add this debug line
+                    signals.qctools_progress.emit(safe_percent)
+    
+    except Exception as e:
+        logger.error(f"Error reading QCTools output: {str(e)}")
+    
+    # Wait for process to complete and get return code
+    return_code = process.wait()
+    
+    # Emit 100% completion if signals available
+    if signals:
+        signals.qctools_progress.emit(100)
+    
+    return return_code
+
+def extract_percentage(output_line, signals=None):
+    """
+    Extract percentage value from QCTools output line.
+    Handles QCTools specific format: "dots + spaces + X of 100 %"
+    """
+    # QCTools specific pattern: any number of dots, then spaces, then "X of 100 %"
+    pattern = r'\.+\s+(\d+)\s+of\s+100\s+%'
+
+    match = re.search(pattern, output_line)
+    if match:
+        try:
+            percentage = int(match.group(1))
+            if signals:
+                # logger.debug(f"QCTools emitting progress: {percentage}%")
+                return percentage
+            elif signals is None:
+                print(f"\rQCTools progress: {percentage}%", end='', flush=True)
+                return percentage
+        except (ValueError, IndexError):
+            pass
+    else:
+        # Try without dots (for early progress like 1%)
+        pattern2 = r'(\d+)\s+of\s+100\s+%'
+        match2 = re.search(pattern2, output_line)
+        if match2:
             try:
-                process.wait(timeout=5)  # Wait up to 5 seconds for graceful termination
-            except subprocess.TimeoutExpired:
-                process.kill()  # Force kill if process doesn't terminate
-            return None
-        time.sleep(1)  # Check cancel status every 0.5 seconds
-    
-    #return process.returncode
+                percentage = int(match2.group(1))
+                if signals:
+                    # logger.debug(f"QCTools emitting progress: {percentage}%")
+                    return percentage
+                elif signals is None:
+                    print(f"\rQCTools progress: {percentage}%", end='', flush=True)
+                    return percentage
+            except (ValueError, IndexError):
+                pass
 
 
 def check_tool_metadata(tool_name, output_path):

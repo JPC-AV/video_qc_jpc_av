@@ -1019,7 +1019,14 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     
     qct_parse = asdict(checks_config.tools.qct_parse)
 
-    qctools_ext = checks_config.outputs.qctools_ext
+    # Get the extension from the actual qctools file path
+    if '.qctools.mkv' in qctools_output_path:
+        qctools_ext = 'qctools.mkv'
+    elif '.qctools.xml.gz' in qctools_output_path:
+        qctools_ext = 'qctools.xml.gz'
+    else:
+        # Fallback to config if we can't determine from path
+        qctools_ext = checks_config.outputs.qctools_ext
 
     if qctools_ext.lower().endswith('mkv'):
         startObj = extract_report_mkv(startObj, qctools_output_path)

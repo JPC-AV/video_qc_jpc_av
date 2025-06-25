@@ -50,6 +50,7 @@ class MainWindowProcessing:
         self.main_window.signals.stream_hash_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.md5_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.access_file_progress.connect(self.main_window.processing_window.update_detail_progress)
+        self.main_window.signals.qctools_progress.connect(self.main_window.processing_window.update_detail_progress)
             
         # Connect the step_completed signal
         self.main_window.signals.step_completed.connect(self.main_window.processing_window.mark_step_complete)
@@ -86,6 +87,8 @@ class MainWindowProcessing:
                 self.main_window.processing_window.update_status("Processing completed successfully!")
                 self.main_window.processing_window.progress_bar.setMaximum(100)
                 self.main_window.processing_window.progress_bar.setValue(100)
+                # To prevent "0%" showing when jobs are done.
+                self.main_window.processing_window.overlay_label.setText("Complete")
             
             # Change the cancel button to a close button
             self.main_window.processing_window.cancel_button.setText("Close")
@@ -255,6 +258,11 @@ class MainWindowProcessing:
             self.main_window.worker.wait()
             self.main_window.worker.deleteLater()
             self.main_window.worker = None
+
+    def on_clear_status(self):
+        """Handle status clearing"""
+        if self.main_window.processing_window:
+            self.main_window.processing_window.update_detailed_status("")
 
     def cancel_processing(self):
         """Cancel ongoing processing"""
