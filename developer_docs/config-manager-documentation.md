@@ -1473,60 +1473,57 @@ if metadata_tools_enabled:
         video_path, destination_directory, video_id
     )
 ```
+### GUI Integration
 
-### GUI Integration Patterns
-
-#### Module-Level Configuration Loading
-```python
-# Module-level instantiation for GUI components
-config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
-```
-
-#### Configuration Synchronization in GUI
-The GUI implements comprehensive configuration synchronization when importing/resetting:
+#### Config Import and UI Synchronization
+When users import new configs through the GUI, all the UI elements need to be updated to reflect the new settings:
 
 ```python
 def import_config(self):
-    """Import configuration and synchronize all UI components."""
-    # Import through ConfigIO
+    """Import config from file and update all UI elements to match."""
+    # Load the new config from the selected file
     config_io = ConfigIO(config_mgr)
     config_io.import_configs(file_path)
     
-    # Reload UI components to reflect new settings
+    # Tell the main config widget to refresh its checkboxes and values
     self.main_window.config_widget.load_config_values()
     
-    # Get fresh config references
+    # Get the newly imported configs
     checks_config = config_mgr.get_config('checks', ChecksConfig)
     spex_config = config_mgr.get_config('spex', SpexConfig)
     
-    # Synchronize dropdown selections based on imported values
+    # Update dropdown menus to match the imported settings
+    # blockSignals prevents the dropdown change from triggering another config update
     if hasattr(self.main_window, 'checks_profile_dropdown'):
         self.main_window.checks_profile_dropdown.blockSignals(True)
+        
+        # Set dropdown based on what tools are actually enabled
         if checks_config.tools.exiftool.run_tool == "yes":
             self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
         elif checks_config.tools.exiftool.run_tool == "no":
             self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
+            
         self.main_window.checks_profile_dropdown.blockSignals(False)
 ```
 
-### MediaConch Policy Management Example
-
-The system demonstrates sophisticated policy file handling:
+#### MediaConch Policy Management
+The CLI and GUI can accept a custom MediaConch policy file and copy it to the user's config directory:
 
 ```python
 def setup_mediaconch_policy(user_policy_path: str = None) -> str:
-    """Set up MediaConch policy file, either using user-provided policy or default."""
+    """Copy user's policy file and update config to use it."""
     config_mgr = ConfigManager()
     
     if user_policy_path:
-        # Copy user policy to user policies directory
+        # Get just the filename from the full path
         policy_filename = os.path.basename(user_policy_path)
+        
+        # Copy the file to the user's policies directory
         user_policy_dest = os.path.join(config_mgr._user_policies_dir, policy_filename)
         shutil.copy2(user_policy_path, user_policy_dest)
         
-        # Update config while preserving other settings
+        # Update the config to use this new policy file
+        # but keep the existing run_mediaconch setting
         current_config = config_mgr.get_config('checks', ChecksConfig)
         config_mgr.update_config('checks', {
             'tools': {
@@ -1540,24 +1537,28 @@ def setup_mediaconch_policy(user_policy_path: str = None) -> str:
     return policy_filename
 ```
 
-### Dynamic Configuration Mapping
-
-The CLI demonstrates dynamic configuration mapping with validation:
+#### CLI Config Mapping
+The CLI maps simple text arguments to actual config objects:
 
 ```python
+# Map CLI argument strings to the actual profile dictionaries
 PROFILE_MAPPING = {
-    "step1": config_edit.profile_step1,
-    "step2": config_edit.profile_step2,
-    "off": config_edit.profile_allOff
+    "step1": config_edit.profile_step1,    # Metadata extraction profile
+    "step2": config_edit.profile_step2,    # Quality analysis profile  
+    "off": config_edit.profile_allOff      # Turn off all tools
 }
 
-# Dynamic filename profile loading from config
+# Load filename profiles from the config file and map them to CLI arguments
 filename_config = config_mgr.get_config("filename", FilenameConfig)
 FILENAME_MAPPING = {
     "jpc": filename_config.filename_profiles["JPC Filename Profile"],
     "bowser": filename_config.filename_profiles["Bowser Filename Profile"]
 }
+
+# Usage: python av_spex_the_file.py --profile step1 --filename jpc
 ```
+
+This lets users type simple commands like `--profile step1` instead of having to specify all the individual tool settings.
 
 ### Configuration Persistence Best Practices
 
@@ -1588,12 +1589,11 @@ def on_check_spex_clicked(self):
 ## Best Practices
 
 1. **Processing Components**: Always call `refresh_configs()` in processing class constructors to ensure latest configuration state
-2. **GUI Components**: Use module-level instantiation for consistent configuration access, but implement synchronization logic for dynamic updates
-3. **Configuration Persistence**: Save configurations as `last_used` immediately before processing operations and on application exit
-4. **Policy Management**: Use ConfigManager's path management methods for external files like MediaConch policies
-5. **Dynamic Processing**: Structure processing logic to be configuration-driven rather than hardcoded
-6. **Error Handling**: Implement robust error handling for configuration operations, especially in GUI contexts
-7. **Signal Blocking**: Use `blockSignals()` when programmatically updating GUI elements to prevent recursive configuration updates
-8. **Resource Management**: Leverage ConfigManager's resource discovery methods rather than hardcoding file paths
+2. **Configuration Persistence**: Save configurations as `last_used` immediately before processing operations and on application exit
+3. **Policy Management**: Use ConfigManager's path management methods for external files like MediaConch policies
+4. **Dynamic Processing**: Structure processing logic to be configuration-driven rather than hardcoded
+5. **Error Handling**: Implement robust error handling for configuration operations, especially in GUI contexts
+6. **Signal Blocking**: Use `blockSignals()` when programmatically updating GUI elements to prevent recursive configuration updates
+7. **Resource Management**: Leverage ConfigManager's resource discovery methods rather than hardcoding file paths
 
 This pattern balances consistency and freshness, ensuring that all components work with appropriately timed configuration data while providing robust resource management and complex dataclass support.
