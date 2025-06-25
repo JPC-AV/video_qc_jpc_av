@@ -2,48 +2,58 @@
 
 ## Overview
 
-The ConfigManager is a singleton class that provides centralized configuration management for the AV Spex application. It handles loading, caching, updating, and persisting configuration data across multiple configuration types including Checks, Spex, Filename, and Signalflow configurations.
+The ConfigManager is a singleton class. It handles loading, caching, updating, and persisting configuration data across all modules in the AV Spex app.
 
 ## Configuration Architecture
 
-The AV Spex application uses four primary configuration types:
+The AV Spex application uses four primary configs:
 
 1. **ChecksConfig**: Controls which tools run and how processing steps are executed
 2. **SpexConfig**: Defines expected metadata values for validation against actual file metadata  
 3. **FilenameConfig**: Contains filename parsing profiles for different naming conventions
-4. **SignalflowConfig**: Stores signal flow equipment profiles for metadata embedding
+4. **SignalflowConfig**: Stores signal flow profiles for metadata embedding
 
 Each configuration type is backed by:
 - **JSON configuration files**: Default configurations bundled with the application
 - **Dataclass definitions**: Type-safe Python objects defined in `config_setup.py`
 - **User overrides**: Last-used configurations stored in the user's config directory
 
-## Instantiation
+## Instantiation and Singleton Pattern
 
-The ConfigManager class uses the `__new__` initialization method with the `super()` function to ensure only one instance is ever created:
+The ConfigManager uses the **singleton design pattern** to ensure that only one instance exists throughout the entire application. This means that no matter how many times you call `ConfigManager()`, you always get the same instance.
 
 ```python
 class ConfigManager:
-    _instance = None  # Class-level variable to hold single instance
-    _configs: Dict[str, Any] = {}  # Shared configuration cache dictionary
+    _instance = None  # Stores the single instance
+    _configs: Dict[str, Any] = {}  # Shared configuration cache
     
-    # The __new__(cls) insures only one instance is ever created
     def __new__(cls):
+        # If no instance exists yet, create one
         if cls._instance is None:
             cls._instance = super(ConfigManager, cls).__new__(cls)
-            # One-time initialization of paths and directories
+            # One-time initialization happens here
+        
+        # Always return the same instance
+        return cls._instance
 ```
 
-`super()` is used to call methods from a parent/base class. In Python, all classes ultimately inherit from `object`, which provides the basic `__new__()` implementation.
+**How the Singleton Works:**
 
-Here's the sequence:
+1. **First call** to `ConfigManager()`: Creates a new instance and stores it in `_instance`
+2. **Subsequent calls** to `ConfigManager()`: Returns the existing instance from `_instance`
+3. **Shared state**: All instances share the same `_configs` cache dictionary
 
-When `super().__new__(cls)` is called:
+**Why This Matters:**
+```python
+# These are all the same instance
+config_mgr1 = ConfigManager()
+config_mgr2 = ConfigManager()
+config_mgr3 = ConfigManager()
 
-1. `super()` gets the parent class (which is `object` in this case)
-2. It calls the parent's `__new__()` method
-3. It passes `cls` (`ConfigManager`) as the argument
-4. The parent `object.__new__(cls)` creates a bare instance of `ConfigManager`
+# Changes made through one affect all others
+config_mgr1.update_config('checks', {'tools': {'mediainfo': {'run_tool': 'yes'}}})
+config_mgr2.get_config('checks', ChecksConfig)  # Will see the update made through config_mgr1
+```
 
 ### Directory Structure and Path Management
 
@@ -85,22 +95,73 @@ class ChecksConfig:
 ```
 
 **OutputsConfig**: Controls output generation
-- `access_file`: Whether to create low-resolution access copies
-- `report`: Whether to generate HTML reports
-- `qctools_ext`: File extension for QCTools output
+```python
+@dataclass
+class OutputsConfig:
+    access_file: str         # "yes" or "no" - Create low-resolution access copies
+    report: str              # "yes" or "no" - Generate HTML reports
+    qctools_ext: str         # File extension for QCTools output (e.g., "qctools.xml.gz")
+```
 
 **FixityConfig**: Manages file integrity checking
-- `check_fixity`: Compare against stored checksums
-- `validate_stream_fixity`: Validate embedded stream hashes
-- `embed_stream_fixity`: Embed MD5 hashes in MKV tags
-- `output_fixity`: Generate checksum files
-- `overwrite_stream_fixity`: Overwrite existing embedded hashes
+```python
+@dataclass
+class FixityConfig:
+    check_fixity: str               # "yes" or "no" - Compare against stored checksums
+    validate_stream_fixity: str     # "yes" or "no" - Validate embedded stream hashes
+    embed_stream_fixity: str        # "yes" or "no" - Embed MD5 hashes in MKV tags
+    output_fixity: str              # "yes" or "no" - Generate checksum files
+    overwrite_stream_fixity: str    # "yes" or "no" - Overwrite existing embedded hashes
+```
 
-**ToolsConfig**: Individual tool configurations including:
-- `BasicToolConfig`: Standard tools (MediaInfo, ExifTool, FFprobe, MediaTrace)
-- `QCToolsConfig`: QCTools analysis
-- `MediaConchConfig`: Policy-based validation
-- `QCTParseToolConfig`: Advanced QCTools parsing with boolean and list options
+**ToolsConfig**: Individual tool configurations with different structures for different tool types
+```python
+@dataclass
+class ToolsConfig:
+    exiftool: BasicToolConfig       # Standard metadata extraction tool
+    ffprobe: BasicToolConfig        # FFmpeg metadata probe tool
+    mediainfo: BasicToolConfig      # MediaInfo metadata tool
+    mediatrace: BasicToolConfig     # MediaTrace container analysis
+    qctools: QCToolsConfig          # QCTools video analysis (run_tool only)
+    mediaconch: MediaConchConfig    # Policy-based validation
+    qct_parse: QCTParseToolConfig   # Advanced QCTools parsing with multiple options
+```
+
+**Basic Tool Configuration** (ExifTool, FFprobe, MediaInfo, MediaTrace):
+```python
+@dataclass
+class BasicToolConfig:
+    check_tool: str    # "yes" or "no" - Whether to validate output against expected values
+    run_tool: str      # "yes" or "no" - Whether to execute the tool
+```
+
+**QCTools Configuration**:
+```python
+@dataclass
+class QCToolsConfig:
+    run_tool: str      # "yes" or "no" - Whether to run QCTools analysis
+```
+
+**MediaConch Configuration**:
+```python
+@dataclass
+class MediaConchConfig:
+    mediaconch_policy: str    # Filename of XML policy file (e.g., "JPC_AV_NTSC_MKV_2025.xml")
+    run_mediaconch: str       # "yes" or "no" - Whether to run MediaConch validation
+```
+
+**QCT Parse Configuration** (Advanced QCTools parsing):
+```python
+@dataclass
+class QCTParseToolConfig:
+    run_tool: str               # "yes" or "no" - Whether to run QCT parsing
+    barsDetection: bool         # True/False - Detect color bars in video
+    evaluateBars: bool          # True/False - Evaluate detected color bars
+    contentFilter: List[str]    # List of content filters to apply
+    profile: List[str]          # List of analysis profiles to use
+    tagname: Optional[str]      # Optional tag name for analysis
+    thumbExport: bool           # True/False - Export thumbnail images
+```
 
 #### SpexConfig
 Defines expected metadata values for validation:
@@ -126,7 +187,7 @@ class SpexConfig:
 - **QCT Parse Values**: Quality control thresholds and analysis profiles
 
 #### FilenameConfig and SignalflowConfig
-Support specialized profile management:
+Management of default and user created profiles for file names and embedded signal flow metadata:
 
 ```python
 @dataclass
@@ -136,54 +197,6 @@ class FilenameConfig:
 @dataclass  
 class SignalflowConfig:
     signalflow_profiles: Dict[str, SignalflowProfile]
-```
-
-### Complex Dataclass Examples
-
-#### MediaInfo Structure
-The MediaInfo values are organized by metadata section:
-
-```python
-@dataclass
-class MediainfoGeneralValues:
-    FileExtension: str
-    Format: str
-    OverallBitRate_Mode: str
-
-@dataclass
-class MediainfoVideoValues:
-    Format: str
-    Width: str
-    Height: str
-    FrameRate: str
-    ColorSpace: str
-    BitDepth: str
-    # ... additional video metadata fields
-```
-
-#### QCTools Analysis Structure
-QCTools configurations support complex analysis profiles:
-
-```python
-@dataclass
-class QCTParseValues:
-    content: Content                    # Content analysis thresholds
-    profiles: Profiles                  # Analysis tolerance profiles  
-    fullTagList: FullTagList           # Complete metadata tag definitions
-    smpte_color_bars: SmpteColorBars   # Color bar analysis thresholds
-```
-
-#### Signal Flow Equipment Tracking
-Equipment configurations for metadata embedding:
-
-```python
-@dataclass
-class EncoderSettings:
-    Source_VTR: List[str]
-    TBC_Framesync: List[str] 
-    ADC: List[str]
-    Capture_Device: List[str]
-    Computer: List[str]
 ```
 
 ## The Merge Process
@@ -520,7 +533,7 @@ def find_file(self, filename: str, user_config: bool = False) -> Optional[str]:
     return file_path if os.path.exists(file_path) else None
 ```
 
-All resource management methods include automatic path quoting for filenames containing spaces, ensuring compatibility across different operating systems.
+All resource management methods include automatic path quoting for filenames containing spaces.
 
 ## The Refresh Challenge
 
@@ -584,7 +597,7 @@ The ConfigManager provides mechanisms for editing configurations through the CLI
 
 ### Updating Individual Settings
 
-The `update_config()` method enables precise updates to configuration values:
+The `update_config()` method enables updates (as python dictionaries) to the config:
 
 ```python
 def update_config(self, config_name: str, updates: dict) -> None:
@@ -640,11 +653,13 @@ def on_checkbox_changed(self, state, path):
     self.config_mgr.update_config('checks', updates)
 ```
 
-This allows each checkbox in the interface to directly modify its corresponding field in the configuration, with changes immediately reflected in the in-memory configuration.
+This allows each checkbox in the interface to directly modify its corresponding field in the configuration, with changes immediately reflected in the config.
 
 ### Section Replacement
 
-For wholesale replacement of configuration sections, the `replace_config_section()` method provides targeted section updates:
+For wholesale replacement of configuration sections, the `replace_config_section()` method provides targeted section updates.
+
+This method is must be used for filename profiles or signalflow configurations! It replaces the entire nested structure. Otherwise, a simpler file name profile with fewer fields would inheret the fields from the previously used profile which were not overwritten.
 
 ```python
 def replace_config_section(self, config_name: str, section_path: str, new_value: any) -> None:
@@ -691,11 +706,9 @@ def replace_config_section(self, config_name: str, section_path: str, new_value:
     self.save_config(config_name, is_last_used=True)
 ```
 
-This method is particularly useful for replacing complex nested structures like filename profiles or signalflow configurations.
-
 ### Applying Predefined Profiles
 
-The system supports applying predefined configuration profiles that modify multiple settings at once through the `apply_profile()` function:
+The system supports applying predefined Checks Config profiles that modify multiple settings at once through the `apply_profile()` function:
 
 ```python
 def apply_profile(selected_profile):
@@ -730,7 +743,7 @@ def apply_profile(selected_profile):
         config_mgr.update_config('checks', updates)
 ```
 
-Predefined profiles are stored as dictionaries in `config_edit.py`:
+Predefined Checks Config profiles are stored as dictionaries in `config_edit.py`:
 
 ```python
 profile_step1 = {
@@ -745,8 +758,6 @@ profile_step1 = {
     'fixity': {'check_fixity': 'yes'}
 }
 ```
-
-This approach allows for quick application of common configuration groups, such as turning on a set of tools for common workflow steps.
 
 ### Specialized Configuration Updates
 
@@ -807,17 +818,11 @@ This function handles the specific complexities of updating the signal flow conf
 
 ## Configuration Import/Export System
 
-The AV Spex application includes a comprehensive configuration import/export system through the `ConfigIO` class, enabling users to share, backup, and restore configuration settings across different installations.
+The AV Spex application includes a config import/export system through the `ConfigIO` class, enabling users to share, backup, and restore config settings.
 
 ### ConfigIO Class
 
-The `ConfigIO` class provides centralized configuration serialization and deserialization:
-
-```python
-class ConfigIO:
-    def __init__(self, config_mgr: ConfigManager):
-        self.config_mgr = config_mgr
-```
+The `ConfigIO` class stores functions for importing and exporting config files.
 
 #### Export Functionality
 
@@ -958,13 +963,13 @@ def handle_config_io(args, config_mgr: ConfigManager):
 **Example CLI Usage:**
 ```bash
 # Export all configurations
-python av_spex_the_file.py --export-config all --export-file my_config_backup.json
+av-spex --export-config all --export-file my_config_backup.json
 
 # Export only checks configuration
-python av_spex_the_file.py --export-config checks --export-file checks_only.json
+av-spex --export-config checks --export-file checks_only.json
 
 # Import configurations
-python av_spex_the_file.py --import-config my_config_backup.json
+av-spex --import-config my_config_backup.json
 ```
 
 ## Configuration Utility Functions
@@ -991,13 +996,13 @@ def print_config(config_spec='all'):
 **Example Usage:**
 ```bash
 # Print all configurations
-python av_spex_the_file.py --printprofile all
+av-spex --printprofile all
 
 # Print only tools section of checks config
-python av_spex_the_file.py --printprofile checks,tools
+av-spex --printprofile checks,tools
 
 # Print filename values from spex config
-python av_spex_the_file.py --printprofile spex,filename_values
+av-spex --printprofile spex,filename_values
 ```
 
 #### Configuration Validation
@@ -1102,7 +1107,7 @@ BVH3100 = {
 }
 ```
 
-### CLI Configuration Management
+### CLI Checks Config Options
 
 The command-line interface provides options for targeted configuration changes through the `--on` and `--off` flags, which are processed by the `toggle_on()` and `toggle_off()` functions:
 
@@ -1168,15 +1173,15 @@ This implementation allows for precise control through the command line:
 
 ```bash
 # Turn on mediainfo tool
-python av_spex_the_file.py --on mediainfo.run_tool
+av-spex --on mediainfo.run_tool
 
 # Turn off exiftool and fixity
-python av_spex_the_file.py --off exiftool.run_tool --off fixity.check_fixity
+av-spex --off exiftool.run_tool --off fixity.check_fixity
 ```
 
 ### Persisting Configuration Changes
 
-After modifying a configuration, changes can be persisted to disk using the `save_config()` method:
+After modifying a configuration, changes can be persisted to disk using the `save_config()` method, which is used at the end of the previously mentioned `update_config()` and `replace_config_section()` functions:
 
 ```python
 def save_config(self, config_name: str, is_last_used: bool = False) -> None:
@@ -1201,11 +1206,6 @@ def save_config(self, config_name: str, is_last_used: bool = False) -> None:
     except Exception as e:
         logger.error(f"Error saving config to {save_path}: {str(e)}")
 ```
-
-This method:
-1. Retrieves the configuration from the cache
-2. Converts the dataclass instance to a dictionary using `asdict()`
-3. Writes the configuration to a JSON file, using the `is_last_used` flag to determine the filename
 
 ### Resetting Configurations
 
@@ -1246,22 +1246,11 @@ This method:
 3. Loads a fresh configuration from the default config file
 4. Returns the reset configuration instance
 
-The `refresh_configs()` method provides a more general way to clear the entire configuration cache:
-
-```python
-def refresh_configs(self):
-    """Force reload of all configs from disk"""
-    self._configs = {}
-    logger.debug(f"Config cache cleared, configs will be reloaded from disk\n")
-```
-
-This method simply clears the configuration cache, ensuring that the next time a configuration is requested, it will be reloaded from disk.
-
 ## Configuration File Relationships
 
 ### File Structure Overview
 
-The AV Spex configuration system uses multiple JSON files to organize different aspects of the application:
+The AV Spex config system uses multiple JSON files to organize different aspects of the application:
 
 ```
 config/
@@ -1274,23 +1263,6 @@ config/
     └── [other policy files]
 ```
 
-### Configuration Interdependencies
-
-**ChecksConfig Dependencies:**
-- References MediaConch policy files through `mediaconch_policy` field
-- Controls which SpexConfig sections are used during validation
-- Determines output file naming conventions
-
-**SpexConfig Dependencies:**
-- Contains signalflow profiles that can be applied to `mediatrace_values.ENCODER_SETTINGS`
-- Filename values must match patterns defined in FilenameConfig profiles
-- QCTools analysis thresholds align with ChecksConfig QCT Parse tool settings
-
-**Profile Management:**
-- FilenameConfig profiles can be applied to SpexConfig `filename_values`
-- SignalflowConfig profiles update both SpexConfig `mediatrace_values` and `ffmpeg_values.format.tags`
-- ChecksConfig profiles coordinate multiple tool and output settings
-
 ### Configuration Loading Priority
 
 The ConfigManager follows a consistent loading priority:
@@ -1300,251 +1272,77 @@ The ConfigManager follows a consistent loading priority:
 3. **User policies** (MediaConch policies in user directory) - for policies
 4. **Bundled policies** (MediaConch policies in application bundle) - policy fallback
 
-### Advanced GUI Configuration Dialogs
+### Custom Configuration Dialogs
 
-The AV Spex application includes sophisticated dialog components for creating custom configuration profiles through interactive GUI forms. These dialogs demonstrate advanced integration with the ConfigManager system.
+The application includes dialog windows for creating custom filename patterns and signal flow profiles through GUI forms.
 
 #### Custom Filename Pattern Dialog
 
-The `CustomFilenameDialog` provides a dynamic interface for creating filename validation patterns:
+This dialog allows users to create filename validation patterns by defining sections separated by underscores:
 
-```python
-class CustomFilenameDialog(QDialog, ThemeableMixin):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.pattern = None
-        self.setup_theme_handling()
-        # Dynamic section management up to 8 sections
-        self.sections = []
-        self.add_section()  # Start with one section
-```
-
-**Dynamic Section Management:**
-```python
-def add_section(self):
-    """Add a new filename section widget"""
-    if len(self.sections) >= 8:
-        QMessageBox.warning(self, "Warning", "Maximum 8 sections allowed")
-        return
-        
-    # Create section controls
-    section = {
-        'widget': section_widget,
-        'type_combo': type_combo,  # Literal, Wildcard, Regex
-        'value_input': value_input
-    }
-    self.sections.append(section)
-    
-    # Connect signals for live preview updates
-    type_combo.currentIndexChanged.connect(self.update_preview)
-    value_input.textChanged.connect(self.update_preview)
-```
-
-**Configuration Creation and Application:**
 ```python
 def get_filename_pattern(self):
-    """Get the filename pattern as a FilenameProfile dataclass"""
+    """Create a FilenameProfile dataclass from form inputs"""
     fn_sections = {}
     for i, section in enumerate(self.sections, 1):
-        section_type = section['type_combo'].currentText().lower()
+        section_type = section['type_combo'].currentText().lower()  # literal, wildcard, regex
         value = section['value_input'].text()
         
-        # Create FilenameSection dataclass instances
         fn_sections[f"section{i}"] = FilenameSection(
             value=value,
             section_type=section_type
         )
         
-    # Return complete FilenameProfile dataclass
     return FilenameProfile(
         fn_sections=fn_sections,
         FileExtension=self.extension_input.text()
     )
-
-def on_save_clicked(self):
-    """Handle save button click with validation and application"""
-    pattern = self.get_filename_pattern()
-    if pattern:
-        try:
-            # Apply through config_edit utility
-            config_edit.apply_filename_profile(pattern)
-            self.pattern = pattern
-            self.accept()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to apply pattern: {str(e)}")
 ```
+
+The dialog creates up to 8 filename sections, each with:
+- **Section type**: Literal text, wildcard patterns (#,@,*), or regex
+- **Value**: The actual pattern or text for that section
+- **Live preview**: Shows the resulting filename pattern as you type
+
+When saved, the pattern is applied using `config_edit.apply_filename_profile()`.
 
 #### Custom Signal Flow Profile Dialog
 
-The `CustomSignalflowDialog` creates comprehensive equipment chain profiles:
+This dialog captures the equipment chain used for video digitization:
 
-```python
-class CustomSignalflowDialog(QDialog, ThemeableMixin):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.profile = None
-        self.setup_theme_handling()
-        
-        # Setup configuration sections for video equipment chain
-        self.setup_source_vtr_section()
-        self.setup_tbc_section()
-        self.setup_adc_section()
-        self.setup_capture_device_section()
-        self.setup_computer_section()
-```
-
-**Complex Profile Structure Creation:**
 ```python
 def get_profile(self):
-    """Build complete signal flow profile from form inputs"""
+    """Build signal flow profile from equipment form inputs"""
     profile = {"name": self.profile_name_input.text()}
     
-    # Source VTR configuration
-    vtr_model = self.get_selected_model(self.vtr_model_combo, self.custom_vtr_input)
-    vtr_parts = [vtr_model]
-    if self.vtr_sn_input.text():
-        vtr_parts.append(f"SN {self.vtr_sn_input.text()}")
-    vtr_parts.extend([
-        self.vtr_connection_combo.currentText(),
-        self.vtr_audio_combo.currentText()
-    ])
-    profile["Source_VTR"] = vtr_parts
-    
-    # Conditional ADC handling based on checkbox state
-    if self.separate_adc_check.isChecked():
-        # Create separate ADC configuration
-        adc_model = self.get_selected_model(self.adc_model_combo, self.custom_adc_input)
-        adc_parts = [adc_model]
-        if self.adc_sn_input.text():
-            adc_parts.append(f"SN {self.adc_sn_input.text()}")
-        adc_parts.append(self.adc_connection_combo.currentText())
-        profile["ADC"] = adc_parts
-    elif "TBC_Framesync" in profile:
-        # Use TBC as ADC if no separate ADC specified
-        profile["ADC"] = profile["TBC_Framesync"].copy()
+    # Build equipment chain from form sections
+    profile["Source_VTR"] = [vtr_model, serial_number, connection_type, audio_type]
+    profile["TBC_Framesync"] = [tbc_model, firmware, serial_number, output_connection]
+    profile["Capture_Device"] = [device_model, serial_number, interface_type]
+    profile["Computer"] = [computer_model, processor, serial_number, os_version, software]
     
     return profile
-
-def on_save_clicked(self):
-    """Validate, create profile, and apply to configuration"""
-    profile = self.get_profile()
-    if profile is None:
-        return
-    
-    try:
-        # Apply through config_edit utility
-        config_edit.apply_signalflow_profile(profile)
-        self.profile = profile
-        self.accept()
-    except Exception as e:
-        QMessageBox.critical(self, "Error", f"Failed to save profile: {str(e)}")
 ```
 
-#### Live Preview and Validation Features
+The dialog organizes equipment into categories:
+- **Source VTR**: Video tape recorder details
+- **TBC/Frame Sync**: Time base corrector information
+- **A/D Converter**: Analog-to-digital conversion (optional separate device)
+- **Capture Device**: Digital capture hardware
+- **Computer**: System specifications and software
 
-Both dialogs implement sophisticated user experience features:
+Equipment details are stored as lists containing model, serial numbers, connection types, and other relevant specifications. When saved, the profile updates both `mediatrace_values.ENCODER_SETTINGS` and `ffmpeg_values.format.tags.ENCODER_SETTINGS` using `config_edit.apply_signalflow_profile()`.
 
-**Real-time Preview Updates:**
-```python
-def update_preview(self):
-    """Update preview display as user types"""
-    # Filename dialog preview
-    parts = []
-    for section in self.sections:
-        value = section['value_input'].text()
-        if value:
-            parts.append(value)
-    
-    if parts:
-        preview = "_".join(parts) + "." + self.extension_input.text()
-        self.preview_label.setText(preview)
+#### Form Features
 
-def update_preview(self):
-    """Signal flow profile preview with full equipment chain"""
-    preview_parts = []
-    
-    # Build comprehensive equipment chain display
-    vtr_text = f"Source_VTR: {', '.join(vtr_parts)}"
-    preview_parts.append(vtr_text)
-    
-    # ... additional equipment sections
-    
-    preview_text = "\n".join(preview_parts)
-    self.preview_label.setText(preview_text)
-```
-
-**Form Validation:**
-```python
-def get_filename_pattern(self):
-    """Comprehensive validation before pattern creation"""
-    if not self.sections:
-        QMessageBox.warning(self, "Validation Error", "At least one section is required.")
-        return None
-        
-    if not all(section['value_input'].text() for section in self.sections):
-        QMessageBox.warning(self, "Validation Error", "All sections must have a value.")
-        return None
-        
-    if not self.extension_input.text():
-        QMessageBox.warning(self, "Validation Error", "File extension is required.")
-        return None
-```
-
-#### Theme Integration
-
-Both dialogs properly integrate with the application's theme system:
-
-```python
-class CustomFilenameDialog(QDialog, ThemeableMixin):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setup_theme_handling()  # Enable theme change detection
-        
-    def on_theme_changed(self, palette):
-        """Apply theme changes to dialog components"""
-        self.setPalette(palette)
-        
-    def closeEvent(self, event):
-        """Clean up theme connections on dialog close"""
-        self.cleanup_theme_handling()
-        super().closeEvent(event)
-```
-
-#### Integration with Main Application
-
-The dialogs integrate seamlessly with the main application's configuration workflow:
-
-```python
-# Dialog usage pattern in main application
-def show_custom_filename_dialog(self):
-    """Show custom filename creation dialog"""
-    dialog = CustomFilenameDialog(self)
-    
-    # Load existing pattern if available
-    if hasattr(self, 'current_pattern'):
-        dialog.load_existing_pattern(self.current_pattern)
-    
-    if dialog.exec() == QDialog.DialogCode.Accepted:
-        # Pattern was successfully created and applied
-        new_pattern = dialog.get_pattern()
-        self.refresh_ui_after_config_change()
-        
-        # Update UI to reflect new configuration
-        self.update_profile_dropdown_selection()
-```
-
-These dialog implementations demonstrate:
-
-1. **Dynamic UI Generation**: Creating form elements programmatically based on user needs
-2. **Real-time Validation**: Providing immediate feedback as users interact with the interface
-3. **Complex Configuration Building**: Assembling sophisticated nested configuration structures
-4. **Integration Patterns**: Seamless integration with the ConfigManager and broader application architecture
-5. **Theme Consistency**: Proper integration with the application's theming system
-6. **Error Handling**: Comprehensive validation and user-friendly error reporting
+Both dialogs include:
+- **Real-time preview**: Shows the resulting configuration as you make changes
+- **Form validation**: Ensures required fields are filled before saving
+- **Error handling**: Displays helpful error messages if saving fails
 
 #### Profile Selection and Application Workflow
 
-The Checks tab demonstrates a sophisticated profile selection system that combines GUI interactions with configuration management:
+The Checks tab demonstrates a profile selection system that combines GUI interactions with configuration management:
 
 ```python
 class ProfileHandlers:
@@ -1579,49 +1377,6 @@ class ProfileHandlers:
                 logger.critical(f"Error applying profile: {e}")
 ```
 
-**Dynamic UI State Synchronization:**
-```python
-def setup_checks_tab(self):
-    """Initialize Checks tab with current configuration state"""
-    # Create dropdown with predefined options
-    self.main_window.checks_profile_dropdown = QComboBox()
-    self.main_window.checks_profile_dropdown.addItem("Step 1")
-    self.main_window.checks_profile_dropdown.addItem("Step 2")
-    self.main_window.checks_profile_dropdown.addItem("All Off")
-    
-    # Set initial dropdown state based on current configuration
-    checks_config = config_mgr.get_config('checks', ChecksConfig)
-    if checks_config.tools.exiftool.run_tool == "yes":
-        self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
-    elif checks_config.tools.exiftool.run_tool == "no":
-        self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
-    # Implicit "All Off" state for other cases
-    
-    # Connect selection handler
-    self.main_window.checks_profile_dropdown.currentIndexChanged.connect(
-        self.profile_handlers.on_profile_selected
-    )
-```
-
-**Immediate Configuration Reflection:**
-The profile selection system demonstrates immediate UI synchronization after configuration changes:
-
-```python
-def on_profile_selected(self, index):
-    """Profile selection with immediate UI update"""
-    # Apply configuration changes
-    config_edit.apply_profile(profile)
-    
-    # Immediately refresh UI components to reflect new state
-    self.main_window.config_widget.load_config_values()
-```
-
-This pattern ensures that:
-1. **Configuration Changes are Immediate**: No "apply" button needed
-2. **UI State Reflects Configuration**: Dropdown selection matches actual config state
-3. **Bidirectional Synchronization**: Configuration changes update UI, UI changes update configuration
-4. **Error Handling**: Profile application failures are logged and handled gracefully
-
 #### Hierarchical GUI Organization Pattern
 
 The Checks tab demonstrates a hierarchical organization pattern using nested handler classes:
@@ -1648,20 +1403,13 @@ class ChecksTab(ThemeableMixin):
         # Setup theme handling
         self.setup_theme_handling()
 ```
+## How the ConfigManager is Used
 
-This organization pattern provides:
-- **Logical Separation**: Related functionality grouped in nested classes
-- **Clear Ownership**: Each handler class has clear responsibilities
-- **Maintainable Code**: Easy to locate and modify specific functionality
-- **Consistent Access**: All handlers have access to main window through parent reference
+### In Processing Components
 
-## Real-World Usage Patterns
+Processing classes refresh configs when they start to ensure they have the latest settings from the GUI:
 
-### Processing Workflow Integration
-
-The ConfigManager integrates throughout the processing pipeline to provide dynamic configuration access:
-
-#### AVSpexProcessor Pattern
+#### AVSpexProcessor
 ```python
 class AVSpexProcessor:
     def __init__(self, signals=None):
@@ -1670,35 +1418,34 @@ class AVSpexProcessor:
         self._cancel_emitted = False 
 
         self.config_mgr = ConfigManager()
-        # Always refresh configs to get latest changes from GUI
+        # Get latest configs from disk
         self.config_mgr.refresh_configs()
         self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
         self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
 ```
 
-This pattern ensures that processing components always work with the most current configuration, even if changes were made in the GUI after the processor was instantiated.
+This ensures processing uses current settings, even if the user changed configs in the GUI after the processor was created.
 
-#### ProcessingManager Pattern
+#### ProcessingManager
 ```python
 class ProcessingManager:
     def __init__(self, signals=None, check_cancelled_fn=None):
         self.signals = signals
         self.check_cancelled = check_cancelled_fn or (lambda: False)
         
-        # Each processing manager gets fresh configs
+        # Load fresh configs from disk
         self.config_mgr = ConfigManager()
         self.config_mgr.refresh_configs()
         self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
         self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
 ```
 
-### Configuration-Driven Processing Logic
+### Config-Driven Processing Logic
 
-The system uses configuration values to dynamically determine which processing steps to execute:
+The Checks Config values decide which processing steps are run:
 
-#### Conditional Processing Based on Configuration
 ```python
-# Check if fixity is enabled in config
+# Check if any fixity operations are enabled
 fixity_enabled = False
 fixity_config = self.checks_config.fixity
 
@@ -1711,7 +1458,7 @@ if (fixity_config.check_fixity == "yes" or
 if fixity_enabled:
     processing_mgmt.process_fixity(source_directory, video_path, video_id)
 
-# Dynamic tool checking
+# Check if any metadata tools are enabled
 metadata_tools_enabled = False
 tools_config = self.checks_config.tools
 
@@ -1720,6 +1467,11 @@ if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.che
     hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool == "yes" or
     hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool == "yes"):
     metadata_tools_enabled = True
+    
+if metadata_tools_enabled:
+    metadata_differences = processing_mgmt.process_video_metadata(
+        video_path, destination_directory, video_id
+    )
 ```
 
 ### GUI Integration Patterns
