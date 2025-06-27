@@ -1,8 +1,8 @@
 from dataclasses import asdict
-from typing import List
+from typing import List, Dict, Union, Optional
 
 from AV_Spex.utils.log_setup import logger
-from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, FilenameSection, SignalflowConfig
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, FilenameSection, SignalflowConfig, ChecksProfile, ChecksProfilesConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
 
@@ -360,6 +360,100 @@ def toggle_on(tool_names: List[str]):
 
 def toggle_off(tool_names: List[str]):
     update_tool_setting(tool_names, 'no')
+
+
+def get_custom_profiles_config():
+    """Get the custom profiles configuration."""
+    try:
+        return config_mgr.get_config('profiles_checks', ChecksProfilesConfig, use_last_used=False)
+    except FileNotFoundError:
+        # If the file doesn't exist, create a new empty config
+        empty_config = ChecksProfilesConfig()
+        config_mgr._configs['profiles_checks'] = empty_config
+        save_custom_profiles_config(empty_config)
+        return empty_config
+
+def save_custom_profiles_config(profiles_config: ChecksProfilesConfig):
+    """Save the custom profiles configuration."""
+    config_mgr._configs['profiles_checks'] = profiles_config
+    config_mgr.save_config('profiles_checks', is_last_used=False)
+
+def get_available_custom_profiles() -> List[str]:
+    """Get list of available custom profile names."""
+    profiles_config = get_custom_profiles_config()
+    return list(profiles_config.custom_profiles.keys())
+
+def get_custom_profile(profile_name: str) -> Optional[ChecksProfile]:
+    """Get a specific custom profile by name."""
+    profiles_config = get_custom_profiles_config()
+    return profiles_config.custom_profiles.get(profile_name)
+
+def save_custom_profile(profile: ChecksProfile):
+    """Save a custom profile."""
+    profiles_config = get_custom_profiles_config()
+    profiles_config.custom_profiles[profile.name] = profile
+    save_custom_profiles_config(profiles_config)
+    logger.info(f"Saved custom profile: {profile.name}")
+
+def delete_custom_profile(profile_name: str) -> bool:
+    """Delete a custom profile."""
+    profiles_config = get_custom_profiles_config()
+    if profile_name in profiles_config.custom_profiles:
+        del profiles_config.custom_profiles[profile_name]
+        save_custom_profiles_config(profiles_config)
+        logger.info(f"Deleted custom profile: {profile_name}")
+        return True
+    return False
+
+def apply_custom_profile(profile_name: str):
+    """Apply a custom profile to the current checks configuration."""
+    profile = get_custom_profile(profile_name)
+    if not profile:
+        logger.error(f"Custom profile '{profile_name}' not found")
+        return False
+    
+    # Convert the profile to the format expected by apply_profile
+    profile_dict = {
+        "outputs": asdict(profile.outputs),
+        "fixity": asdict(profile.fixity),
+        "tools": asdict(profile.tools)
+    }
+    
+    apply_profile(profile_dict)
+    logger.info(f"Applied custom profile: {profile_name}")
+    return True
+
+def create_profile_from_current_config(profile_name: str, description: str = "") -> ChecksProfile:
+    """Create a new custom profile from the current checks configuration."""
+    current_config = config_mgr.get_config('checks', ChecksConfig)
+    
+    # Create a new profile with the current configuration
+    new_profile = ChecksProfile(
+        name=profile_name,
+        description=description,
+        outputs=current_config.outputs,
+        fixity=current_config.fixity,
+        tools=current_config.tools
+    )
+    
+    return new_profile
+
+def get_all_profiles() -> Dict[str, Union[dict, ChecksProfile]]:
+    """Get all available profiles (both built-in and custom)."""
+    all_profiles = {}
+    
+    # Add built-in profiles
+    all_profiles.update({
+        "Step 1 Profile": profile_step1,
+        "Step 2 Profile": profile_step2, 
+        "All Off Profile": profile_allOff
+    })
+    
+    # Add custom profiles
+    custom_profiles = get_custom_profiles_config().custom_profiles
+    all_profiles.update(custom_profiles)
+    
+    return all_profiles
 
 
 profile_step1 = {
