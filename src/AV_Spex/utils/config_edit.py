@@ -367,43 +367,14 @@ def toggle_off(tool_names: List[str]):
 
 def get_custom_profiles_config():
     """Get the custom profiles configuration."""
-    try:
-        # Force reload from disk by clearing cache first
-        if 'profiles_checks' in config_mgr._configs:
-            del config_mgr._configs['profiles_checks']
-            logger.debug("Cleared profiles_checks from cache")
-            
-        # Check what files actually exist
-        bundled_path = os.path.join(config_mgr._bundle_dir, 'config', 'profiles_checks_config.json')
-        last_used_path = os.path.join(config_mgr._user_config_dir, 'last_used_profiles_checks_config.json')
+    # Force reload from disk by clearing cache first
+    if 'profiles_checks' in config_mgr._configs:
+        del config_mgr._configs['profiles_checks']
         
-        logger.debug(f"Checking bundled config at: {bundled_path} - exists: {os.path.exists(bundled_path)}")
-        logger.debug(f"Checking last_used config at: {last_used_path} - exists: {os.path.exists(last_used_path)}")
-        
-        if os.path.exists(last_used_path):
-            # Read and debug the last_used file directly
-            with open(last_used_path, 'r') as f:
-                content = f.read()
-                logger.debug(f"Last used file content: {content[:200]}...")  # First 200 chars
-        
-        # Use last_used=True to load saved profiles, falling back to bundled config
-        config = config_mgr.get_config('profiles_checks', ChecksProfilesConfig, use_last_used=True)
-        logger.debug(f"Loaded custom profiles config with {len(config.custom_profiles)} profiles: {list(config.custom_profiles.keys())}")
-        return config
-    except FileNotFoundError:
-        logger.debug("profiles_checks.json not found, creating new empty config")
-        # If the file doesn't exist, create a new empty config
-        empty_config = ChecksProfilesConfig()
-        
-        # Save it directly to user config directory as last_used only
-        config_file_path = os.path.join(config_mgr._user_config_dir, 'last_used_profiles_checks_config.json')
-        with open(config_file_path, 'w') as f:
-            json.dump(asdict(empty_config), f, indent=2)
-        
-        # Set in cache
-        config_mgr._configs['profiles_checks'] = empty_config
-        logger.debug(f"Created empty profiles config at: {config_file_path}")
-        return empty_config
+    # Use last_used=True to load saved profiles, falling back to bundled config
+    config = config_mgr.get_config('profiles_checks', ChecksProfilesConfig, use_last_used=True)
+    logger.debug(f"Loaded custom profiles config with {len(config.custom_profiles)} profiles: {list(config.custom_profiles.keys())}")
+    return config
     
 
 def get_available_custom_profiles() -> List[str]:
@@ -439,25 +410,8 @@ def save_custom_profile(profile: ChecksProfile):
         
         logger.debug(f"Updated profiles dict will have: {list(updated_profiles.keys())}")
         
-        # Debug: Check config before replace_config_section
-        logger.debug(f"Config in cache before replace: {config_mgr._configs.get('profiles_checks', 'NOT FOUND')}")
-        
         # Use replace_config_section to replace the entire custom_profiles dict
         config_mgr.replace_config_section('profiles_checks', 'custom_profiles', updated_profiles)
-        
-        # Debug: Check config after replace_config_section
-        cached_config = config_mgr._configs.get('profiles_checks')
-        if cached_config:
-            logger.debug(f"Config in cache after replace: {len(cached_config.custom_profiles)} profiles")
-        
-        # Debug: Check if file was actually written
-        last_used_path = os.path.join(config_mgr._user_config_dir, 'last_used_profiles_checks_config.json')
-        if os.path.exists(last_used_path):
-            with open(last_used_path, 'r') as f:
-                content = f.read()
-                logger.debug(f"File content after save: {content[:300]}...")  # First 300 chars
-        else:
-            logger.error(f"Last used file not found after save at: {last_used_path}")
         
         logger.info(f"Successfully saved custom profile: {profile.name}")
         
