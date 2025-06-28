@@ -1,6 +1,9 @@
 from dataclasses import asdict
 from typing import List, Dict, Union, Optional
 
+import json
+import os
+
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, FilenameSection, SignalflowConfig, ChecksProfile, ChecksProfilesConfig
 from AV_Spex.utils.config_manager import ConfigManager
@@ -365,70 +368,43 @@ def toggle_off(tool_names: List[str]):
 def get_custom_profiles_config():
     """Get the custom profiles configuration."""
     try:
-        config = config_mgr.get_config('profiles_checks', ChecksProfilesConfig, use_last_used=False)
+        # Force reload from disk by clearing cache first
+        if 'profiles_checks' in config_mgr._configs:
+            del config_mgr._configs['profiles_checks']
+            logger.debug("Cleared profiles_checks from cache")
+            
+        # Check what files actually exist
+        bundled_path = os.path.join(config_mgr._bundle_dir, 'config', 'profiles_checks_config.json')
+        last_used_path = os.path.join(config_mgr._user_config_dir, 'last_used_profiles_checks_config.json')
+        
+        logger.debug(f"Checking bundled config at: {bundled_path} - exists: {os.path.exists(bundled_path)}")
+        logger.debug(f"Checking last_used config at: {last_used_path} - exists: {os.path.exists(last_used_path)}")
+        
+        if os.path.exists(last_used_path):
+            # Read and debug the last_used file directly
+            with open(last_used_path, 'r') as f:
+                content = f.read()
+                logger.debug(f"Last used file content: {content[:200]}...")  # First 200 chars
+        
+        # Use last_used=True to load saved profiles, falling back to bundled config
+        config = config_mgr.get_config('profiles_checks', ChecksProfilesConfig, use_last_used=True)
         logger.debug(f"Loaded custom profiles config with {len(config.custom_profiles)} profiles: {list(config.custom_profiles.keys())}")
         return config
     except FileNotFoundError:
         logger.debug("profiles_checks.json not found, creating new empty config")
         # If the file doesn't exist, create a new empty config
         empty_config = ChecksProfilesConfig()
-        config_mgr._configs['profiles_checks'] = empty_config
-        save_custom_profiles_config(empty_config)
-        return empty_config
-
-def save_custom_profiles_config(profiles_config: ChecksProfilesConfig):
-    """Save the custom profiles configuration."""
-    logger.debug(f"=== SAVING PROFILES CONFIG ===")
-    logger.debug(f"Saving {len(profiles_config.custom_profiles)} profiles: {list(profiles_config.custom_profiles.keys())}")
-    
-    try:
+        
+        # Save it directly to user config directory as last_used only
+        config_file_path = os.path.join(config_mgr._user_config_dir, 'last_used_profiles_checks_config.json')
+        with open(config_file_path, 'w') as f:
+            json.dump(asdict(empty_config), f, indent=2)
+        
         # Set in cache
-        config_mgr._configs['profiles_checks'] = profiles_config
-        logger.debug("Set profiles_config in cache")
-        
-        # Try the standard save method first
-        try:
-            config_mgr.save_config('profiles_checks', is_last_used=False)
-            logger.debug("Standard save_config completed")
-        except Exception as standard_save_error:
-            logger.warning(f"Standard save failed: {standard_save_error}, trying direct save")
-            
-            # Fallback: Direct save to user config directory
-            import json
-            import os
-            from dataclasses import asdict
-            
-            config_file_path = os.path.join(config_mgr._user_config_dir, 'profiles_checks_config.json')
-            
-            # Convert to dict for JSON serialization
-            config_dict = asdict(profiles_config)
-            
-            # Save directly
-            with open(config_file_path, 'w') as f:
-                json.dump(config_dict, f, indent=2)
-            
-            logger.debug(f"Direct save completed to: {config_file_path}")
-        
-        # Verify the save worked
-        import os
-        config_file_path = os.path.join(config_mgr._user_config_dir, 'profiles_checks_config.json')
-        if os.path.exists(config_file_path):
-            logger.debug(f"Config file exists at: {config_file_path}")
-            with open(config_file_path, 'r') as f:
-                content = f.read()
-                logger.debug(f"File content length: {len(content)} characters")
-                if len(content) < 500:  # Short enough to log
-                    logger.debug(f"File content: {content}")
-                else:
-                    logger.debug("File content too long to log, but file exists and has content")
-        else:
-            logger.error(f"Config file was not created at: {config_file_path}")
-            
-    except Exception as e:
-        logger.error(f"Error in save_custom_profiles_config: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise
+        config_mgr._configs['profiles_checks'] = empty_config
+        logger.debug(f"Created empty profiles config at: {config_file_path}")
+        return empty_config
+    
 
 def get_available_custom_profiles() -> List[str]:
     """Get list of available custom profile names."""
@@ -438,48 +414,86 @@ def get_available_custom_profiles() -> List[str]:
 def get_custom_profile(profile_name: str) -> Optional[ChecksProfile]:
     """Get a specific custom profile by name."""
     profiles_config = get_custom_profiles_config()
-    profile = profiles_config.custom_profiles.get(profile_name)
-    logger.debug(f"Looking for profile '{profile_name}': {'Found' if profile else 'Not found'}")
-    if not profile:
-        logger.debug(f"Available profiles: {list(profiles_config.custom_profiles.keys())}")
-    return profile
+    return profiles_config.custom_profiles.get(profile_name)
+
 
 def save_custom_profile(profile: ChecksProfile):
-    """Save a custom profile."""
+    """Save a custom profile using ConfigManager's replace_config_section method."""
     logger.debug(f"=== SAVING CUSTOM PROFILE ===")
     logger.debug(f"Profile name: {profile.name}")
-    logger.debug(f"Profile description: {profile.description}")
-    
-    profiles_config = get_custom_profiles_config()
-    logger.debug(f"Current profiles before save: {list(profiles_config.custom_profiles.keys())}")
-    
-    profiles_config.custom_profiles[profile.name] = profile
-    logger.debug(f"Added profile, now have: {list(profiles_config.custom_profiles.keys())}")
     
     try:
-        save_custom_profiles_config(profiles_config)
+        # Get current profiles
+        profiles_config = get_custom_profiles_config()
+        logger.debug(f"Current profiles before save: {list(profiles_config.custom_profiles.keys())}")
+        
+        # Create updated profiles dict with the new profile
+        updated_profiles = {}
+        
+        # Add existing profiles
+        for name, existing_profile in profiles_config.custom_profiles.items():
+            updated_profiles[name] = asdict(existing_profile)
+        
+        # Add the new profile
+        updated_profiles[profile.name] = asdict(profile)
+        
+        logger.debug(f"Updated profiles dict will have: {list(updated_profiles.keys())}")
+        
+        # Debug: Check config before replace_config_section
+        logger.debug(f"Config in cache before replace: {config_mgr._configs.get('profiles_checks', 'NOT FOUND')}")
+        
+        # Use replace_config_section to replace the entire custom_profiles dict
+        config_mgr.replace_config_section('profiles_checks', 'custom_profiles', updated_profiles)
+        
+        # Debug: Check config after replace_config_section
+        cached_config = config_mgr._configs.get('profiles_checks')
+        if cached_config:
+            logger.debug(f"Config in cache after replace: {len(cached_config.custom_profiles)} profiles")
+        
+        # Debug: Check if file was actually written
+        last_used_path = os.path.join(config_mgr._user_config_dir, 'last_used_profiles_checks_config.json')
+        if os.path.exists(last_used_path):
+            with open(last_used_path, 'r') as f:
+                content = f.read()
+                logger.debug(f"File content after save: {content[:300]}...")  # First 300 chars
+        else:
+            logger.error(f"Last used file not found after save at: {last_used_path}")
+        
         logger.info(f"Successfully saved custom profile: {profile.name}")
         
-        # Verify the save worked by reloading
+        # Verify the save worked
         verification_config = get_custom_profiles_config()
         if profile.name in verification_config.custom_profiles:
             logger.debug(f"Verification: Profile '{profile.name}' confirmed saved")
         else:
             logger.error(f"Verification failed: Profile '{profile.name}' not found after save")
-            
+            logger.debug(f"Available profiles after save: {list(verification_config.custom_profiles.keys())}")
+        
     except Exception as e:
         logger.error(f"Error saving custom profile '{profile.name}': {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise
 
 def delete_custom_profile(profile_name: str) -> bool:
-    """Delete a custom profile."""
+    """Delete a custom profile using ConfigManager's replace_config_section method."""
     profiles_config = get_custom_profiles_config()
-    if profile_name in profiles_config.custom_profiles:
-        del profiles_config.custom_profiles[profile_name]
-        save_custom_profiles_config(profiles_config)
+    if profile_name not in profiles_config.custom_profiles:
+        logger.warning(f"Profile '{profile_name}' not found, cannot delete")
+        return False
+    
+    try:
+        # Create updated profiles dict without the deleted profile
+        updated_profiles = {k: asdict(v) for k, v in profiles_config.custom_profiles.items() if k != profile_name}
+        
+        # Use replace_config_section to replace the entire custom_profiles dict
+        config_mgr.replace_config_section('profiles_checks', 'custom_profiles', updated_profiles)
         logger.info(f"Deleted custom profile: {profile_name}")
         return True
-    return False
+        
+    except Exception as e:
+        logger.error(f"Error deleting custom profile '{profile_name}': {str(e)}")
+        return False
 
 def apply_custom_profile(profile_name: str):
     """Apply a custom profile to the current checks configuration."""
@@ -488,16 +502,21 @@ def apply_custom_profile(profile_name: str):
         logger.error(f"Custom profile '{profile_name}' not found")
         return False
     
-    # Convert the profile to the format expected by apply_profile
-    profile_dict = {
-        "outputs": asdict(profile.outputs),
-        "fixity": asdict(profile.fixity),
-        "tools": asdict(profile.tools)
-    }
-    
-    apply_profile(profile_dict)
-    logger.info(f"Applied custom profile: {profile_name}")
-    return True
+    try:
+        # Convert the profile to the format expected by apply_profile
+        profile_dict = {
+            "outputs": asdict(profile.outputs),
+            "fixity": asdict(profile.fixity),
+            "tools": asdict(profile.tools)
+        }
+        
+        apply_profile(profile_dict)
+        logger.info(f"Applied custom profile: {profile_name}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error applying custom profile '{profile_name}': {str(e)}")
+        return False
 
 def create_profile_from_current_config(profile_name: str, description: str = "") -> ChecksProfile:
     """Create a new custom profile from the current checks configuration."""
@@ -531,57 +550,6 @@ def get_all_profiles() -> Dict[str, Union[dict, ChecksProfile]]:
     
     return all_profiles
 
-
-def test_profile_save():
-    """Test function to debug profile saving issues."""
-    logger.debug("=== TESTING PROFILE SAVE ===")
-    
-    try:
-        # Create a simple test profile
-        from AV_Spex.utils.config_setup import ChecksProfile, OutputsConfig, FixityConfig, ToolsConfig
-        from AV_Spex.utils.config_setup import BasicToolConfig, QCToolsConfig, MediaConchConfig, QCTParseToolConfig
-        
-        test_profile = ChecksProfile(
-            name="Test Profile",
-            description="Test profile for debugging",
-            outputs=OutputsConfig(access_file="no", report="no", qctools_ext="qctools.xml.gz"),
-            fixity=FixityConfig(
-                check_fixity="no", validate_stream_fixity="no", embed_stream_fixity="no", 
-                output_fixity="no", overwrite_stream_fixity="no"
-            ),
-            tools=ToolsConfig(
-                exiftool=BasicToolConfig(check_tool="no", run_tool="no"),
-                ffprobe=BasicToolConfig(check_tool="no", run_tool="no"),
-                mediaconch=MediaConchConfig(mediaconch_policy="", run_mediaconch="no"),
-                mediainfo=BasicToolConfig(check_tool="no", run_tool="no"),
-                mediatrace=BasicToolConfig(check_tool="no", run_tool="no"),
-                qctools=QCToolsConfig(run_tool="no"),
-                qct_parse=QCTParseToolConfig(
-                    run_tool="no", barsDetection=False, evaluateBars=False,
-                    contentFilter=[], profile=[], tagname=None, thumbExport=False
-                )
-            )
-        )
-        
-        logger.debug(f"Created test profile: {test_profile.name}")
-        
-        # Try to save it
-        save_custom_profile(test_profile)
-        
-        # Try to load it back
-        loaded_profile = get_custom_profile("Test Profile")
-        if loaded_profile:
-            logger.debug("Test profile save/load successful!")
-            return True
-        else:
-            logger.error("Test profile was not found after save")
-            return False
-            
-    except Exception as e:
-        logger.error(f"Error in test_profile_save: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
 
 profile_step1 = {
     "tools": {
