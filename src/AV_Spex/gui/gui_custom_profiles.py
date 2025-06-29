@@ -637,6 +637,31 @@ class ProfileSelectionDialog(QDialog, ThemeableMixin):
                 # Apply custom profile
                 config_edit.apply_custom_profile(profile_name)
             
+            # Update the GUI to reflect the new configuration
+            main_window = self.parent()
+            if main_window:
+                # Refresh the config widget to show the new settings (handles most dropdowns)
+                if hasattr(main_window, 'config_widget') and main_window.config_widget:
+                    main_window.config_widget.load_config_values()
+                
+                # Handle the main profile dropdown separately
+                if hasattr(main_window, 'checks_tab') and main_window.checks_tab:
+                    main_window.checks_tab.profile_handlers.refresh_profile_dropdown()
+                    
+                    # Set the dropdown to show the applied profile
+                    dropdown = main_window.checks_profile_dropdown
+                    if item_text.startswith("[Built-in]"):
+                        # For built-in profiles, use the simplified name
+                        if profile_name == "Step 1 Profile":
+                            dropdown.setCurrentText("Step 1")
+                        elif profile_name == "Step 2 Profile":
+                            dropdown.setCurrentText("Step 2")
+                        elif profile_name == "All Off Profile":
+                            dropdown.setCurrentText("All Off")
+                    else:
+                        # For custom profiles, use the [Custom] prefix format
+                        dropdown.setCurrentText(f"[Custom] {profile_name}")
+            
             QMessageBox.information(self, "Success", f"Applied profile: {profile_name}")
             self.selected_profile = profile_name
             
