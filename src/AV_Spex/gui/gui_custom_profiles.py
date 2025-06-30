@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
+from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils import config_edit
 from AV_Spex.utils.config_setup import (
     ChecksProfile, OutputsConfig, FixityConfig, ToolsConfig,
@@ -55,9 +56,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.setup_dialog_buttons(layout)
         
         self.setLayout(layout)
-        
-        # Apply initial theme styling
-        self._apply_initial_theme_styling()
         
         # Load existing profile if in edit mode
         if edit_profile:
@@ -203,11 +201,16 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         mediaconch_group = QGroupBox("MediaConch")
         mediaconch_layout = QGridLayout()
         
-        # Policy
+        # Policy dropdown (replacing the text input)
         mediaconch_layout.addWidget(QLabel("Policy:"), 0, 0)
-        self.mediaconch_policy_input = QLineEdit()
-        self.mediaconch_policy_input.setPlaceholderText("Policy filename...")
-        mediaconch_layout.addWidget(self.mediaconch_policy_input, 0, 1)
+        self.mediaconch_policy_combo = QComboBox()
+        
+        # Load available policies from config manager
+        config_mgr = ConfigManager()
+        available_policies = config_mgr.get_available_policies()
+        self.mediaconch_policy_combo.addItems(available_policies)
+        
+        mediaconch_layout.addWidget(self.mediaconch_policy_combo, 0, 1)
         
         # Run MediaConch
         mediaconch_layout.addWidget(QLabel("Run MediaConch:"), 1, 0)
@@ -312,8 +315,17 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
                 self.basic_tool_combos[tool_name]['check_tool'].setCurrentText(tool_config.check_tool)
                 self.basic_tool_combos[tool_name]['run_tool'].setCurrentText(tool_config.run_tool)
             
-            # Load MediaConch
-            self.mediaconch_policy_input.setText(current_config.tools.mediaconch.mediaconch_policy)
+            # Load MediaConch - updated to use combo box
+            if current_config.tools.mediaconch.mediaconch_policy:
+                # Check if the policy exists in the dropdown, if so select it
+                index = self.mediaconch_policy_combo.findText(current_config.tools.mediaconch.mediaconch_policy)
+                if index >= 0:
+                    self.mediaconch_policy_combo.setCurrentIndex(index)
+                else:
+                    # If policy doesn't exist in dropdown, add it and select it
+                    self.mediaconch_policy_combo.addItem(current_config.tools.mediaconch.mediaconch_policy)
+                    self.mediaconch_policy_combo.setCurrentText(current_config.tools.mediaconch.mediaconch_policy)
+            
             self.mediaconch_run_combo.setCurrentText(current_config.tools.mediaconch.run_mediaconch)
             
             # Load QCTools
@@ -327,8 +339,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             self.thumb_export_check.setChecked(qct_config.thumbExport)
             if qct_config.tagname:
                 self.tagname_input.setText(qct_config.tagname)
-                
-            QMessageBox.information(self, "Success", "Loaded current configuration settings.")
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load current config: {str(e)}")
@@ -357,8 +367,17 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             self.basic_tool_combos[tool_name]['check_tool'].setCurrentText(tool_config.check_tool)
             self.basic_tool_combos[tool_name]['run_tool'].setCurrentText(tool_config.run_tool)
         
-        # Load MediaConch
-        self.mediaconch_policy_input.setText(profile.tools.mediaconch.mediaconch_policy)
+        # Load MediaConch - updated to use combo box
+        if profile.tools.mediaconch.mediaconch_policy:
+            # Check if the policy exists in the dropdown, if so select it
+            index = self.mediaconch_policy_combo.findText(profile.tools.mediaconch.mediaconch_policy)
+            if index >= 0:
+                self.mediaconch_policy_combo.setCurrentIndex(index)
+            else:
+                # If policy doesn't exist in dropdown, add it and select it
+                self.mediaconch_policy_combo.addItem(profile.tools.mediaconch.mediaconch_policy)
+                self.mediaconch_policy_combo.setCurrentText(profile.tools.mediaconch.mediaconch_policy)
+        
         self.mediaconch_run_combo.setCurrentText(profile.tools.mediaconch.run_mediaconch)
         
         # Load QCTools
@@ -408,7 +427,7 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
                 run_tool=self.basic_tool_combos['ffprobe']['run_tool'].currentText()
             ),
             mediaconch=MediaConchConfig(
-                mediaconch_policy=self.mediaconch_policy_input.text(),
+                mediaconch_policy=self.mediaconch_policy_combo.currentText(),
                 run_mediaconch=self.mediaconch_run_combo.currentText()
             ),
             mediainfo=BasicToolConfig(
@@ -471,9 +490,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         
         # Update all buttons
         theme_manager.style_buttons(self)
-        
-        # Update all comboboxes
-        theme_manager.style_comboboxes(self)
         
         # Force repaint
         self.update()
