@@ -2,10 +2,12 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, 
     QScrollArea, QPushButton, QComboBox, QCheckBox, QGroupBox,
-    QMessageBox, QDialog, QTextEdit, QGridLayout, QListWidget
+    QMessageBox, QDialog, QTextEdit, QGridLayout, QListWidget,
+    QFileDialog
 )
 from PyQt6.QtCore import Qt
 
+from AV_Spex.processing.processing_mgmt import setup_mediaconch_policy
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils import config_edit
 from AV_Spex.utils.config_setup import (
@@ -56,6 +58,13 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.setup_dialog_buttons(layout)
         
         self.setLayout(layout)
+
+        # Apply initial theme styling
+        self._apply_initial_theme_styling()
+        
+        # Style buttons at the end, after all UI is set up
+        theme_manager = ThemeManager.instance()
+        theme_manager.style_buttons(self)
         
         # Load existing profile if in edit mode
         if edit_profile:
@@ -68,12 +77,7 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         # Style all group boxes
         for group_box in self.findChildren(QGroupBox):
             theme_manager.style_groupbox(group_box)
-        
-        # Style all buttons
-        theme_manager.style_buttons(self)
-        
-        # Style all comboboxes
-        theme_manager.style_comboboxes(self)
+
     
     def setup_profile_info_section(self, layout):
         """Setup the profile name and description section."""
@@ -201,25 +205,84 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         mediaconch_group = QGroupBox("MediaConch")
         mediaconch_layout = QGridLayout()
         
-        # Policy dropdown (replacing the text input)
+        # Policy dropdown
         mediaconch_layout.addWidget(QLabel("Policy:"), 0, 0)
         self.mediaconch_policy_combo = QComboBox()
         
         # Load available policies from config manager
+        from AV_Spex.utils.config_manager import ConfigManager
         config_mgr = ConfigManager()
         available_policies = config_mgr.get_available_policies()
         self.mediaconch_policy_combo.addItems(available_policies)
         
         mediaconch_layout.addWidget(self.mediaconch_policy_combo, 0, 1)
         
+        # Import button
+        self.import_policy_btn = QPushButton("Import New MediaConch Policy")
+        self.import_policy_btn.clicked.connect(self.open_policy_file_dialog)
+        mediaconch_layout.addWidget(self.import_policy_btn, 1, 0, 1, 2)  # Span both columns
+        
         # Run MediaConch
-        mediaconch_layout.addWidget(QLabel("Run MediaConch:"), 1, 0)
+        mediaconch_layout.addWidget(QLabel("Run MediaConch:"), 2, 0)
         self.mediaconch_run_combo = QComboBox()
         self.mediaconch_run_combo.addItems(["no", "yes"])
-        mediaconch_layout.addWidget(self.mediaconch_run_combo, 1, 1)
+        mediaconch_layout.addWidget(self.mediaconch_run_combo, 2, 1)
         
         mediaconch_group.setLayout(mediaconch_layout)
         parent_layout.addWidget(mediaconch_group)
+
+    def open_policy_file_dialog(self):
+        """Open file dialog for selecting MediaConch policy file"""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from AV_Spex.processing.processing_mgmt import setup_mediaconch_policy
+        
+        file_dialog = QFileDialog()
+        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        file_dialog.setNameFilter("XML files (*.xml)")
+        
+        if file_dialog.exec():
+            selected_files = file_dialog.selectedFiles()
+            if selected_files:
+                policy_path = selected_files[0]
+                # Call setup_mediaconch_policy with selected file
+                new_policy_name = setup_mediaconch_policy(policy_path)
+                if new_policy_name:
+                    # Refresh the policy dropdown to show the new policy
+                    self.refresh_policy_dropdown()
+                    # Set the dropdown to the newly imported policy
+                    self.mediaconch_policy_combo.setCurrentText(new_policy_name)
+                    QMessageBox.information(
+                        self,
+                        "Success",
+                        f"Successfully imported MediaConch policy: {new_policy_name}"
+                    )
+                else:
+                    # Show error message if policy setup failed
+                    QMessageBox.critical(
+                        self,
+                        "Error",
+                        "Failed to import MediaConch policy file. Check logs for details."
+                    )
+    
+    def refresh_policy_dropdown(self):
+        """Refresh the MediaConch policy dropdown with current available policies"""
+        from AV_Spex.utils.config_manager import ConfigManager
+        
+        # Store current selection
+        current_policy = self.mediaconch_policy_combo.currentText()
+        
+        # Clear and repopulate
+        self.mediaconch_policy_combo.clear()
+        
+        # Get updated list of available policies
+        config_mgr = ConfigManager()
+        available_policies = config_mgr.get_available_policies()
+        self.mediaconch_policy_combo.addItems(available_policies)
+        
+        # Restore selection if it still exists
+        index = self.mediaconch_policy_combo.findText(current_policy)
+        if index >= 0:
+            self.mediaconch_policy_combo.setCurrentIndex(index)
     
     def setup_qctools_section(self, parent_layout):
         """Setup QCTools specific settings."""
@@ -561,7 +624,11 @@ class ProfileSelectionDialog(QDialog, ThemeableMixin):
         """Apply initial theme styling using ThemeManager."""
         theme_manager = ThemeManager.instance()
         
-        # Style all buttons
+        # Style all group boxes
+        for group_box in self.findChildren(QGroupBox):
+            theme_manager.style_groupbox(group_box)
+        
+        # Style all buttons (including the new import button)
         theme_manager.style_buttons(self)
     
     def refresh_profile_list(self):
@@ -691,6 +758,10 @@ class ProfileSelectionDialog(QDialog, ThemeableMixin):
         
         # Get the theme manager
         theme_manager = ThemeManager.instance()
+
+        # Update all group boxes
+        for group_box in self.findChildren(QGroupBox):
+            theme_manager.style_groupbox(group_box)
         
         # Update all buttons
         theme_manager.style_buttons(self)
