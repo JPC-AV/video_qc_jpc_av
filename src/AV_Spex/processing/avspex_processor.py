@@ -139,7 +139,7 @@ class AVSpexProcessor:
             
         if fixity_enabled:
             if self.signals:
-                self.signals.tool_started.emit("Fixity...")
+                self.signals.tool_started.emit("Fixity...\n")
             processing_mgmt.process_fixity(source_directory, video_path, video_id)
             if self.signals:
                 self.signals.tool_completed.emit("Fixity processing complete")

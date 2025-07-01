@@ -337,7 +337,7 @@ def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
     if check_cancelled():
         return None
 
-    logger.debug('Extracting existing video and audio stream hashes')
+    logger.debug('Extracting existing video and audio stream hashes\n')
     existing_tags = extract_tags(video_path)
     if existing_tags:
         existing_video_hash, existing_audio_hash = extract_hashes(existing_tags)
@@ -346,13 +346,13 @@ def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
             logger.info(f'Video stream md5 found: {existing_video_hash}')
         else:
             logger.warning('No video stream hash found\n')
-            embed_fixity(video_path, check_cancelled=check_cancelled)
+            embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
             return
         if existing_audio_hash is not None:
             logger.info(f'Audio stream md5 found: {existing_audio_hash}\n')
         else:
             logger.warning('No audio stream hash found\n')
-            embed_fixity(video_path, check_cancelled=check_cancelled)
+            embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
             return
         logger.debug('Generating video and audio stream hashes. This may take a moment...')
         hash_result = make_stream_hash(video_path, check_cancelled=check_cancelled, signals=signals)
@@ -384,7 +384,7 @@ def process_embedded_fixity(video_path, check_cancelled=None, signals=None):
 
     # Check if VIDEO_STREAM_HASH and AUDIO_STREAM_HASH MKV tags exist
     if existing_video_hash is None or existing_audio_hash is None:
-        embed_fixity(video_path, check_cancelled=check_cancelled)
+        embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
     else:
         logger.critical("Existing stream hashes found!")
         if checks_config.fixity.overwrite_stream_fixity == 'yes':
