@@ -222,7 +222,7 @@ class AVSpexProcessor:
         
         if outputs_enabled:
             if self.signals:
-                self.signals.tool_started.emit("Output Processing")
+                self.signals.tool_started.emit("Output Processing\n")
             
             processing_results = processing_mgmt.process_video_outputs(
                 video_path, source_directory, destination_directory,
@@ -230,13 +230,13 @@ class AVSpexProcessor:
             )
             
             if self.signals:
-                self.signals.tool_completed.emit("Outputs complete")
+                self.signals.tool_completed.emit("Outputs complete\n")
 
         if self.check_cancelled():
             return False
         
         if self.signals:
-            self.signals.tool_completed.emit("All processing for this directory complete")
+            self.signals.tool_completed.emit("All processing for this directory complete\n")
         if self.signals:
             self.signals.step_completed.emit("All Processing")
             time.sleep(0.1) # pause for a ms to let the list update before the QMessage box pops up
