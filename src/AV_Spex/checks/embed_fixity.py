@@ -189,6 +189,21 @@ def extract_tags(video_path):
     return result.stdout
 
 
+def remove_existing_stream_hashes(xml_tags):
+    """
+    Remove any existing VIDEO_STREAM_HASH and AUDIO_STREAM_HASH tags from the XML.
+    """
+    root = ET.fromstring(xml_tags)
+
+    for tag in root.findall('.//Tag'):
+        for simple in list(tag.findall('.//Simple')):
+            name_element = simple.find('Name')
+            if name_element is not None and name_element.text in ["VIDEO_STREAM_HASH", "AUDIO_STREAM_HASH"]:
+                tag.remove(simple)
+
+    return ET.tostring(root, encoding="unicode")
+
+
 def add_stream_hash_tag(xml_tags, video_hash, audio_hash):
     root = ET.fromstring(xml_tags)
 
@@ -292,44 +307,55 @@ def compare_hashes(existing_video_hash, existing_audio_hash, video_hash, audio_h
 
 
 def embed_fixity(video_path, check_cancelled=None, signals=None):
-
-    # Make md5 of video/audio stream
+    """
+    Generates new stream hashes and embeds them in the MKV file.
+    Handles removal of old hashes if overwriting.
+    """
     logger.debug('Generating video and audio stream hashes. This may take a moment...')
     hash_result = make_stream_hash(video_path, check_cancelled=check_cancelled, signals=signals)
     if hash_result is None:
         return None
     video_hash, audio_hash = hash_result
-    logger.debug('')  # add space after stream hash output
+    logger.debug('')
     logger.info(f'Video hash = {video_hash}\nAudio hash = {audio_hash}\n')
 
     if check_cancelled():
         return None
 
-    # Extract existing tags
     existing_tags = extract_tags(video_path)
 
     if check_cancelled():
         return None
 
-    # Add stream_hash tag
     if existing_tags:
-        updated_tags = add_stream_hash_tag(existing_tags, video_hash, audio_hash)
+        existing_video_hash, existing_audio_hash = extract_hashes(existing_tags)
+        checks_config = config_mgr.get_config('checks', ChecksConfig)
+
+        if existing_video_hash or existing_audio_hash:
+            if checks_config.fixity.overwrite_stream_fixity == 'yes':
+                logger.debug('Removing old stream hashes before embedding new ones.')
+                cleaned_tags = remove_existing_stream_hashes(existing_tags)
+                updated_tags = add_stream_hash_tag(cleaned_tags, video_hash, audio_hash)
+            else:
+                logger.error("embed_fixity() called but stream hashes already exist and overwrite is disabled. Aborting embedding.")
+                return
+        else:
+            # No existing stream hashes, so just add new ones
+            updated_tags = add_stream_hash_tag(existing_tags, video_hash, audio_hash)
     else:
         logger.critical("mkvextract unable to extract MKV tags! Unable to embed stream hashes.\n")
         return
-    
+
     if check_cancelled():
         return None
 
-    # Write updated tags to a temporary XML file
     temp_xml_file = write_tags_to_temp_file(updated_tags)
 
-    # Write updated tags back to MKV file
-    logger.debug('Embedding video and audio stream hashes to XML in MKV file')
+    logger.debug('Embedding video and audio stream hashes to XML in MKV file.')
     write_tags_to_mkv(video_path, temp_xml_file)
 
-    # Remove the temporary XML file
     os.remove(temp_xml_file)
+
 
 
 def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
@@ -372,18 +398,22 @@ def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
 def process_embedded_fixity(video_path, check_cancelled=None, signals=None):
     """
     Handles embedding stream fixity tags in the video file.
+    Decides whether to embed for the first time, overwrite, or skip.
     """
     checks_config = config_mgr.get_config('checks', ChecksConfig)
 
     existing_tags = extract_tags(video_path)
+
     if existing_tags:
         existing_video_hash, existing_audio_hash = extract_hashes(existing_tags)
     else:
         existing_video_hash = None
         existing_audio_hash = None
 
-    # Check if VIDEO_STREAM_HASH and AUDIO_STREAM_HASH MKV tags exist
+    # Decide what to do:
     if existing_video_hash is None or existing_audio_hash is None:
+        # No stream hashes yet → always embed them
+        logger.info("No existing stream hashes found. Embedding new stream hashes.")
         embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
     else:
         logger.critical("Existing stream hashes found!")
@@ -391,4 +421,5 @@ def process_embedded_fixity(video_path, check_cancelled=None, signals=None):
             logger.critical('New stream hashes will be generated and old hashes will be overwritten!\n')
             embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
         else:
-            logger.error('Not writing stream hashes to MKV\n')
+            logger.error('Not writing new stream hashes to MKV. Overwrite is disabled.\n')
+
