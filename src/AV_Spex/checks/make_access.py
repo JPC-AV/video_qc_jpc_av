@@ -5,9 +5,6 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-
 def get_duration(video_path):
     command = [
         'ffprobe',
@@ -24,7 +21,7 @@ def get_duration(video_path):
 def make_access_file(video_path, output_path, check_cancelled=None, signals=None):
     """Create access file using ffmpeg."""
 
-    logger.debug(f'Running ffmpeg on {os.path.basename(video_path)} to create access copy {os.path.basename(output_path)}')
+    logger.debug(f'Running ffmpeg on {os.path.basename(video_path)} to create access copy {os.path.basename(output_path)}\n')
 
     duration_str = get_duration(video_path)
 
@@ -84,6 +81,9 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
     Returns:
         str or None: Path to the created access file, or None
     """
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    
     # Check if access file should be generated
     if checks_config.outputs.access_file != 'yes':
         return None

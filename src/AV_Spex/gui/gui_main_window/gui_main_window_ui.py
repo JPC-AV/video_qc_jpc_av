@@ -10,6 +10,7 @@ import sys
 import platform
 
 from AV_Spex.gui.gui_theme_manager import ThemeManager
+from AV_Spex.utils import config_edit
 
 class MainWindowUI:
     """UI components and setup for the main window"""
@@ -73,6 +74,8 @@ class MainWindowUI:
         self.logo_setup()
 
         self.setup_tabs()
+
+        self.setup_profiles_menu()
     
     def setup_main_layout(self):
         """Set up the main window layout structure"""
@@ -108,3 +111,157 @@ class MainWindowUI:
         self.main_window.import_tab.setup_import_tab()
         self.main_window.checks_tab.setup_checks_tab()
         self.main_window.spex_tab.setup_spex_tab()
+
+        
+    def setup_profiles_menu(self):
+        """Set up the Profiles menu for custom profile management"""
+        # Profiles menu
+        self.profiles_menu = self.menu_bar.addMenu("Profiles")
+        
+        # Built-in profiles submenu
+        self.builtin_profiles_menu = self.profiles_menu.addMenu("Built-in Profiles")
+        
+        self.step1_action = self.builtin_profiles_menu.addAction("Step 1 Profile")
+        self.step1_action.triggered.connect(lambda: self.apply_builtin_profile('step1'))
+        
+        self.step2_action = self.builtin_profiles_menu.addAction("Step 2 Profile")
+        self.step2_action.triggered.connect(lambda: self.apply_builtin_profile('step2'))
+        
+        self.all_off_action = self.builtin_profiles_menu.addAction("All Off Profile")
+        self.all_off_action.triggered.connect(lambda: self.apply_builtin_profile('allOff'))
+        
+        # Separator
+        self.profiles_menu.addSeparator()
+        
+        # Custom profiles management
+        self.manage_profiles_action = self.profiles_menu.addAction("Manage Custom Profiles...")
+        self.manage_profiles_action.triggered.connect(self.open_profile_manager)
+        
+        self.create_profile_action = self.profiles_menu.addAction("Save Current as Profile...")
+        self.create_profile_action.triggered.connect(self.create_profile_from_current)
+        
+        # Dynamic custom profiles submenu
+        self.custom_profiles_menu = self.profiles_menu.addMenu("Custom Profiles")
+        self.profiles_menu.aboutToShow.connect(self.update_custom_profiles_menu)
+
+    def apply_builtin_profile(self, profile_name):
+        """Apply a built-in profile."""
+        try:
+            if profile_name == 'step1':
+                config_edit.apply_profile(config_edit.profile_step1)
+            elif profile_name == 'step2':
+                config_edit.apply_profile(config_edit.profile_step2)
+            elif profile_name == 'allOff':
+                config_edit.apply_profile(config_edit.profile_allOff)
+            
+            # Update the checks tab dropdown
+            if hasattr(self.main_window, 'checks_tab'):
+                self.main_window.checks_tab.profile_handlers.refresh_profile_dropdown()
+            
+            # Refresh config display
+            if hasattr(self.main_window, 'config_widget'):
+                self.main_window.config_widget.load_config_values()
+            
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self.main_window, "Success", f"Applied {profile_name} profile")
+            
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self.main_window, "Error", f"Failed to apply profile: {str(e)}")
+
+    def open_profile_manager(self):
+        """Open the profile management dialog."""
+        from AV_Spex.gui.gui_custom_profiles import ProfileSelectionDialog
+        dialog = ProfileSelectionDialog(self.main_window)
+        if dialog.exec():
+            # Update the checks tab dropdown
+            if hasattr(self.main_window, 'checks_tab'):
+                self.main_window.checks_tab.profile_handlers.refresh_profile_dropdown()
+            
+            # Refresh config display
+            if hasattr(self.main_window, 'config_widget'):
+                self.main_window.config_widget.load_config_values()
+
+    def create_profile_from_current(self):
+        """Create a new profile from the current configuration."""
+        from PyQt6.QtWidgets import QInputDialog, QMessageBox
+        
+        # Get available custom profiles to suggest a name
+        custom_profiles = config_edit.get_available_custom_profiles()
+        suggested_name = f"Custom Profile {len(custom_profiles) + 1}"
+        
+        name, ok = QInputDialog.getText(
+            self.main_window, 
+            'Create Profile', 
+            'Enter a name for the new profile:',
+            text=suggested_name
+        )
+        
+        if ok and name:
+            try:
+                # Create profile from current config
+                new_profile = config_edit.create_profile_from_current_config(
+                    name.strip(), 
+                    "Created from current configuration"
+                )
+                
+                # Save the profile
+                config_edit.save_custom_profile(new_profile)
+                
+                # Update the checks tab dropdown
+                if hasattr(self.main_window, 'checks_tab'):
+                    self.main_window.checks_tab.profile_handlers.refresh_profile_dropdown()
+                    # Set the dropdown to the new profile
+                    dropdown = self.main_window.checks_tab.main_window.checks_profile_dropdown
+                    dropdown.setCurrentText(f"[Custom] {name.strip()}")
+                
+                QMessageBox.information(
+                    self.main_window, 
+                    "Success", 
+                    f"Created profile '{name}' from current configuration"
+                )
+                
+            except Exception as e:
+                QMessageBox.critical(self.main_window, "Error", f"Failed to create profile: {str(e)}")
+
+    def update_custom_profiles_menu(self):
+        """Dynamically update the custom profiles menu."""
+        # Clear existing actions
+        self.custom_profiles_menu.clear()
+        
+        # Get available custom profiles
+        custom_profiles = config_edit.get_available_custom_profiles()
+        
+        if not custom_profiles:
+            no_profiles_action = self.custom_profiles_menu.addAction("No custom profiles")
+            no_profiles_action.setEnabled(False)
+        else:
+            for profile_name in custom_profiles:
+                action = self.custom_profiles_menu.addAction(profile_name)
+                action.triggered.connect(
+                    lambda checked, name=profile_name: self.apply_custom_profile(name)
+                )
+
+    def apply_custom_profile(self, profile_name):
+        """Apply a custom profile by name."""
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            
+            config_edit.apply_custom_profile(profile_name)
+            
+            # Update the checks tab dropdown
+            if hasattr(self.main_window, 'checks_tab'):
+                self.main_window.checks_tab.profile_handlers.refresh_profile_dropdown()
+                # Set the dropdown to the applied profile
+                dropdown = self.main_window.checks_tab.main_window.checks_profile_dropdown
+                dropdown.setCurrentText(f"[Custom] {profile_name}")
+            
+            # Refresh config display
+            if hasattr(self.main_window, 'config_widget'):
+                self.main_window.config_widget.load_config_values()
+                
+            QMessageBox.information(self.main_window, "Success", f"Applied custom profile '{profile_name}'")
+            
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self.main_window, "Error", f"Failed to apply profile: {str(e)}")

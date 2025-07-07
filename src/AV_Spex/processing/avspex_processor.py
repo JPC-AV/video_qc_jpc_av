@@ -328,15 +328,15 @@ class AVSpexProcessor:
 
     def _run_metadata_step(self, processing_mgmt):
         """Run metadata step"""
-        metadata_tools_enabled = (
-            hasattr(self.checks_config.tools.mediainfo, 'check_tool') and self.checks_config.tools.mediainfo.check_tool == "yes" or
-            hasattr(self.checks_config.tools.mediatrace, 'check_tool') and self.checks_config.tools.mediatrace.check_tool == "yes" or
-            hasattr(self.checks_config.tools.exiftool, 'check_tool') and self.checks_config.tools.exiftool.check_tool == "yes" or
-            hasattr(self.checks_config.tools.ffprobe, 'check_tool') and self.checks_config.tools.ffprobe.check_tool == "yes"
-        )
+        # Check if any metadata tools are enabled
+        tools_to_check = ['mediainfo', 'mediatrace', 'exiftool', 'ffprobe']
+        metadata_tools_enabled = False
 
-        if not metadata_tools_enabled:
-            return True
+        for tool_name in tools_to_check:
+            tool = getattr(tools_config, tool_name, None)
+            if tool and (getattr(tool, 'check_tool', 'no') == 'yes' or 
+                        getattr(tool, 'run_tool', 'no') == 'yes'):
+                    metadata_tools_enabled = True
 
         if self.signals:
             self.signals.tool_started.emit("Metadata Tools")
@@ -359,7 +359,24 @@ class AVSpexProcessor:
             
             if self.signals:
                 self.signals.tool_completed.emit("Metadata tools complete")
-            return True
+                # Emit signals for each completed metadata tool
+                tools_to_signal = [
+                    ('mediainfo', 'Mediainfo'),
+                    ('mediatrace', 'Mediatrace'), 
+                    ('exiftool', 'Exiftool'),
+                    ('ffprobe', 'FFprobe')
+                ]
+                
+                for tool_name, display_name in tools_to_signal:
+                    tool = getattr(tools_config, tool_name)
+                    if tool.check_tool == "yes" or tool.run_tool == "yes":
+                        self.signals.step_completed.emit(display_name)
+
+            if self.signals:
+                self.signals.clear_status.emit()
+
+            if self.check_cancelled():
+                return True
             
         except Exception as e:
             print(f"DEBUG: Metadata step error: {e}")
@@ -378,7 +395,7 @@ class AVSpexProcessor:
             return True
 
         if self.signals:
-            self.signals.tool_started.emit("Output Processing")
+            self.signals.tool_started.emit("Output Processing\n")
         
         try:
             ctx = self._processing_context
@@ -397,12 +414,19 @@ class AVSpexProcessor:
                     print("DEBUG: Outputs step was cancelled")
                     return False
             
-            if self.signals:
-                self.signals.tool_completed.emit("Outputs complete")
-            return True
+            # CHECK FOR PAUSE AFTER THE OPERATION
+            if self.check_cancelled():
+                if self._paused:
+                    print("DEBUG: Outputs step was paused, not completed")
+                    return False  # Return False so the step isn't marked complete
+                else:
+                    print("DEBUG: Outputs step was cancelled")
+                    return False
             
-        except Exception as e:
-            print(f"DEBUG: Outputs step error: {e}")
+            if self.signals:
+                self.signals.tool_completed.emit("Outputs complete\n")
+
+        if self.check_cancelled():
             return False
 
     def _complete_processing(self):
@@ -410,14 +434,15 @@ class AVSpexProcessor:
         ctx = self._processing_context
         
         if self.signals:
-            self.signals.tool_completed.emit("All processing for this directory complete")
+            self.signals.tool_completed.emit("All processing for this directory complete\n")
+        if self.signals:
             self.signals.step_completed.emit("All Processing")
             time.sleep(0.1)
         
         logger.debug('Please note that any warnings on metadata are just used to help any issues with your file. If they are not relevant at this point in your workflow, just ignore this. Thanks!\n')
-        display_processing_banner(ctx['video_id'])
+
+        if self.signals:
+            self.signals.clear_status.emit()
         
-        # Reset state for next directory
-        self._completed_steps = set()
-        self._processing_context = None
-        self._current_step = 'fixity'
+        display_processing_banner(video_id)
+        return True

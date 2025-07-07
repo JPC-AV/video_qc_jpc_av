@@ -30,6 +30,8 @@ class MainWindowSignals:
         self.main_window.signals.mediaconch_progress.connect(self.main_window.processing.on_mediaconch_progress)
         self.main_window.signals.metadata_progress.connect(self.main_window.processing.on_metadata_progress)
         self.main_window.signals.output_progress.connect(self.main_window.processing.on_output_progress)
+
+        self.main_window.signals.clear_status.connect(self.main_window.processing.on_clear_status)
     
     def on_processing_window_hidden(self):
         """Handle processing window hidden event."""
