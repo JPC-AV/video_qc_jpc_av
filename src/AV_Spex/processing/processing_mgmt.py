@@ -333,7 +333,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     # Check if QCTools should be run
     qct_run_tool = getattr(checks_config.tools.qctools, 'run_tool')
     if qct_run_tool != 'yes':
-        logger.info("QCTools processing skipped per configuration")
+        logger.info("QCTools processing skipped per configuration\n")
         return results
 
     # First, search for existing QCTools reports in metadata folders
