@@ -426,6 +426,10 @@ class AVSpexProcessor:
             if self.signals:
                 self.signals.tool_completed.emit("Outputs complete\n")
 
+        except Exception as e:
+            print(f"DEBUG: Outputs step error: {e}")
+            return False
+
         if self.check_cancelled():
             return False
 
