@@ -250,7 +250,7 @@ class AVSpexProcessor:
                     return False
 
         # All steps completed successfully
-        self._complete_processing()
+        self._complete_processing(video_id)
         return True
 
     def _run_fixity_step(self, processing_mgmt):
@@ -330,6 +330,7 @@ class AVSpexProcessor:
         """Run metadata step"""
         # Check if any metadata tools are enabled
         tools_to_check = ['mediainfo', 'mediatrace', 'exiftool', 'ffprobe']
+        tools_config = self.checks_config.tools
         metadata_tools_enabled = False
 
         for tool_name in tools_to_check:
@@ -433,7 +434,7 @@ class AVSpexProcessor:
         if self.check_cancelled():
             return False
 
-    def _complete_processing(self):
+    def _complete_processing(self, video_id=None):
         """Complete processing and reset state"""
         ctx = self._processing_context
         
