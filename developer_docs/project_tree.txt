@@ -25,8 +25,11 @@ JPC_AV_videoQC
     │   └── qct_parse.py
     ├── config
     │   ├── checks_config.json
-    │   ├── mediaconch_policies
-    │   └── spex_config.json
+    │   ├── filename_config.json
+    │   ├── mediaconch_policies
+    │   ├── profiles_checks_config.json
+    │   ├── signalflow_config.json
+    │   └── spex_config.json
     ├── gui
     |   ├── __init__.py
     |   |── gui_checks_tab
@@ -34,6 +37,9 @@ JPC_AV_videoQC
     │   |   |── __pycache__
     │   |   |── gui_checks_tab.py
     |   │   └── gui_checks_window.py
+    |   ├── gui_custom_filename.py
+    │   ├── gui_custom_profiles.py
+    │   ├── gui_custom_signalflow.py
     |   |── gui_import_tab.py
     |   |── gui_main.py
     |   |── gui_main_window
@@ -66,14 +72,15 @@ JPC_AV_videoQC
     │   ├── run_tools.py
     │   └── worker_thread.py
     └── utils
-        ├── __init__.py
-        ├── __pycache__
-        ├── config_edit.py
-        ├── config_io.py
-        ├── config_manager.py
-        ├── config_setup.py
-        ├── deps_setup.py
-        ├── dir_setup.py
-        ├── generate_report.py
-        └── log_setup.py
+        ├── __init__.py
+        ├── __pycache__
+        ├── config_edit.py
+        ├── config_io.py
+        ├── config_manager.py
+        ├── config_setup.py
+        ├── dependency_checker.py
+        ├── dir_setup.py
+        ├── filename_validate.py
+        ├── generate_report.py
+        └── log_setup.py
 └── tests

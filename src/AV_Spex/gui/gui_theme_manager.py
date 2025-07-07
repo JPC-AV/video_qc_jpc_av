@@ -570,7 +570,7 @@ class ThemeManager(QObject):
                 if 0 <= luminance <= 1:
                     is_dark = luminance < 0.5
                     theme = 'Dark' if is_dark else 'Light'
-                    logger.debug(f"PyQt6 palette detection: {theme} (luminance: {luminance:.3f})")
+                    # logger.debug(f"PyQt6 palette detection: {theme} (luminance: {luminance:.3f})")
                     return theme
                 else:
                     logger.warning(f"PyQt6 returned invalid luminance: {luminance}")
