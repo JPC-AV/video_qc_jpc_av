@@ -63,6 +63,7 @@ class AVSpexProcessor:
         self._pause_requested = False
         self._current_step = 'fixity'
         self._completed_steps = set()
+        self._completed_sub_steps = {}  # Track sub-steps within each major step
         self._processing_context = None
 
         if self.signals:
@@ -70,22 +71,12 @@ class AVSpexProcessor:
             self.signals.resume_requested.connect(self.request_resume)
 
         self.config_mgr = ConfigManager()
-        # logger.debug("==== PROCESSOR INITIALIZATION DEBUGGING ====")
-        
-        # Get the config before refresh
-        pre_refresh_spex = self.config_mgr.get_config('spex', SpexConfig, use_last_used=True)
-        # logger.debug(f"Pre-refresh spex config has {len(pre_refresh_spex.filename_values.fn_sections)} sections")
         
         self.config_mgr.refresh_configs()
         
         # Get configs after refresh
         self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
         self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
-        
-        # Log details about the refreshed config
-        # logger.debug(f"Post-refresh spex config has {len(self.spex_config.filename_values.fn_sections)} sections")
-        # for idx, (key, section) in enumerate(sorted(self.spex_config.filename_values.fn_sections.items()), 1):
-        #     logger.debug(f"  Section {idx}: {key} = {section.value} ({section.section_type})")
 
     def cancel(self):
         self._cancelled = True
@@ -112,7 +103,6 @@ class AVSpexProcessor:
         if return_value:
             print(f"DEBUG: check_cancelled returning True - cancelled: {self._cancelled}, paused: {self._paused}")
         return return_value
-
     
     def request_pause(self):
         """Request pause - will pause at next check_cancelled call"""
@@ -197,6 +187,7 @@ class AVSpexProcessor:
             
             # Initialize step tracking
             self._completed_steps = getattr(self, '_completed_steps', set())
+            self._completed_sub_steps = getattr(self, '_completed_sub_steps', {})
             self._current_step = getattr(self, '_current_step', 'fixity')
 
         processing_mgmt = ProcessingManager(signals=self.signals, check_cancelled_fn=self.check_cancelled)
@@ -206,6 +197,8 @@ class AVSpexProcessor:
             self._current_step = 'fixity'
             if self._run_fixity_step(processing_mgmt):
                 self._completed_steps.add('fixity')
+                # Clear sub-steps for this major step after completion
+                self._completed_sub_steps.pop('fixity', None)
             elif self.check_cancelled():
                 if self._paused:
                     print("DEBUG: Fixity step paused")
@@ -250,19 +243,33 @@ class AVSpexProcessor:
                     return False
 
         # All steps completed successfully
-        self._complete_processing(video_id)
+        self._complete_processing(self._processing_context['video_id'])
+        
+        # Clear context for next directory
+        self._processing_context = None
+        self._completed_steps.clear()
+        self._completed_sub_steps.clear()
+        
         return True
 
     def _run_fixity_step(self, processing_mgmt):
-        """Run fixity step - existing logic, just returns success/failure"""
+        """Run fixity step with sub-step tracking"""
         print("DEBUG: _run_fixity_step starting")
         
-        fixity_enabled = (
-            self.checks_config.fixity.check_fixity == "yes" or 
-            self.checks_config.fixity.validate_stream_fixity == "yes" or 
-            self.checks_config.fixity.embed_stream_fixity == "yes" or 
-            self.checks_config.fixity.output_fixity == "yes"
-        )
+        # Initialize sub-steps tracking for fixity if not exists
+        if 'fixity' not in self._completed_sub_steps:
+            self._completed_sub_steps['fixity'] = set()
+        
+        completed_sub_steps = self._completed_sub_steps['fixity']
+        ctx = self._processing_context
+        
+        # Check which fixity operations are enabled
+        embed_enabled = self.checks_config.fixity.embed_stream_fixity == "yes"
+        validate_enabled = self.checks_config.fixity.validate_stream_fixity == "yes"
+        output_enabled = self.checks_config.fixity.output_fixity == "yes"
+        check_enabled = self.checks_config.fixity.check_fixity == "yes"
+        
+        fixity_enabled = embed_enabled or validate_enabled or output_enabled or check_enabled
         
         if not fixity_enabled:
             print("DEBUG: Fixity not enabled, returning True")
@@ -271,22 +278,36 @@ class AVSpexProcessor:
         if self.signals:
             self.signals.tool_started.emit("Fixity...")
         
-        print("DEBUG: About to call processing_mgmt.process_fixity")
+        print("DEBUG: About to process fixity sub-steps")
+        print(f"DEBUG: Completed sub-steps so far: {completed_sub_steps}")
         
         try:
-            ctx = self._processing_context
-            processing_mgmt.process_fixity(ctx['source_directory'], ctx['video_path'], ctx['video_id'])
+            # Pass the context to processing_mgmt so it can store the md5_checksum
+            processing_mgmt._processing_context = ctx
             
-            # CHECK FOR PAUSE AFTER THE OPERATION
+            # Call the main process_fixity method with completed sub-steps
+            result = processing_mgmt.process_fixity(
+                ctx['source_directory'], 
+                ctx['video_path'], 
+                ctx['video_id'],
+                completed_sub_steps=completed_sub_steps
+            )
+            
+            # Check if we were cancelled/paused after process_fixity
             if self.check_cancelled():
                 if self._paused:
-                    print("DEBUG: Fixity step was paused, not completed")
-                    return False  # Return False so the step isn't marked complete
+                    print("DEBUG: Fixity step was paused")
+                    return False
                 else:
                     print("DEBUG: Fixity step was cancelled")
                     return False
             
-            print("DEBUG: process_fixity completed normally")
+            # If result is False or None, something went wrong
+            if not result:
+                return False
+            
+            # If we get here without cancellation, all sub-steps completed
+            print("DEBUG: All fixity sub-steps completed")
             
             if self.signals:
                 self.signals.tool_completed.emit("Fixity processing complete")
@@ -294,6 +315,8 @@ class AVSpexProcessor:
             
         except Exception as e:
             print(f"DEBUG: Fixity step error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def _run_mediaconch_step(self, processing_mgmt):
@@ -326,6 +349,7 @@ class AVSpexProcessor:
             print(f"DEBUG: MediaConch step error: {e}")
             return False
 
+    
     def _run_metadata_step(self, processing_mgmt):
         """Run metadata step"""
         # Check if any metadata tools are enabled
@@ -405,15 +429,6 @@ class AVSpexProcessor:
                 ctx['video_path'], ctx['source_directory'], ctx['destination_directory'],
                 ctx['video_id'], metadata_differences
             )
-            
-            # CHECK FOR PAUSE AFTER THE OPERATION
-            if self.check_cancelled():
-                if self._paused:
-                    print("DEBUG: Outputs step was paused, not completed")
-                    return False  # Return False so the step isn't marked complete
-                else:
-                    print("DEBUG: Outputs step was cancelled")
-                    return False
             
             # CHECK FOR PAUSE AFTER THE OPERATION
             if self.check_cancelled():

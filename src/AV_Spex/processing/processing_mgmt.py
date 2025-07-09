@@ -33,7 +33,7 @@ class ProcessingManager:
         self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
         self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
 
-    def process_fixity(self, source_directory, video_path, video_id):
+    def process_fixity(self, source_directory, video_path, video_id, completed_sub_steps=None):
         """
         Orchestrates the entire fixity process, including embedded and file-level operations.
 
@@ -41,13 +41,23 @@ class ProcessingManager:
             source_directory (str): Directory containing source files
             video_path (str): Path to the video file
             video_id (str): Unique identifier for the video
+            completed_sub_steps (set): Set of already completed sub-steps
         """
         
         if self.check_cancelled():
             return None
         
+        # Initialize completed_sub_steps if not provided
+        if completed_sub_steps is None:
+            completed_sub_steps = set()
+        
+        # Get md5_checksum from context if it exists (for resume scenarios)
+        md5_checksum = None
+        if hasattr(self, '_processing_context') and self._processing_context:
+            md5_checksum = self._processing_context.get('md5_checksum')
+        
         # Embed stream fixity if required  
-        if self.checks_config.fixity.embed_stream_fixity == 'yes':
+        if self.checks_config.fixity.embed_stream_fixity == 'yes' and 'embed_stream_fixity' not in completed_sub_steps:
             if self.signals:
                 self.signals.fixity_progress.emit("Embedding fixity...")
             if self.check_cancelled():
@@ -58,40 +68,52 @@ class ProcessingManager:
             # Mark checkbox
             if self.signals:
                 self.signals.step_completed.emit("Embed Stream Fixity")
+            completed_sub_steps.add('embed_stream_fixity')
 
         # Validate stream hashes if required
-        if self.checks_config.fixity.validate_stream_fixity == 'yes':
+        if self.checks_config.fixity.validate_stream_fixity == 'yes' and 'validate_stream_fixity' not in completed_sub_steps:
             if self.signals:
                 self.signals.fixity_progress.emit("Validating embedded fixity...")
             if self.checks_config.fixity.embed_stream_fixity == 'yes':
                 logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
             else:
                 validate_embedded_md5(video_path, check_cancelled=self.check_cancelled, signals=self.signals)
+                if self.check_cancelled():
+                    return False
             # Mark checkbox
             if self.signals:
                 self.signals.step_completed.emit("Validate Stream Fixity")
-
-        # Initialize md5_checksum variable
-        md5_checksum = None
+            completed_sub_steps.add('validate_stream_fixity')
 
         # Create checksum for video file and output results
-        if self.checks_config.fixity.output_fixity == 'yes':
+        if self.checks_config.fixity.output_fixity == 'yes' and 'output_fixity' not in completed_sub_steps:
             if self.signals:
                 self.signals.fixity_progress.emit("Outputting fixity...")
             md5_checksum = output_fixity(source_directory, video_path, check_cancelled=self.check_cancelled, signals=self.signals)
+            if self.check_cancelled():
+                return False
             if self.signals:
                 self.signals.step_completed.emit("Output Fixity")
+            completed_sub_steps.add('output_fixity')
+            # Store checksum in context for potential resume
+            if hasattr(self, '_processing_context') and self._processing_context:
+                self._processing_context['md5_checksum'] = md5_checksum
 
         # Verify stored checksum and write results  
-        if self.checks_config.fixity.check_fixity == 'yes':
+        if self.checks_config.fixity.check_fixity == 'yes' and 'check_fixity' not in completed_sub_steps:
             if self.signals:
                 self.signals.fixity_progress.emit("Validating fixity...")
             check_fixity(source_directory, video_id, actual_checksum=md5_checksum, check_cancelled=self.check_cancelled, signals=self.signals)
+            if self.check_cancelled():
+                return False
             if self.signals:
                 self.signals.step_completed.emit("Validate Fixity")
+            completed_sub_steps.add('check_fixity')
 
         if self.check_cancelled():
             return None
+        
+        return True
 
 
     def validate_video_with_mediaconch(self, video_path, destination_directory, video_id):
