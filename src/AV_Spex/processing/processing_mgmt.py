@@ -260,6 +260,7 @@ class ProcessingManager:
         # Generate final HTML report
         processing_results['html_report'] = generate_final_report(
             video_id, source_directory, report_directory, destination_directory,
+            video_path=video_path,
             check_cancelled=self.check_cancelled, signals=self.signals
         )
 

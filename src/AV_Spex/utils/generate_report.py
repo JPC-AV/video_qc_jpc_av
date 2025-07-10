@@ -88,9 +88,32 @@ def prepare_file_section(file_path, process_function=None):
 def parse_timestamp(timestamp_str):
     if not timestamp_str:
         return (9999, 99, 99, 99, 9999)  # Return a placeholder tuple for non-timestamp entries
-    # Convert timestamp to a tuple of integers
-    timestamp_tuple = tuple(map(int, timestamp_str.split(':')))
-    return timestamp_tuple
+    
+    try:
+        # Split timestamp into hours, minutes, and seconds
+        parts = timestamp_str.split(':')
+        if len(parts) != 3:
+            return (9999, 99, 99, 99, 9999)  # Invalid format
+        
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        
+        # Handle seconds with decimals
+        seconds_parts = parts[2].split('.')
+        seconds = int(seconds_parts[0])
+        
+        # Handle milliseconds if present
+        if len(seconds_parts) > 1:
+            # Pad or truncate to 4 digits for consistency
+            milliseconds = int(seconds_parts[1].ljust(4, '0')[:4])
+        else:
+            milliseconds = 0
+        
+        return (hours, minutes, seconds, milliseconds)
+        
+    except (ValueError, IndexError):
+        # Return placeholder if parsing fails
+        return (9999, 99, 99, 99, 9999)
 
 
 def parse_profile(profile_name):
@@ -122,8 +145,29 @@ def find_qct_thumbs(report_directory):
                     profile_name = filename_segments[1]
                     tag_name = filename_segments[2]
                     tag_value = filename_segments[3]
-                    timestamp_as_list = filename_segments[4:-1]
-                    timestamp_as_string = ':'.join(timestamp_as_list)
+                    
+                    # Find the timestamp pattern in the filename
+                    # It should be HH.MM.SS.ssss before the .png extension
+                    # We need to reconstruct it as HH:MM:SS.ssss
+                    
+                    # The timestamp starts after tag_value (index 4) and goes until .png
+                    # For a file like: JPC_AV_01663.color_bars_evaluation.YMAX.940.0.00.00.53.7870.png
+                    # segments[4:] would be ['0', '00', '00', '53', '7870', 'png']
+                    # We want to reconstruct 00:00:53.7870
+                    
+                    timestamp_parts = filename_segments[4:-1]  # Exclude .png
+                    
+                    if len(timestamp_parts) >= 4:
+                        # Assuming format is always HH.MM.SS.milliseconds
+                        hours = timestamp_parts[1].zfill(2)    # Second element (skip the first '0')
+                        minutes = timestamp_parts[2].zfill(2)
+                        seconds = timestamp_parts[3].zfill(2)
+                        milliseconds = timestamp_parts[4] if len(timestamp_parts) > 4 else '0000'
+                        timestamp_as_string = f"{hours}:{minutes}:{seconds}.{milliseconds}"
+                    else:
+                        # Fallback
+                        timestamp_as_string = ':'.join(timestamp_parts)
+                    
                     if profile_name == 'color_bars_detection':
                         qct_thumb_name = f'First frame of color bars\n\nAt timecode: {timestamp_as_string}'
                     else:
@@ -139,7 +183,6 @@ def find_qct_thumbs(report_directory):
         sorted_thumbs_dict[key] = thumbs_dict[key]
 
     return sorted_thumbs_dict
-
 
 def find_report_csvs(report_directory):
 
@@ -214,6 +257,61 @@ def find_qc_metadata(destination_directory):
                 fixity_sidecar = file_path
 
     return exiftool_output_path, ffprobe_output_path, mediainfo_output_path, mediaconch_csv, fixity_sidecar
+
+
+def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile_name, thumbPath):
+    """
+    Generates a thumbnail for a specific failure based on the summarized failures.
+    
+    Parameters:
+        video_path (str): Path to the video file.
+        tag (str): The tag that failed.
+        tagValue (float): The value of the tag at failure.
+        timestamp (str): Timestamp in HH:MM:SS.ssss format.
+        profile_name (str): Name of the profile (e.g., 'tag_check', 'color_bars_evaluation').
+        thumbPath (str): Directory to save the thumbnail.
+    
+    Returns:
+        str: Path to the generated thumbnail, or None if generation failed.
+    """
+    import subprocess
+    import re
+    
+    if not os.path.isfile(video_path):
+        logger.error(f"Video file not found: {video_path}")
+        return None
+    
+    video_basename = os.path.basename(video_path)
+    video_id = os.path.splitext(video_basename)[0]
+    
+    # Create filename matching existing convention
+    outputFramePath = os.path.join(thumbPath, f"{video_id}.{profile_name}.{tag}.{tagValue}.{timestamp}.png")
+    ffoutputFramePath = outputFramePath.replace(":", ".")
+    
+    # Windows drive letter fix
+    match = re.search(r"[A-Z]\.\/", ffoutputFramePath)
+    if match:
+        ffoutputFramePath = ffoutputFramePath.replace(".", ":", 1)
+    
+    # Generate appropriate ffmpeg command based on tag
+    if tag == "TOUT":
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=tout:color=yellow -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+    elif tag == "VREP":
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=vrep:color=pink -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+    else:
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=brng:color=cyan -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+    
+    try:
+        logger.debug(f"Generating thumbnail for {tag} failure at {timestamp}\n")
+        result = subprocess.run(ffmpegString, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+        if result.returncode == 0 and os.path.isfile(ffoutputFramePath):
+            return ffoutputFramePath
+        else:
+            logger.error(f"Failed to generate thumbnail: {result.stderr.decode()}")
+            return None
+    except Exception as e:
+        logger.error(f"Error generating thumbnail: {e}")
+        return None
 
 
 def summarize_failures(failure_csv_path):  # Change parameter to accept CSV file path
@@ -454,6 +552,16 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
     profile_summary_html = None
     profile_summary_pie_charts = []
 
+    # Create a reverse lookup dictionary for thumbnails by timestamp and tag
+    thumb_lookup = {}
+    for thumb_name, (thumb_path, tag_name, timestamp) in sorted_thumbs_dict.items():
+        if timestamp and tag_name:  # Only process thumbnails with valid timestamps and tags
+            key = (timestamp, tag_name)
+            thumb_lookup[key] = (thumb_path, thumb_name)
+            logger.debug(f"Added to thumb_lookup: {key} -> {thumb_path}")
+    
+    logger.debug(f"Thumb lookup has {len(thumb_lookup)} entries")
+
     # Create pie charts for the profile summary
     for row in profile_data:
         if check_cancelled and check_cancelled():
@@ -466,27 +574,42 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
 
         if tag != 'Total' and percentage > 0:
             # Initialize variables for summary data
-            failed_frame_timestamps = []
-            failed_frame_values = []
-            failed_frame_thresholds = []
+            failure_entries_html = []
 
             # Get failure details for this tag
             for timestamp, info_list in failureInfoSummary.items():
                 for info in info_list:
                     if info['tag'] == tag:
-                        failed_frame_timestamps.append(timestamp)
-                        failed_frame_values.append(info['tagValue'])
-                        failed_frame_thresholds.append(info['over'])
+                        # Look for thumbnail for this specific timestamp and tag
+                        thumb_html = ""
+                        lookup_key = (timestamp, tag)
+                        logger.debug(f"Looking for thumbnail with key: {lookup_key}")
+                        
+                        if lookup_key in thumb_lookup:
+                            thumb_path, thumb_name = thumb_lookup[lookup_key]
+                            logger.debug(f"Found thumbnail at: {thumb_path}")
+                            with open(thumb_path, "rb") as image_file:
+                                encoded_string = b64encode(image_file.read()).decode()
+                            thumb_html = f'''<img src="data:image/png;base64,{encoded_string}" 
+                                        style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px;" />'''
+                        else:
+                            logger.debug(f"No thumbnail found for {lookup_key}")
+                        
+                        # Create entry with or without thumbnail
+                        entry_html = f'''
+                        <div style="margin-bottom: 10px;">
+                            <span><b>Timestamp: {timestamp}</b> | <b>Value:</b> {info['tagValue']} | <b>Threshold:</b> {info['over']}</span>
+                            {thumb_html}
+                        </div>
+                        '''
+                        failure_entries_html.append(entry_html)
 
-            # Create formatted failure summary string
-            formatted_failures = "<br>".join(
-                f"<b>Timestamp: {timestamp}</b><br><b>Value:</b> {value}<br><b>Threshold:</b> {threshold}<br>" 
-                for timestamp, value, threshold in zip(failed_frame_timestamps, failed_frame_values, failed_frame_thresholds)
-            )
+            # Create formatted failure summary with all thumbnails
+            formatted_failures = "".join(failure_entries_html)
             summary_html = f"""
-            <div style="display: flex; flex-direction: column; align-items: center; background-color: #f5e9e3; padding: 10px;">
+            <div style="display: flex; flex-direction: column; align-items: flex-start; background-color: #f5e9e3; padding: 10px; max-height: 400px; overflow-y: auto;">
                 <p><b>Peak Values outside of Threshold for {tag}:</b></p>
-                <p>{formatted_failures}</p>
+                {formatted_failures}
             </div>
             """
 
@@ -500,27 +623,10 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
             pie_fig.update_layout(title=f"{tag} - {percentage:.2f}% ({failed_frames} frames)", height=400, width=400,
                                 paper_bgcolor='#f5e9e3')
 
-            # Get Thumbnails
-            thumbnail_html = ''
-            for thumb_name, (thumb_path, profile_name, timestamp) in sorted_thumbs_dict.items():
-                if profile_name == tag:
-                    thumb_name_with_breaks = thumb_name.replace("\n", "<br>")
-                    with open(thumb_path, "rb") as image_file:
-                        encoded_string = b64encode(image_file.read()).decode()
-                    thumbnail_html = f"""
-                    <div style="display: flex; flex-direction: column; align-items: center; background-color: #f5e9e3; padding: 10px;">
-                        <img src="data:image/png;base64,{encoded_string}" style="width: 150px; height: auto;" /> 
-                        <p style="margin-left: 10px;">{thumb_name_with_breaks}</p>
-                    </div>
-                    """
-
             # Wrap everything in one div
             pie_chart_html = f"""
             <div style="display: flex; flex-direction: column; align-items: start; background-color: #f5e9e3; padding: 10px;"> 
-                <div style="display: flex; align-items: center;">  
-                    <div style="width: 400px;">{pie_fig.to_html(full_html=False, include_plotlyjs='cdn')}</div> 
-                    {thumbnail_html}
-                </div>
+                <div style="width: 400px;">{pie_fig.to_html(full_html=False, include_plotlyjs='cdn')}</div>
                 {summary_html}
             </div>
             """
@@ -594,7 +700,7 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
 
     return content_summary_html
 
-def generate_final_report(video_id, source_directory, report_directory, destination_directory, check_cancelled=None, signals=None):
+def generate_final_report(video_id, source_directory, report_directory, destination_directory, video_path=None, check_cancelled=None, signals=None):
     """
     Generate final HTML report if configured.
     
@@ -603,7 +709,7 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         source_directory (str): Source directory for the video
         report_directory (str): Directory containing report files
         destination_directory (str): Destination directory for output files
-        command_config (object): Configuration object with tool settings
+        video_path (str, optional): Path to the video file for thumbnail generation
         
     Returns:
         str or None: Path to the generated HTML report, or None
@@ -611,15 +717,15 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
     
     checks_config = config_mgr.get_config('checks', ChecksConfig)
 
-    # Check if report should be generated
     if checks_config.outputs.report != 'yes':
         return None
 
     try:
         html_report_path = os.path.join(source_directory, f'{video_id}_avspex_report.html')
         
-        # Generate HTML report
-        write_html_report(video_id, report_directory, destination_directory, html_report_path, check_cancelled=check_cancelled)
+        # Generate HTML report with video path
+        write_html_report(video_id, report_directory, destination_directory, html_report_path, 
+                         video_path=video_path, check_cancelled=check_cancelled)
         
         logger.info(f"HTML report generated: {html_report_path}\n")
         if signals:
@@ -633,9 +739,86 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         return None
 
 
-def write_html_report(video_id, report_directory, destination_directory, html_report_path, check_cancelled=None):
+def write_html_report(video_id, report_directory, destination_directory, html_report_path, video_path=None, check_cancelled=None):
 
     qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv = find_report_csvs(report_directory)
+
+    if check_cancelled():
+        return
+    
+    # Create thumbPath if it doesn't exist
+    thumbPath = os.path.join(report_directory, "ThumbExports")
+    if not os.path.exists(thumbPath):
+        os.makedirs(thumbPath)
+    
+    # Generate thumbnails for peak failures
+    generated_thumbs = {}
+    
+    if profile_fails_csv and video_path:
+        profile_fails_csv_path = os.path.join(report_directory, profile_fails_csv)
+        failureInfoSummary_profile = summarize_failures(profile_fails_csv_path)
+        
+        # Generate thumbnails for profile failures
+        for timestamp, info_list in failureInfoSummary_profile.items():
+            for info in info_list:
+                thumb_path = generate_thumbnail_for_failure(
+                    video_path, 
+                    info['tag'], 
+                    info['tagValue'], 
+                    timestamp, 
+                    'threshold_profile',  # or determine from context
+                    thumbPath
+                )
+                if thumb_path:
+                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
+                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
+    
+    if tag_fails_csv and video_path:
+        tag_fails_csv_path = os.path.join(report_directory, tag_fails_csv)
+        failureInfoSummary_tags = summarize_failures(tag_fails_csv_path)
+        
+        # Generate thumbnails for tag failures
+        for timestamp, info_list in failureInfoSummary_tags.items():
+            for info in info_list:
+                thumb_path = generate_thumbnail_for_failure(
+                    video_path, 
+                    info['tag'], 
+                    info['tagValue'], 
+                    timestamp, 
+                    'tag_check',
+                    thumbPath
+                )
+                if thumb_path:
+                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
+                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
+    
+    if colorbars_eval_fails_csv and video_path:
+        colorbars_eval_fails_csv_path = os.path.join(report_directory, colorbars_eval_fails_csv)
+        failureInfoSummary_colorbars = summarize_failures(colorbars_eval_fails_csv_path)
+        
+        # Generate thumbnails for colorbar failures
+        for timestamp, info_list in failureInfoSummary_colorbars.items():
+            for info in info_list:
+                thumb_path = generate_thumbnail_for_failure(
+                    video_path, 
+                    info['tag'], 
+                    info['tagValue'], 
+                    timestamp, 
+                    'color_bars_evaluation',
+                    thumbPath
+                )
+                if thumb_path:
+                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
+                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
+    
+    # Merge with existing thumbs (for things like color bars detection)
+    existing_thumbs = find_qct_thumbs(report_directory)
+    thumbs_dict = {**existing_thumbs, **generated_thumbs}
+    
+    # Sort thumbs_dict as before
+    sorted_thumbs_dict = {}
+    for key in sorted(thumbs_dict.keys(), key=lambda x: (parse_profile(thumbs_dict[x][1]), parse_timestamp(thumbs_dict[x][2]))):
+        sorted_thumbs_dict[key] = thumbs_dict[key]
 
     if check_cancelled():
         return

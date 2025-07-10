@@ -210,9 +210,11 @@ def threshFinder(qct_parse, video_path, inFrame, startObj, pkt, tag, over, thumb
             'over': over
         })
 
-        if qct_parse['thumbExport'] and (thumbDelay > int(thumbExportDelay)): # if thumb export is turned on and there has been enough delay between this frame and the last exported thumb, then export a new thumb
-            printThumb(video_path, tag, profile_name, startObj, thumbPath, tagValue, timeStampString)
+        # Remove the thumbnail generation - just reset thumbDelay if conditions met
+        if qct_parse['thumbExport'] and (thumbDelay > int(thumbExportDelay)):
+            # Previously generated thumbnail here, now just reset the delay counter
             thumbDelay = 0
+        
         return True, thumbDelay, failureInfo # return true because it was over and thumbDelay
     else:
         return False, thumbDelay, failureInfo # return false because it was NOT over and thumbDelay
@@ -493,8 +495,8 @@ def print_consecutive_durations(durations,qctools_check_output,contentFilter_nam
                     else:
                         logger.info(start_time)
                         f.write(f"{start_time}\n")
-                    if qct_parse['thumbExport']:
-                        printThumb(video_path, "thumbnail", contentFilter_name, startObj, thumbPath, "output", start_time)
+                  # if qct_parse['thumbExport']:
+                  #     printThumb(video_path, "thumbnail", contentFilter_name, startObj, thumbPath, "output", start_time)
                     start_time = current_time
                     end_time = current_time
 
@@ -507,8 +509,8 @@ def print_consecutive_durations(durations,qctools_check_output,contentFilter_nam
                 logger.info(start_time)
                 f.write(f"{start_time}\n")
             logger.debug(f"")
-            if qct_parse['thumbExport']:
-                printThumb(video_path, "thumbnail", contentFilter_name, startObj, thumbPath, "output", start_time)
+          # if qct_parse['thumbExport']:
+          #     printThumb(video_path, "thumbnail", contentFilter_name, startObj, thumbPath, "output", start_time)
 
 
 # Modified version of detectBars for finding segments that meet all thresholds instead of any thresholds (like analyze does)
