@@ -562,13 +562,6 @@ def getCompFromConfig(qct_parse, profile, tag):
    
    smpte_color_bars_keys = asdict(spex_config.qct_parse_values.smpte_color_bars).keys()
 
-   if qct_parse['profile']:
-       template = qct_parse['profile'][0]
-       if hasattr(spex_config.qct_parse_values.profiles, template):
-           profile_keys = asdict(getattr(spex_config.qct_parse_values.profiles, template)).keys()
-           if set(profile) == set(profile_keys):
-               return operator.lt if "MIN" in tag or "LOW" in tag else operator.gt
-
    if set(profile) == set(smpte_color_bars_keys):
        return operator.lt if "MIN" in tag else operator.gt
 
@@ -1092,31 +1085,6 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
                 }
                 qctools_content_check_output = os.path.join(report_directory, f"qct-parse_contentFilter_{filter_name}_summary.csv")
                 detectContentFilter(startObj, pkt, filter_name, contentFilter_dict, qctools_content_check_output, framesList, qct_parse, thumbPath, video_path)
-
-    if check_cancelled():
-        return None
-
-    ######## Iterate Through the XML for General Analysis ########
-    if qct_parse['profile']:
-        template = qct_parse['profile'][0] 
-        if template in spex_config.qct_parse_values.profiles.__dict__:
-        # If the template matches one of the profiles
-            for t in tagList:
-                if hasattr(getattr(spex_config.qct_parse_values.profiles, template), t):
-                    profile[t] = getattr(getattr(spex_config.qct_parse_values.profiles, template), t)
-        logger.debug(f"Starting qct-parse analysis against {template} thresholds on {baseName}\n")
-        # set thumbExportDelay for profile check
-        thumbExportDelay = 9000
-        # set profile_name
-        profile_name = f"threshold_profile_{template}"
-        # check xml against thresholds, return kbeyond (dictionary of tags: framecount exceeding), frameCount (total # of frames), and overallFrameFail (total # of failed frames)
-        kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled)
-        profile_fails_csv_path = os.path.join(report_directory, "qct-parse_profile_failures.csv")
-        if failureInfo:
-            save_failures_to_csv(failureInfo, profile_fails_csv_path)
-        qctools_profile_check_output = os.path.join(report_directory, "qct-parse_profile_summary.csv")
-        printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_profile_check_output)
-        logger.debug(f"qct-parse summary written to {qctools_profile_check_output}\n")
 
     if check_cancelled():
         return None

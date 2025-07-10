@@ -167,61 +167,6 @@ class Content:
     static: StaticContent
 
 @dataclass
-class DefaultProfile:
-    YLOW: float
-    YHIGH: float
-    ULOW: float
-    UHIGH: float
-    VLOW: float
-    VHIGH: float
-    SATMAX: float
-    TOUT: float
-    VREP: float
-
-@dataclass
-class HighToleranceProfile:
-    YLOW: float
-    YMAX: float
-    UMIN: float
-    UMAX: float
-    VMIN: float
-    VMAX: float
-    SATMAX: float
-    TOUT: float
-    VREP: float
-
-@dataclass
-class MidToleranceProfile:
-    YLOW: float
-    YMAX: float
-    UMIN: float
-    UMAX: float
-    VMIN: float
-    VMAX: float
-    SATMAX: float
-    TOUT: float
-    VREP: float
-
-@dataclass
-class LowToleranceProfile:
-    YLOW: float
-    YMAX: float
-    UMIN: float
-    UMAX: float
-    VMIN: float
-    VMAX: float
-    SATMAX: float
-    TOUT: float
-    VREP: float
-
-@dataclass
-class Profiles:
-    default: DefaultProfile
-    highTolerance: HighToleranceProfile
-    midTolerance: MidToleranceProfile
-    lowTolerance: LowToleranceProfile
-
-@dataclass
 class FullTagList:
     YMIN: Optional[float]
     YLOW: Optional[float]
@@ -276,7 +221,6 @@ class SmpteColorBars:
 @dataclass
 class QCTParseValues:
     content: Content
-    profiles: Profiles
     fullTagList: FullTagList
     smpte_color_bars: SmpteColorBars
 
@@ -327,7 +271,6 @@ class QCTParseToolConfig:
     barsDetection: bool
     evaluateBars: bool
     contentFilter: List[str]
-    profile: List[str]
     tagname: Optional[str]
     thumbExport: bool
 
@@ -400,7 +343,6 @@ class ChecksProfile:
             barsDetection=False,
             evaluateBars=False,
             contentFilter=[],
-            profile=[],
             tagname=None,
             thumbExport=False
         )
