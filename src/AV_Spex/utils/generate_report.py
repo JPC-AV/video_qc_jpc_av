@@ -501,7 +501,7 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
     return colorbars_html
 
 
-def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, check_cancelled=None):
+def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, video_id, check_cancelled=None):
     """
     Creates HTML visualizations showing pie charts of profile check results with thumbnails 
     and detailed failure information for each failed profile check.
@@ -572,56 +572,68 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
         failed_frames = int(row['Number of failed frames'])
         percentage = float(row['Percentage of failed frames'])
 
-        if tag != 'Total' and percentage > 0:
-            # Initialize variables for summary data
-            failure_entries_html = []
+        if tag != 'Total':  # Remove the percentage > 0 condition
+            if percentage > 0:
+                # Initialize variables for summary data
+                failure_entries_html = []
 
-            # Get failure details for this tag
-            for timestamp, info_list in failureInfoSummary.items():
-                for info in info_list:
-                    if info['tag'] == tag:
-                        # Look for thumbnail for this specific timestamp and tag
-                        thumb_html = ""
-                        lookup_key = (timestamp, tag)
-                        logger.debug(f"Looking for thumbnail with key: {lookup_key}")
-                        
-                        if lookup_key in thumb_lookup:
-                            thumb_path, thumb_name = thumb_lookup[lookup_key]
-                            logger.debug(f"Found thumbnail at: {thumb_path}")
-                            with open(thumb_path, "rb") as image_file:
-                                encoded_string = b64encode(image_file.read()).decode()
-                            thumb_html = f'''<img src="data:image/png;base64,{encoded_string}" 
-                                        style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px;" />'''
-                        else:
-                            logger.debug(f"No thumbnail found for {lookup_key}")
-                        
-                        # Create entry with or without thumbnail
-                        entry_html = f'''
-                        <div style="margin-bottom: 10px;">
-                            <span><b>Timestamp: {timestamp}</b> | <b>Value:</b> {info['tagValue']} | <b>Threshold:</b> {info['over']}</span>
-                            {thumb_html}
-                        </div>
-                        '''
-                        failure_entries_html.append(entry_html)
+                # Get failure details for this tag
+                for timestamp, info_list in failureInfoSummary.items():
+                    for info in info_list:
+                        if info['tag'] == tag:
+                            # Look for thumbnail for this specific timestamp and tag
+                            thumb_html = ""
+                            lookup_key = (timestamp, tag)
+                            logger.debug(f"Looking for thumbnail with key: {lookup_key}")
+                            
+                            if lookup_key in thumb_lookup:
+                                thumb_path, thumb_name = thumb_lookup[lookup_key]
+                                logger.debug(f"Found thumbnail at: {thumb_path}")
+                                with open(thumb_path, "rb") as image_file:
+                                    encoded_string = b64encode(image_file.read()).decode()
+                                thumb_html = f'''<img src="data:image/png;base64,{encoded_string}" 
+                                            style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px;" />'''
+                            else:
+                                logger.debug(f"No thumbnail found for {lookup_key}")
+                            
+                            # Create entry with or without thumbnail
+                            entry_html = f'''
+                            <div style="margin-bottom: 10px;">
+                                <span><b>Timestamp: {timestamp}</b> | <b>Value:</b> {info['tagValue']} | <b>Threshold:</b> {info['over']}</span>
+                                {thumb_html}
+                            </div>
+                            '''
+                            failure_entries_html.append(entry_html)
 
-            # Create formatted failure summary with all thumbnails
-            formatted_failures = "".join(failure_entries_html)
-            summary_html = f"""
-            <div style="display: flex; flex-direction: column; align-items: flex-start; background-color: #f5e9e3; padding: 10px; max-height: 400px; overflow-y: auto;">
-                <p><b>Peak Values outside of Threshold for {tag}:</b></p>
-                {formatted_failures}
-            </div>
-            """
+                # Create formatted failure summary with all thumbnails
+                formatted_failures = "".join(failure_entries_html)
+                summary_html = f"""
+                <div style="display: flex; flex-direction: column; align-items: flex-start; background-color: #f5e9e3; padding: 10px; max-height: 400px; overflow-y: auto;">
+                    <p><b>Peak Values outside of Threshold for {tag}:</b></p>
+                    {formatted_failures}
+                </div>
+                """
+            else:
+                # For 0% failures, show a simple message without thumbnails
+                summary_html = f"""
+                <div style="display: flex; flex-direction: column; align-items: flex-start; background-color: #f5e9e3; padding: 10px;">
+                    <p><b>All values within specified threshold</b></p>
+                </div>
+                """
 
-            # Generate Pie chart
+            # Generate Pie chart (same for both cases)
             pie_fig = go.Figure(data=[go.Pie(
                 labels=['Failed Frames', 'Other Frames'],
                 values=[failed_frames, total_frames - failed_frames],
                 hole=.3,
                 marker=dict(colors=['#ffbaba', '#d2ffed'])
             )])
-            pie_fig.update_layout(title=f"{tag} - {percentage:.2f}% ({failed_frames} frames)", height=400, width=400,
-                                paper_bgcolor='#f5e9e3')
+            pie_fig.update_layout(
+                title=f"{video_id}<br>{tag} - {percentage:.2f}% ({failed_frames} frames)", 
+                height=400, 
+                width=400,
+                paper_bgcolor='#f5e9e3'
+            )
 
             # Wrap everything in one div
             pie_chart_html = f"""
@@ -862,7 +874,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # Create graphs for all existing csv files
     if qctools_bars_eval_check_output and failureInfoSummary_colorbars:
-        colorbars_eval_html = make_profile_piecharts(qctools_bars_eval_check_output,thumbs_dict,failureInfoSummary_colorbars,check_cancelled=check_cancelled)
+        colorbars_eval_html = make_profile_piecharts(qctools_bars_eval_check_output, thumbs_dict, failureInfoSummary_colorbars, video_id, check_cancelled=check_cancelled)
     elif qctools_bars_eval_check_output and failureInfoSummary_colorbars is None:
        color_bars_segment = f"""
         <div style="display: flex; flex-direction: column; align-items: start; background-color: #f5e9e3; padding: 10px;"> 
@@ -883,7 +895,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
          colorbars_html = None
 
     if qctools_profile_check_output and failureInfoSummary_profile:
-        profile_summary_html = make_profile_piecharts(qctools_profile_check_output,thumbs_dict,failureInfoSummary_profile,check_cancelled=check_cancelled)
+        profile_summary_html = make_profile_piecharts(qctools_profile_check_output, thumbs_dict, failureInfoSummary_profile, video_id, check_cancelled=check_cancelled)
     else:
         profile_summary_html = None
 
@@ -896,7 +908,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         content_summary_html_list = None
 
     if tags_check_output and failureInfoSummary_tags:
-        tags_summary_html = make_profile_piecharts(tags_check_output,thumbs_dict,failureInfoSummary_tags,check_cancelled=check_cancelled)
+        tags_summary_html = make_profile_piecharts(tags_check_output, thumbs_dict, failureInfoSummary_tags, video_id, check_cancelled=check_cancelled)
     else:
         tags_summary_html = None
 
