@@ -317,14 +317,30 @@ def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile
 def summarize_failures(failure_csv_path):  # Change parameter to accept CSV file path
     """
     Summarizes the failure information from the CSV file, prioritizing tags 
-    with the greatest difference between tag value and threshold.
+    with the greatest difference between tag value and threshold, ensuring
+    selected frames are at least 4 seconds apart.
 
     Args:
         failure_csv_path (str): The path to the CSV file containing failure details.
 
     Returns:
-        str: A formatted summary of the failures.
+        dict: A dictionary with timestamps as keys and failure details as values.
     """
+    
+    def timestamp_to_seconds(timestamp_str):
+        """Convert HH:MM:SS.ssss to total seconds"""
+        parts = timestamp_str.split(':')
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+        return hours * 3600 + minutes * 60 + seconds
+    
+    def are_timestamps_far_enough(ts1, ts2, min_gap=4.0):
+        """Check if two timestamps are at least min_gap seconds apart"""
+        seconds1 = timestamp_to_seconds(ts1)
+        seconds2 = timestamp_to_seconds(ts2)
+        return abs(seconds1 - seconds2) >= min_gap
+    
     failureInfo = {}
     # 0. Read the failure information from the CSV
     try:
@@ -379,14 +395,32 @@ def summarize_failures(failure_csv_path):  # Change parameter to accept CSV file
     # 4. Sort the flattened list based on tag value difference
     all_failures.sort(key=lambda x: abs(x[1]['tagValue'] - x[1]['over']), reverse=True)
 
-    # 5. Limit the number of frames per tag
+    # 5. Limit the number of frames per tag with 4-second spacing
     limited_failures = []
-    tag_counts = {tag: 0 for tag in tag_counts}  # Reset tag counts
+    selected_timestamps_per_tag = {}  # Track selected timestamps for each tag
+    
     for timestamp, info in all_failures:
         tag = info['tag']
-        if tag_counts[tag] < max_frames_per_tag:
+        
+        # Initialize list for this tag if needed
+        if tag not in selected_timestamps_per_tag:
+            selected_timestamps_per_tag[tag] = []
+        
+        # Check if we've already selected enough frames for this tag
+        if len(selected_timestamps_per_tag[tag]) >= max_frames_per_tag:
+            continue
+        
+        # Check if this timestamp is far enough from all previously selected timestamps for this tag
+        is_far_enough = True
+        for selected_ts in selected_timestamps_per_tag[tag]:
+            if not are_timestamps_far_enough(timestamp, selected_ts):
+                is_far_enough = False
+                break
+        
+        # If far enough from all selected timestamps, add it
+        if is_far_enough:
             limited_failures.append((timestamp, info))
-            tag_counts[tag] += 1
+            selected_timestamps_per_tag[tag].append(timestamp)
 
     # 6. Group the limited failures back into a dictionary by timestamp
     summary_dict = {}
