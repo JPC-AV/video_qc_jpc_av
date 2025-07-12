@@ -339,7 +339,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     existing_qctools_path = find_qctools_report(source_directory, video_id)
     
     if existing_qctools_path:
-        logger.info(f"Found existing QCTools report: {existing_qctools_path}")
+        logger.info(f"Found existing QCTools report: {existing_qctools_path}\n")
         results['qctools_output_path'] = existing_qctools_path
     
     # Handle QCTools generation (only if configured and no existing report)
@@ -366,8 +366,6 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             
             if signals:
                 signals.step_completed.emit("QCTools")
-    else:
-        logger.info("QCTools processing skipped per configuration")
 
     # Handle QCTools parsing (independent of whether QCTools was run)
     if qct_parse_run_tool == 'yes':
