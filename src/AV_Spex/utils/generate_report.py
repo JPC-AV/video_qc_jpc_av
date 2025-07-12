@@ -616,6 +616,14 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
     # Add JavaScript for toggling tables
     javascript_code = """
     <script>
+    function openImage(imgData, caption) {
+        var newWindow = window.open('', '_blank');
+        newWindow.document.write('<html><head><title>' + caption + '</title></head><body style="margin:0; background:#000; display:flex; align-items:center; justify-content:center; height:100vh;">');
+        newWindow.document.write('<img src="' + imgData + '" style="max-width:100%; max-height:100%; object-fit:contain;">');
+        newWindow.document.write('</body></html>');
+        newWindow.document.close();
+    }
+
     function toggleTable(tagId) {
         var table = document.getElementById('table_' + tagId);
         var link = document.getElementById('link_' + tagId);
@@ -661,8 +669,13 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                                 thumb_path, thumb_name = thumb_lookup[lookup_key]
                                 with open(thumb_path, "rb") as image_file:
                                     encoded_string = b64encode(image_file.read()).decode()
+                                # Create caption for the new window
+                                caption = f"{tag} at {timestamp} - Value: {info['tagValue']}, Threshold: {info['over']}"
+                                # Make thumbnail clickable with JavaScript
                                 thumb_html = f'''<img src="data:image/png;base64,{encoded_string}" 
-                                               style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px;" />'''
+                                                onclick="openImage('data:image/png;base64,{encoded_string}', '{caption}')"
+                                                style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px; cursor: pointer; border: 1px solid #ccc;" 
+                                                title="Click to enlarge" />'''
                             
                             # Create entry with or without thumbnail
                             entry_html = f'''
