@@ -535,7 +535,7 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
     return colorbars_html
 
 
-def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, video_id, check_cancelled=None):
+def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, video_id, failure_csv_path=None, check_cancelled=None):
     """
     Creates HTML visualizations showing pie charts of profile check results with thumbnails 
     and detailed failure information for each failed profile check.
@@ -546,6 +546,8 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                                  and values as tuples of (path, profile_name, timestamp). Output of find_qct_thumbs().
         failureInfoSummary (dict): Dictionary containing detailed failure information, with timestamps
                                  as keys and lists of failure details as values. Output of summarize_failures().
+        video_id (str): The identifier for the video being analyzed.
+        failure_csv_path (str, optional): Path to the full failures CSV file.
         check_cancelled (callable, optional): Function to check if processing should be cancelled.
                                            Defaults to None.
 
@@ -557,6 +559,24 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
     except ImportError as e:
         logger.critical(f"Error importing required libraries for graphs: {e}")
         return None
+    
+    # Read the full failure data if CSV path is provided
+    all_failures = {}
+    if failure_csv_path and os.path.isfile(failure_csv_path):
+        try:
+            with open(failure_csv_path, 'r', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    tag = row['Tag']
+                    if tag not in all_failures:
+                        all_failures[tag] = []
+                    all_failures[tag].append({
+                        'timestamp': row['Timestamp'],
+                        'tagValue': row['Tag Value'],
+                        'threshold': row['Threshold']
+                    })
+        except Exception as e:
+            logger.error(f"Error reading full failures CSV: {e}")
     
     # Read and validate CSV file
     try:
@@ -592,11 +612,26 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
         if timestamp and tag_name:  # Only process thumbnails with valid timestamps and tags
             key = (timestamp, tag_name)
             thumb_lookup[key] = (thumb_path, thumb_name)
-            logger.debug(f"Added to thumb_lookup: {key} -> {thumb_path}")
-    
-    logger.debug(f"Thumb lookup has {len(thumb_lookup)} entries")
+
+    # Add JavaScript for toggling tables
+    javascript_code = """
+    <script>
+    function toggleTable(tagId) {
+        var table = document.getElementById('table_' + tagId);
+        var link = document.getElementById('link_' + tagId);
+        if (table.style.display === 'none') {
+            table.style.display = 'block';
+            link.textContent = 'Hide all failures ▲';
+        } else {
+            table.style.display = 'none';
+            link.textContent = 'Show all failures ▼';
+        }
+    }
+    </script>
+    """
 
     # Create pie charts for the profile summary
+    tag_counter = 0  # Counter to create unique IDs
     for row in profile_data:
         if check_cancelled and check_cancelled():
             logger.warning("HTML report cancelled.")
@@ -606,7 +641,10 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
         failed_frames = int(row['Number of failed frames'])
         percentage = float(row['Percentage of failed frames'])
 
-        if tag != 'Total':  # Remove the percentage > 0 condition
+        if tag != 'Total':
+            tag_id = f"tag_{tag_counter}"  # Create unique ID for this tag
+            tag_counter += 1
+            
             if percentage > 0:
                 # Initialize variables for summary data
                 failure_entries_html = []
@@ -618,17 +656,13 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                             # Look for thumbnail for this specific timestamp and tag
                             thumb_html = ""
                             lookup_key = (timestamp, tag)
-                            logger.debug(f"Looking for thumbnail with key: {lookup_key}")
                             
                             if lookup_key in thumb_lookup:
                                 thumb_path, thumb_name = thumb_lookup[lookup_key]
-                                logger.debug(f"Found thumbnail at: {thumb_path}")
                                 with open(thumb_path, "rb") as image_file:
                                     encoded_string = b64encode(image_file.read()).decode()
                                 thumb_html = f'''<img src="data:image/png;base64,{encoded_string}" 
-                                            style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px;" />'''
-                            else:
-                                logger.debug(f"No thumbnail found for {lookup_key}")
+                                               style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px;" />'''
                             
                             # Create entry with or without thumbnail
                             entry_html = f'''
@@ -641,10 +675,39 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
 
                 # Create formatted failure summary with all thumbnails
                 formatted_failures = "".join(failure_entries_html)
+                
+                # Create the full failures table (hidden by default)
+                full_table_html = ""
+                if tag in all_failures:
+                    table_rows = []
+                    for failure in all_failures[tag]:
+                        table_rows.append(f"""
+                        <tr>
+                            <td>{failure['timestamp']}</td>
+                            <td>{failure['tagValue']}</td>
+                            <td>{failure['threshold']}</td>
+                        </tr>
+                        """)
+                    
+                    full_table_html = f"""
+                    <div id="table_{tag_id}" style="display: none; margin-top: 10px;">
+                        <table style="border-collapse: collapse; width: 100%; border: 1px solid #4d2b12;">
+                            <tr style="background-color: #fbe4eb;">
+                                <th style="border: 1px solid #4d2b12; padding: 8px;">Timestamp</th>
+                                <th style="border: 1px solid #4d2b12; padding: 8px;">Value</th>
+                                <th style="border: 1px solid #4d2b12; padding: 8px;">Threshold</th>
+                            </tr>
+                            {''.join(table_rows)}
+                        </table>
+                    </div>
+                    """
+                
                 summary_html = f"""
                 <div style="display: flex; flex-direction: column; align-items: flex-start; background-color: #f5e9e3; padding: 10px; max-height: 400px; overflow-y: auto;">
                     <p><b>Peak Values outside of Threshold for {tag}:</b></p>
                     {formatted_failures}
+                    <a id="link_{tag_id}" href="javascript:void(0);" onclick="toggleTable('{tag_id}')" style="color: #378d6a; text-decoration: underline; margin-top: 10px;">Show all failures ▼</a>
+                    {full_table_html}
                 </div>
                 """
             else:
@@ -683,10 +746,11 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
             </div>
             """)
 
-    # Arrange pie charts horizontally
+    # Arrange pie charts horizontally with JavaScript
     profile_piecharts_html = ''.join(profile_summary_pie_charts)
 
     profile_summary_html = f'''
+    {javascript_code}
     <div>
         {profile_piecharts_html}
     </div>
@@ -908,7 +972,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # Create graphs for all existing csv files
     if qctools_bars_eval_check_output and failureInfoSummary_colorbars:
-        colorbars_eval_html = make_profile_piecharts(qctools_bars_eval_check_output, thumbs_dict, failureInfoSummary_colorbars, video_id, check_cancelled=check_cancelled)
+        colorbars_eval_html = make_profile_piecharts(qctools_bars_eval_check_output, thumbs_dict, failureInfoSummary_colorbars, video_id, failure_csv_path=colorbars_eval_fails_csv_path, check_cancelled=check_cancelled)
     elif qctools_bars_eval_check_output and failureInfoSummary_colorbars is None:
        color_bars_segment = f"""
         <div style="display: flex; flex-direction: column; align-items: start; background-color: #f5e9e3; padding: 10px;"> 
@@ -929,7 +993,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
          colorbars_html = None
 
     if qctools_profile_check_output and failureInfoSummary_profile:
-        profile_summary_html = make_profile_piecharts(qctools_profile_check_output, thumbs_dict, failureInfoSummary_profile, video_id, check_cancelled=check_cancelled)
+        profile_summary_html = make_profile_piecharts(qctools_profile_check_output, thumbs_dict, failureInfoSummary_profile, video_id, failure_csv_path=profile_fails_csv_path, check_cancelled=check_cancelled)
     else:
         profile_summary_html = None
 
@@ -942,7 +1006,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         content_summary_html_list = None
 
     if tags_check_output and failureInfoSummary_tags:
-        tags_summary_html = make_profile_piecharts(tags_check_output, thumbs_dict, failureInfoSummary_tags, video_id, check_cancelled=check_cancelled)
+        tags_summary_html = make_profile_piecharts(tags_check_output, thumbs_dict, failureInfoSummary_tags, video_id, failure_csv_path=tag_fails_csv_path, check_cancelled=check_cancelled)
     else:
         tags_summary_html = None
 
