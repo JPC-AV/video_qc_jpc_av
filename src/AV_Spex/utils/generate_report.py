@@ -494,16 +494,27 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
             # Create the bar chart for the colorbars values
             colorbars_fig = go.Figure(data=[
                 go.Bar(name='SMPTE Colorbars', 
-                      x=colorbar_csv_data['QCTools Fields'], 
-                      y=colorbar_csv_data['SMPTE Colorbars'], 
-                      marker=dict(color='#378d6a')),
+                    x=colorbar_csv_data['QCTools Fields'], 
+                    y=colorbar_csv_data['SMPTE Colorbars'], 
+                    marker=dict(color='#378d6a')),
                 go.Bar(name=f'{video_id} Colorbars', 
-                      x=colorbar_csv_data['QCTools Fields'], 
-                      y=colorbar_csv_data[f'{video_id} Colorbars'], 
-                      marker=dict(color='#bf971b'))
+                    x=colorbar_csv_data['QCTools Fields'], 
+                    y=colorbar_csv_data[f'{video_id} Colorbars'], 
+                    marker=dict(color='#bf971b'))
             ])
             colorbars_fig.update_layout(barmode='group')
-            colorbars_barchart_html = colorbars_fig.to_html(full_html=False, include_plotlyjs='cdn')
+            
+            # custom config values for png export
+            config = {
+                'toImageButtonOptions': {
+                    'format': 'png',
+                    'filename': f'{video_id}_colorbars_comparison',
+                    'height': 500,
+                    'width': 800,
+                    'scale': 1
+                }
+            }
+            colorbars_barchart_html = colorbars_fig.to_html(full_html=False, include_plotlyjs='cdn', config=config)
     except Exception as e:
         logger.critical(f"Error processing duration file: {e}")
         return None 
@@ -745,10 +756,21 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                 paper_bgcolor='#f5e9e3'
             )
 
+            # plotly config values for custo. png file name
+            config = {
+                'toImageButtonOptions': {
+                    'format': 'png',
+                    'filename': f'{video_id}_{tag}',
+                    'height': 400,
+                    'width': 400,
+                    'scale': 1
+                }
+            }
+
             # Wrap everything in one div
             pie_chart_html = f"""
             <div style="display: flex; flex-direction: column; align-items: start; background-color: #f5e9e3; padding: 10px;"> 
-                <div style="width: 400px;">{pie_fig.to_html(full_html=False, include_plotlyjs='cdn')}</div>
+                <div style="width: 400px;">{pie_fig.to_html(full_html=False, include_plotlyjs='cdn', config=config)}</div>
                 {summary_html}
             </div>
             """
