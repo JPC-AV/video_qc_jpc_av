@@ -509,7 +509,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
                 barsDetection=self.bars_detection_check.isChecked(),
                 evaluateBars=self.evaluate_bars_check.isChecked(),
                 contentFilter=[],  # Empty for now, could be extended
-                profile=[],  # Empty for now, could be extended
                 tagname=self.tagname_input.text() if self.tagname_input.text() else None,
                 thumbExport=self.thumb_export_check.isChecked()
             )
