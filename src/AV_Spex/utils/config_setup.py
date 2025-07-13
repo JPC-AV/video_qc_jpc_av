@@ -167,61 +167,6 @@ class Content:
     static: StaticContent
 
 @dataclass
-class DefaultProfile:
-    YLOW: float
-    YHIGH: float
-    ULOW: float
-    UHIGH: float
-    VLOW: float
-    VHIGH: float
-    SATMAX: float
-    TOUT: float
-    VREP: float
-
-@dataclass
-class HighToleranceProfile:
-    YLOW: float
-    YMAX: float
-    UMIN: float
-    UMAX: float
-    VMIN: float
-    VMAX: float
-    SATMAX: float
-    TOUT: float
-    VREP: float
-
-@dataclass
-class MidToleranceProfile:
-    YLOW: float
-    YMAX: float
-    UMIN: float
-    UMAX: float
-    VMIN: float
-    VMAX: float
-    SATMAX: float
-    TOUT: float
-    VREP: float
-
-@dataclass
-class LowToleranceProfile:
-    YLOW: float
-    YMAX: float
-    UMIN: float
-    UMAX: float
-    VMIN: float
-    VMAX: float
-    SATMAX: float
-    TOUT: float
-    VREP: float
-
-@dataclass
-class Profiles:
-    default: DefaultProfile
-    highTolerance: HighToleranceProfile
-    midTolerance: MidToleranceProfile
-    lowTolerance: LowToleranceProfile
-
-@dataclass
 class FullTagList:
     YMIN: Optional[float]
     YLOW: Optional[float]
@@ -276,7 +221,6 @@ class SmpteColorBars:
 @dataclass
 class QCTParseValues:
     content: Content
-    profiles: Profiles
     fullTagList: FullTagList
     smpte_color_bars: SmpteColorBars
 
@@ -327,7 +271,6 @@ class QCTParseToolConfig:
     barsDetection: bool
     evaluateBars: bool
     contentFilter: List[str]
-    profile: List[str]
     tagname: Optional[str]
     thumbExport: bool
 
@@ -370,3 +313,42 @@ class SignalflowProfile:
 class SignalflowConfig:
     """Container for signal flow profiles"""
     signalflow_profiles: Dict[str, SignalflowProfile] = field(default_factory=dict)
+
+@dataclass
+class ChecksProfile:
+    """Custom profile for checks configuration"""
+    name: str
+    description: str = ""
+    outputs: OutputsConfig = field(default_factory=lambda: OutputsConfig(
+        access_file="no",
+        report="no", 
+        qctools_ext="qctools.xml.gz"
+    ))
+    fixity: FixityConfig = field(default_factory=lambda: FixityConfig(
+        check_fixity="no",
+        validate_stream_fixity="no",
+        embed_stream_fixity="no", 
+        output_fixity="no",
+        overwrite_stream_fixity="no"
+    ))
+    tools: ToolsConfig = field(default_factory=lambda: ToolsConfig(
+        exiftool=BasicToolConfig(check_tool="no", run_tool="no"),
+        ffprobe=BasicToolConfig(check_tool="no", run_tool="no"),
+        mediaconch=MediaConchConfig(mediaconch_policy="", run_mediaconch="no"),
+        mediainfo=BasicToolConfig(check_tool="no", run_tool="no"),
+        mediatrace=BasicToolConfig(check_tool="no", run_tool="no"),
+        qctools=QCToolsConfig(run_tool="no"),
+        qct_parse=QCTParseToolConfig(
+            run_tool="no",
+            barsDetection=False,
+            evaluateBars=False,
+            contentFilter=[],
+            tagname=None,
+            thumbExport=False
+        )
+    ))
+
+@dataclass
+class ChecksProfilesConfig:
+    """Container for custom checks profiles"""
+    custom_profiles: Dict[str, ChecksProfile] = field(default_factory=dict)

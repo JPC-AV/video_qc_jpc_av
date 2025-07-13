@@ -125,7 +125,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         self.validate_stream_cb = QCheckBox("Validate Stream fixity")
         self.validate_stream_cb.setStyleSheet("font-weight: bold;")
-        validate_stream_desc = QLabel("Validates any embedded stream fixity, will not run if there is no embedded steam fixity")
+        validate_stream_desc = QLabel("Validates any embedded stream fixity, will embedded steam fixity if none is found")
         validate_stream_desc.setIndent(20)
         
         # Add to layout
@@ -298,25 +298,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Add items with display text and corresponding data value
         for display_text, value in content_filter_options.items():
             self.content_filter_combo.addItem(display_text, value)
-                
-        # Profile
-        profile_label = QLabel("Profile")
-        profile_label.setStyleSheet("font-weight: bold;")
-        profile_desc = QLabel("Select tolerance profile for content analysis")
-        self.profile_combo = QComboBox()
-        self.profile_combo.addItem("Select options...", None)  # Store None as data
-
-        # Create a mapping of display text to actual values
-        profile_options = {
-            "Default Profile": "default",
-            "High Tolerance": "highTolerance",
-            "Medium Tolerance": "midTolerance",
-            "Low Tolerance": "lowTolerance"
-        }
-
-        # Add items with display text and corresponding data value
-        for display_text, value in profile_options.items():
-            self.profile_combo.addItem(display_text, value)
 
         # Add all widgets to the qct layout
         qct_layout.addWidget(self.run_qctparse_cb)
@@ -330,9 +311,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         qct_layout.addWidget(content_filter_label)
         qct_layout.addWidget(content_filter_desc)
         qct_layout.addWidget(self.content_filter_combo)
-        qct_layout.addWidget(profile_label)
-        qct_layout.addWidget(profile_desc)
-        qct_layout.addWidget(self.profile_combo)
 
         self.qct_group.setLayout(qct_layout)
         tools_layout.addWidget(self.qct_group)
@@ -386,19 +364,22 @@ class ChecksWindow(QWidget, ThemeableMixin):
             lambda text: self.on_text_changed(['outputs', 'qctools_ext'], text)
         )
         
-        # Fixity section
+        # Fixity section - handle most checkboxes normally
         fixity_checkboxes = {
             self.check_fixity_cb: 'check_fixity',
             self.validate_stream_cb: 'validate_stream_fixity',
             self.embed_stream_cb: 'embed_stream_fixity',
             self.output_fixity_cb: 'output_fixity',
-            self.overwrite_stream_cb: 'overwrite_stream_fixity'
+            # Note: overwrite_stream_cb is handled separately below
         }
         
         for checkbox, field in fixity_checkboxes.items():
             checkbox.stateChanged.connect(
                 lambda state, f=field: self.on_checkbox_changed(state, ['fixity', f])
             )
+        
+        # Special handling for overwrite_stream_cb to auto-check embed_stream_cb
+        self.overwrite_stream_cb.stateChanged.connect(self.on_overwrite_stream_changed)
         
         # Tools section
         for tool, widgets in self.tool_widgets.items():
@@ -436,9 +417,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         )
         self.content_filter_combo.currentIndexChanged.connect(
             lambda index: self.on_qct_combo_changed(self.content_filter_combo.itemData(index), 'contentFilter')
-        )
-        self.profile_combo.currentIndexChanged.connect(
-            lambda index: self.on_qct_combo_changed(self.profile_combo.itemData(index), 'profile')
         )
         self.tagname_input.textChanged.connect(
             lambda text: self.on_tagname_changed(text)
@@ -499,8 +477,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         if qct.contentFilter:
             self.content_filter_combo.setCurrentText(qct.contentFilter[0])
-        if qct.profile:
-            self.profile_combo.setCurrentText(qct.profile[0])
         if qct.tagname is not None:
             self.tagname_input.setText(qct.tagname)
 
@@ -546,6 +522,28 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         updates = {path[0]: {path[1]: text}}
         config_mgr.update_config('checks', updates)
+
+    def on_overwrite_stream_changed(self, state):
+        """Handle changes in overwrite stream fixity checkbox with dependency logic"""
+        # Skip updates while loading to avoid issues during initialization
+        if self.is_loading:
+            return
+        
+        # Handle the normal config update for overwrite stream fixity
+        new_value = 'yes' if Qt.CheckState(state) == Qt.CheckState.Checked else 'no'
+        updates = {'fixity': {'overwrite_stream_fixity': new_value}}
+        config_mgr.update_config('checks', updates)
+        
+        # If overwrite stream fixity is being checked, also check embed stream fixity
+        if Qt.CheckState(state) == Qt.CheckState.Checked:
+            # Temporarily block signals to prevent recursive calls
+            self.embed_stream_cb.blockSignals(True)
+            self.embed_stream_cb.setChecked(True)
+            self.embed_stream_cb.blockSignals(False)
+            
+            # Update the config for embed stream fixity as well
+            embed_updates = {'fixity': {'embed_stream_fixity': 'yes'}}
+            config_mgr.update_config('checks', embed_updates)
 
     def on_qct_combo_changed(self, value, field):
         """Handle changes in QCT Parse combo boxes"""

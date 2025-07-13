@@ -88,9 +88,32 @@ def prepare_file_section(file_path, process_function=None):
 def parse_timestamp(timestamp_str):
     if not timestamp_str:
         return (9999, 99, 99, 99, 9999)  # Return a placeholder tuple for non-timestamp entries
-    # Convert timestamp to a tuple of integers
-    timestamp_tuple = tuple(map(int, timestamp_str.split(':')))
-    return timestamp_tuple
+    
+    try:
+        # Split timestamp into hours, minutes, and seconds
+        parts = timestamp_str.split(':')
+        if len(parts) != 3:
+            return (9999, 99, 99, 99, 9999)  # Invalid format
+        
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        
+        # Handle seconds with decimals
+        seconds_parts = parts[2].split('.')
+        seconds = int(seconds_parts[0])
+        
+        # Handle milliseconds if present
+        if len(seconds_parts) > 1:
+            # Pad or truncate to 4 digits for consistency
+            milliseconds = int(seconds_parts[1].ljust(4, '0')[:4])
+        else:
+            milliseconds = 0
+        
+        return (hours, minutes, seconds, milliseconds)
+        
+    except (ValueError, IndexError):
+        # Return placeholder if parsing fails
+        return (9999, 99, 99, 99, 9999)
 
 
 def parse_profile(profile_name):
@@ -122,8 +145,29 @@ def find_qct_thumbs(report_directory):
                     profile_name = filename_segments[1]
                     tag_name = filename_segments[2]
                     tag_value = filename_segments[3]
-                    timestamp_as_list = filename_segments[4:-1]
-                    timestamp_as_string = ':'.join(timestamp_as_list)
+                    
+                    # Find the timestamp pattern in the filename
+                    # It should be HH.MM.SS.ssss before the .png extension
+                    # We need to reconstruct it as HH:MM:SS.ssss
+                    
+                    # The timestamp starts after tag_value (index 4) and goes until .png
+                    # For a file like: JPC_AV_01663.color_bars_evaluation.YMAX.940.0.00.00.53.7870.png
+                    # segments[4:] would be ['0', '00', '00', '53', '7870', 'png']
+                    # We want to reconstruct 00:00:53.7870
+                    
+                    timestamp_parts = filename_segments[4:-1]  # Exclude .png
+                    
+                    if len(timestamp_parts) >= 4:
+                        # Assuming format is always HH.MM.SS.milliseconds
+                        hours = timestamp_parts[1].zfill(2)    # Second element (skip the first '0')
+                        minutes = timestamp_parts[2].zfill(2)
+                        seconds = timestamp_parts[3].zfill(2)
+                        milliseconds = timestamp_parts[4] if len(timestamp_parts) > 4 else '0000'
+                        timestamp_as_string = f"{hours}:{minutes}:{seconds}.{milliseconds}"
+                    else:
+                        # Fallback
+                        timestamp_as_string = ':'.join(timestamp_parts)
+                    
                     if profile_name == 'color_bars_detection':
                         qct_thumb_name = f'First frame of color bars\n\nAt timecode: {timestamp_as_string}'
                     else:
@@ -139,7 +183,6 @@ def find_qct_thumbs(report_directory):
         sorted_thumbs_dict[key] = thumbs_dict[key]
 
     return sorted_thumbs_dict
-
 
 def find_report_csvs(report_directory):
 
@@ -216,17 +259,88 @@ def find_qc_metadata(destination_directory):
     return exiftool_output_path, ffprobe_output_path, mediainfo_output_path, mediaconch_csv, fixity_sidecar
 
 
+def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile_name, thumbPath):
+    """
+    Generates a thumbnail for a specific failure based on the summarized failures.
+    
+    Parameters:
+        video_path (str): Path to the video file.
+        tag (str): The tag that failed.
+        tagValue (float): The value of the tag at failure.
+        timestamp (str): Timestamp in HH:MM:SS.ssss format.
+        profile_name (str): Name of the profile (e.g., 'tag_check', 'color_bars_evaluation').
+        thumbPath (str): Directory to save the thumbnail.
+    
+    Returns:
+        str: Path to the generated thumbnail, or None if generation failed.
+    """
+    import subprocess
+    import re
+    
+    if not os.path.isfile(video_path):
+        logger.error(f"Video file not found: {video_path}")
+        return None
+    
+    video_basename = os.path.basename(video_path)
+    video_id = os.path.splitext(video_basename)[0]
+    
+    # Create filename matching existing convention
+    outputFramePath = os.path.join(thumbPath, f"{video_id}.{profile_name}.{tag}.{tagValue}.{timestamp}.png")
+    ffoutputFramePath = outputFramePath.replace(":", ".")
+    
+    # Windows drive letter fix
+    match = re.search(r"[A-Z]\.\/", ffoutputFramePath)
+    if match:
+        ffoutputFramePath = ffoutputFramePath.replace(".", ":", 1)
+    
+    # Generate appropriate ffmpeg command based on tag
+    if tag == "TOUT":
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=tout:color=yellow -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+    elif tag == "VREP":
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=vrep:color=pink -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+    else:
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=brng:color=cyan -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+    
+    try:
+        logger.debug(f"Generating thumbnail for {tag} failure at {timestamp}\n")
+        result = subprocess.run(ffmpegString, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+        if result.returncode == 0 and os.path.isfile(ffoutputFramePath):
+            return ffoutputFramePath
+        else:
+            logger.error(f"Failed to generate thumbnail: {result.stderr.decode()}")
+            return None
+    except Exception as e:
+        logger.error(f"Error generating thumbnail: {e}")
+        return None
+
+
 def summarize_failures(failure_csv_path):  # Change parameter to accept CSV file path
     """
     Summarizes the failure information from the CSV file, prioritizing tags 
-    with the greatest difference between tag value and threshold.
+    with the greatest difference between tag value and threshold, ensuring
+    selected frames are at least 4 seconds apart.
 
     Args:
         failure_csv_path (str): The path to the CSV file containing failure details.
 
     Returns:
-        str: A formatted summary of the failures.
+        dict: A dictionary with timestamps as keys and failure details as values.
     """
+    
+    def timestamp_to_seconds(timestamp_str):
+        """Convert HH:MM:SS.ssss to total seconds"""
+        parts = timestamp_str.split(':')
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+        return hours * 3600 + minutes * 60 + seconds
+    
+    def are_timestamps_far_enough(ts1, ts2, min_gap=4.0):
+        """Check if two timestamps are at least min_gap seconds apart"""
+        seconds1 = timestamp_to_seconds(ts1)
+        seconds2 = timestamp_to_seconds(ts2)
+        return abs(seconds1 - seconds2) >= min_gap
+    
     failureInfo = {}
     # 0. Read the failure information from the CSV
     try:
@@ -281,14 +395,32 @@ def summarize_failures(failure_csv_path):  # Change parameter to accept CSV file
     # 4. Sort the flattened list based on tag value difference
     all_failures.sort(key=lambda x: abs(x[1]['tagValue'] - x[1]['over']), reverse=True)
 
-    # 5. Limit the number of frames per tag
+    # 5. Limit the number of frames per tag with 4-second spacing
     limited_failures = []
-    tag_counts = {tag: 0 for tag in tag_counts}  # Reset tag counts
+    selected_timestamps_per_tag = {}  # Track selected timestamps for each tag
+    
     for timestamp, info in all_failures:
         tag = info['tag']
-        if tag_counts[tag] < max_frames_per_tag:
+        
+        # Initialize list for this tag if needed
+        if tag not in selected_timestamps_per_tag:
+            selected_timestamps_per_tag[tag] = []
+        
+        # Check if we've already selected enough frames for this tag
+        if len(selected_timestamps_per_tag[tag]) >= max_frames_per_tag:
+            continue
+        
+        # Check if this timestamp is far enough from all previously selected timestamps for this tag
+        is_far_enough = True
+        for selected_ts in selected_timestamps_per_tag[tag]:
+            if not are_timestamps_far_enough(timestamp, selected_ts):
+                is_far_enough = False
+                break
+        
+        # If far enough from all selected timestamps, add it
+        if is_far_enough:
             limited_failures.append((timestamp, info))
-            tag_counts[tag] += 1
+            selected_timestamps_per_tag[tag].append(timestamp)
 
     # 6. Group the limited failures back into a dictionary by timestamp
     summary_dict = {}
@@ -362,16 +494,27 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
             # Create the bar chart for the colorbars values
             colorbars_fig = go.Figure(data=[
                 go.Bar(name='SMPTE Colorbars', 
-                      x=colorbar_csv_data['QCTools Fields'], 
-                      y=colorbar_csv_data['SMPTE Colorbars'], 
-                      marker=dict(color='#378d6a')),
+                    x=colorbar_csv_data['QCTools Fields'], 
+                    y=colorbar_csv_data['SMPTE Colorbars'], 
+                    marker=dict(color='#378d6a')),
                 go.Bar(name=f'{video_id} Colorbars', 
-                      x=colorbar_csv_data['QCTools Fields'], 
-                      y=colorbar_csv_data[f'{video_id} Colorbars'], 
-                      marker=dict(color='#bf971b'))
+                    x=colorbar_csv_data['QCTools Fields'], 
+                    y=colorbar_csv_data[f'{video_id} Colorbars'], 
+                    marker=dict(color='#bf971b'))
             ])
             colorbars_fig.update_layout(barmode='group')
-            colorbars_barchart_html = colorbars_fig.to_html(full_html=False, include_plotlyjs='cdn')
+            
+            # custom config values for png export
+            config = {
+                'toImageButtonOptions': {
+                    'format': 'png',
+                    'filename': f'{video_id}_colorbars_comparison',
+                    'height': 500,
+                    'width': 800,
+                    'scale': 1
+                }
+            }
+            colorbars_barchart_html = colorbars_fig.to_html(full_html=False, include_plotlyjs='cdn', config=config)
     except Exception as e:
         logger.critical(f"Error processing duration file: {e}")
         return None 
@@ -403,7 +546,7 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
     return colorbars_html
 
 
-def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, check_cancelled=None):
+def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, video_id, failure_csv_path=None, check_cancelled=None):
     """
     Creates HTML visualizations showing pie charts of profile check results with thumbnails 
     and detailed failure information for each failed profile check.
@@ -414,6 +557,8 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                                  and values as tuples of (path, profile_name, timestamp). Output of find_qct_thumbs().
         failureInfoSummary (dict): Dictionary containing detailed failure information, with timestamps
                                  as keys and lists of failure details as values. Output of summarize_failures().
+        video_id (str): The identifier for the video being analyzed.
+        failure_csv_path (str, optional): Path to the full failures CSV file.
         check_cancelled (callable, optional): Function to check if processing should be cancelled.
                                            Defaults to None.
 
@@ -425,6 +570,24 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
     except ImportError as e:
         logger.critical(f"Error importing required libraries for graphs: {e}")
         return None
+    
+    # Read the full failure data if CSV path is provided
+    all_failures = {}
+    if failure_csv_path and os.path.isfile(failure_csv_path):
+        try:
+            with open(failure_csv_path, 'r', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    tag = row['Tag']
+                    if tag not in all_failures:
+                        all_failures[tag] = []
+                    all_failures[tag].append({
+                        'timestamp': row['Timestamp'],
+                        'tagValue': row['Tag Value'],
+                        'threshold': row['Threshold']
+                    })
+        except Exception as e:
+            logger.error(f"Error reading full failures CSV: {e}")
     
     # Read and validate CSV file
     try:
@@ -454,7 +617,40 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
     profile_summary_html = None
     profile_summary_pie_charts = []
 
+    # Create a reverse lookup dictionary for thumbnails by timestamp and tag
+    thumb_lookup = {}
+    for thumb_name, (thumb_path, tag_name, timestamp) in sorted_thumbs_dict.items():
+        if timestamp and tag_name:  # Only process thumbnails with valid timestamps and tags
+            key = (timestamp, tag_name)
+            thumb_lookup[key] = (thumb_path, thumb_name)
+
+    # Add JavaScript for toggling tables
+    javascript_code = """
+    <script>
+    function openImage(imgData, caption) {
+        var newWindow = window.open('', '_blank');
+        newWindow.document.write('<html><head><title>' + caption + '</title></head><body style="margin:0; background:#000; display:flex; align-items:center; justify-content:center; height:100vh;">');
+        newWindow.document.write('<img src="' + imgData + '" style="max-width:100%; max-height:100%; object-fit:contain;">');
+        newWindow.document.write('</body></html>');
+        newWindow.document.close();
+    }
+
+    function toggleTable(tagId) {
+        var table = document.getElementById('table_' + tagId);
+        var link = document.getElementById('link_' + tagId);
+        if (table.style.display === 'none') {
+            table.style.display = 'block';
+            link.textContent = 'Hide all failures ▲';
+        } else {
+            table.style.display = 'none';
+            link.textContent = 'Show all failures ▼';
+        }
+    }
+    </script>
+    """
+
     # Create pie charts for the profile summary
+    tag_counter = 0  # Counter to create unique IDs
     for row in profile_data:
         if check_cancelled and check_cancelled():
             logger.warning("HTML report cancelled.")
@@ -464,63 +660,117 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
         failed_frames = int(row['Number of failed frames'])
         percentage = float(row['Percentage of failed frames'])
 
-        if tag != 'Total' and percentage > 0:
-            # Initialize variables for summary data
-            failed_frame_timestamps = []
-            failed_frame_values = []
-            failed_frame_thresholds = []
+        if tag != 'Total':
+            tag_id = f"tag_{tag_counter}"  # Create unique ID for this tag
+            tag_counter += 1
+            
+            if percentage > 0:
+                # Initialize variables for summary data
+                failure_entries_html = []
 
-            # Get failure details for this tag
-            for timestamp, info_list in failureInfoSummary.items():
-                for info in info_list:
-                    if info['tag'] == tag:
-                        failed_frame_timestamps.append(timestamp)
-                        failed_frame_values.append(info['tagValue'])
-                        failed_frame_thresholds.append(info['over'])
+                # Get failure details for this tag
+                for timestamp, info_list in failureInfoSummary.items():
+                    for info in info_list:
+                        if info['tag'] == tag:
+                            # Look for thumbnail for this specific timestamp and tag
+                            thumb_html = ""
+                            lookup_key = (timestamp, tag)
+                            
+                            if lookup_key in thumb_lookup:
+                                thumb_path, thumb_name = thumb_lookup[lookup_key]
+                                with open(thumb_path, "rb") as image_file:
+                                    encoded_string = b64encode(image_file.read()).decode()
+                                # Create caption for the new window
+                                caption = f"{tag} at {timestamp} - Value: {info['tagValue']}, Threshold: {info['over']}"
+                                # Make thumbnail clickable with JavaScript
+                                thumb_html = f'''<img src="data:image/png;base64,{encoded_string}" 
+                                                onclick="openImage('data:image/png;base64,{encoded_string}', '{caption}')"
+                                                style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px; cursor: pointer; border: 1px solid #ccc;" 
+                                                title="Click to enlarge" />'''
+                            
+                            # Create entry with or without thumbnail
+                            entry_html = f'''
+                            <div style="margin-bottom: 10px;">
+                                <span><b>Timestamp: {timestamp}</b> | <b>Value:</b> {info['tagValue']} | <b>Threshold:</b> {info['over']}</span>
+                                {thumb_html}
+                            </div>
+                            '''
+                            failure_entries_html.append(entry_html)
 
-            # Create formatted failure summary string
-            formatted_failures = "<br>".join(
-                f"<b>Timestamp: {timestamp}</b><br><b>Value:</b> {value}<br><b>Threshold:</b> {threshold}<br>" 
-                for timestamp, value, threshold in zip(failed_frame_timestamps, failed_frame_values, failed_frame_thresholds)
-            )
-            summary_html = f"""
-            <div style="display: flex; flex-direction: column; align-items: center; background-color: #f5e9e3; padding: 10px;">
-                <p><b>Peak Values outside of Threshold for {tag}:</b></p>
-                <p>{formatted_failures}</p>
-            </div>
-            """
+                # Create formatted failure summary with all thumbnails
+                formatted_failures = "".join(failure_entries_html)
+                
+                # Create the full failures table (hidden by default)
+                full_table_html = ""
+                if tag in all_failures:
+                    table_rows = []
+                    for failure in all_failures[tag]:
+                        table_rows.append(f"""
+                        <tr>
+                            <td>{failure['timestamp']}</td>
+                            <td>{failure['tagValue']}</td>
+                            <td>{failure['threshold']}</td>
+                        </tr>
+                        """)
+                    
+                    full_table_html = f"""
+                    <div id="table_{tag_id}" style="display: none; margin-top: 10px;">
+                        <table style="border-collapse: collapse; width: 100%; border: 1px solid #4d2b12;">
+                            <tr style="background-color: #fbe4eb;">
+                                <th style="border: 1px solid #4d2b12; padding: 8px;">Timestamp</th>
+                                <th style="border: 1px solid #4d2b12; padding: 8px;">Value</th>
+                                <th style="border: 1px solid #4d2b12; padding: 8px;">Threshold</th>
+                            </tr>
+                            {''.join(table_rows)}
+                        </table>
+                    </div>
+                    """
+                
+                summary_html = f"""
+                <div style="display: flex; flex-direction: column; align-items: flex-start; background-color: #f5e9e3; padding: 10px; max-height: 400px; overflow-y: auto;">
+                    <p><b>Peak Values outside of Threshold for {tag}:</b></p>
+                    {formatted_failures}
+                    <a id="link_{tag_id}" href="javascript:void(0);" onclick="toggleTable('{tag_id}')" style="color: #378d6a; text-decoration: underline; margin-top: 10px;">Show all failures ▼</a>
+                    {full_table_html}
+                </div>
+                """
+            else:
+                # For 0% failures, show a simple message without thumbnails
+                summary_html = f"""
+                <div style="display: flex; flex-direction: column; align-items: flex-start; background-color: #f5e9e3; padding: 10px;">
+                    <p><b>All values within specified threshold</b></p>
+                </div>
+                """
 
-            # Generate Pie chart
+            # Generate Pie chart (same for both cases)
             pie_fig = go.Figure(data=[go.Pie(
                 labels=['Failed Frames', 'Other Frames'],
                 values=[failed_frames, total_frames - failed_frames],
                 hole=.3,
                 marker=dict(colors=['#ffbaba', '#d2ffed'])
             )])
-            pie_fig.update_layout(title=f"{tag} - {percentage:.2f}% ({failed_frames} frames)", height=400, width=400,
-                                paper_bgcolor='#f5e9e3')
+            pie_fig.update_layout(
+                title=f"{video_id}<br>{tag} - {percentage:.2f}% ({failed_frames} frames)", 
+                height=400, 
+                width=400,
+                paper_bgcolor='#f5e9e3'
+            )
 
-            # Get Thumbnails
-            thumbnail_html = ''
-            for thumb_name, (thumb_path, profile_name, timestamp) in sorted_thumbs_dict.items():
-                if profile_name == tag:
-                    thumb_name_with_breaks = thumb_name.replace("\n", "<br>")
-                    with open(thumb_path, "rb") as image_file:
-                        encoded_string = b64encode(image_file.read()).decode()
-                    thumbnail_html = f"""
-                    <div style="display: flex; flex-direction: column; align-items: center; background-color: #f5e9e3; padding: 10px;">
-                        <img src="data:image/png;base64,{encoded_string}" style="width: 150px; height: auto;" /> 
-                        <p style="margin-left: 10px;">{thumb_name_with_breaks}</p>
-                    </div>
-                    """
+            # plotly config values for custo. png file name
+            config = {
+                'toImageButtonOptions': {
+                    'format': 'png',
+                    'filename': f'{video_id}_{tag}',
+                    'height': 400,
+                    'width': 400,
+                    'scale': 1
+                }
+            }
 
             # Wrap everything in one div
             pie_chart_html = f"""
             <div style="display: flex; flex-direction: column; align-items: start; background-color: #f5e9e3; padding: 10px;"> 
-                <div style="display: flex; align-items: center;">  
-                    <div style="width: 400px;">{pie_fig.to_html(full_html=False, include_plotlyjs='cdn')}</div> 
-                    {thumbnail_html}
-                </div>
+                <div style="width: 400px;">{pie_fig.to_html(full_html=False, include_plotlyjs='cdn', config=config)}</div>
                 {summary_html}
             </div>
             """
@@ -531,10 +781,11 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
             </div>
             """)
 
-    # Arrange pie charts horizontally
+    # Arrange pie charts horizontally with JavaScript
     profile_piecharts_html = ''.join(profile_summary_pie_charts)
 
     profile_summary_html = f'''
+    {javascript_code}
     <div>
         {profile_piecharts_html}
     </div>
@@ -594,7 +845,7 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
 
     return content_summary_html
 
-def generate_final_report(video_id, source_directory, report_directory, destination_directory, check_cancelled=None, signals=None):
+def generate_final_report(video_id, source_directory, report_directory, destination_directory, video_path=None, check_cancelled=None, signals=None):
     """
     Generate final HTML report if configured.
     
@@ -603,7 +854,7 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         source_directory (str): Source directory for the video
         report_directory (str): Directory containing report files
         destination_directory (str): Destination directory for output files
-        command_config (object): Configuration object with tool settings
+        video_path (str, optional): Path to the video file for thumbnail generation
         
     Returns:
         str or None: Path to the generated HTML report, or None
@@ -611,15 +862,15 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
     
     checks_config = config_mgr.get_config('checks', ChecksConfig)
 
-    # Check if report should be generated
     if checks_config.outputs.report != 'yes':
         return None
 
     try:
         html_report_path = os.path.join(source_directory, f'{video_id}_avspex_report.html')
         
-        # Generate HTML report
-        write_html_report(video_id, report_directory, destination_directory, html_report_path, check_cancelled=check_cancelled)
+        # Generate HTML report with video path
+        write_html_report(video_id, report_directory, destination_directory, html_report_path, 
+                         video_path=video_path, check_cancelled=check_cancelled)
         
         logger.info(f"HTML report generated: {html_report_path}\n")
         if signals:
@@ -633,9 +884,86 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         return None
 
 
-def write_html_report(video_id, report_directory, destination_directory, html_report_path, check_cancelled=None):
+def write_html_report(video_id, report_directory, destination_directory, html_report_path, video_path=None, check_cancelled=None):
 
     qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv = find_report_csvs(report_directory)
+
+    if check_cancelled():
+        return
+    
+    # Create thumbPath if it doesn't exist
+    thumbPath = os.path.join(report_directory, "ThumbExports")
+    if not os.path.exists(thumbPath):
+        os.makedirs(thumbPath)
+    
+    # Generate thumbnails for peak failures
+    generated_thumbs = {}
+    
+    if profile_fails_csv and video_path:
+        profile_fails_csv_path = os.path.join(report_directory, profile_fails_csv)
+        failureInfoSummary_profile = summarize_failures(profile_fails_csv_path)
+        
+        # Generate thumbnails for profile failures
+        for timestamp, info_list in failureInfoSummary_profile.items():
+            for info in info_list:
+                thumb_path = generate_thumbnail_for_failure(
+                    video_path, 
+                    info['tag'], 
+                    info['tagValue'], 
+                    timestamp, 
+                    'threshold_profile',  # or determine from context
+                    thumbPath
+                )
+                if thumb_path:
+                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
+                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
+    
+    if tag_fails_csv and video_path:
+        tag_fails_csv_path = os.path.join(report_directory, tag_fails_csv)
+        failureInfoSummary_tags = summarize_failures(tag_fails_csv_path)
+        
+        # Generate thumbnails for tag failures
+        for timestamp, info_list in failureInfoSummary_tags.items():
+            for info in info_list:
+                thumb_path = generate_thumbnail_for_failure(
+                    video_path, 
+                    info['tag'], 
+                    info['tagValue'], 
+                    timestamp, 
+                    'tag_check',
+                    thumbPath
+                )
+                if thumb_path:
+                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
+                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
+    
+    if colorbars_eval_fails_csv and video_path:
+        colorbars_eval_fails_csv_path = os.path.join(report_directory, colorbars_eval_fails_csv)
+        failureInfoSummary_colorbars = summarize_failures(colorbars_eval_fails_csv_path)
+        
+        # Generate thumbnails for colorbar failures
+        for timestamp, info_list in failureInfoSummary_colorbars.items():
+            for info in info_list:
+                thumb_path = generate_thumbnail_for_failure(
+                    video_path, 
+                    info['tag'], 
+                    info['tagValue'], 
+                    timestamp, 
+                    'color_bars_evaluation',
+                    thumbPath
+                )
+                if thumb_path:
+                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
+                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
+    
+    # Merge with existing thumbs (for things like color bars detection)
+    existing_thumbs = find_qct_thumbs(report_directory)
+    thumbs_dict = {**existing_thumbs, **generated_thumbs}
+    
+    # Sort thumbs_dict as before
+    sorted_thumbs_dict = {}
+    for key in sorted(thumbs_dict.keys(), key=lambda x: (parse_profile(thumbs_dict[x][1]), parse_timestamp(thumbs_dict[x][2]))):
+        sorted_thumbs_dict[key] = thumbs_dict[key]
 
     if check_cancelled():
         return
@@ -679,7 +1007,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # Create graphs for all existing csv files
     if qctools_bars_eval_check_output and failureInfoSummary_colorbars:
-        colorbars_eval_html = make_profile_piecharts(qctools_bars_eval_check_output,thumbs_dict,failureInfoSummary_colorbars,check_cancelled=check_cancelled)
+        colorbars_eval_html = make_profile_piecharts(qctools_bars_eval_check_output, thumbs_dict, failureInfoSummary_colorbars, video_id, failure_csv_path=colorbars_eval_fails_csv_path, check_cancelled=check_cancelled)
     elif qctools_bars_eval_check_output and failureInfoSummary_colorbars is None:
        color_bars_segment = f"""
         <div style="display: flex; flex-direction: column; align-items: start; background-color: #f5e9e3; padding: 10px;"> 
@@ -700,7 +1028,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
          colorbars_html = None
 
     if qctools_profile_check_output and failureInfoSummary_profile:
-        profile_summary_html = make_profile_piecharts(qctools_profile_check_output,thumbs_dict,failureInfoSummary_profile,check_cancelled=check_cancelled)
+        profile_summary_html = make_profile_piecharts(qctools_profile_check_output, thumbs_dict, failureInfoSummary_profile, video_id, failure_csv_path=profile_fails_csv_path, check_cancelled=check_cancelled)
     else:
         profile_summary_html = None
 
@@ -713,7 +1041,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         content_summary_html_list = None
 
     if tags_check_output and failureInfoSummary_tags:
-        tags_summary_html = make_profile_piecharts(tags_check_output,thumbs_dict,failureInfoSummary_tags,check_cancelled=check_cancelled)
+        tags_summary_html = make_profile_piecharts(tags_check_output, thumbs_dict, failureInfoSummary_tags, video_id, failure_csv_path=tag_fails_csv_path, check_cancelled=check_cancelled)
     else:
         tags_summary_html = None
 
