@@ -258,8 +258,6 @@ class MainWindowProcessing:
             self.main_window.check_spex_button.setEnabled(True)
         if hasattr(self.main_window, 'open_processing_button'):
             self.main_window.open_processing_button.setEnabled(False)
-        
-        QMessageBox.information(self.main_window, "Complete", message)
 
     def on_processing_paused(self):
         """Handle when processing is paused"""
