@@ -256,8 +256,6 @@ class MainWindowProcessing:
         # Re-enable both buttons
         if hasattr(self.main_window, 'check_spex_button'):
             self.main_window.check_spex_button.setEnabled(True)
-        if hasattr(self.main_window, 'open_processing_button'):
-            self.main_window.open_processing_button.setEnabled(False)
 
     def on_processing_paused(self):
         """Handle when processing is paused"""
@@ -315,10 +313,6 @@ class MainWindowProcessing:
         # Hide the processing indicator
         if hasattr(self.main_window, 'processing_indicator'):
             self.main_window.processing_indicator.setVisible(False)
-        
-        # Disable the Open Processing Window button
-        if hasattr(self.main_window, 'open_processing_button'):
-            self.main_window.open_processing_button.setEnabled(False)
         
         if hasattr(self.main_window, 'processing_window') and self.main_window.processing_window:
             self.main_window.processing_window.update_status(f"ERROR: {error_message}")
@@ -383,10 +377,6 @@ class MainWindowProcessing:
         # Reset the status label
         if hasattr(self.main_window, 'main_status_label'):
             self.main_window.main_status_label.setVisible(False)
-        
-        # Disable the Open Processing Window button
-        if hasattr(self.main_window, 'open_processing_button'):
-            self.main_window.open_processing_button.setEnabled(False)
 
         # Disable the Cancel button button
         if hasattr(self.main_window, 'cancel_processing_button'):
