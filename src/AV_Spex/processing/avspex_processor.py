@@ -80,6 +80,16 @@ class AVSpexProcessor:
 
     def cancel(self):
         self._cancelled = True
+        
+        # Clean up any in-progress access file
+        if hasattr(self, '_processing_context') and self._processing_context:
+            current_access_file = self._processing_context.get('current_access_file')
+            if current_access_file and os.path.exists(current_access_file):
+                try:
+                    os.remove(current_access_file)
+                    logger.info(f"Removed incomplete access file on cancel: {os.path.basename(current_access_file)}")
+                except Exception as e:
+                    logger.error(f"Failed to remove incomplete access file: {e}")
 
     def check_cancelled(self):
         """Check for cancellation OR pause - reuse existing mechanism"""
@@ -108,7 +118,20 @@ class AVSpexProcessor:
         """Request pause - will pause at next check_cancelled call"""
         print("DEBUG: Pause requested!")
         self._pause_requested = True
-        # Add debug about current state
+        
+        # Clean up any in-progress access file
+        if hasattr(self, '_processing_context') and self._processing_context:
+            current_access_file = self._processing_context.get('current_access_file')
+            if current_access_file and os.path.exists(current_access_file):
+                print(f"DEBUG: Cleaning up incomplete access file: {current_access_file}")
+                try:
+                    os.remove(current_access_file)
+                    logger.info(f"Removed incomplete access file: {os.path.basename(current_access_file)}")
+                except Exception as e:
+                    logger.error(f"Failed to remove incomplete access file: {e}")
+                # Remove from context
+                self._processing_context.pop('current_access_file', None)
+        
         print(f"DEBUG: _pause_requested = {self._pause_requested}")
         print(f"DEBUG: _paused = {self._paused}")
         print(f"DEBUG: Current step: {self._current_step}")

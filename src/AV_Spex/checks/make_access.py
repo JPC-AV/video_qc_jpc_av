@@ -48,9 +48,10 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
             duration_ms = (duration * 1000000)
             # Calculate the total duration in microseconds
             if ff_output.startswith(duration_prefix):
-                if check_cancelled():
-                    ffmpeg_process.terminate
-                    return
+                if check_cancelled and check_cancelled():
+                    ffmpeg_process.terminate()  # Fixed: added parentheses
+                    ffmpeg_process.wait()  # Wait for process to finish
+                    return False  # Return False to indicate cancellation
                 current_frame_str = ff_output.split(duration_prefix)[1]
                 current_frame_ms = float(current_frame_str)
                 percent_complete = (current_frame_ms / duration_ms) * 100
@@ -60,12 +61,26 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
                     signals.access_file_progress.emit(safe_percent)
                 else:
                     print(f"\rFFmpeg Access Copy Progress: {percent_complete:.2f}%", end='', flush=True)
+        
+        # Wait for process to complete
+        ffmpeg_process.wait()
+        
         ffmpeg_stderr = ffmpeg_process.stderr.read()
         if ffmpeg_stderr:
             logger.error(f"ffmpeg stderr: {ffmpeg_stderr.strip()}")
+            
+        # Check if process completed successfully
+        if ffmpeg_process.returncode == 0:
+            return True
+        else:
+            logger.error(f"ffmpeg exited with code {ffmpeg_process.returncode}")
+            return False
+            
     except Exception as e:
         logger.error(f"Error during ffmpeg process: {str(e)}")
-    print("\n")
+        return False
+    finally:
+        print("\n")
 
 
 def process_access_file(video_path, source_directory, video_id, check_cancelled=None, signals=None):
@@ -76,7 +91,8 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
         video_path (str): Path to the input video file
         source_directory (str): Source directory for the video
         video_id (str): Unique identifier for the video
-        command_config (object): Configuration object with tool settings
+        check_cancelled: Function to check if operation was cancelled
+        signals: Signal object for progress updates
         
     Returns:
         str or None: Path to the created access file, or None
@@ -92,24 +108,51 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
 
     try:
         # Check if access file already exists
-        for filename in os.listdir(source_directory):
-            if filename.lower().endswith('mp4'):
+        if os.path.isfile(access_output_path):
+            # Check file size to ensure it's not a partial file from interrupted processing
+            file_size = os.path.getsize(access_output_path)
+            if file_size > 100000:  # More than 100KB (adjust based on your typical file sizes)
                 logger.critical(f"Access file already exists, not running ffmpeg\n")
                 if signals:
                     signals.step_completed.emit("Generate Access File")
-                return None
-        if os.path.isfile(access_output_path):
-            logger.critical(f"Access file already exists, not running ffmpeg\n")
-            if signals:
-                signals.step_completed.emit("Generate Access File")
-            return None
+                return access_output_path
+            else:
+                # Remove incomplete file
+                logger.info(f"Removing incomplete access file from previous run (size: {file_size} bytes)")
+                os.remove(access_output_path)
+
+        # Store the access file path in context for cleanup on pause
+        if hasattr(check_cancelled, '__self__'):
+            processor = check_cancelled.__self__
+            if hasattr(processor, '_processing_context') and processor._processing_context:
+                processor._processing_context['current_access_file'] = access_output_path
 
         # Generate access file
-        make_access_file(video_path, access_output_path, check_cancelled=check_cancelled, signals=signals)
-        if signals:
-            signals.step_completed.emit("Generate Access File")
-        return access_output_path
+        success = make_access_file(video_path, access_output_path, check_cancelled=check_cancelled, signals=signals)
+        
+        # Clear the current access file from context after completion
+        if hasattr(check_cancelled, '__self__'):
+            processor = check_cancelled.__self__
+            if hasattr(processor, '_processing_context') and processor._processing_context:
+                processor._processing_context.pop('current_access_file', None)
+        
+        if success:
+            if signals:
+                signals.step_completed.emit("Generate Access File")
+            return access_output_path
+        else:
+            # Clean up incomplete file if creation failed or was cancelled
+            if os.path.exists(access_output_path):
+                logger.info("Removing incomplete access file after cancellation/failure")
+                os.remove(access_output_path)
+            return None
 
     except Exception as e:
         logger.critical(f"Error creating access file: {e}")
+        # Clean up on error
+        if os.path.exists(access_output_path):
+            try:
+                os.remove(access_output_path)
+            except:
+                pass
         return None
