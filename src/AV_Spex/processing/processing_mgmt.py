@@ -214,9 +214,9 @@ class ProcessingManager:
         return metadata_differences
     
 
-    def process_video_outputs(self, video_path, source_directory, destination_directory, video_id, metadata_differences):
+    def process_video_outputs(self, video_path, source_directory, destination_directory, video_id, metadata_differences, completed_sub_steps=None):
         """
-        Coordinate the entire output processing workflow.
+        Coordinate the entire output processing workflow with sub-step tracking.
         
         Args:
             video_path (str): Path to the input video file
@@ -224,10 +224,18 @@ class ProcessingManager:
             destination_directory (str): Destination directory for output files
             video_id (str): Unique identifier for the video
             metadata_differences (dict): Differences found in metadata checks
+            completed_sub_steps (set): Set of already completed sub-steps
             
         Returns:
-            dict: Processing results and file paths
+            dict, False, or "paused": Processing results, False for failure, or "paused" for pause
         """
+        
+        if self.check_cancelled():
+            return None
+        
+        # Initialize completed_sub_steps if not provided
+        if completed_sub_steps is None:
+            completed_sub_steps = set()
 
         # Collect processing results
         processing_results = {
@@ -237,56 +245,183 @@ class ProcessingManager:
             'html_report': None
         }
 
-        if self.check_cancelled():
-            return None
-       
-        # Create report directory if report is enabled
-        report_directory = None
-        if self.checks_config.outputs.report == 'yes':
+        # SUB-STEP 1: Metadata difference report
+        if self.checks_config.outputs.report == 'yes' and 'metadata_diff_report' not in completed_sub_steps:
+            if self.signals:
+                self.signals.output_progress.emit("Creating metadata difference report...")
+            
             report_directory = dir_setup.make_report_dir(source_directory, video_id)
-            # Process metadata differences report
             processing_results['metadata_diff_report'] = create_metadata_difference_report(
-                    metadata_differences, report_directory, video_id
-                )
+                metadata_differences, report_directory, video_id
+            )
+            
+            if self.check_cancelled():
+                # Return "paused" if it's a pause, not a cancellation
+                if hasattr(self, 'check_cancelled') and hasattr(self.check_cancelled, '__self__'):
+                    processor = self.check_cancelled.__self__
+                    if hasattr(processor, '_paused') and processor._paused:
+                        return "paused"
+                return False
+                
+            completed_sub_steps.add('metadata_diff_report')
+            # Store report directory in context for later steps
+            if hasattr(self, '_processing_context') and self._processing_context:
+                self._processing_context['report_directory'] = report_directory
         else:
-            processing_results['metadata_diff_report'] =  None
-        
-        if self.signals:
-            self.signals.output_progress.emit("Running QCTools and qct-parse...")
+            # Get report directory from context if it was created before pause
+            if hasattr(self, '_processing_context') and self._processing_context:
+                report_directory = self._processing_context.get('report_directory', None)
+            else:
+                report_directory = None
+
+        # SUB-STEP 2: QCTools
+        if self.checks_config.tools.qctools.run_tool == 'yes' and 'qctools' not in completed_sub_steps:
+            if self.signals:
+                self.signals.output_progress.emit("Running QCTools...")
+            
+            qctools_result = self._run_qctools_sub_step(
+                video_path, source_directory, destination_directory, video_id, report_directory
+            )
+            
+            if self.check_cancelled():
+                # Return "paused" if it's a pause, not a cancellation
+                if hasattr(self, 'check_cancelled') and hasattr(self.check_cancelled, '__self__'):
+                    processor = self.check_cancelled.__self__
+                    if hasattr(processor, '_paused') and processor._paused:
+                        return "paused"
+                return False
+                
+            if qctools_result:
+                completed_sub_steps.add('qctools')
+                # Store result in context
+                if hasattr(self, '_processing_context') and self._processing_context:
+                    self._processing_context['qctools_output_path'] = qctools_result.get('qctools_output_path')
+
+        # SUB-STEP 3: QCT-Parse
+        if self.checks_config.tools.qct_parse.run_tool == 'yes' and 'qct_parse' not in completed_sub_steps:
+            if self.signals:
+                self.signals.output_progress.emit("Running qct-parse...")
+            
+            # Get qctools output path from context or find existing
+            qctools_output_path = None
+            if hasattr(self, '_processing_context') and self._processing_context:
+                qctools_output_path = self._processing_context.get('qctools_output_path')
+            
+            if not qctools_output_path:
+                qctools_output_path = find_qctools_report(source_directory, video_id)
+            
+            if qctools_output_path and os.path.isfile(qctools_output_path):
+                # Ensure report directory exists
+                if not report_directory:
+                    report_directory = dir_setup.make_report_dir(source_directory, video_id)
+                
+                logger.info(f"Running qct-parse on: {qctools_output_path}")
+                run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=self.check_cancelled)
+                
+                if self.check_cancelled():
+                    # Return "paused" if it's a pause, not a cancellation
+                    if hasattr(self, 'check_cancelled') and hasattr(self.check_cancelled, '__self__'):
+                        processor = self.check_cancelled.__self__
+                        if hasattr(processor, '_paused') and processor._paused:
+                            return "paused"
+                    return False
+                    
+                if self.signals:
+                    self.signals.step_completed.emit("QCT Parse")
+                completed_sub_steps.add('qct_parse')
+            else:
+                logger.critical(f"Unable to run qct-parse. No QCTools file found.")
+
+        # SUB-STEP 4: Access file
+        if self.checks_config.outputs.access_file == 'yes' and 'access_file' not in completed_sub_steps:
+            if self.signals:
+                self.signals.output_progress.emit("Creating access file...")
+            
+            processing_results['access_file'] = process_access_file(
+                video_path, source_directory, video_id, 
+                check_cancelled=self.check_cancelled,
+                signals=self.signals
+            )
+            
+            if self.check_cancelled():
+                # Return "paused" if it's a pause, not a cancellation
+                if hasattr(self, 'check_cancelled') and hasattr(self.check_cancelled, '__self__'):
+                    processor = self.check_cancelled.__self__
+                    if hasattr(processor, '_paused') and processor._paused:
+                        return "paused"
+                return False
+                
+            if self.signals:
+                self.signals.step_completed.emit("Generate Access File")
+            completed_sub_steps.add('access_file')
+
+        # SUB-STEP 5: Final HTML report
+        if self.checks_config.outputs.report == 'yes' and 'final_report' not in completed_sub_steps:
+            if self.signals:
+                self.signals.output_progress.emit("Preparing report...")
+            
+            # Ensure report directory exists
+            if not report_directory:
+                report_directory = dir_setup.make_report_dir(source_directory, video_id)
+            
+            processing_results['html_report'] = generate_final_report(
+                video_id, source_directory, report_directory, destination_directory,
+                video_path=video_path,
+                check_cancelled=self.check_cancelled, signals=self.signals
+            )
+            
+            if self.check_cancelled():
+                # Return "paused" if it's a pause, not a cancellation
+                if hasattr(self, 'check_cancelled') and hasattr(self.check_cancelled, '__self__'):
+                    processor = self.check_cancelled.__self__
+                    if hasattr(processor, '_paused') and processor._paused:
+                        return "paused"
+                return False
+                
+            if self.signals:
+                self.signals.step_completed.emit("Generate Report")
+            completed_sub_steps.add('final_report')
+
         if self.check_cancelled():
             return None
-
-        # Process QCTools output
-        process_qctools_output(
-            video_path, source_directory, destination_directory, video_id, report_directory=report_directory,
-            check_cancelled=self.check_cancelled, signals=self.signals
-        )
-
-        if self.signals:
-            self.signals.output_progress.emit("Creating access file...")
-        if self.check_cancelled():
-            return None
-
-        # Generate access file
-        processing_results['access_file'] = process_access_file(
-            video_path, source_directory, video_id, 
-            check_cancelled=self.check_cancelled,
-            signals=self.signals
-        )
-
-        if self.signals:
-            self.signals.output_progress.emit("Preparing report...")
-        if self.check_cancelled():
-            return None
-
-        # Generate final HTML report
-        processing_results['html_report'] = generate_final_report(
-            video_id, source_directory, report_directory, destination_directory,
-            video_path=video_path,
-            check_cancelled=self.check_cancelled, signals=self.signals
-        )
 
         return processing_results
+
+
+    def _run_qctools_sub_step(self, video_path, source_directory, destination_directory, video_id, report_directory):
+        """
+        Run QCTools as a separate sub-step with proper pause/resume support.
+        """
+        # Check for existing QCTools report first
+        existing_qctools_path = find_qctools_report(source_directory, video_id)
+        
+        if existing_qctools_path:
+            logger.info(f"Found existing QCTools report: {existing_qctools_path}\n")
+            if self.signals:
+                self.signals.step_completed.emit("QCTools")
+            return {'qctools_output_path': existing_qctools_path}
+        
+        # No existing report found, create a new one
+        qctools_ext = self.checks_config.outputs.qctools_ext
+        qctools_output_path = os.path.join(destination_directory, f'{video_id}.{qctools_ext}')
+        
+        # Check if we already created one in the destination directory
+        if os.path.exists(qctools_output_path):
+            logger.warning("QCTools report already exists in destination directory, not overwriting...")
+            if self.signals:
+                self.signals.step_completed.emit("QCTools")
+            return {'qctools_output_path': qctools_output_path}
+        
+        # Create new QCTools report
+        logger.info(f"No existing QCTools report found. Creating new report: {qctools_output_path}")
+        run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, 
+                        check_cancelled=self.check_cancelled, signals=self.signals)
+        logger.debug('')  # Add new line for cleaner terminal output
+        
+        if self.signals:
+            self.signals.step_completed.emit("QCTools")
+        
+        return {'qctools_output_path': qctools_output_path}
     
 
 def find_qctools_report(source_directory, video_id):

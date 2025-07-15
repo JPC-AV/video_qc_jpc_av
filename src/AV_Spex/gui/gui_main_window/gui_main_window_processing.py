@@ -4,6 +4,8 @@ from AV_Spex.gui.gui_processing_window import ProcessingWindow
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.processing.worker_thread import ProcessingWorker
 
+from AV_Spex.gui.gui_processing_window_console import MessageType
+
 class MainWindowProcessing:
     """Processing-related event handlers for the main window"""
     
@@ -250,8 +252,7 @@ class MainWindowProcessing:
             self.main_window.main_status_label.setVisible(False)
         
         if self.main_window.processing_window:
-            self.main_window.processing_window.close()
-            self.main_window.processing_window = None  # Explicitly set to None
+            self.main_window.processing_window.file_status_label.setText("✅ Processing completed successfully!")
         
         # Re-enable both buttons
         if hasattr(self.main_window, 'check_spex_button'):

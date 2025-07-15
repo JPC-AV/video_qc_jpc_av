@@ -185,10 +185,17 @@ class AVSpexProcessor:
                 'access_file_found': access_file_found
             }
             
-            # Initialize step tracking
-            self._completed_steps = getattr(self, '_completed_steps', set())
-            self._completed_sub_steps = getattr(self, '_completed_sub_steps', {})
-            self._current_step = getattr(self, '_current_step', 'fixity')
+            # Initialize step tracking ONLY if not already initialized
+            if not hasattr(self, '_completed_steps'):
+                self._completed_steps = set()
+            if not hasattr(self, '_completed_sub_steps'):
+                self._completed_sub_steps = {}
+            if not hasattr(self, '_current_step'):
+                self._current_step = 'fixity'
+
+        # Add debug logging
+        print(f"DEBUG: process_single_directory - completed steps: {self._completed_steps}")
+        print(f"DEBUG: process_single_directory - current step: {self._current_step}")
 
         processing_mgmt = ProcessingManager(signals=self.signals, check_cancelled_fn=self.check_cancelled)
 
@@ -199,6 +206,7 @@ class AVSpexProcessor:
                 self._completed_steps.add('fixity')
                 # Clear sub-steps for this major step after completion
                 self._completed_sub_steps.pop('fixity', None)
+                print(f"DEBUG: Fixity step completed, completed_steps now: {self._completed_steps}")
             elif self.check_cancelled():
                 if self._paused:
                     print("DEBUG: Fixity step paused")
@@ -211,6 +219,7 @@ class AVSpexProcessor:
             self._current_step = 'mediaconch'
             if self._run_mediaconch_step(processing_mgmt):
                 self._completed_steps.add('mediaconch')
+                print(f"DEBUG: MediaConch step completed, completed_steps now: {self._completed_steps}")
             elif self.check_cancelled():
                 if self._paused:
                     print("DEBUG: MediaConch step paused")
@@ -221,20 +230,32 @@ class AVSpexProcessor:
         # STEP 3: Metadata
         if 'metadata' not in self._completed_steps:
             self._current_step = 'metadata'
-            if self._run_metadata_step(processing_mgmt):
+            print(f"DEBUG: Starting metadata step")
+            result = self._run_metadata_step(processing_mgmt)
+            print(f"DEBUG: Metadata step returned: {result}")
+            
+            if result:
                 self._completed_steps.add('metadata')
+                print(f"DEBUG: Metadata step completed, completed_steps now: {self._completed_steps}")
             elif self.check_cancelled():
                 if self._paused:
-                    print("DEBUG: Metadata step paused")
+                    print("DEBUG: Metadata step paused during execution")
                     return "paused"
                 else:
+                    print("DEBUG: Metadata step cancelled")
                     return False
+            else:
+                print("DEBUG: Metadata step failed")
+                return False
+        else:
+            print(f"DEBUG: Skipping metadata step - already completed")
 
         # STEP 4: Outputs
         if 'outputs' not in self._completed_steps:
             self._current_step = 'outputs'
             if self._run_outputs_step(processing_mgmt):
                 self._completed_steps.add('outputs')
+                print(f"DEBUG: Outputs step completed, completed_steps now: {self._completed_steps}")
             elif self.check_cancelled():
                 if self._paused:
                     print("DEBUG: Outputs step paused")
@@ -352,6 +373,8 @@ class AVSpexProcessor:
     
     def _run_metadata_step(self, processing_mgmt):
         """Run metadata step"""
+        print("DEBUG: _run_metadata_step starting")
+        
         # Check if any metadata tools are enabled
         tools_to_check = ['mediainfo', 'mediatrace', 'exiftool', 'ffprobe']
         tools_config = self.checks_config.tools
@@ -362,6 +385,10 @@ class AVSpexProcessor:
             if tool and (getattr(tool, 'check_tool', 'no') == 'yes' or 
                         getattr(tool, 'run_tool', 'no') == 'yes'):
                     metadata_tools_enabled = True
+
+        if not metadata_tools_enabled:
+            print("DEBUG: No metadata tools enabled, returning True")
+            return True
 
         if self.signals:
             self.signals.tool_started.emit("Metadata Tools")
@@ -393,60 +420,87 @@ class AVSpexProcessor:
                 ]
                 
                 for tool_name, display_name in tools_to_signal:
-                    tool = getattr(tools_config, tool_name)
-                    if tool.check_tool == "yes" or tool.run_tool == "yes":
+                    tool = getattr(tools_config, tool_name, None)
+                    if tool and (tool.check_tool == "yes" or tool.run_tool == "yes"):
                         self.signals.step_completed.emit(display_name)
 
             if self.signals:
                 self.signals.clear_status.emit()
 
-            if self.check_cancelled():
-                return True
-            
+            print("DEBUG: Metadata step completed successfully")
+            return True
+                
         except Exception as e:
             print(f"DEBUG: Metadata step error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def _run_outputs_step(self, processing_mgmt):
-        """Run outputs step"""
-        outputs_enabled = (
-            self.checks_config.outputs.access_file == "yes" or
-            self.checks_config.outputs.report == "yes" or
-            self.checks_config.tools.qctools.run_tool == "yes" or
-            self.checks_config.tools.qct_parse.run_tool == "yes"
-        )
+        """Run outputs step with sub-step tracking"""
+        print("DEBUG: _run_outputs_step starting")
+        
+        # Initialize sub-steps tracking for outputs if not exists
+        if 'outputs' not in self._completed_sub_steps:
+            self._completed_sub_steps['outputs'] = set()
+        
+        completed_sub_steps = self._completed_sub_steps['outputs']
+        ctx = self._processing_context
+        
+        # Check which output operations are enabled
+        report_enabled = self.checks_config.outputs.report == "yes"
+        access_enabled = self.checks_config.outputs.access_file == "yes"
+        qctools_enabled = self.checks_config.tools.qctools.run_tool == "yes"
+        qct_parse_enabled = self.checks_config.tools.qct_parse.run_tool == "yes"
+        
+        outputs_enabled = report_enabled or access_enabled or qctools_enabled or qct_parse_enabled
         
         if not outputs_enabled:
+            print("DEBUG: Outputs not enabled, returning True")
             return True
 
         if self.signals:
             self.signals.tool_started.emit("Output Processing\n")
         
+        print("DEBUG: About to process outputs sub-steps")
+        print(f"DEBUG: Completed sub-steps so far: {completed_sub_steps}")
+        
         try:
-            ctx = self._processing_context
-            metadata_differences = ctx.get('metadata_differences')
-            processing_mgmt.process_video_outputs(
-                ctx['video_path'], ctx['source_directory'], ctx['destination_directory'],
-                ctx['video_id'], metadata_differences
+            # Pass the context to processing_mgmt
+            processing_mgmt._processing_context = ctx
+            
+            # Get metadata differences from context
+            metadata_differences = ctx.get('metadata_differences', {})
+            
+            # Call the main process_video_outputs method with completed sub-steps
+            result = processing_mgmt.process_video_outputs(
+                ctx['video_path'], 
+                ctx['source_directory'], 
+                ctx['destination_directory'],
+                ctx['video_id'], 
+                metadata_differences,
+                completed_sub_steps=completed_sub_steps
             )
             
-            # CHECK FOR PAUSE AFTER THE OPERATION
-            if self.check_cancelled():
-                if self._paused:
-                    print("DEBUG: Outputs step was paused, not completed")
-                    return False  # Return False so the step isn't marked complete
-                else:
-                    print("DEBUG: Outputs step was cancelled")
-                    return False
+            # Handle the result properly
+            if result == "paused":
+                print("DEBUG: Outputs step was paused")
+                return False  # Return False but the step isn't marked complete
+            elif result is False or result is None:
+                print("DEBUG: Outputs step failed or was cancelled")
+                return False
+            
+            # If we get here without cancellation/pause, all sub-steps completed
+            print("DEBUG: All outputs sub-steps completed")
             
             if self.signals:
                 self.signals.tool_completed.emit("Outputs complete\n")
-
+            return True
+            
         except Exception as e:
             print(f"DEBUG: Outputs step error: {e}")
-            return False
-
-        if self.check_cancelled():
+            import traceback
+            traceback.print_exc()
             return False
 
     def _complete_processing(self, video_id=None):
