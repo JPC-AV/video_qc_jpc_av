@@ -1,55 +1,101 @@
 #!/usr/bin/env python3
 """
-FFprobe Signalstats BRNG Analyzer with Border Detection
+FFprobe Signalstats Analyzer
 
-Uses ffprobe with lavfi to get BRNG statistics, which works more reliably
-than ffmpeg for extracting signalstats data.
+Uses ffprobe with lavfi to analyze broadcast range violations (BRNG) in video files.
+Can work with border detection data from border_detector.py or analyze full frames.
 
-Modified to:
-- Analyze the 3rd minute of video (2:00-3:00) 
-- Handle 10-bit video properly
-- Test border areas separately
-- Use tighter active area detection
+This script focuses specifically on FFprobe signalstats analysis for broadcast compliance.
 """
 
-import cv2
-import numpy as np
 import json
 import subprocess
 import shlex
+import numpy as np
 from pathlib import Path
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+import cv2
 
-class FFprobeSignalstatsAnalyzer:
+
+class FFprobeAnalyzer:
     """
-    Combines OpenCV border detection with FFprobe signalstats BRNG analysis
+    Analyzes video files using FFprobe signalstats for broadcast range compliance
     """
     
-    def __init__(self, video_path, sample_frames=30):
+    def __init__(self, video_path):
         self.video_path = str(video_path)
-        self.sample_frames = sample_frames
         
         # Check FFprobe availability
         self.check_ffprobe()
         
-        self.cap = cv2.VideoCapture(self.video_path)
-        
-        if not self.cap.isOpened():
-            raise ValueError(f"Cannot open video file: {video_path}")
-            
-        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
-        self.duration = self.total_frames / self.fps if self.fps > 0 else 0
+        # Get video properties
+        self.get_video_properties()
         
         # Detect bit depth and set appropriate thresholds
         self.bit_depth = self.detect_bit_depth()
         self.set_broadcast_thresholds()
         
+    def check_ffprobe(self):
+        """Check if FFprobe is available"""
+        try:
+            result = subprocess.run(['ffprobe', '-version'], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                print("✓ FFprobe found")
+            else:
+                print("⚠️  FFprobe may not be properly installed")
+        except FileNotFoundError:
+            print("⚠️  FFprobe not found in PATH")
+            print("   Install with: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)")
+            raise
+        except Exception as e:
+            print(f"⚠️  Could not check FFprobe: {e}")
+            
+    def get_video_properties(self):
+        """Get basic video properties using FFprobe"""
+        try:
+            cmd = [
+                'ffprobe', '-v', 'quiet',
+                '-select_streams', 'v:0',
+                '-show_entries', 'stream=width,height,duration,r_frame_rate',
+                '-of', 'json',
+                self.video_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                raise ValueError(f"Could not get video properties: {result.stderr}")
+                
+            data = json.loads(result.stdout)
+            stream = data['streams'][0]
+            
+            self.width = int(stream['width'])
+            self.height = int(stream['height'])
+            self.duration = float(stream.get('duration', 0))
+            
+            # Parse frame rate
+            fps_str = stream.get('r_frame_rate', '25/1')
+            if '/' in fps_str:
+                num, den = map(int, fps_str.split('/'))
+                self.fps = num / den if den > 0 else 25
+            else:
+                self.fps = float(fps_str)
+                
+            print(f"✓ Video properties: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
+            
+        except Exception as e:
+            print(f"Error getting video properties: {e}")
+            # Fallback to OpenCV for basic properties
+            cap = cv2.VideoCapture(self.video_path)
+            if cap.isOpened():
+                self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                self.fps = cap.get(cv2.CAP_PROP_FPS)
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                self.duration = total_frames / self.fps if self.fps > 0 else 0
+                cap.release()
+            else:
+                raise ValueError(f"Cannot open video file: {self.video_path}")
+    
     def detect_bit_depth(self):
         """Detect if video is 8-bit or 10-bit"""
         try:
@@ -85,118 +131,6 @@ class FFprobeSignalstatsAnalyzer:
             self.ymax_threshold = 235
             
         print(f"✓ Using {self.bit_depth}-bit thresholds: Y={self.ymin_threshold}-{self.ymax_threshold}")
-        
-    def check_ffprobe(self):
-        """Check if FFprobe is available"""
-        try:
-            result = subprocess.run(['ffprobe', '-version'], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                print("✓ FFprobe found")
-            else:
-                print("⚠️  FFprobe may not be properly installed")
-        except FileNotFoundError:
-            print("⚠️  FFprobe not found in PATH")
-            print("   Install with: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)")
-        except Exception as e:
-            print(f"⚠️  Could not check FFprobe: {e}")
-            
-    def detect_blanking_borders(self, threshold=10, edge_sample_width=100):
-        """
-        Detect borders with improved accuracy, especially for right side
-        """
-        frame_indices = np.linspace(0, self.total_frames - 1, 
-                                   min(self.sample_frames, self.total_frames), 
-                                   dtype=int)
-        
-        left_borders = []
-        right_borders = []
-        top_borders = []
-        bottom_borders = []
-        
-        for idx in frame_indices:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ret, frame = self.cap.read()
-            
-            if not ret:
-                continue
-                
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            h, w = gray.shape
-            
-            # Detect left border - scan from left
-            left = 0
-            for x in range(min(edge_sample_width, w)):
-                # Use mean instead of max for more robust detection
-                if np.mean(gray[:, x]) > threshold:
-                    left = x
-                    break
-                    
-            # Detect right border - scan from right, more thorough
-            right = w
-            for x in range(w-1, max(w-edge_sample_width-1, -1), -1):
-                if np.mean(gray[:, x]) > threshold:
-                    right = x + 1
-                    break
-                    
-            # For top/bottom, focus on center area to avoid side borders
-            center_start = w // 3
-            center_end = 2 * w // 3
-            
-            # Detect top border
-            top = 0
-            for y in range(min(20, h)):
-                if np.mean(gray[y, center_start:center_end]) > threshold:
-                    top = y
-                    break
-                    
-            # Detect bottom border
-            bottom = h
-            for y in range(h-1, max(h-20, -1), -1):
-                if np.mean(gray[y, center_start:center_end]) > threshold:
-                    bottom = y + 1
-                    break
-                    
-            left_borders.append(left)
-            right_borders.append(right)
-            top_borders.append(top)
-            bottom_borders.append(bottom)
-            
-        if not left_borders:
-            return None
-            
-        # Calculate stable borders with more conservative approach
-        median_left = int(np.median(left_borders))
-        median_right = int(np.median(right_borders))
-        
-        # Add some padding for tighter active area
-        padding = 5
-        median_left += padding
-        median_right -= padding
-        
-        top_unique, top_counts = np.unique(top_borders, return_counts=True)
-        mode_top = int(top_unique[np.argmax(top_counts)]) + padding
-        
-        bottom_unique, bottom_counts = np.unique(bottom_borders, return_counts=True)
-        mode_bottom = int(bottom_unique[np.argmax(bottom_counts)]) - padding
-        
-        active_width = median_right - median_left
-        active_height = mode_bottom - mode_top
-        
-        if active_width < 100 or active_height < 100:
-            print("Warning: Detected active area seems too small")
-            return None
-            
-        result = (median_left, mode_top, active_width, active_height)
-        
-        print(f"\nBorder detection statistics:")
-        print(f"  Left border: median={median_left} (std={np.std(left_borders):.1f})")
-        print(f"  Right border: median={median_right} (std={np.std(right_borders):.1f})")
-        print(f"  Top border: mode={mode_top} (variations={len(top_unique)})")
-        print(f"  Bottom border: mode={mode_bottom} (variations={len(bottom_unique)})")
-        print(f"  Active area (with {padding}px padding): {active_width}x{active_height} at ({median_left},{mode_top})")
-        
-        return result
         
     def analyze_with_ffprobe(self, active_area=None, start_time=120, duration=60, region_name="frame"):
         """
@@ -260,17 +194,18 @@ class FFprobeSignalstatsAnalyzer:
                 return None
                 
             # Parse CSV output
-            return self.parse_ffprobe_output(result.stdout)
+            return self.parse_ffprobe_output(result.stdout, region_name)
             
         except Exception as e:
             print(f"Error running FFprobe: {e}")
             return None
             
-    def parse_ffprobe_output(self, output):
+    def parse_ffprobe_output(self, output, region_name="frame"):
         """
         Parse FFprobe CSV output for BRNG values
         """
         results = {
+            'region_name': region_name,
             'frames_analyzed': 0,
             'frames_with_violations': 0,
             'brng_values': [],
@@ -311,10 +246,13 @@ class FFprobeSignalstatsAnalyzer:
         
         return results
         
-    def analyze_with_ffprobe_detailed(self, active_area=None, start_time=120, duration=60, region_name="frame"):
+    def analyze_detailed_stats(self, active_area=None, start_time=120, duration=10, region_name="frame"):
         """
         Get more detailed statistics including YMIN, YMAX if available
         """
+        # Limit detailed analysis duration for performance
+        duration = min(duration, 10)
+        
         # Check if video is long enough
         if self.duration < start_time + duration:
             if self.duration > start_time:
@@ -355,6 +293,7 @@ class FFprobeSignalstatsAnalyzer:
             data = json.loads(result.stdout)
             
             results = {
+                'region_name': region_name,
                 'frames_analyzed': 0,
                 'frames_with_violations': 0,
                 'ymin_violations': 0,
@@ -422,152 +361,64 @@ class FFprobeSignalstatsAnalyzer:
             print(f"Error getting detailed stats: {e}")
             return None
     
-    def analyze_border_regions(self, active_area, start_time=120, duration=60):
+    def analyze_border_regions_from_data(self, border_regions, start_time=120, duration=60):
         """
-        Analyze just the border regions to see what's in them
+        Analyze border regions using pre-calculated border data
+        
+        Args:
+            border_regions: Dictionary of border regions from border detector
+            start_time: Start time for analysis
+            duration: Duration of analysis
         """
-        if not active_area:
-            print("No active area detected, cannot analyze borders")
-            return None
-            
-        x, y, w, h = active_area
         results = {}
         
-        # Left border
-        if x > 10:
-            left_border = (0, 0, x, self.height)
-            results['left_border'] = self.analyze_with_ffprobe(
-                active_area=left_border, 
-                start_time=start_time, 
-                duration=duration,
-                region_name="left border"
-            )
+        if not border_regions:
+            print("No border regions provided")
+            return results
         
-        # Right border  
-        right_border_start = x + w
-        if right_border_start < self.width - 10:
-            right_border = (right_border_start, 0, self.width - right_border_start, self.height)
-            results['right_border'] = self.analyze_with_ffprobe(
-                active_area=right_border,
-                start_time=start_time,
-                duration=duration, 
-                region_name="right border"
-            )
+        for region_name, coords in border_regions.items():
+            if coords:
+                x, y, w, h = coords
+                print(f"\nAnalyzing {region_name}: {w}x{h} at ({x},{y})")
+                results[region_name] = self.analyze_with_ffprobe(
+                    active_area=coords,
+                    start_time=start_time,
+                    duration=duration,
+                    region_name=region_name
+                )
         
-        # Top border
-        if y > 10:
-            top_border = (0, 0, self.width, y)
-            results['top_border'] = self.analyze_with_ffprobe(
-                active_area=top_border,
-                start_time=start_time,
-                duration=duration,
-                region_name="top border"
-            )
-        
-        # Bottom border
-        bottom_border_start = y + h
-        if bottom_border_start < self.height - 10:
-            bottom_border = (0, bottom_border_start, self.width, self.height - bottom_border_start)
-            results['bottom_border'] = self.analyze_with_ffprobe(
-                active_area=bottom_border,
-                start_time=start_time,
-                duration=duration,
-                region_name="bottom border"
-            )
-            
         return results
-        
-    def generate_comparison_report(self, output_path, active_area=None):
+    
+    def load_border_data(self, border_data_path):
         """
-        Generate visual comparison showing full frame vs active area with border regions highlighted
+        Load border detection data from JSON file created by border_detector.py
         """
-        # Get a representative frame from the analysis period (around 2:30)
-        target_frame = int(150 * self.fps)  # 2.5 minutes
-        if target_frame >= self.total_frames:
-            target_frame = self.total_frames // 2
+        try:
+            with open(border_data_path, 'r') as f:
+                border_data = json.load(f)
             
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-        ret, frame = self.cap.read()
+            print(f"✓ Loaded border data from {border_data_path}")
+            return border_data
         
-        if not ret:
-            return False
-            
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 8))
-        
-        # Full frame with regions marked
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        ax1.imshow(frame_rgb)
-        ax1.set_title('Full Frame with Border Analysis Regions')
-        ax1.axis('off')
-        
-        if active_area:
-            x, y, w, h = active_area
-            
-            # Mark active area in green
-            active_rect = patches.Rectangle((x, y), w, h, linewidth=3, 
-                                          edgecolor='lime', facecolor='none', 
-                                          label='Active Area (Tighter)')
-            ax1.add_patch(active_rect)
-            
-            # Mark border regions in red
-            if x > 10:  # Left border
-                left_rect = patches.Rectangle((0, 0), x, self.height, linewidth=2,
-                                            edgecolor='red', facecolor='red', alpha=0.3,
-                                            label='Border Regions')
-                ax1.add_patch(left_rect)
-            
-            if x + w < self.width - 10:  # Right border
-                right_rect = patches.Rectangle((x + w, 0), self.width - (x + w), self.height, 
-                                             linewidth=2, edgecolor='red', facecolor='red', alpha=0.3)
-                ax1.add_patch(right_rect)
-                
-            if y > 10:  # Top border
-                top_rect = patches.Rectangle((0, 0), self.width, y, linewidth=2,
-                                           edgecolor='red', facecolor='red', alpha=0.3)
-                ax1.add_patch(top_rect)
-                
-            if y + h < self.height - 10:  # Bottom border
-                bottom_rect = patches.Rectangle((0, y + h), self.width, self.height - (y + h), 
-                                              linewidth=2, edgecolor='red', facecolor='red', alpha=0.3)
-                ax1.add_patch(bottom_rect)
-            
-            ax1.legend()
-            
-            # Active area only
-            active_frame = frame_rgb[y:y+h, x:x+w]
-            ax2.imshow(active_frame)
-            ax2.set_title('Tighter Active Picture Area Only')
-            ax2.axis('off')
-            
-            # Add text annotations
-            border_info = f'Border sizes: L={x}px, R={self.width-x-w}px, T={y}px, B={self.height-y-h}px'
-            fig.text(0.5, 0.02, border_info, ha='center', fontsize=10)
-            fig.text(0.5, 0.95, f'{self.bit_depth}-bit video | Analysis period: 2:00-3:00', 
-                    ha='center', fontsize=12, weight='bold')
-        else:
-            ax2.text(0.5, 0.5, 'No borders detected', 
-                    ha='center', va='center', transform=ax2.transAxes)
-            ax2.axis('off')
-            
-        plt.tight_layout()
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
-        plt.close()
-        
-        return True
-        
-    def close(self):
-        self.cap.release()
+        except Exception as e:
+            print(f"⚠️ Could not load border data: {e}")
+            return None
 
 
-def process_video_with_ffprobe_analysis(video_path, output_dir=None, start_time=120, duration=60):
+def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None, 
+                             start_time=120, duration=60):
     """
-    Main processing function using FFprobe signalstats for broadcast range analysis
+    Main function to analyze video signalstats with optional border data
     
     Args:
         video_path: Path to video file
-        output_dir: Output directory for reports
-        start_time: Start analysis at this time in seconds (default: 120 = 2 minutes)
-        duration: Duration of analysis in seconds (default: 60 = 1 minute)
+        border_data_path: Optional path to border data JSON from border_detector.py
+        output_dir: Output directory for results
+        start_time: Start analysis at this time in seconds
+        duration: Duration of analysis in seconds
+    
+    Returns:
+        Dictionary with analysis results
     """
     video_path = Path(video_path)
     
@@ -581,16 +432,19 @@ def process_video_with_ffprobe_analysis(video_path, output_dir=None, start_time=
     print(f"Using FFprobe signalstats BRNG analysis")
     print(f"Analyzing from {start_time//60}:{start_time%60:02d} to {(start_time+duration)//60}:{(start_time+duration)%60:02d}")
     
-    analyzer = FFprobeSignalstatsAnalyzer(video_path)
+    analyzer = FFprobeAnalyzer(video_path)
     
-    # Check video duration
-    print(f"Video duration: {analyzer.duration:.1f} seconds ({analyzer.duration//60:.0f}:{analyzer.duration%60:02.0f})")
+    # Load border data if provided
+    border_data = None
+    active_area = None
     
-    # Step 1: Detect borders with improved algorithm
-    print("\nDetecting active picture area (tighter detection)...")
-    active_area = analyzer.detect_blanking_borders(threshold=10)
+    if border_data_path:
+        border_data = analyzer.load_border_data(border_data_path)
+        if border_data and border_data.get('active_area'):
+            active_area = tuple(border_data['active_area'])
+            print(f"Using active area from border data: {active_area}")
     
-    # Step 2: Analyze full frame with FFprobe
+    # Analyze full frame
     print("\nAnalyzing full frame with FFprobe signalstats...")
     full_results = analyzer.analyze_with_ffprobe(
         active_area=None, 
@@ -599,31 +453,32 @@ def process_video_with_ffprobe_analysis(video_path, output_dir=None, start_time=
         region_name="full frame"
     )
     
-    # Step 3: Analyze active area only (tighter)
+    # Analyze active area if available
     active_results = None
     if active_area:
-        print("\nAnalyzing tighter active area only...")
+        print("\nAnalyzing active area only...")
         active_results = analyzer.analyze_with_ffprobe(
             active_area=active_area,
             start_time=start_time,
             duration=duration,
-            region_name="tighter active area"
+            region_name="active area"
         )
     
-    # Step 4: NEW - Analyze border regions separately
+    # Analyze border regions if available
     border_results = None
-    if active_area:
-        print("\nAnalyzing border regions separately...")
-        border_results = analyzer.analyze_border_regions(
-            active_area=active_area,
+    if border_data and border_data.get('border_regions'):
+        print("\nAnalyzing border regions...")
+        border_results = analyzer.analyze_border_regions_from_data(
+            border_data['border_regions'],
             start_time=start_time,
             duration=duration
         )
     
-    # Step 5: Get detailed stats (limit to 10 seconds for performance)
-    print("\nGetting detailed statistics...")
+    # Get detailed stats for shorter duration
     detail_duration = min(duration, 10)
-    full_detailed = analyzer.analyze_with_ffprobe_detailed(
+    print(f"\nGetting detailed statistics ({detail_duration}s sample)...")
+    
+    full_detailed = analyzer.analyze_detailed_stats(
         active_area=None,
         start_time=start_time,
         duration=detail_duration,
@@ -632,19 +487,14 @@ def process_video_with_ffprobe_analysis(video_path, output_dir=None, start_time=
     
     active_detailed = None
     if active_area:
-        active_detailed = analyzer.analyze_with_ffprobe_detailed(
+        active_detailed = analyzer.analyze_detailed_stats(
             active_area=active_area,
             start_time=start_time,
             duration=detail_duration,
             region_name="active area detailed"
         )
     
-    # Step 6: Generate visual comparison
-    comparison_path = output_dir / f"{video_path.stem}_ffprobe_comparison.jpg"
-    analyzer.generate_comparison_report(comparison_path, active_area)
-    print(f"\nVisual comparison saved: {comparison_path}")
-    
-    # Step 7: Create comprehensive report
+    # Create comprehensive report
     report = {
         'video_file': str(video_path),
         'bit_depth': analyzer.bit_depth,
@@ -655,19 +505,22 @@ def process_video_with_ffprobe_analysis(video_path, output_dir=None, start_time=
         'analysis_method': 'FFprobe signalstats',
         'analysis_period': f'{start_time}s to {start_time + duration}s',
         'sample_duration': duration,
+        'border_data_used': border_data_path is not None,
         'active_area': list(active_area) if active_area else None,
-        'ffprobe_results': {
+        'results': {
             'full_frame': full_results,
-            'active_area_only': active_results,
+            'active_area': active_results,
             'border_regions': border_results,
-            'full_frame_detailed': full_detailed,
-            'active_area_detailed': active_detailed
+            'detailed_stats': {
+                'full_frame': full_detailed,
+                'active_area': active_detailed
+            }
         }
     }
     
-    # Enhanced diagnosis
+    # Analysis and diagnosis
     print("\n" + "="*80)
-    print("ENHANCED FFPROBE SIGNALSTATS ANALYSIS RESULTS")
+    print("FFPROBE SIGNALSTATS ANALYSIS RESULTS")
     print("="*80)
     print(f"\nVideo: {analyzer.bit_depth}-bit, using Y thresholds {analyzer.ymin_threshold}-{analyzer.ymax_threshold}")
     print(f"Analysis period: {start_time//60}:{start_time%60:02d} to {(start_time+duration)//60}:{(start_time+duration)%60:02d}")
@@ -679,7 +532,7 @@ def process_video_with_ffprobe_analysis(video_path, output_dir=None, start_time=
         print(f"   Maximum BRNG: {full_results['max_brng']:.2f}%")
     
     if active_results:
-        print(f"\n🎯 TIGHTER ACTIVE AREA ANALYSIS:")
+        print(f"\n🎯 ACTIVE AREA ANALYSIS:")
         print(f"   Frames with violations: {active_results['frames_with_violations']}/{active_results['frames_analyzed']} ({active_results['violation_percentage']:.1f}%)")
         print(f"   Average BRNG: {active_results['avg_brng']:.2f}%")
         print(f"   Maximum BRNG: {active_results['max_brng']:.2f}%")
@@ -710,14 +563,23 @@ def process_video_with_ffprobe_analysis(video_path, output_dir=None, start_time=
         else:
             report['diagnosis'] = "✓ Video appears broadcast-compliant"
             print(f"\n✅ DIAGNOSIS: Video appears to be within broadcast range")
+    elif full_results:
+        if full_results['violation_percentage'] > 5:
+            report['diagnosis'] = "⚠️ Significant BRNG violations found"
+            print(f"\n⚠️ DIAGNOSIS: Video contains significant broadcast range violations")
+        elif full_results['violation_percentage'] > 1:
+            report['diagnosis'] = "⚠️ Minor BRNG violations found"
+            print(f"\n⚠️ DIAGNOSIS: Video contains minor broadcast range violations")
+        else:
+            report['diagnosis'] = "✓ Video appears broadcast-compliant"
+            print(f"\n✅ DIAGNOSIS: Video appears to be within broadcast range")
     
     # Save JSON report
-    json_path = output_dir / f"{video_path.stem}_ffprobe_analysis.json"
+    json_path = output_dir / f"{video_path.stem}_signalstats_analysis.json"
     with open(json_path, 'w') as f:
         json.dump(report, f, indent=2)
     print(f"\nDetailed analysis report saved: {json_path}")
     
-    analyzer.close()
     return report
 
 
@@ -726,12 +588,15 @@ if __name__ == "__main__":
     
     if len(sys.argv) > 1:
         video_file = sys.argv[1]
+        border_data_file = sys.argv[2] if len(sys.argv) > 2 else None
     else:
         video_file = "JPC_AV_00011.mkv"
+        border_data_file = None
     
-    # Process with enhanced FFprobe signalstats - analyze 3rd minute (2:00 to 3:00)
-    results = process_video_with_ffprobe_analysis(
+    # Process with FFprobe signalstats analysis
+    results = analyze_video_signalstats(
         video_file, 
-        start_time=300,  # Start at 2 minutes (120 seconds)
-        duration=60      # Analyze for 1 minute (60 seconds)
+        border_data_path=border_data_file,
+        start_time=120,  # Start at 2 minutes
+        duration=60      # Analyze for 1 minute
     )
