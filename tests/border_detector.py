@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Video Border Detection Script
+Video Border Detection Script with Enhanced Frame Quality Assessment
 
 Detects blanking borders and active picture areas in video files using OpenCV.
-This script focuses specifically on border detection and can be extended
-with additional border analysis functionality.
+Enhanced with robust frame quality assessment to filter out black frames,
+title cards, static content, and other non-video frames.
 """
 
 import cv2
@@ -38,57 +38,252 @@ class VideoBorderDetector:
         self.duration = self.total_frames / self.fps if self.fps > 0 else 0
         
         print(f"✓ Video loaded: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
-        
-    def detect_blanking_borders(self, threshold=10, edge_sample_width=100, avoid_dark_frames=True):
+    
+    def assess_frame_quality(self, frame, previous_frame=None, strict_mode=False):
         """
-        Detect borders with improved accuracy, especially for right side
+        Comprehensive frame quality assessment to identify suitable video content frames
         
         Args:
-            threshold: Brightness threshold for border detection
-            edge_sample_width: Width of edge sampling area
-            avoid_dark_frames: If True, skip very dark frames that might be fades/transitions
+            frame: Current frame to assess
+            previous_frame: Previous frame for motion detection (optional)
+            strict_mode: If True, apply stricter criteria for frame selection
+            
+        Returns:
+            dict: Quality assessment results with scores and flags
         """
-        frame_indices = np.linspace(0, self.total_frames - 1, 
-                                   min(self.sample_frames, self.total_frames), 
-                                   dtype=int)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
         
-        left_borders = []
-        right_borders = []
-        top_borders = []
-        bottom_borders = []
-        frames_used = 0
-        frames_skipped = 0
+        # Initialize results
+        assessment = {
+            'is_suitable': False,
+            'scores': {},
+            'flags': {},
+            'reasons_rejected': []
+        }
         
-        print(f"Analyzing up to {len(frame_indices)} frames for border detection...")
+        # 1. Basic brightness analysis
+        mean_brightness = np.mean(gray)
+        std_brightness = np.std(gray)
         
-        for idx in frame_indices:
+        assessment['scores']['brightness'] = float(mean_brightness)
+        assessment['scores']['contrast'] = float(std_brightness)
+        
+        # Reject very dark frames (likely black frames, fades)
+        if mean_brightness < 15:
+            assessment['flags']['too_dark'] = True
+            assessment['reasons_rejected'].append(f"Too dark (brightness: {mean_brightness:.1f})")
+        
+        # Reject very bright frames (likely white frames, overexposed)
+        elif mean_brightness > 240:
+            assessment['flags']['too_bright'] = True
+            assessment['reasons_rejected'].append(f"Too bright (brightness: {mean_brightness:.1f})")
+        
+        # 2. Contrast analysis - detect low contrast frames (solid colors, fades)
+        if strict_mode:
+            min_contrast = 25
+        else:
+            min_contrast = 15
+            
+        if std_brightness < min_contrast:
+            assessment['flags']['low_contrast'] = True
+            assessment['reasons_rejected'].append(f"Low contrast (std: {std_brightness:.1f})")
+        
+        # 3. Detect predominantly uniform frames (solid colors, simple graphics)
+        # Calculate what percentage of pixels are within a narrow range
+        median_brightness = np.median(gray)
+        tolerance = 20
+        uniform_pixels = np.sum(np.abs(gray - median_brightness) < tolerance)
+        uniform_percentage = (uniform_pixels / gray.size) * 100
+        
+        assessment['scores']['uniform_percentage'] = float(uniform_percentage)
+        
+        if uniform_percentage > 85:
+            assessment['flags']['too_uniform'] = True
+            assessment['reasons_rejected'].append(f"Too uniform ({uniform_percentage:.1f}% similar pixels)")
+        
+        # 4. Detect potential title cards/text frames using edge detection
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = np.sum(edges > 0) / edges.size
+        
+        assessment['scores']['edge_density'] = float(edge_density)
+        
+        # High edge density might indicate text/graphics rather than natural video
+        if strict_mode and edge_density > 0.15:
+            assessment['flags']['high_edge_density'] = True
+            assessment['reasons_rejected'].append(f"High edge density ({edge_density:.3f}) - possible text/graphics")
+        elif edge_density > 0.25:
+            assessment['flags']['very_high_edge_density'] = True
+            assessment['reasons_rejected'].append(f"Very high edge density ({edge_density:.3f}) - likely text/graphics")
+        
+        # 5. Motion detection (if previous frame available)
+        if previous_frame is not None:
+            prev_gray = cv2.cvtColor(previous_frame, cv2.COLOR_BGR2GRAY)
+            
+            # Calculate frame difference
+            frame_diff = cv2.absdiff(gray, prev_gray)
+            motion_score = np.mean(frame_diff)
+            
+            assessment['scores']['motion'] = float(motion_score)
+            
+            # Very low motion might indicate static title cards or paused content
+            if strict_mode and motion_score < 2:
+                assessment['flags']['too_static'] = True
+                assessment['reasons_rejected'].append(f"Too static (motion: {motion_score:.1f})")
+        
+        # 6. Detect letterbox/pillarbox patterns that might indicate title sequences
+        # Check if frame has very dark borders that are too large (not just blanking)
+        border_threshold = 30
+        
+        # Check top and bottom rows
+        top_brightness = np.mean(gray[:10, :])
+        bottom_brightness = np.mean(gray[-10:, :])
+        left_brightness = np.mean(gray[:, :10])
+        right_brightness = np.mean(gray[:, -10:])
+        
+        dark_borders = sum([
+            top_brightness < border_threshold,
+            bottom_brightness < border_threshold,
+            left_brightness < border_threshold,
+            right_brightness < border_threshold
+        ])
+        
+        assessment['scores']['dark_borders'] = int(dark_borders)
+        
+        # If all sides are very dark, might be a transition frame
+        if dark_borders >= 3:
+            assessment['flags']['dark_border_frame'] = True
+            assessment['reasons_rejected'].append("Frame has dark borders on multiple sides")
+        
+        # 7. Histogram analysis - detect unusual distributions
+        hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+        hist_normalized = hist.flatten() / np.sum(hist)
+        
+        # Check for bimodal distributions (might indicate graphics/text)
+        # Find peaks in histogram
+        hist_smooth = np.convolve(hist_normalized, np.ones(5)/5, mode='same')
+        peaks = []
+        for i in range(5, len(hist_smooth)-5):
+            if (hist_smooth[i] > hist_smooth[i-2] and 
+                hist_smooth[i] > hist_smooth[i+2] and 
+                hist_smooth[i] > 0.01):  # At least 1% of pixels
+                peaks.append(i)
+        
+        assessment['scores']['histogram_peaks'] = len(peaks)
+        
+        # Multiple distinct peaks might indicate text on background
+        if len(peaks) >= 3 and strict_mode:
+            assessment['flags']['multi_peak_histogram'] = True
+            assessment['reasons_rejected'].append(f"Multiple histogram peaks ({len(peaks)}) - possible text/graphics")
+        
+        # 8. Final suitability assessment
+        if not assessment['reasons_rejected']:
+            assessment['is_suitable'] = True
+            
+            # Calculate overall quality score (0-1)
+            brightness_score = 1.0 - abs(mean_brightness - 120) / 120
+            contrast_score = min(std_brightness / 50.0, 1.0)
+            uniform_score = max(0, (100 - uniform_percentage) / 100)
+            edge_score = max(0, 1.0 - edge_density / 0.2)
+            
+            overall_score = (brightness_score * 0.3 + 
+                           contrast_score * 0.3 + 
+                           uniform_score * 0.25 + 
+                           edge_score * 0.15)
+            
+            assessment['scores']['overall_quality'] = float(overall_score)
+        else:
+            assessment['scores']['overall_quality'] = 0.0
+        
+        return assessment
+    
+    def select_quality_frames(self, frame_indices, max_attempts=None, strict_mode=False):
+        """
+        Select high-quality frames from a list of candidate frame indices
+        
+        Args:
+            frame_indices: List of frame indices to evaluate
+            max_attempts: Maximum number of frames to check (None = check all)
+            strict_mode: Apply stricter quality criteria
+            
+        Returns:
+            List of (frame_index, frame, quality_score) tuples for suitable frames
+        """
+        if max_attempts is None:
+            max_attempts = len(frame_indices)
+        
+        quality_frames = []
+        frames_checked = 0
+        previous_frame = None
+        
+        print(f"Evaluating frame quality (strict_mode={strict_mode})...")
+        
+        for idx in frame_indices[:max_attempts]:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = self.cap.read()
             
             if not ret:
                 continue
                 
+            frames_checked += 1
+            
+            # Assess frame quality
+            assessment = self.assess_frame_quality(frame, previous_frame, strict_mode)
+            
+            if assessment['is_suitable']:
+                quality_frames.append((idx, frame, assessment['scores']['overall_quality']))
+            else:
+                if frames_checked <= 10:  # Only log first few rejections to avoid spam
+                    print(f"  Frame {idx} ({idx/self.fps:.1f}s) rejected: {', '.join(assessment['reasons_rejected'])}")
+            
+            previous_frame = frame
+        
+        # Sort by quality score (highest first)
+        quality_frames.sort(key=lambda x: x[2], reverse=True)
+        
+        print(f"  Found {len(quality_frames)} suitable frames out of {frames_checked} checked")
+        
+        return quality_frames
+    
+    def detect_blanking_borders(self, threshold=10, edge_sample_width=100):
+        """
+        Detect borders with enhanced frame quality filtering
+        """
+        frame_indices = np.linspace(0, self.total_frames - 1, 
+                                   min(self.sample_frames, self.total_frames), 
+                                   dtype=int)
+        
+        # Select only high-quality frames for border detection
+        quality_frames = self.select_quality_frames(frame_indices, strict_mode=False)
+        
+        if len(quality_frames) < 5:
+            print(f"⚠️ Only {len(quality_frames)} suitable frames found, relaxing criteria...")
+            # Try again with less strict criteria
+            quality_frames = self.select_quality_frames(frame_indices, strict_mode=False)
+            
+        if len(quality_frames) == 0:
+            print("⚠️ No suitable frames found for border detection")
+            return None
+        
+        print(f"Using {len(quality_frames)} high-quality frames for border detection...")
+        
+        left_borders = []
+        right_borders = []
+        top_borders = []
+        bottom_borders = []
+        
+        for frame_idx, frame, quality_score in quality_frames:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             h, w = gray.shape
-            
-            # Skip very dark frames if requested (likely fades, black frames, etc.)
-            if avoid_dark_frames:
-                mean_brightness = np.mean(gray)
-                if mean_brightness < 20:  # Very dark frame
-                    frames_skipped += 1
-                    continue
-            
-            frames_used += 1
             
             # Detect left border - scan from left
             left = 0
             for x in range(min(edge_sample_width, w)):
-                # Use mean instead of max for more robust detection
                 if np.mean(gray[:, x]) > threshold:
                     left = x
                     break
                     
-            # Detect right border - scan from right, more thorough
+            # Detect right border - scan from right
             right = w
             for x in range(w-1, max(w-edge_sample_width-1, -1), -1):
                 if np.mean(gray[:, x]) > threshold:
@@ -118,19 +313,14 @@ class VideoBorderDetector:
             top_borders.append(top)
             bottom_borders.append(bottom)
         
-        if frames_skipped > 0:
-            print(f"  Skipped {frames_skipped} dark frames, used {frames_used} frames for detection")
-        else:
-            print(f"  Used {frames_used} frames for detection")
-            
         if not left_borders:
             return None
             
-        # Calculate stable borders with more conservative approach
+        # Calculate stable borders
         median_left = int(np.median(left_borders))
         median_right = int(np.median(right_borders))
         
-        # Add some padding for tighter active area
+        # Add padding for tighter active area
         padding = 5
         median_left += padding
         median_right -= padding
@@ -161,33 +351,18 @@ class VideoBorderDetector:
     
     def detect_head_switching_artifacts(self, active_area=None, sample_frames=20):
         """
-        Detect head switching artifacts at the bottom of the picture area.
-        
-        Head switching artifacts typically manifest as:
-        - Bottom horizontal line(s) only occupying left half of screen
-        - Bottom right corner appearing black/missing
-        - Horizontal discontinuity at the video head switching point
-        
-        Args:
-            active_area: tuple (x, y, w, h) of active picture area, or None for full frame
-            sample_frames: number of frames to analyze for consistency
-            
-        Returns:
-            Dictionary with artifact detection results
+        Detect head switching artifacts with enhanced frame quality filtering
         """
         try:
             if active_area:
                 crop_x, crop_y, crop_w, crop_h = active_area
-                # Analyze bottom of active area
-                analysis_y = crop_y + crop_h - 10  # Bottom 10 lines of active area
+                analysis_y = crop_y + crop_h - 10
                 analysis_height = 10
             else:
                 crop_x, crop_y, crop_w, crop_h = 0, 0, self.width, self.height
-                # Analyze bottom of full frame
-                analysis_y = self.height - 15  # Bottom 15 lines
+                analysis_y = self.height - 15
                 analysis_height = 15
             
-            # Ensure we don't go out of bounds
             analysis_y = max(0, analysis_y)
             analysis_height = min(analysis_height, self.height - analysis_y)
             
@@ -209,22 +384,22 @@ class VideoBorderDetector:
                                        min(sample_frames, self.total_frames), 
                                        dtype=int)
             
+            # Select only quality frames for artifact detection
+            quality_frames = self.select_quality_frames(frame_indices, strict_mode=False)
+            
+            if len(quality_frames) < 3:
+                print(f"⚠️ Only {len(quality_frames)} suitable frames for head switching analysis")
+            
             artifact_detections = []
             line_asymmetry_scores = []
             horizontal_discontinuities = []
             
-            for idx in frame_indices:
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                ret, frame = self.cap.read()
-                
-                if not ret:
-                    continue
-                    
+            for frame_idx, frame, quality_score in quality_frames:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 
                 # Extract the bottom region for analysis
                 if analysis_y + analysis_height > gray.shape[0] or crop_x + crop_w > gray.shape[1]:
-                    continue  # Skip if region is out of bounds
+                    continue
                     
                 bottom_region = gray[analysis_y:analysis_y + analysis_height, crop_x:crop_x + crop_w]
                 
@@ -239,7 +414,7 @@ class VideoBorderDetector:
                     line = bottom_region[line_idx, :]
                     line_width = len(line)
                     
-                    if line_width < 20:  # Skip very narrow lines
+                    if line_width < 20:
                         continue
                     
                     # Split line into left and right halves
@@ -251,28 +426,40 @@ class VideoBorderDetector:
                     left_brightness = np.mean(left_half)
                     right_brightness = np.mean(right_half)
                     
-                    # Calculate asymmetry score (higher = more asymmetric)
-                    if left_brightness > 10:  # Avoid division by very small numbers
+                    # Calculate asymmetry score
+                    if left_brightness > 10:
                         asymmetry = abs(left_brightness - right_brightness) / left_brightness
                     else:
                         asymmetry = 0
                     
                     frame_asymmetries.append(asymmetry)
                     
-                    # Look for horizontal discontinuities (abrupt changes)
-                    # Check for sudden drops in brightness from left to right
+                    # Look for horizontal discontinuities and track their positions
+                    discontinuity_info = None
                     if left_brightness > 30 and right_brightness < 15:
-                        frame_discontinuities.append(line_idx)
+                        discontinuity_info = {
+                            'line': line_idx,
+                            'start_x': mid_point,  # Discontinuity starts at midpoint
+                            'end_x': line_width - 1,
+                            'type': 'left_right_split'
+                        }
+                        frame_discontinuities.append(discontinuity_info)
                     
-                    # Also check for sharp transitions within the line
+                    # Check for sharp transitions within the line
                     if line_width > 10:
-                        # Look for sharp drops in the rightmost quarter
                         right_quarter = line[int(line_width * 0.75):]
                         left_three_quarters = line[:int(line_width * 0.75)]
                         
                         if len(right_quarter) > 0 and len(left_three_quarters) > 0:
                             if np.mean(left_three_quarters) > 30 and np.mean(right_quarter) < 15:
-                                frame_discontinuities.append(line_idx)
+                                # This discontinuity affects the right quarter
+                                discontinuity_info = {
+                                    'line': line_idx,
+                                    'start_x': int(line_width * 0.75),
+                                    'end_x': line_width - 1,
+                                    'type': 'right_quarter_drop'
+                                }
+                                frame_discontinuities.append(discontinuity_info)
                 
                 # Store results for this frame
                 if frame_asymmetries:
@@ -282,21 +469,74 @@ class VideoBorderDetector:
                     
                     # Consider it an artifact if multiple lines show high asymmetry
                     artifact_lines = sum(1 for asym in frame_asymmetries if asym > 0.5)
-                    if artifact_lines >= 2:  # At least 2 lines with significant asymmetry
+                    if artifact_lines >= 2:
+                        # Calculate the affected region based on discontinuities
+                        if frame_discontinuities:
+                            # Find the earliest start and latest end of discontinuities
+                            start_positions = [d['start_x'] for d in frame_discontinuities if isinstance(d, dict)]
+                            end_positions = [d['end_x'] for d in frame_discontinuities if isinstance(d, dict)]
+                            
+                            if start_positions and end_positions:
+                                artifact_start_x = min(start_positions)
+                                artifact_end_x = max(end_positions)
+                            else:
+                                # Fallback to right half if no specific positions
+                                artifact_start_x = line_width // 2
+                                artifact_end_x = line_width - 1
+                        else:
+                            # Default to right half for asymmetry-based artifacts
+                            artifact_start_x = line_width // 2
+                            artifact_end_x = line_width - 1
+                        
                         artifact_detections.append({
-                            'frame_idx': int(idx),
-                            'time': float(idx / self.fps),
+                            'frame_idx': int(frame_idx),
+                            'time': float(frame_idx / self.fps),
                             'avg_asymmetry': float(avg_asymmetry),
                             'max_asymmetry': float(max_asymmetry),
                             'artifact_lines': int(artifact_lines),
-                            'discontinuities': len(frame_discontinuities)
+                            'discontinuities': len([d for d in frame_discontinuities if isinstance(d, dict)]),
+                            'quality_score': float(quality_score),
+                            'artifact_region': {
+                                'start_x': int(artifact_start_x),
+                                'end_x': int(artifact_end_x),
+                                'width': int(artifact_end_x - artifact_start_x + 1)
+                            }
                         })
                 
-                horizontal_discontinuities.extend(frame_discontinuities)
+                horizontal_discontinuities.extend([d for d in frame_discontinuities if isinstance(d, dict)])
             
             # Analyze results
+            total_quality_frames = len(quality_frames)
+            
+            # Calculate typical artifact region if artifacts were detected
+            artifact_region_info = None
+            if artifact_detections:
+                start_positions = []
+                end_positions = []
+                widths = []
+                
+                for detection in artifact_detections:
+                    if 'artifact_region' in detection:
+                        start_positions.append(detection['artifact_region']['start_x'])
+                        end_positions.append(detection['artifact_region']['end_x'])
+                        widths.append(detection['artifact_region']['width'])
+                
+                if start_positions and end_positions:
+                    # Use median values for a typical artifact region
+                    typical_start = int(np.median(start_positions))
+                    typical_end = int(np.median(end_positions))
+                    typical_width = int(np.median(widths))
+                    
+                    artifact_region_info = {
+                        'start_x': typical_start,
+                        'end_x': typical_end,
+                        'width': typical_width,
+                        'relative_start': typical_start / crop_w if crop_w > 0 else 0.5,
+                        'relative_end': typical_end / crop_w if crop_w > 0 else 1.0
+                    }
+            
             results = {
-                'frames_analyzed': len(frame_indices),
+                'frames_analyzed': total_quality_frames,
                 'frames_with_artifacts': len(artifact_detections),
                 'artifact_percentage': 0.0,
                 'avg_asymmetry': 0.0,
@@ -308,16 +548,19 @@ class VideoBorderDetector:
                     'width': int(crop_w),
                     'height': int(analysis_height)
                 },
-                'artifact_frames': artifact_detections[:5],  # Store first 5 examples
-                'severity': 'none'
+                'artifact_frames': artifact_detections[:5],
+                'severity': 'none',
+                'quality_frames_used': total_quality_frames,
+                'total_frames_sampled': len(frame_indices),
+                'artifact_region': artifact_region_info
             }
             
             if line_asymmetry_scores:
                 results['avg_asymmetry'] = float(np.mean(line_asymmetry_scores))
                 results['max_asymmetry'] = float(np.max(line_asymmetry_scores))
             
-            if len(frame_indices) > 0:
-                results['artifact_percentage'] = float((len(artifact_detections) / len(frame_indices)) * 100)
+            if total_quality_frames > 0:
+                results['artifact_percentage'] = float((len(artifact_detections) / total_quality_frames) * 100)
             
             # Determine severity
             if results['artifact_percentage'] > 50:
@@ -328,6 +571,7 @@ class VideoBorderDetector:
                 results['severity'] = 'minor'
             
             # Report findings
+            print(f"  Quality frames used: {total_quality_frames}/{len(frame_indices)}")
             print(f"  Frames with head switching artifacts: {results['frames_with_artifacts']}/{results['frames_analyzed']} ({results['artifact_percentage']:.1f}%)")
             print(f"  Average asymmetry score: {results['avg_asymmetry']:.3f}")
             print(f"  Horizontal discontinuities found: {results['total_discontinuities']}")
@@ -335,6 +579,8 @@ class VideoBorderDetector:
             
             if results['severity'] != 'none':
                 print(f"  ⚠️  Head switching artifacts detected - check bottom of picture area")
+                if artifact_region_info:
+                    print(f"  Artifact region: {artifact_region_info['width']}px wide, starting at {artifact_region_info['relative_start']:.1%} of scan line")
             else:
                 print(f"  ✓ No significant head switching artifacts detected")
             
@@ -390,14 +636,7 @@ class VideoBorderDetector:
     
     def find_good_representative_frame(self, target_time=150, search_window=120):
         """
-        Find a good representative frame with sufficient brightness and detail
-        
-        Args:
-            target_time: Preferred time in seconds
-            search_window: Seconds to search around target time (default: 2 minutes)
-        
-        Returns:
-            Best frame found, or None if no suitable frame
+        Find a good representative frame using enhanced quality assessment
         """
         # Calculate search range
         target_frame = int(target_time * self.fps)
@@ -406,7 +645,6 @@ class VideoBorderDetector:
         start_frame = max(0, target_frame - window_frames // 2)
         end_frame = min(self.total_frames - 1, target_frame + window_frames // 2)
         
-        # If video is too short, search the middle section
         if end_frame >= self.total_frames:
             mid_point = self.total_frames // 2
             start_frame = max(0, mid_point - window_frames // 2)
@@ -414,122 +652,39 @@ class VideoBorderDetector:
         
         print(f"Searching for good representative frame between {start_frame/self.fps:.1f}s and {end_frame/self.fps:.1f}s...")
         
-        best_frame = None
-        best_score = 0
-        best_frame_idx = target_frame
-        candidates_found = 0
-        
         # Check frames every 1 second in the search window
         check_interval = max(1, int(self.fps))
+        frame_indices = list(range(start_frame, end_frame, check_interval))
         
-        # First pass: Look for ideal frames
-        for frame_idx in range(start_frame, end_frame, check_interval):
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret, frame = self.cap.read()
-            
-            if not ret:
-                continue
-            
-            # Convert to grayscale for analysis
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
-            # Calculate frame quality metrics
-            mean_brightness = np.mean(gray)
-            std_brightness = np.std(gray)
-            
-            # First pass: stricter criteria
-            # Avoid very dark frames (mean < 25) and very bright frames (mean > 230)  
-            if mean_brightness < 25 or mean_brightness > 230:
-                continue
-                
-            # Must have reasonable contrast
-            if std_brightness < 15:
-                continue
-                
-            candidates_found += 1
-                
-            # Score based on brightness and contrast
-            brightness_score = 1.0 - abs(mean_brightness - 120) / 120
-            contrast_score = min(std_brightness / 40.0, 1.0)
-            
-            # Combined score favoring contrast over brightness
-            score = brightness_score * 0.3 + contrast_score * 0.7
-            
-            if score > best_score:
-                best_score = score
-                best_frame = frame.copy()
-                best_frame_idx = frame_idx
+        # Use quality assessment to find the best frame
+        quality_frames = self.select_quality_frames(frame_indices, strict_mode=True)
         
-        # Second pass: relaxed criteria if no good frame found
-        if best_frame is None:
-            print(f"No ideal frames found, searching with relaxed criteria...")
-            
-            for frame_idx in range(start_frame, end_frame, check_interval):
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = self.cap.read()
-                
-                if not ret:
-                    continue
-                
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                mean_brightness = np.mean(gray)
-                std_brightness = np.std(gray)
-                
-                # Relaxed criteria: just avoid completely black/white frames
-                if mean_brightness < 15 or mean_brightness > 245:
-                    continue
-                    
-                candidates_found += 1
-                    
-                # Simple scoring for any decent frame
-                score = mean_brightness / 255.0 + std_brightness / 100.0
-                
-                if score > best_score:
-                    best_score = score
-                    best_frame = frame.copy()
-                    best_frame_idx = frame_idx
-        
-        # Third pass: if still no frame, just find anything that's not completely black
-        if best_frame is None:
-            print(f"Still no suitable frame, looking for any non-black frame...")
-            
-            for frame_idx in range(start_frame, end_frame, check_interval * 2):  # Check less frequently
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = self.cap.read()
-                
-                if not ret:
-                    continue
-                
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                mean_brightness = np.mean(gray)
-                
-                # Just avoid completely black frames
-                if mean_brightness > 10:
-                    best_frame = frame.copy()
-                    best_frame_idx = frame_idx
-                    candidates_found += 1
-                    break
-        
-        if best_frame is not None:
-            print(f"✓ Selected frame at {best_frame_idx/self.fps:.1f}s (score: {best_score:.2f}, candidates: {candidates_found})")
+        if quality_frames:
+            # Return the highest quality frame
+            best_frame_idx, best_frame, best_score = quality_frames[0]
+            print(f"✓ Selected high-quality frame at {best_frame_idx/self.fps:.1f}s (quality score: {best_score:.3f})")
             return best_frame
         else:
-            print(f"⚠️ No suitable frame found in {search_window}s window, using target frame")
-            # Fallback to original behavior
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame if target_frame < self.total_frames else self.total_frames // 2)
-            ret, frame = self.cap.read()
-            return frame if ret else None
+            # Fallback: try with less strict criteria
+            print("No frames met strict criteria, trying with relaxed standards...")
+            quality_frames = self.select_quality_frames(frame_indices, strict_mode=False)
+            
+            if quality_frames:
+                best_frame_idx, best_frame, best_score = quality_frames[0]
+                print(f"✓ Selected frame at {best_frame_idx/self.fps:.1f}s (relaxed quality score: {best_score:.3f})")
+                return best_frame
+            else:
+                # Final fallback
+                print(f"⚠️ No suitable frame found, using target frame as fallback")
+                fallback_frame = target_frame if target_frame < self.total_frames else self.total_frames // 2
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, fallback_frame)
+                ret, frame = self.cap.read()
+                return frame if ret else None
 
     def generate_border_visualization(self, output_path, active_area=None, head_switching_results=None, target_time=150, search_window=120):
         """
         Generate visual showing detected borders and active area
-        
-        Args:
-            target_time: Target time for frame selection (seconds)
-            search_window: How many seconds to search around target time
-            head_switching_results: Results from head switching analysis to highlight regions
         """
-        # Find a good representative frame instead of using fixed time
         frame = self.find_good_representative_frame(target_time, search_window)
         
         if frame is None:
@@ -581,18 +736,36 @@ class VideoBorderDetector:
             # Highlight head switching analysis region if artifacts detected
             if head_switching_results and head_switching_results.get('severity') != 'none':
                 hs_region = head_switching_results.get('analysis_region', {})
-                if hs_region:
+                artifact_region = head_switching_results.get('artifact_region', {})
+                
+                if hs_region and artifact_region:
                     hs_x = hs_region.get('x', 0)
                     hs_y = hs_region.get('y', self.height - 10)
                     hs_w = hs_region.get('width', self.width)
                     
-                    # Draw a horizontal line at the bottom of the analysis region
-                    line_y = hs_y + hs_region.get('height', 10) - 1  # Bottom of analysis region
+                    # Calculate the actual pixel positions of the artifact region
+                    artifact_start_x = hs_x + artifact_region.get('start_x', hs_w // 2)
+                    artifact_end_x = hs_x + artifact_region.get('end_x', hs_w - 1)
+                    
+                    # Ensure the line doesn't go beyond the analysis region
+                    artifact_start_x = max(hs_x, min(artifact_start_x, hs_x + hs_w))
+                    artifact_end_x = max(hs_x, min(artifact_end_x, hs_x + hs_w))
+                    
+                    line_y = hs_y + hs_region.get('height', 10) - 1
+                    ax1.plot([artifact_start_x, artifact_end_x], [line_y, line_y], 
+                            color='orange', linewidth=3, alpha=0.9, 
+                            label='Head Switching Artifacts')
+                elif hs_region:
+                    # Fallback to original behavior if no specific artifact region
+                    hs_x = hs_region.get('x', 0)
+                    hs_y = hs_region.get('y', self.height - 10)
+                    hs_w = hs_region.get('width', self.width)
+                    
+                    line_y = hs_y + hs_region.get('height', 10) - 1
                     ax1.plot([hs_x, hs_x + hs_w], [line_y, line_y], 
                             color='orange', linewidth=2, alpha=0.8, 
                             label='Head Switching Artifacts')
             
-            # Only show legend if we have patches to show
             if border_added or (head_switching_results and head_switching_results.get('severity') != 'none'):
                 ax1.legend()
             
@@ -606,7 +779,7 @@ class VideoBorderDetector:
             border_info = f'Border sizes: L={x}px, R={self.width-x-w}px, T={y}px, B={self.height-y-h}px'
             fig.text(0.5, 0.02, border_info, ha='center', fontsize=10)
             
-            # Add head switching info if relevant
+            # Add head switching info
             if head_switching_results and head_switching_results.get('severity') != 'none':
                 hs_info = f"Head switching artifacts: {head_switching_results['severity']} ({head_switching_results['artifact_percentage']:.1f}% of frames)"
                 fig.text(0.5, 0.95, hs_info, ha='center', fontsize=12, weight='bold', color='orange')
@@ -619,21 +792,39 @@ class VideoBorderDetector:
             
             # Still show head switching info even without borders
             if head_switching_results and head_switching_results.get('severity') != 'none':
-                # Highlight head switching analysis region on full frame
                 hs_region = head_switching_results.get('analysis_region', {})
-                if hs_region:
+                artifact_region = head_switching_results.get('artifact_region', {})
+                
+                if hs_region and artifact_region:
                     hs_x = hs_region.get('x', 0)
                     hs_y = hs_region.get('y', self.height - 15)
                     hs_w = hs_region.get('width', self.width)
                     
-                    # Draw a horizontal line at the bottom of the analysis region
-                    line_y = hs_y + hs_region.get('height', 15) - 1  # Bottom of analysis region
+                    # Calculate the actual pixel positions of the artifact region
+                    artifact_start_x = hs_x + artifact_region.get('start_x', hs_w // 2)
+                    artifact_end_x = hs_x + artifact_region.get('end_x', hs_w - 1)
+                    
+                    # Ensure the line doesn't go beyond the analysis region
+                    artifact_start_x = max(hs_x, min(artifact_start_x, hs_x + hs_w))
+                    artifact_end_x = max(hs_x, min(artifact_end_x, hs_x + hs_w))
+                    
+                    line_y = hs_y + hs_region.get('height', 15) - 1
+                    ax1.plot([artifact_start_x, artifact_end_x], [line_y, line_y], 
+                            color='orange', linewidth=3, alpha=0.9, 
+                            label='Head Switching Artifacts')
+                    ax1.legend()
+                elif hs_region:
+                    # Fallback to original behavior if no specific artifact region
+                    hs_x = hs_region.get('x', 0)
+                    hs_y = hs_region.get('y', self.height - 15)
+                    hs_w = hs_region.get('width', self.width)
+                    
+                    line_y = hs_y + hs_region.get('height', 15) - 1
                     ax1.plot([hs_x, hs_x + hs_w], [line_y, line_y], 
                             color='orange', linewidth=2, alpha=0.8, 
                             label='Head Switching Artifacts')
                     ax1.legend()
                 
-                # Add head switching info
                 hs_info = f"Head switching artifacts: {head_switching_results['severity']} ({head_switching_results['artifact_percentage']:.1f}% of frames)"
                 fig.text(0.5, 0.95, hs_info, ha='center', fontsize=12, weight='bold', color='orange')
             else:
@@ -667,8 +858,9 @@ class VideoBorderDetector:
             'head_switching_artifacts': head_switching_results,
             'detection_settings': {
                 'sample_frames': int(self.sample_frames),
-                'threshold': 10,  # Default threshold used
-                'padding': 5      # Default padding used
+                'threshold': 10,
+                'padding': 5,
+                'quality_filtering': True
             }
         }
         
@@ -684,16 +876,7 @@ class VideoBorderDetector:
 
 def detect_video_borders(video_path, output_dir=None, target_viz_time=150, search_window=120):
     """
-    Main function to detect borders in a video file
-    
-    Args:
-        video_path: Path to video file
-        output_dir: Output directory for results
-        target_viz_time: Target time for visualization frame (seconds)
-        search_window: Seconds to search around target time for good frame
-    
-    Returns:
-        Dictionary with border detection results
+    Main function to detect borders in a video file with enhanced quality filtering
     """
     video_path = Path(video_path)
     
@@ -704,14 +887,14 @@ def detect_video_borders(video_path, output_dir=None, target_viz_time=150, searc
         output_dir = video_path.parent
         
     print(f"Processing: {video_path.name}")
-    print("Detecting blanking borders and active picture area...")
+    print("Detecting blanking borders and active picture area with quality filtering...")
     
     detector = VideoBorderDetector(video_path)
     
-    # Detect borders
+    # Detect borders with quality filtering
     active_area = detector.detect_blanking_borders(threshold=10)
     
-    # Detect head switching artifacts (whether borders were found or not)
+    # Detect head switching artifacts with quality filtering
     head_switching_results = detector.detect_head_switching_artifacts(active_area)
     
     if active_area:
@@ -772,7 +955,8 @@ if __name__ == "__main__":
     # Head switching artifact summary
     if results.get('head_switching_artifacts'):
         hs_results = results['head_switching_artifacts']
-        print(f"\nHead Switching Artifact Analysis:")
+        print(f"\nHead Switching Artifact Analysis (Quality Filtering Applied):")
+        print(f"Quality frames used: {hs_results.get('quality_frames_used', 'N/A')}/{hs_results.get('total_frames_sampled', 'N/A')}")
         print(f"Severity: {hs_results['severity']}")
         if hs_results['severity'] != 'none':
             print(f"Affected frames: {hs_results['frames_with_artifacts']}/{hs_results['frames_analyzed']} ({hs_results['artifact_percentage']:.1f}%)")

@@ -53,10 +53,11 @@ class FFprobeAnalyzer:
     def get_video_properties(self):
         """Get basic video properties using FFprobe"""
         try:
+            # Get both stream and format information
             cmd = [
                 'ffprobe', '-v', 'quiet',
                 '-select_streams', 'v:0',
-                '-show_entries', 'stream=width,height,duration,r_frame_rate',
+                '-show_entries', 'stream=width,height,duration,r_frame_rate:format=duration',
                 '-of', 'json',
                 self.video_path
             ]
@@ -67,10 +68,17 @@ class FFprobeAnalyzer:
                 
             data = json.loads(result.stdout)
             stream = data['streams'][0]
+            format_data = data.get('format', {})
             
             self.width = int(stream['width'])
             self.height = int(stream['height'])
-            self.duration = float(stream.get('duration', 0))
+            
+            # Try to get duration from stream first, then format, then calculate from frames
+            self.duration = None
+            if 'duration' in stream:
+                self.duration = float(stream['duration'])
+            elif 'duration' in format_data:
+                self.duration = float(format_data['duration'])
             
             # Parse frame rate
             fps_str = stream.get('r_frame_rate', '25/1')
@@ -79,7 +87,28 @@ class FFprobeAnalyzer:
                 self.fps = num / den if den > 0 else 25
             else:
                 self.fps = float(fps_str)
-                
+            
+            # If duration is still None, try to calculate from frame count
+            if self.duration is None or self.duration == 0:
+                try:
+                    # Get frame count using a different ffprobe command
+                    count_cmd = [
+                        'ffprobe', '-v', 'error',
+                        '-select_streams', 'v:0',
+                        '-count_packets',
+                        '-show_entries', 'stream=nb_read_packets',
+                        '-of', 'csv=p=0',
+                        self.video_path
+                    ]
+                    count_result = subprocess.run(count_cmd, capture_output=True, text=True)
+                    if count_result.returncode == 0:
+                        frame_count = int(count_result.stdout.strip())
+                        self.duration = frame_count / self.fps if self.fps > 0 else 0
+                        print(f"✓ Calculated duration from {frame_count} frames")
+                except:
+                    # Final fallback - use a very conservative estimate
+                    self.duration = 0
+                    
             print(f"✓ Video properties: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
             
         except Exception as e:
@@ -93,6 +122,7 @@ class FFprobeAnalyzer:
                 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 self.duration = total_frames / self.fps if self.fps > 0 else 0
                 cap.release()
+                print(f"✓ Using OpenCV fallback: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
             else:
                 raise ValueError(f"Cannot open video file: {self.video_path}")
     

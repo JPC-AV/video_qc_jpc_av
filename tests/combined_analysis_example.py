@@ -11,7 +11,7 @@ import sys
 
 # Import the two modules
 from border_detector import detect_video_borders
-from ffprobe_analyzer import analyze_video_signalstats
+from ffmpeg_signalstats_analyzer import analyze_video_signalstats
 
 
 def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, duration=60, viz_time=150):
