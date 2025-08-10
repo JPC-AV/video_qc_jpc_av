@@ -53,7 +53,7 @@ class ActiveAreaBrngAnalyzer:
         except Exception as e:
             print(f"⚠️ Could not load border data: {e}")
     
-    def process_with_ffmpeg(self, duration_limit=300):
+    def process_with_ffmpeg(self, duration_limit=300, start_offset=60):
         """
         Process video with ffmpeg signalstats, optionally cropping to active area.
         
@@ -142,7 +142,6 @@ class ActiveAreaBrngAnalyzer:
         print(f"  Sampling every {sample_every_n_frames} frames")
         
         # Initialize analysis data
-        heatmap = np.zeros((height, width), dtype=np.float32)
         frame_violations = []
         region_stats = defaultdict(lambda: {'count': 0, 'total_pixels': 0})
         
@@ -162,7 +161,6 @@ class ActiveAreaBrngAnalyzer:
                 
                 if violation_pixels > 0:
                     # Update heatmap
-                    heatmap += cyan_mask.astype(np.float32) / 255.0
                     
                     # Analyze regions
                     # Divide into 9 regions (3x3 grid)
@@ -222,7 +220,7 @@ class ActiveAreaBrngAnalyzer:
                             key=lambda x: x['violation_pixels'], 
                             reverse=True)[:10]
         
-        # Compile analysis results
+                # Compile analysis results
         analysis = {
             'video_info': {
                 'source': str(self.video_path),
@@ -230,7 +228,7 @@ class ActiveAreaBrngAnalyzer:
                 'height': height,
                 'fps': fps,
                 'total_frames': total_frames,
-                'duration': total_frames / fps,
+                'duration': total_frames / fps if fps else 0,
                 'active_area': list(self.active_area) if self.active_area else None
             },
             'analysis_settings': {
@@ -253,56 +251,35 @@ class ActiveAreaBrngAnalyzer:
                 }
                 for region, stats in region_stats.items()
             },
-            'worst_frames': worst_frames
+            'worst_frames': worst_frames,
         }
-        
-        # Save analysis
+
+        # Save top 5 worst frames as thumbnails (from the highlighted video so cyan highlights remain)
+        thumbnails = []
+        if worst_frames:
+            cap2 = cv2.VideoCapture(str(self.highlighted_video))
+            if cap2.isOpened():
+                for i, wf in enumerate(worst_frames[:5], start=1):
+                    frame_no = int(wf.get("frame", 0))
+                    cap2.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+                    ret2, frame2 = cap2.read()
+                    if ret2 and frame2 is not None:
+                        thumb_path = self.output_dir / f"{self.video_path.stem}_worst_frame_{i}.jpg"
+                        cv2.imwrite(str(thumb_path), frame2)
+                        thumbnails.append(str(thumb_path))
+                cap2.release()
+            else:
+                print("⚠️ Could not open highlighted video to save thumbnails")
+        analysis["thumbnails"] = thumbnails
+
+        # Save analysis JSON
         with open(self.analysis_output, 'w') as f:
             json.dump(analysis, f, indent=2)
-        
+
         print(f"✓ Analysis complete. Results saved to: {self.analysis_output}")
-        
-        # Create heatmap visualization
-        if samples_with_violations > 0:
-            self.create_heatmap(heatmap, analysis)
         
         return analysis
     
-    def create_heatmap(self, heatmap, analysis):
-        """Create a heatmap visualization of BRNG violations"""
-        print("\nCreating heatmap visualization...")
-        
-        # Normalize heatmap
-        if np.max(heatmap) > 0:
-            normalized = (heatmap / np.max(heatmap) * 255).astype(np.uint8)
-            
-            # Apply colormap
-            colored = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
-            
-            # Add text overlay with statistics
-            h, w = colored.shape[:2]
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            
-            # Add title
-            cv2.putText(colored, "BRNG Violation Heatmap", (10, 30),
-                       font, 1, (255, 255, 255), 2)
-            
-            # Add statistics
-            stats_text = [
-                f"Active Area: {analysis['video_info']['active_area']}" if analysis['video_info']['active_area'] else "Full Frame",
-                f"Samples with violations: {analysis['summary']['samples_with_violations']}",
-                f"Max violation: {analysis['summary']['max_violation_percentage']:.3f}% pixels"
-            ]
-            
-            y_pos = 60
-            for text in stats_text:
-                cv2.putText(colored, text, (10, y_pos),
-                           font, 0.5, (255, 255, 255), 1)
-                y_pos += 25
-            
-            # Save heatmap
-            cv2.imwrite(str(self.heatmap_image), colored)
-            print(f"✓ Heatmap saved to: {self.heatmap_image}")
     
     def print_summary(self, analysis):
         """Print analysis summary"""
@@ -367,7 +344,7 @@ class ActiveAreaBrngAnalyzer:
 
 
 def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None, 
-                            duration_limit=300, sample_rate=30):
+                            duration_limit=300, start_offset=60, sample_rate=30):
     """
     Main function to analyze BRNG violations in active picture area.
     
@@ -384,7 +361,7 @@ def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None,
     analyzer = ActiveAreaBrngAnalyzer(video_path, border_data_path, output_dir)
     
     # Process with ffmpeg
-    if not analyzer.process_with_ffmpeg(duration_limit):
+    if not analyzer.process_with_ffmpeg(duration_limit, start_offset):
         print("FFmpeg processing failed")
         return None
     

@@ -82,13 +82,9 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             border_data_path=border_data_path,
             output_dir=output_dir,
             duration_limit=brng_duration,
+            start_offset=60,   # <-- Skip first minute by default
             sample_rate=30
         )
-        
-        if brng_results:
-            print(f"✓ Active area BRNG analysis complete")
-        else:
-            print("⚠️ Active area BRNG analysis failed")
     else:
         print("No border detection available - analyzing full frame for BRNG...")
         brng_results = analyze_active_area_brng(
@@ -96,9 +92,10 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             border_data_path=None,
             output_dir=output_dir,
             duration_limit=brng_duration,
+            start_offset=60,   # <-- Skip first minute by default
             sample_rate=30
         )
-    
+
     print()
     print("="*80)
     print("ANALYSIS COMPLETE - SUMMARY")
