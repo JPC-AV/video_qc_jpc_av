@@ -5,7 +5,7 @@ Combined Border Detection, FFprobe Analysis, and Active Area BRNG Analysis
 This script combines three analyses:
 1. Border detection using OpenCV
 2. FFprobe signalstats analysis (simplified)
-3. Active area BRNG analysis using ffmpeg signalstats
+3. Active area BRNG analysis using ffmpeg signalstats with thumbnail export
 """
 
 from pathlib import Path
@@ -82,7 +82,6 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             border_data_path=border_data_path,
             output_dir=output_dir,
             duration_limit=brng_duration,
-            start_offset=60,   # <-- Skip first minute by default
             sample_rate=30
         )
     else:
@@ -92,7 +91,6 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             border_data_path=None,
             output_dir=output_dir,
             duration_limit=brng_duration,
-            start_offset=60,   # <-- Skip first minute by default
             sample_rate=30
         )
 
@@ -158,7 +156,11 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             # Show worst frame
             if brng_results.get('worst_frames') and len(brng_results['worst_frames']) > 0:
                 worst = brng_results['worst_frames'][0]
-                print(f"   Worst frame: {worst['frame']} ({worst['timestamp']:.1f}s) - {worst['violation_percentage']:.4f}% pixels")
+                print(f"   Worst frame: {worst['frame']} ({worst['timecode']}) - {worst['violation_percentage']:.4f}% pixels")
+            
+            # Mention thumbnails if saved
+            if brng_results.get('saved_thumbnails'):
+                print(f"   📸 Saved {len(brng_results['saved_thumbnails'])} worst frame thumbnail(s)")
     else:
         print(f"   ⚠️ Analysis not available")
     
@@ -208,7 +210,8 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
     print(f"  - {video_path.stem}_signalstats_analysis.json (FFprobe analysis)")
     if brng_results:
         print(f"  - {video_path.stem}_active_brng_analysis.json (detailed BRNG analysis)")
-        print(f"  - {video_path.stem}_brng_heatmap.png (violation heatmap)")
+        if brng_results.get('saved_thumbnails'):
+            print(f"  - brng_thumbnails/ ({len(brng_results['saved_thumbnails'])} worst frame thumbnails with timecodes)")
     
     # Save combined summary
     summary_path = output_dir / f"{video_path.stem}_combined_summary.json"
@@ -242,7 +245,8 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             'analyzed': brng_results is not None,
             'region': brng_results['analysis_settings']['analyzed_region'] if brng_results else None,
             'samples_with_violations': brng_results['summary']['samples_with_violations'] if brng_results else None,
-            'max_violation_percentage': brng_results['summary']['max_violation_percentage'] if brng_results else None
+            'max_violation_percentage': brng_results['summary']['max_violation_percentage'] if brng_results else None,
+            'thumbnails_saved': len(brng_results.get('saved_thumbnails', [])) if brng_results else 0
         }
     }
     

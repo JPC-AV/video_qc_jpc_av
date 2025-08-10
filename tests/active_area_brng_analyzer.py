@@ -4,6 +4,7 @@ Active Area BRNG Analyzer
 
 Analyzes broadcast range violations specifically in the active picture area,
 using border detection data to exclude blanking/border regions.
+Exports thumbnails of worst violation frames with timecode in filename.
 """
 
 import subprocess
@@ -35,9 +36,12 @@ class ActiveAreaBrngAnalyzer:
         self.temp_dir = self.output_dir / "temp_brng"
         self.temp_dir.mkdir(exist_ok=True)
         
+        # Create thumbnails directory
+        self.thumbnails_dir = self.output_dir / "brng_thumbnails"
+        self.thumbnails_dir.mkdir(exist_ok=True)
+        
         self.highlighted_video = self.temp_dir / f"{self.video_path.stem}_highlighted.mp4"
         self.analysis_output = self.output_dir / f"{self.video_path.stem}_active_brng_analysis.json"
-        self.heatmap_image = self.output_dir / f"{self.video_path.stem}_brng_heatmap.png"
         
     def load_border_data(self, border_data_path):
         """Load border detection data"""
@@ -53,7 +57,7 @@ class ActiveAreaBrngAnalyzer:
         except Exception as e:
             print(f"⚠️ Could not load border data: {e}")
     
-    def process_with_ffmpeg(self, duration_limit=300, start_offset=60):
+    def process_with_ffmpeg(self, duration_limit=300):
         """
         Process video with ffmpeg signalstats, optionally cropping to active area.
         
@@ -110,17 +114,101 @@ class ActiveAreaBrngAnalyzer:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
         # Cyan in HSV (OpenCV uses H: 0-179, S: 0-255, V: 0-255)
-        lower_cyan = np.array([85, 50, 50])
-        upper_cyan = np.array([105, 255, 255])
+        # Expanded range for better cyan detection
+        lower_cyan = np.array([80, 40, 40])   # Slightly wider range
+        upper_cyan = np.array([110, 255, 255])
         
         # Create mask
         mask = cv2.inRange(hsv, lower_cyan, upper_cyan)
         
+        # Optional: Apply morphological operations to reduce noise
+        kernel = np.ones((2, 2), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        
         return mask
+    
+    def format_timecode(self, seconds):
+        """Convert seconds to timecode format HH:MM:SS"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    
+    def format_filename_timecode(self, seconds):
+        """Convert seconds to timecode format HH-MM-SS for filename"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        frames = int((seconds % 1) * 30)  # Assuming 30fps for frame number
+        return f"{hours:02d}-{minutes:02d}-{secs:02d}-{frames:02d}"
+    
+    def save_worst_frame_thumbnails(self, worst_frames, cap, num_thumbnails=5):
+        """
+        Save thumbnails of the worst frames with cyan highlights
+        
+        Args:
+            worst_frames: List of worst frame data
+            cap: Video capture object
+            num_thumbnails: Number of thumbnails to save
+        """
+        print(f"\nSaving thumbnails of worst {num_thumbnails} frames...")
+        
+        saved_thumbnails = []
+        
+        for i, frame_data in enumerate(worst_frames[:num_thumbnails]):
+            frame_idx = frame_data['frame']
+            timestamp = frame_data['timestamp']
+            violation_pct = frame_data['violation_percentage']
+            
+            # Seek to the frame
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            
+            if ret:
+                # Generate filename with timecode
+                timecode_str = self.format_filename_timecode(timestamp)
+                thumbnail_filename = f"{self.video_path.stem}_brng_frame_{timecode_str}_violation_{violation_pct:.4f}pct.jpg"
+                thumbnail_path = self.thumbnails_dir / thumbnail_filename
+                
+                # Add text overlay with violation info
+                h, w = frame.shape[:2]
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                
+                # Create a semi-transparent overlay for text background
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (w, 60), (0, 0, 0), -1)
+                frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
+                
+                # Add text
+                text1 = f"Timecode: {self.format_timecode(timestamp)}"
+                text2 = f"BRNG Violation: {violation_pct:.4f}% pixels"
+                
+                cv2.putText(frame, text1, (10, 25),
+                           font, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame, text2, (10, 50),
+                           font, 0.7, (0, 255, 255), 2)
+                
+                # Save thumbnail
+                cv2.imwrite(str(thumbnail_path), frame)
+                
+                saved_thumbnails.append({
+                    'filename': thumbnail_filename,
+                    'path': str(thumbnail_path),
+                    'frame': frame_idx,
+                    'timestamp': timestamp,
+                    'timecode': self.format_timecode(timestamp),
+                    'violation_percentage': violation_pct
+                })
+                
+                print(f"  ✓ Saved: {thumbnail_filename}")
+            else:
+                print(f"  ⚠️ Could not read frame {frame_idx}")
+        
+        return saved_thumbnails
     
     def analyze_highlighted_video(self, sample_every_n_frames=30):
         """
-        Analyze the highlighted video to find BRNG violation patterns.
+        Analyze the highlighted video to find BRNG violation patterns and save thumbnails.
         
         Args:
             sample_every_n_frames: Sample every Nth frame for faster processing
@@ -160,8 +248,6 @@ class ActiveAreaBrngAnalyzer:
                 violation_pixels = np.sum(cyan_mask > 0)
                 
                 if violation_pixels > 0:
-                    # Update heatmap
-                    
                     # Analyze regions
                     # Divide into 9 regions (3x3 grid)
                     h_third = height // 3
@@ -182,10 +268,12 @@ class ActiveAreaBrngAnalyzer:
                                 region_stats[region_name]['count'] += 1
                                 region_stats[region_name]['total_pixels'] += region_pixels
                     
-                    # Store frame data
+                    # Store frame data with timecode
+                    timestamp = frame_idx / fps
                     frame_violations.append({
                         'frame': frame_idx,
-                        'timestamp': frame_idx / fps,
+                        'timestamp': timestamp,
+                        'timecode': self.format_timecode(timestamp),
                         'violation_pixels': int(violation_pixels),
                         'violation_percentage': (violation_pixels / (width * height)) * 100
                     })
@@ -197,8 +285,6 @@ class ActiveAreaBrngAnalyzer:
                     print(f"  Analyzed {analyzed_frames} samples ({frame_idx}/{total_frames} frames)")
             
             frame_idx += 1
-        
-        cap.release()
         
         # Calculate statistics
         total_samples = analyzed_frames
@@ -220,7 +306,16 @@ class ActiveAreaBrngAnalyzer:
                             key=lambda x: x['violation_pixels'], 
                             reverse=True)[:10]
         
-                # Compile analysis results
+        # Save thumbnails of worst frames
+        saved_thumbnails = []
+        if worst_frames:
+            # Reset video capture to beginning for thumbnail extraction
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            saved_thumbnails = self.save_worst_frame_thumbnails(worst_frames, cap, num_thumbnails=5)
+        
+        cap.release()
+        
+        # Compile analysis results
         analysis = {
             'video_info': {
                 'source': str(self.video_path),
@@ -228,7 +323,7 @@ class ActiveAreaBrngAnalyzer:
                 'height': height,
                 'fps': fps,
                 'total_frames': total_frames,
-                'duration': total_frames / fps if fps else 0,
+                'duration': total_frames / fps,
                 'active_area': list(self.active_area) if self.active_area else None
             },
             'analysis_settings': {
@@ -252,34 +347,18 @@ class ActiveAreaBrngAnalyzer:
                 for region, stats in region_stats.items()
             },
             'worst_frames': worst_frames,
+            'saved_thumbnails': saved_thumbnails
         }
-
-        # Save top 5 worst frames as thumbnails (from the highlighted video so cyan highlights remain)
-        thumbnails = []
-        if worst_frames:
-            cap2 = cv2.VideoCapture(str(self.highlighted_video))
-            if cap2.isOpened():
-                for i, wf in enumerate(worst_frames[:5], start=1):
-                    frame_no = int(wf.get("frame", 0))
-                    cap2.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-                    ret2, frame2 = cap2.read()
-                    if ret2 and frame2 is not None:
-                        thumb_path = self.output_dir / f"{self.video_path.stem}_worst_frame_{i}.jpg"
-                        cv2.imwrite(str(thumb_path), frame2)
-                        thumbnails.append(str(thumb_path))
-                cap2.release()
-            else:
-                print("⚠️ Could not open highlighted video to save thumbnails")
-        analysis["thumbnails"] = thumbnails
-
-        # Save analysis JSON
+        
+        # Save analysis
         with open(self.analysis_output, 'w') as f:
             json.dump(analysis, f, indent=2)
-
+        
         print(f"✓ Analysis complete. Results saved to: {self.analysis_output}")
+        if saved_thumbnails:
+            print(f"✓ Saved {len(saved_thumbnails)} thumbnail(s) to: {self.thumbnails_dir}")
         
         return analysis
-    
     
     def print_summary(self, analysis):
         """Print analysis summary"""
@@ -311,7 +390,12 @@ class ActiveAreaBrngAnalyzer:
         if analysis['worst_frames']:
             print("\nWORST FRAMES:")
             for i, frame in enumerate(analysis['worst_frames'][:5], 1):
-                print(f"  {i}. Frame {frame['frame']} ({frame['timestamp']:.1f}s): {frame['violation_percentage']:.4f}% pixels")
+                print(f"  {i}. Frame {frame['frame']} ({frame['timecode']}) - {frame['violation_percentage']:.4f}% pixels")
+        
+        if analysis.get('saved_thumbnails'):
+            print("\nSAVED THUMBNAILS:")
+            for thumb in analysis['saved_thumbnails']:
+                print(f"  - {thumb['filename']}")
         
         # Diagnosis
         print("\nDIAGNOSIS:")
@@ -331,20 +415,33 @@ class ActiveAreaBrngAnalyzer:
         
         print("="*80)
     
-    def cleanup(self):
-        """Clean up temporary files"""
+    def cleanup(self, keep_highlighted=False):
+        """
+        Clean up temporary files
+        
+        Args:
+            keep_highlighted: If True, keep the highlighted video for debugging
+        """
         try:
-            if self.highlighted_video.exists():
+            if not keep_highlighted and self.highlighted_video.exists():
                 self.highlighted_video.unlink()
+                print("✓ Removed highlighted video")
+            elif keep_highlighted and self.highlighted_video.exists():
+                print(f"ℹ️ Kept highlighted video: {self.highlighted_video}")
+            
+            # Remove temp directory if empty
             if self.temp_dir.exists():
-                self.temp_dir.rmdir()
-            print("✓ Cleaned up temporary files")
+                if not any(self.temp_dir.iterdir()):
+                    self.temp_dir.rmdir()
+                    print("✓ Cleaned up temporary directory")
+                else:
+                    print(f"ℹ️ Temp directory not empty: {self.temp_dir}")
         except Exception as e:
             print(f"⚠️ Could not clean up temp files: {e}")
 
 
 def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None, 
-                            duration_limit=300, start_offset=60, sample_rate=30):
+                            duration_limit=300, sample_rate=30):
     """
     Main function to analyze BRNG violations in active picture area.
     
@@ -361,11 +458,11 @@ def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None,
     analyzer = ActiveAreaBrngAnalyzer(video_path, border_data_path, output_dir)
     
     # Process with ffmpeg
-    if not analyzer.process_with_ffmpeg(duration_limit, start_offset):
+    if not analyzer.process_with_ffmpeg(duration_limit):
         print("FFmpeg processing failed")
         return None
     
-    # Analyze the highlighted video
+    # Analyze the highlighted video and save thumbnails
     analysis = analyzer.analyze_highlighted_video(sample_rate)
     
     if analysis:
