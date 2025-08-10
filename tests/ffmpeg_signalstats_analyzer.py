@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-FFprobe Signalstats Analyzer
+FFprobe Signalstats Analyzer (Simplified)
 
 Uses ffprobe with lavfi to analyze broadcast range violations (BRNG) in video files.
-Can work with border detection data from border_detector.py or analyze full frames.
-
-This script focuses specifically on FFprobe signalstats analysis for broadcast compliance.
+Focuses on active area and border regions when border detection data is available.
+Skips full frame analysis to improve performance.
 """
 
 import json
@@ -30,9 +29,8 @@ class FFprobeAnalyzer:
         # Get video properties
         self.get_video_properties()
         
-        # Detect bit depth and set appropriate thresholds
+        # Detect bit depth
         self.bit_depth = self.detect_bit_depth()
-        self.set_broadcast_thresholds()
         
     def check_ffprobe(self):
         """Check if FFprobe is available"""
@@ -150,17 +148,6 @@ class FFprobeAnalyzer:
         except Exception as e:
             print(f"⚠️  Could not detect bit depth: {e}, assuming 8-bit")
             return 8
-    
-    def set_broadcast_thresholds(self):
-        """Set broadcast range thresholds based on bit depth"""
-        if self.bit_depth == 10:
-            self.ymin_threshold = 64   # 16 * 4 for 10-bit
-            self.ymax_threshold = 940  # 235 * 4 for 10-bit
-        else:
-            self.ymin_threshold = 16
-            self.ymax_threshold = 235
-            
-        print(f"✓ Using {self.bit_depth}-bit thresholds: Y={self.ymin_threshold}-{self.ymax_threshold}")
         
     def analyze_with_ffprobe(self, active_area=None, start_time=120, duration=60, region_name="frame"):
         """
@@ -195,7 +182,7 @@ class FFprobeAnalyzer:
             x, y, w, h = active_area
             filter_chain += f",crop={w}:{h}:{x}:{y}"
             
-        # Add signalstats
+        # Add signalstats (BRNG only)
         filter_chain += ",signalstats=stat=brng"
         
         # Build FFprobe command
@@ -249,7 +236,7 @@ class FFprobeAnalyzer:
         for line in lines:
             if line.strip():
                 try:
-                    # CSV output should be just the BRNG value
+                    # CSV output should be just the BRNG value (as a proportion 0-1)
                     brng_value = float(line.strip())
                     results['brng_values'].append(brng_value)
                     results['frames_analyzed'] += 1
@@ -263,8 +250,9 @@ class FFprobeAnalyzer:
                     
         # Calculate statistics
         if results['brng_values']:
-            results['avg_brng'] = np.mean(results['brng_values'])
-            results['max_brng'] = np.max(results['brng_values'])
+            # BRNG values are proportions (0-1), convert to percentages for storage
+            results['avg_brng'] = np.mean(results['brng_values']) * 100
+            results['max_brng'] = np.max(results['brng_values']) * 100
             
         if results['frames_analyzed'] > 0:
             results['violation_percentage'] = (results['frames_with_violations'] / 
@@ -272,124 +260,9 @@ class FFprobeAnalyzer:
                                              
         print(f"  Analyzed {results['frames_analyzed']} frames")
         print(f"  Frames with violations: {results['frames_with_violations']} ({results['violation_percentage']:.1f}%)")
-        print(f"  Avg BRNG: {results['avg_brng']:.2f}%, Max BRNG: {results['max_brng']:.2f}%")
+        print(f"  Avg BRNG: {results['avg_brng']:.4f}%, Max BRNG: {results['max_brng']:.4f}%")
         
         return results
-        
-    def analyze_detailed_stats(self, active_area=None, start_time=120, duration=10, region_name="frame"):
-        """
-        Get more detailed statistics including YMIN, YMAX if available
-        """
-        # Limit detailed analysis duration for performance
-        duration = min(duration, 10)
-        
-        # Check if video is long enough
-        if self.duration < start_time + duration:
-            if self.duration > start_time:
-                duration = self.duration - start_time
-            else:
-                start_time = 0
-                duration = min(duration, self.duration)
-        
-        # Build filter chain
-        filter_chain = f"movie={shlex.quote(self.video_path)}"
-        
-        # Add time selection
-        end_time = start_time + duration
-        filter_chain += f",select='between(t\\,{start_time}\\,{end_time})'"
-        
-        if active_area:
-            x, y, w, h = active_area
-            filter_chain += f",crop={w}:{h}:{x}:{y}"
-            
-        filter_chain += ",signalstats"  # Get all stats, not just BRNG
-        
-        # Build FFprobe command for multiple fields
-        cmd = [
-            'ffprobe',
-            '-f', 'lavfi',
-            '-i', filter_chain,
-            '-show_entries', 'frame_tags=lavfi.signalstats.YMIN,lavfi.signalstats.YMAX,lavfi.signalstats.BRNG',
-            '-of', 'json'
-        ]
-        
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                return None
-                
-            # Parse JSON output for more detailed analysis
-            data = json.loads(result.stdout)
-            
-            results = {
-                'region_name': region_name,
-                'frames_analyzed': 0,
-                'frames_with_violations': 0,
-                'ymin_violations': 0,
-                'ymax_violations': 0,
-                'brng_violations': 0,
-                'avg_ymin': 0.0,
-                'avg_ymax': 0.0,
-                'min_ymin': float('inf'),
-                'max_ymax': 0.0,
-                'violation_percentage': 0.0
-            }
-            
-            ymin_values = []
-            ymax_values = []
-            
-            for frame in data.get('frames', []):
-                tags = frame.get('tags', {})
-                results['frames_analyzed'] += 1
-                
-                has_violation = False
-                
-                # Check YMIN
-                ymin = float(tags.get('lavfi.signalstats.YMIN', self.ymin_threshold))
-                ymin_values.append(ymin)
-                if ymin < self.ymin_threshold:
-                    results['ymin_violations'] += 1
-                    has_violation = True
-                    
-                # Check YMAX
-                ymax = float(tags.get('lavfi.signalstats.YMAX', self.ymax_threshold))
-                ymax_values.append(ymax)
-                if ymax > self.ymax_threshold:
-                    results['ymax_violations'] += 1
-                    has_violation = True
-                    
-                # Check BRNG
-                brng = float(tags.get('lavfi.signalstats.BRNG', 0))
-                if brng > 0:
-                    results['brng_violations'] += 1
-                    has_violation = True
-                    
-                if has_violation:
-                    results['frames_with_violations'] += 1
-                    
-            # Calculate statistics
-            if ymin_values:
-                results['avg_ymin'] = np.mean(ymin_values)
-                results['min_ymin'] = np.min(ymin_values)
-            if ymax_values:
-                results['avg_ymax'] = np.mean(ymax_values)
-                results['max_ymax'] = np.max(ymax_values)
-                
-            if results['frames_analyzed'] > 0:
-                results['violation_percentage'] = (results['frames_with_violations'] / 
-                                                 results['frames_analyzed']) * 100
-                                                 
-            print(f"  Detailed stats for {region_name}:")
-            print(f"    YMIN: avg={results['avg_ymin']:.1f}, min={results['min_ymin']:.1f}, violations={results['ymin_violations']}")
-            print(f"    YMAX: avg={results['avg_ymax']:.1f}, max={results['max_ymax']:.1f}, violations={results['ymax_violations']}")
-            print(f"    BRNG violations: {results['brng_violations']}")
-                                                 
-            return results
-            
-        except Exception as e:
-            print(f"Error getting detailed stats: {e}")
-            return None
     
     def analyze_border_regions_from_data(self, border_regions, start_time=120, duration=60):
         """
@@ -438,7 +311,7 @@ class FFprobeAnalyzer:
 def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None, 
                              start_time=120, duration=60):
     """
-    Main function to analyze video signalstats with optional border data
+    Simplified signalstats analysis focusing on active area and borders only
     
     Args:
         video_path: Path to video file
@@ -459,7 +332,7 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
         output_dir = video_path.parent
         
     print(f"Processing: {video_path.name}")
-    print(f"Using FFprobe signalstats BRNG analysis")
+    print(f"Using FFprobe signalstats BRNG analysis (simplified)")
     print(f"Analyzing from {start_time//60}:{start_time%60:02d} to {(start_time+duration)//60}:{(start_time+duration)%60:02d}")
     
     analyzer = FFprobeAnalyzer(video_path)
@@ -474,135 +347,162 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
             active_area = tuple(border_data['active_area'])
             print(f"Using active area from border data: {active_area}")
     
-    # Analyze full frame
-    print("\nAnalyzing full frame with FFprobe signalstats...")
-    full_results = analyzer.analyze_with_ffprobe(
-        active_area=None, 
-        start_time=start_time,
-        duration=duration,
-        region_name="full frame"
-    )
-    
-    # Analyze active area if available
-    active_results = None
-    if active_area:
-        print("\nAnalyzing active area only...")
+    # If no border data, analyze full frame as fallback
+    if not active_area:
+        print("\nNo border data available - analyzing full frame...")
+        full_results = analyzer.analyze_with_ffprobe(
+            active_area=None, 
+            start_time=start_time,
+            duration=duration,
+            region_name="full frame"
+        )
+        active_results = None
+        border_results = None
+    else:
+        # Analyze active area only
+        print("\nAnalyzing active area...")
         active_results = analyzer.analyze_with_ffprobe(
             active_area=active_area,
             start_time=start_time,
             duration=duration,
             region_name="active area"
         )
+        
+        # Analyze border regions if available
+        border_results = None
+        if border_data.get('border_regions'):
+            print("\nAnalyzing border regions...")
+            border_results = analyzer.analyze_border_regions_from_data(
+                border_data['border_regions'],
+                start_time=start_time,
+                duration=duration
+            )
+        
+        full_results = None  # We're not analyzing full frame when we have border data
     
-    # Analyze border regions if available
-    border_results = None
-    if border_data and border_data.get('border_regions'):
-        print("\nAnalyzing border regions...")
-        border_results = analyzer.analyze_border_regions_from_data(
-            border_data['border_regions'],
-            start_time=start_time,
-            duration=duration
-        )
-    
-    # Get detailed stats for shorter duration
-    detail_duration = min(duration, 10)
-    print(f"\nGetting detailed statistics ({detail_duration}s sample)...")
-    
-    full_detailed = analyzer.analyze_detailed_stats(
-        active_area=None,
-        start_time=start_time,
-        duration=detail_duration,
-        region_name="full frame detailed"
-    )
-    
-    active_detailed = None
-    if active_area:
-        active_detailed = analyzer.analyze_detailed_stats(
-            active_area=active_area,
-            start_time=start_time,
-            duration=detail_duration,
-            region_name="active area detailed"
-        )
-    
-    # Create comprehensive report
+    # Create report
     report = {
         'video_file': str(video_path),
         'bit_depth': analyzer.bit_depth,
-        'broadcast_thresholds': {
-            'ymin': analyzer.ymin_threshold,
-            'ymax': analyzer.ymax_threshold
-        },
-        'analysis_method': 'FFprobe signalstats',
+        'analysis_method': 'FFprobe signalstats (simplified)',
         'analysis_period': f'{start_time}s to {start_time + duration}s',
         'sample_duration': duration,
         'border_data_used': border_data_path is not None,
         'active_area': list(active_area) if active_area else None,
         'results': {
-            'full_frame': full_results,
+            'full_frame': full_results,  # Only present if no border data
             'active_area': active_results,
-            'border_regions': border_results,
-            'detailed_stats': {
-                'full_frame': full_detailed,
-                'active_area': active_detailed
-            }
+            'border_regions': border_results
         }
     }
     
     # Analysis and diagnosis
     print("\n" + "="*80)
-    print("FFPROBE SIGNALSTATS ANALYSIS RESULTS")
+    print("FFPROBE SIGNALSTATS ANALYSIS RESULTS (SIMPLIFIED)")
     print("="*80)
-    print(f"\nVideo: {analyzer.bit_depth}-bit, using Y thresholds {analyzer.ymin_threshold}-{analyzer.ymax_threshold}")
+    print(f"\nVideo: {analyzer.bit_depth}-bit")
     print(f"Analysis period: {start_time//60}:{start_time%60:02d} to {(start_time+duration)//60}:{(start_time+duration)%60:02d}")
-    
-    if full_results:
-        print(f"\n📺 FULL FRAME ANALYSIS:")
-        print(f"   Frames with violations: {full_results['frames_with_violations']}/{full_results['frames_analyzed']} ({full_results['violation_percentage']:.1f}%)")
-        print(f"   Average BRNG: {full_results['avg_brng']:.2f}%")
-        print(f"   Maximum BRNG: {full_results['max_brng']:.2f}%")
     
     if active_results:
         print(f"\n🎯 ACTIVE AREA ANALYSIS:")
         print(f"   Frames with violations: {active_results['frames_with_violations']}/{active_results['frames_analyzed']} ({active_results['violation_percentage']:.1f}%)")
-        print(f"   Average BRNG: {active_results['avg_brng']:.2f}%")
-        print(f"   Maximum BRNG: {active_results['max_brng']:.2f}%")
+        print(f"   Average BRNG: {active_results['avg_brng']:.4f}%")
+        print(f"   Maximum BRNG: {active_results['max_brng']:.4f}%")
+    elif full_results:
+        print(f"\n📺 FULL FRAME ANALYSIS (no border data available):")
+        print(f"   Frames with violations: {full_results['frames_with_violations']}/{full_results['frames_analyzed']} ({full_results['violation_percentage']:.1f}%)")
+        print(f"   Average BRNG: {full_results['avg_brng']:.4f}%")
+        print(f"   Maximum BRNG: {full_results['max_brng']:.4f}%")
     
     if border_results:
         print(f"\n🔴 BORDER REGIONS ANALYSIS:")
         for region, data in border_results.items():
             if data:
-                print(f"   {region}: {data['violation_percentage']:.1f}% violations, avg BRNG: {data['avg_brng']:.2f}%")
+                print(f"   {region}: {data['violation_percentage']:.1f}% violations, avg BRNG: {data['avg_brng']:.4f}%")
     
     # Determine diagnosis
-    if active_area and active_results and full_results:
-        full_violations = full_results['violation_percentage']
-        active_violations = active_results['violation_percentage']
+    if active_results:
+        frame_violation_pct = active_results['violation_percentage']
+        avg_brng = active_results['avg_brng']  # Already in percentage
+        max_brng = active_results['max_brng']  # Already in percentage
         
-        if full_violations > 5 and active_violations < 1:
-            report['diagnosis'] = "✓ BRNG violations are primarily in blanking/border areas"
-            print(f"\n✅ DIAGNOSIS: Violations reduced by {full_violations - active_violations:.1f}% when excluding borders")
-            print("   → Video content appears broadcast-safe, violations are in inactive areas")
-        elif active_violations > 5:
-            report['diagnosis'] = "⚠️ Significant BRNG violations found in active picture content"
-            print(f"\n⚠️ DIAGNOSIS: Active content contains significant broadcast range violations")
-            print("   → Video may need levels adjustment for broadcast compliance")
-        elif active_violations > 1:
-            report['diagnosis'] = "⚠️ Minor BRNG violations found in active picture content"
-            print(f"\n⚠️ DIAGNOSIS: Active content contains minor broadcast range violations")
-            print("   → Review recommended for broadcast compliance")
-        else:
+        # Check if violations are higher in borders than active area
+        border_violation_avg = 0
+        border_brng_avg = 0
+        if border_results:
+            border_violations = [data['violation_percentage'] for data in border_results.values() if data]
+            border_brngs = [data['avg_brng'] for data in border_results.values() if data]
+            if border_violations:
+                border_violation_avg = np.mean(border_violations)
+            if border_brngs:
+                border_brng_avg = np.mean(border_brngs)
+        
+        # Diagnosis based on both frame percentage AND severity of violations
+        # Consider: percentage of frames with violations AND the actual BRNG values
+        
+        if frame_violation_pct < 10 and max_brng < 0.01:
+            # Very minor violations - less than 10% of frames and less than 0.01% of pixels
             report['diagnosis'] = "✓ Video appears broadcast-compliant"
             print(f"\n✅ DIAGNOSIS: Video appears to be within broadcast range")
+            print(f"   Minimal violations: {frame_violation_pct:.1f}% of frames, max {max_brng:.4f}% pixels affected")
+            
+        elif frame_violation_pct < 50 and max_brng < 0.1:
+            # Minor violations - common in professional content
+            report['diagnosis'] = "ℹ️ Minor BRNG violations detected - likely acceptable"
+            print(f"\n✅ DIAGNOSIS: Minor broadcast range violations detected")
+            print(f"   {frame_violation_pct:.1f}% of frames affected, but only {max_brng:.4f}% pixels maximum")
+            print("   → These levels are typically acceptable for broadcast")
+            
+        elif frame_violation_pct > 80 and max_brng < 0.5:
+            # Many frames affected but still minor pixel violations
+            report['diagnosis'] = "⚠️ Widespread minor BRNG violations"
+            print(f"\n⚠️ DIAGNOSIS: Widespread but minor broadcast violations")
+            print(f"   {frame_violation_pct:.1f}% of frames affected, up to {max_brng:.4f}% pixels")
+            print("   → Review recommended, but may be acceptable depending on content")
+            
+        elif max_brng > 2.0 or (frame_violation_pct > 50 and max_brng > 1.0):
+            # Significant violations - needs correction
+            report['diagnosis'] = "⚠️ Significant BRNG violations requiring correction"
+            print(f"\n⚠️ DIAGNOSIS: Significant broadcast range violations detected")
+            print(f"   {frame_violation_pct:.1f}% of frames with up to {max_brng:.4f}% pixels out of range")
+            print("   → Levels adjustment recommended for broadcast compliance")
+            
+        elif max_brng > 5.0:
+            # Severe violations
+            report['diagnosis'] = "🔴 Severe BRNG violations"
+            print(f"\n🔴 DIAGNOSIS: Severe broadcast range violations")
+            print(f"   {frame_violation_pct:.1f}% of frames with up to {max_brng:.4f}% pixels out of range")
+            print("   → Video requires levels correction before broadcast")
+            
+        else:
+            # Moderate violations
+            report['diagnosis'] = "⚠️ Moderate BRNG violations detected"
+            print(f"\n⚠️ DIAGNOSIS: Moderate broadcast range violations")
+            print(f"   {frame_violation_pct:.1f}% of frames, max {max_brng:.4f}% pixels affected")
+            print("   → Review recommended for broadcast compliance")
+            
+        # Additional note if borders have significantly more violations
+        if border_violation_avg > frame_violation_pct * 2 and border_brng_avg > avg_brng * 2:
+            print("   Note: Border regions show higher violation rates than active content")
+            
     elif full_results:
-        if full_results['violation_percentage'] > 5:
+        # Fallback diagnosis when no border data available
+        frame_violation_pct = full_results['violation_percentage']
+        avg_brng = full_results['avg_brng']
+        max_brng = full_results['max_brng']
+        
+        if frame_violation_pct < 10 and max_brng < 0.01:
+            report['diagnosis'] = "✓ Video appears broadcast-compliant"
+            print(f"\n✅ DIAGNOSIS: Video appears to be within broadcast range")
+        elif frame_violation_pct < 50 and max_brng < 0.1:
+            report['diagnosis'] = "ℹ️ Minor BRNG violations detected"
+            print(f"\n✅ DIAGNOSIS: Minor violations - likely acceptable for broadcast")
+        elif max_brng > 2.0 or (frame_violation_pct > 50 and max_brng > 1.0):
             report['diagnosis'] = "⚠️ Significant BRNG violations found"
             print(f"\n⚠️ DIAGNOSIS: Video contains significant broadcast range violations")
-        elif full_results['violation_percentage'] > 1:
-            report['diagnosis'] = "⚠️ Minor BRNG violations found"
-            print(f"\n⚠️ DIAGNOSIS: Video contains minor broadcast range violations")
         else:
-            report['diagnosis'] = "✓ Video appears broadcast-compliant"
-            print(f"\n✅ DIAGNOSIS: Video appears to be within broadcast range")
+            report['diagnosis'] = "⚠️ Moderate BRNG violations found"
+            print(f"\n⚠️ DIAGNOSIS: Video contains moderate broadcast range violations")
     
     # Save JSON report
     json_path = output_dir / f"{video_path.stem}_signalstats_analysis.json"
