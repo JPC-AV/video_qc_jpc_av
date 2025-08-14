@@ -2,10 +2,8 @@
 """
 Combined Border Detection, FFprobe Analysis, and Active Area BRNG Analysis
 
-This script combines three analyses:
-1. Border detection using OpenCV
-2. FFprobe signalstats analysis (simplified)
-3. Active area BRNG analysis using ffmpeg signalstats with thumbnail export
+Updated to work with the revised BRNG analyzer that uses differential detection
+and enhanced pattern recognition.
 """
 
 from pathlib import Path
@@ -70,19 +68,18 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
     
     print()
     
-    # Step 3: Active Area BRNG Analysis
-    print("STEP 3: ACTIVE AREA BRNG ANALYSIS")
+    # Step 3: Active Area BRNG Analysis (Updated for new analyzer)
+    print("STEP 3: ACTIVE AREA BRNG ANALYSIS (DIFFERENTIAL DETECTION)")
     print("-" * 40)
     
     brng_results = None
     if border_results.get('active_area'):
-        print("Analyzing BRNG violations in active picture area...")
+        print("Analyzing BRNG violations in active picture area using differential detection...")
         brng_results = analyze_active_area_brng(
             video_path=video_path,
             border_data_path=border_data_path,
             output_dir=output_dir,
-            duration_limit=brng_duration,
-            sample_rate=30
+            duration_limit=brng_duration  # No longer needs sample_rate parameter
         )
     else:
         print("No border detection available - analyzing full frame for BRNG...")
@@ -90,8 +87,7 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             video_path=video_path,
             border_data_path=None,
             output_dir=output_dir,
-            duration_limit=brng_duration,
-            sample_rate=30
+            duration_limit=brng_duration
         )
 
     print()
@@ -140,27 +136,37 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
         full_frame = signalstats_results['results']['full_frame']
         print(f"   Full frame: {full_frame['violation_percentage']:.1f}% frames, max {full_frame['max_brng']:.4f}% pixels")
     
-    # Active Area BRNG Analysis (detailed)
-    print(f"\n3. Active Area BRNG Analysis (up to {brng_duration}s, visual inspection):")
+    # Active Area BRNG Analysis (Updated for new structure)
+    print(f"\n3. Active Area BRNG Analysis (differential detection, up to {brng_duration}s):")
     if brng_results:
-        summary = brng_results['summary']
-        analyzed_region = brng_results['analysis_settings']['analyzed_region']
+        # Get actionable report from new analyzer
+        actionable_report = brng_results.get('actionable_report', {})
+        analyzed_region = brng_results['video_info'].get('active_area') and 'active_area' or 'full_frame'
         
-        if summary['samples_with_violations'] == 0:
-            print(f"   ✓ No BRNG violations detected in {analyzed_region}")
+        print(f"   Method: Differential detection (eliminates false positives)")
+        print(f"   Region analyzed: {analyzed_region}")
+        print(f"   Assessment: {actionable_report.get('overall_assessment', 'Analysis complete')}")
+        print(f"   Priority: {actionable_report.get('action_priority', 'none').upper()}")
+        
+        if brng_results['frames_with_violations'] > 0:
+            print(f"   Frames with violations: {brng_results['frames_with_violations']}/{brng_results['total_frames_analyzed']}")
+            print(f"   Maximum violation: {brng_results['max_violation_percentage']:.4f}% of pixels")
+            
+            # Show specific issues detected
+            if actionable_report.get('recommendations'):
+                issues = [rec['issue'] for rec in actionable_report['recommendations']]
+                print(f"   Issues detected: {', '.join(issues[:3])}")
+            
+            # Show temporal pattern
+            temporal = brng_results.get('temporal_analysis')
+            if temporal:
+                print(f"   Temporal pattern: {temporal.get('temporal_pattern', 'unknown')} - {temporal.get('interpretation', '')}")
         else:
-            print(f"   Region analyzed: {analyzed_region}")
-            print(f"   Samples with violations: {summary['samples_with_violations']} ({summary['violation_percentage']:.1f}%)")
-            print(f"   Maximum violation: {summary['max_violation_percentage']:.4f}% of pixels")
-            
-            # Show worst frame
-            if brng_results.get('worst_frames') and len(brng_results['worst_frames']) > 0:
-                worst = brng_results['worst_frames'][0]
-                print(f"   Worst frame: {worst['frame']} ({worst['timecode']}) - {worst['violation_percentage']:.4f}% pixels")
-            
-            # Mention thumbnails if saved
-            if brng_results.get('saved_thumbnails'):
-                print(f"   📸 Saved {len(brng_results['saved_thumbnails'])} worst frame thumbnail(s)")
+            print(f"   ✔ No BRNG violations detected")
+        
+        # Mention thumbnails if saved
+        if brng_results.get('saved_thumbnails'):
+            print(f"   📸 Saved {len(brng_results['saved_thumbnails'])} diagnostic thumbnail(s)")
     else:
         print(f"   ⚠️ Analysis not available")
     
@@ -177,23 +183,54 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
     
     if ffprobe_data and brng_results:
         ffprobe_max = ffprobe_data.get('max_brng', 0)
-        detailed_max = brng_results['summary'].get('max_violation_percentage', 0)
+        detailed_max = brng_results.get('max_violation_percentage', 0)
         
+        # Check if analyses agree
         if ffprobe_max < 0.01 and detailed_max < 0.01:
-            print("✓ Both analyses confirm minimal BRNG violations")
+            print("✔ Both analyses confirm minimal BRNG violations")
             print("   → Video appears broadcast-safe")
         elif ffprobe_max > 0.1 or detailed_max > 0.1:
             print("⚠️ Both analyses detect notable BRNG violations")
+            
+            # Show specific recommendations from new analyzer
+            if brng_results.get('actionable_report', {}).get('recommendations'):
+                print("   Specific issues:")
+                for rec in brng_results['actionable_report']['recommendations'][:2]:
+                    severity = rec.get('severity', 'unknown')
+                    issue = rec.get('issue', 'Unknown')
+                    print(f"   • {issue} ({severity} severity)")
+            
             print("   → Review recommended for broadcast compliance")
         else:
             print("ℹ️ Minor BRNG violations detected")
             print("   → Likely acceptable for broadcast")
     
+    # Enhanced insights based on new analyzer's pattern detection
+    if brng_results and brng_results.get('aggregate_patterns'):
+        patterns = brng_results['aggregate_patterns']
+        
+        if patterns.get('primary_violation_zone'):
+            zone = patterns['primary_violation_zone']
+            if zone == 'highlights':
+                print("\n⚠️ Pattern Analysis: Violations primarily in highlight areas")
+                print("   → Consider reducing video levels or applying highlight compression")
+            elif zone == 'shadows':
+                print("\n⚠️ Pattern Analysis: Violations primarily in shadow areas")
+                print("   → Consider lifting blacks or adjusting shadow detail")
+        
+        if patterns.get('horizontal_banding_frames', 0) > 0:
+            print("\n⚠️ Pattern Analysis: Horizontal banding detected")
+            print("   → Check deinterlacing settings or field order")
+        
+        if patterns.get('avg_edge_violation_ratio', 0) > 0.5:
+            print("\n⚠️ Pattern Analysis: Edge enhancement artifacts detected")
+            print("   → Consider reducing sharpening in processing")
+    
     # Active area vs borders insight
     if (border_results.get('active_area') and 
         signalstats_results.get('results', {}).get('border_regions')):
         
-        print("\n✓ Analysis focused on active picture content")
+        print("\n✔ Analysis focused on active picture content")
         print("   → Border/blanking areas excluded from violation assessment")
         
         # If borders have high violations but active area is clean
@@ -209,11 +246,11 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
     print(f"  - {video_path.stem}_border_data.json (border detection data)")
     print(f"  - {video_path.stem}_signalstats_analysis.json (FFprobe analysis)")
     if brng_results:
-        print(f"  - {video_path.stem}_active_brng_analysis.json (detailed BRNG analysis)")
+        print(f"  - {video_path.stem}_active_brng_analysis.json (enhanced BRNG analysis)")
         if brng_results.get('saved_thumbnails'):
-            print(f"  - brng_thumbnails/ ({len(brng_results['saved_thumbnails'])} worst frame thumbnails with timecodes)")
+            print(f"  - brng_thumbnails/ ({len(brng_results['saved_thumbnails'])} diagnostic thumbnails)")
     
-    # Save combined summary
+    # Save combined summary (updated structure)
     summary_path = output_dir / f"{video_path.stem}_combined_summary.json"
     
     # Get signalstats summary data
@@ -225,12 +262,32 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
         signalstats_summary_data['full_frame_violations'] = signalstats_results['results']['full_frame'].get('violation_percentage')
         signalstats_summary_data['full_frame_max_brng'] = signalstats_results['results']['full_frame'].get('max_brng')
     
+    # Extract key info from new BRNG analyzer
+    brng_summary_data = {}
+    if brng_results:
+        actionable = brng_results.get('actionable_report', {})
+        brng_summary_data = {
+            'analyzed': True,
+            'method': 'differential_detection',
+            'region': analyzed_region,
+            'frames_analyzed': brng_results.get('total_frames_analyzed', 0),
+            'frames_with_violations': brng_results.get('frames_with_violations', 0),
+            'max_violation_percentage': brng_results.get('max_violation_percentage', 0),
+            'assessment': actionable.get('overall_assessment', 'Unknown'),
+            'priority': actionable.get('action_priority', 'none'),
+            'issues_detected': [rec['issue'] for rec in actionable.get('recommendations', [])],
+            'temporal_pattern': brng_results.get('temporal_analysis', {}).get('temporal_pattern', 'unknown') if brng_results.get('temporal_analysis') else None,
+            'thumbnails_saved': len(brng_results.get('saved_thumbnails', []))
+        }
+    else:
+        brng_summary_data = {'analyzed': False}
+    
     combined_results = {
         'video_file': str(video_path),
         'analyses_performed': {
             'border_detection': True,
             'ffprobe_signalstats': True,
-            'active_area_brng': brng_results is not None
+            'active_area_brng_differential': brng_results is not None
         },
         'border_results_summary': {
             'has_borders': border_results.get('active_area') is not None,
@@ -241,13 +298,7 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             'diagnosis': signalstats_results.get('diagnosis'),
             **signalstats_summary_data
         },
-        'active_brng_summary': {
-            'analyzed': brng_results is not None,
-            'region': brng_results['analysis_settings']['analyzed_region'] if brng_results else None,
-            'samples_with_violations': brng_results['summary']['samples_with_violations'] if brng_results else None,
-            'max_violation_percentage': brng_results['summary']['max_violation_percentage'] if brng_results else None,
-            'thumbnails_saved': len(brng_results.get('saved_thumbnails', [])) if brng_results else 0
-        }
+        'active_brng_summary': brng_summary_data
     }
     
     with open(summary_path, 'w') as f:
@@ -291,7 +342,7 @@ def analyze_with_existing_borders(video_path, border_data_path, output_dir=None,
     with open(border_data_path, 'r') as f:
         border_results = json.load(f)
     
-    print(f"✓ Loaded border data from: {border_data_path}")
+    print(f"✔ Loaded border data from: {border_data_path}")
     
     # Run signalstats analysis
     print("\nRunning FFprobe signalstats analysis...")
@@ -303,14 +354,13 @@ def analyze_with_existing_borders(video_path, border_data_path, output_dir=None,
         duration=duration
     )
     
-    # Run active area BRNG analysis
-    print("\nRunning active area BRNG analysis...")
+    # Run active area BRNG analysis (updated for new analyzer)
+    print("\nRunning enhanced active area BRNG analysis with differential detection...")
     brng_results = analyze_active_area_brng(
         video_path=video_path,
         border_data_path=border_data_path,
         output_dir=output_dir,
-        duration_limit=brng_duration,
-        sample_rate=30
+        duration_limit=brng_duration  # No longer needs sample_rate
     )
     
     return {
@@ -353,4 +403,4 @@ if __name__ == "__main__":
         
         results = analyze_video_comprehensive(video_file, viz_time=viz_time)
     
-    print(f"\n✓ Analysis complete! Check the output directory for results.")
+    print(f"\n✔ Analysis complete! Check the output directory for results.")
