@@ -874,9 +874,20 @@ class VideoBorderDetector:
         self.cap.release()
 
 
-def detect_video_borders(video_path, output_dir=None, target_viz_time=150, search_window=120):
+def detect_video_borders(video_path, output_dir=None, target_viz_time=150, search_window=120,
+                        threshold=10, edge_sample_width=100, sample_frames=30, padding=5):
     """
     Main function to detect borders in a video file with enhanced quality filtering
+    
+    Args:
+        video_path: Path to video file
+        output_dir: Output directory for results  
+        target_viz_time: Target time for visualization frame
+        search_window: Window to search for good frame
+        threshold: Brightness threshold for border detection (default: 10)
+        edge_sample_width: How far from edges to scan (default: 100)
+        sample_frames: Number of frames to sample (default: 30)
+        padding: Extra pixels to add for tighter active area (default: 5)
     """
     video_path = Path(video_path)
     

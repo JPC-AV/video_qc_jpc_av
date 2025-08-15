@@ -18,7 +18,10 @@ from active_area_brng_analyzer import analyze_active_area_brng
 
 
 def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, duration=60, 
-                               viz_time=150, brng_duration=300):
+                               viz_time=150, brng_duration=300,
+                               # Add new border detection parameters
+                               border_threshold=10, border_edge_sample_width=100, 
+                               border_sample_frames=30, border_padding=5):
     """
     Perform comprehensive video analysis using border detection, signalstats, and active area BRNG
     
@@ -29,6 +32,10 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
         duration: Duration of analysis in seconds (for signalstats)
         viz_time: Target time for visualization frame (for border detection)
         brng_duration: Duration to analyze for BRNG violations (seconds)
+        border_threshold: Brightness threshold for border detection (default: 10)
+        border_edge_sample_width: How far from edges to scan (default: 100)
+        border_sample_frames: Number of frames to sample (default: 30)
+        border_padding: Extra pixels to add for tighter active area (default: 5)
     """
     video_path = Path(video_path)
     
@@ -45,10 +52,30 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
     print(f"Output directory: {output_dir}")
     print()
     
-    # Step 1: Border Detection
+    # Step 1: Border Detection - NOW WITH ADJUSTABLE PARAMETERS
     print("STEP 1: BORDER DETECTION")
     print("-" * 40)
-    border_results = detect_video_borders(video_path, output_dir, target_viz_time=viz_time)
+    
+    # Show if using non-default parameters
+    if (border_threshold != 10 or border_edge_sample_width != 100 or 
+        border_sample_frames != 30 or border_padding != 5):
+        print(f"  Using custom parameters:")
+        print(f"    Threshold: {border_threshold}")
+        print(f"    Edge sample width: {border_edge_sample_width}")
+        print(f"    Sample frames: {border_sample_frames}")
+        print(f"    Padding: {border_padding}")
+    
+    border_results = detect_video_borders(
+        video_path, 
+        output_dir, 
+        target_viz_time=viz_time,
+        search_window=120,  
+        threshold=border_threshold,
+        edge_sample_width=border_edge_sample_width,
+        sample_frames=border_sample_frames,
+        padding=border_padding
+    )
+    
     
     # Get the path to the border data file
     border_data_path = output_dir / f"{video_path.stem}_border_data.json"

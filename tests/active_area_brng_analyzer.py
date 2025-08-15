@@ -66,6 +66,26 @@ class ActiveAreaBrngAnalyzer:
         self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.duration = self.total_frames / self.fps if self.fps > 0 else 0
         cap.release()
+
+    
+    def _convert_numpy_types(self, obj):
+        """Convert numpy types to Python native types for JSON serialization"""
+        import numpy as np
+        
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, (np.integer, np.int64, np.int32)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64, np.float32)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {key: self._convert_numpy_types(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_types(item) for item in obj]
+        else:
+            return obj
     
     def load_border_data(self, border_data_path):
         """Load border detection data"""
@@ -75,7 +95,7 @@ class ActiveAreaBrngAnalyzer:
             
             if self.border_data and self.border_data.get('active_area'):
                 self.active_area = tuple(self.border_data['active_area'])
-                print(f"✓ Loaded border data. Active area: {self.active_area}")
+                print(f"✔ Loaded border data. Active area: {self.active_area}")
             else:
                 print("⚠️ Border data doesn't contain active area")
         except Exception as e:
@@ -134,7 +154,7 @@ class ActiveAreaBrngAnalyzer:
             print("  Creating original version for comparison...")
             result = subprocess.run(original_cmd, capture_output=True, text=True, check=True)
             
-            print(f"✓ FFmpeg processing complete")
+            print(f"✔ FFmpeg processing complete")
             return True
         except subprocess.CalledProcessError as e:
             print(f"✗ FFmpeg error: {e}")
@@ -270,7 +290,7 @@ class ActiveAreaBrngAnalyzer:
         if total_violations == 0:
             return False
         
-        return bool((perimeter_violations / total_violations) > 0.5)  # Convert to Python bool
+        return (perimeter_violations / total_violations) > 0.5
     
     def _calculate_scatter_score(self, mask):
         """Calculate how scattered violations are (0=clustered, 1=scattered)"""
@@ -342,7 +362,104 @@ class ActiveAreaBrngAnalyzer:
         if total_violations == 0:
             return False
         
-        return bool((block_aligned / total_violations) > 0.3)  # Convert to Python bool
+        return (block_aligned / total_violations) > 0.3
+    
+    def _detect_boundary_artifacts(self, mask, edge_threshold=5, continuity_threshold=0.7):
+        """
+        Detect if violations form continuous lines at frame boundaries.
+        These often indicate missed border/blanking areas.
+        
+        Args:
+            mask: Binary violation mask
+            edge_threshold: Maximum distance from edge to consider (pixels)
+            continuity_threshold: Minimum fraction of edge that must have violations
+        
+        Returns:
+            dict: Information about detected boundary artifacts
+        """
+        h, w = mask.shape
+        results = {
+            'left_edge': False,
+            'right_edge': False,
+            'top_edge': False,
+            'bottom_edge': False,
+            'boundary_width': edge_threshold
+        }
+        
+        # Check left edge
+        left_strip = mask[:, :edge_threshold]
+        if left_strip.size > 0:
+            # Check if violations form a continuous vertical line
+            left_coverage = np.sum(np.any(left_strip, axis=1)) / h
+            if left_coverage > continuity_threshold:
+                # Check if violations are concentrated at the very edge
+                edge_column_violations = np.sum(mask[:, 0]) / h
+                if edge_column_violations > 0.5 or left_coverage > 0.8:
+                    results['left_edge'] = True
+        
+        # Check right edge
+        right_strip = mask[:, -edge_threshold:]
+        if right_strip.size > 0:
+            right_coverage = np.sum(np.any(right_strip, axis=1)) / h
+            if right_coverage > continuity_threshold:
+                edge_column_violations = np.sum(mask[:, -1]) / h
+                if edge_column_violations > 0.5 or right_coverage > 0.8:
+                    results['right_edge'] = True
+        
+        # Check top edge
+        top_strip = mask[:edge_threshold, :]
+        if top_strip.size > 0:
+            top_coverage = np.sum(np.any(top_strip, axis=0)) / w
+            if top_coverage > continuity_threshold:
+                edge_row_violations = np.sum(mask[0, :]) / w
+                if edge_row_violations > 0.5 or top_coverage > 0.8:
+                    results['top_edge'] = True
+        
+        # Check bottom edge
+        bottom_strip = mask[-edge_threshold:, :]
+        if bottom_strip.size > 0:
+            bottom_coverage = np.sum(np.any(bottom_strip, axis=0)) / w
+            if bottom_coverage > continuity_threshold:
+                edge_row_violations = np.sum(mask[-1, :]) / w
+                if edge_row_violations > 0.5 or bottom_coverage > 0.8:
+                    results['bottom_edge'] = True
+        
+        # Calculate detailed metrics for any detected edges
+        if any([results['left_edge'], results['right_edge'], results['top_edge'], results['bottom_edge']]):
+            edge_details = []
+            
+            if results['left_edge']:
+                # Find the width of the artifact
+                for x in range(min(20, w)):
+                    column_coverage = np.sum(mask[:, x]) / h
+                    if column_coverage < 0.3:
+                        edge_details.append(('left', x))
+                        break
+            
+            if results['right_edge']:
+                for x in range(min(20, w)):
+                    column_coverage = np.sum(mask[:, -(x+1)]) / h
+                    if column_coverage < 0.3:
+                        edge_details.append(('right', x))
+                        break
+            
+            if results['top_edge']:
+                for y in range(min(20, h)):
+                    row_coverage = np.sum(mask[y, :]) / w
+                    if row_coverage < 0.3:
+                        edge_details.append(('top', y))
+                        break
+            
+            if results['bottom_edge']:
+                for y in range(min(20, h)):
+                    row_coverage = np.sum(mask[-(y+1), :]) / w
+                    if row_coverage < 0.3:
+                        edge_details.append(('bottom', y))
+                        break
+            
+            results['edge_widths'] = edge_details
+        
+        return results
     
     def _get_primary_zone(self, shadow, midtone, highlight):
         """Determine primary brightness zone for violations"""
@@ -363,14 +480,14 @@ class ActiveAreaBrngAnalyzer:
         edge_violations = cv2.bitwise_and(violation_mask, edges)
         edge_violation_ratio = np.sum(edge_violations > 0) / max(1, np.sum(violation_mask > 0))
         
-        # 2. Analyze spatial distribution - Convert all numpy bools to Python bools
+        # 2. Analyze spatial distribution
         spatial_patterns = {
             'edge_concentrated': bool(edge_violation_ratio > 0.6),
             'top_heavy': bool(np.sum(violation_mask[:h//3, :]) > np.sum(violation_mask[2*h//3:, :]) * 2),
             'bottom_heavy': bool(np.sum(violation_mask[2*h//3:, :]) > np.sum(violation_mask[:h//3, :]) * 2),
             'left_biased': bool(np.sum(violation_mask[:, :w//3]) > np.sum(violation_mask[:, 2*w//3:]) * 2),
             'right_biased': bool(np.sum(violation_mask[:, 2*w//3:]) > np.sum(violation_mask[:, :w//3]) * 2),
-            'perimeter_concentrated': self._check_perimeter_concentration(violation_mask),
+            'perimeter_concentrated': bool(self._check_perimeter_concentration(violation_mask)),
             'scattered': bool(self._calculate_scatter_score(violation_mask) > 0.7)
         }
         
@@ -402,7 +519,7 @@ class ActiveAreaBrngAnalyzer:
         row_sums = np.sum(mask, axis=1)
         if len(row_sums) > 10:
             row_fft = np.fft.fft(row_sums)
-            patterns['horizontal_banding'] = bool(self._detect_periodicity(row_fft))  # Convert to Python bool
+            patterns['horizontal_banding'] = self._detect_periodicity(row_fft)
         else:
             patterns['horizontal_banding'] = False
         
@@ -410,7 +527,7 @@ class ActiveAreaBrngAnalyzer:
         col_sums = np.sum(mask, axis=0)
         if len(col_sums) > 10:
             col_fft = np.fft.fft(col_sums)
-            patterns['vertical_banding'] = bool(self._detect_periodicity(col_fft))  # Convert to Python bool
+            patterns['vertical_banding'] = self._detect_periodicity(col_fft)
         else:
             patterns['vertical_banding'] = False
         
@@ -443,32 +560,61 @@ class ActiveAreaBrngAnalyzer:
             'primary_zone': self._get_primary_zone(shadow_violations, midtone_violations, highlight_violations)
         }
     
-    def _generate_diagnostic(self, spatial_patterns, systematic_patterns, luma_distribution):
+    def _generate_diagnostic(self, spatial_patterns, systematic_patterns, luma_distribution, boundary_artifacts=None):
         """Generate human-readable diagnostic based on pattern analysis"""
         diagnostics = []
         
-        # Spatial pattern diagnostics
-        if spatial_patterns.get('edge_concentrated'):
-            diagnostics.append("Edge enhancement artifacts")
-        if spatial_patterns.get('perimeter_concentrated'):
-            diagnostics.append("Perimeter artifacts (possible scaling issues)")
-        if spatial_patterns.get('scattered'):
-            diagnostics.append("Scattered noise-like violations")
+        # Check for boundary artifacts FIRST (highest priority)
+        if boundary_artifacts:
+            edges_detected = []
+            if boundary_artifacts.get('left_edge'):
+                edges_detected.append('left')
+            if boundary_artifacts.get('right_edge'):
+                edges_detected.append('right')
+            if boundary_artifacts.get('top_edge'):
+                edges_detected.append('top')
+            if boundary_artifacts.get('bottom_edge'):
+                edges_detected.append('bottom')
+            
+            if edges_detected:
+                edge_str = '/'.join(edges_detected)
+                diagnostics.append(f"Border/blanking artifacts ({edge_str} edge)")
+        
+        # Spatial pattern diagnostics (skip if boundary artifacts detected)
+        if not (boundary_artifacts and any([boundary_artifacts.get('left_edge'), 
+                                            boundary_artifacts.get('right_edge'),
+                                            boundary_artifacts.get('top_edge'),
+                                            boundary_artifacts.get('bottom_edge')])):
+            if spatial_patterns.get('edge_concentrated'):
+                diagnostics.append("Edge enhancement artifacts")
+            if spatial_patterns.get('perimeter_concentrated'):
+                diagnostics.append("Perimeter artifacts (possible scaling issues)")
+            if spatial_patterns.get('scattered'):
+                diagnostics.append("Scattered noise-like violations")
         
         # Systematic pattern diagnostics
         if systematic_patterns.get('horizontal_banding'):
             diagnostics.append("Horizontal banding (interlacing artifacts)")
         if systematic_patterns.get('vertical_banding'):
-            diagnostics.append("Vertical banding")
+            # Only report vertical banding if it's not a boundary artifact
+            if not (boundary_artifacts and (boundary_artifacts.get('left_edge') or boundary_artifacts.get('right_edge'))):
+                diagnostics.append("Vertical banding")
         if systematic_patterns.get('macroblock_artifacts'):
             diagnostics.append("Macroblock-aligned artifacts")
         
-        # Luma zone diagnostics
-        primary_zone = luma_distribution.get('primary_zone')
-        if primary_zone == 'highlights' and luma_distribution.get('highlight_ratio', 0) > 0.7:
-            diagnostics.append("Highlight clipping")
-        elif primary_zone == 'shadows' and luma_distribution.get('shadow_ratio', 0) > 0.7:
-            diagnostics.append("Shadow crushing")
+        # Luma zone diagnostics (only if not boundary artifacts)
+        # Boundary artifacts often appear dark but aren't actually shadow crushing
+        if not (boundary_artifacts and any([boundary_artifacts.get('left_edge'), 
+                                            boundary_artifacts.get('right_edge'),
+                                            boundary_artifacts.get('top_edge'),
+                                            boundary_artifacts.get('bottom_edge')])):
+            primary_zone = luma_distribution.get('primary_zone')
+            if primary_zone == 'highlights' and luma_distribution.get('highlight_ratio', 0) > 0.7:
+                diagnostics.append("Highlight clipping")
+            elif primary_zone == 'shadows' and luma_distribution.get('shadow_ratio', 0) > 0.7:
+                # Double-check this isn't a misidentified border
+                if not spatial_patterns.get('left_edge_line') and not spatial_patterns.get('right_edge_line'):
+                    diagnostics.append("Shadow crushing")
         
         return diagnostics if diagnostics else ["General broadcast range violations"]
     
@@ -579,25 +725,40 @@ class ActiveAreaBrngAnalyzer:
         edge_ratio = analysis_results.get('aggregate_patterns', {}).get('avg_edge_violation_ratio', 0)
         temporal = analysis_results.get('temporal_analysis', {})
         
-        if primary_zone == 'highlights':
+        # Check for boundary artifacts first (these are usually less severe)
+        boundary_edges = analysis_results.get('aggregate_patterns', {}).get('boundary_edges_detected', [])
+        if boundary_edges:
+            edge_list = list(set(boundary_edges))  # Unique edges
             recommendations.append({
-                'issue': 'Highlight Clipping',
-                'severity': 'high',
-                'affected_areas': 'Bright areas of the image',
-                'percentage_affected': analysis_results.get('aggregate_patterns', {}).get('highlight_percentage', 0)
+                'issue': 'Border/Blanking Artifacts',
+                'severity': 'low',
+                'affected_areas': f"Frame edges: {', '.join(edge_list)}",
+                'description': 'Residual blanking or border areas not fully cropped',
+                'percentage_affected': analysis_results.get('aggregate_patterns', {}).get('boundary_artifact_percentage', 0)
             })
-            severity_score += 3
+            severity_score += 1
         
-        if primary_zone == 'shadows':
-            recommendations.append({
-                'issue': 'Shadow Crushing',
-                'severity': 'medium',
-                'affected_areas': 'Dark areas of the image',
-                'percentage_affected': analysis_results.get('aggregate_patterns', {}).get('shadow_percentage', 0)
-            })
-            severity_score += 2
+        # Only report shadow/highlight issues if not boundary artifacts
+        if not boundary_edges:
+            if primary_zone == 'highlights':
+                recommendations.append({
+                    'issue': 'Highlight Clipping',
+                    'severity': 'high',
+                    'affected_areas': 'Bright areas of the image',
+                    'percentage_affected': analysis_results.get('aggregate_patterns', {}).get('highlight_percentage', 0)
+                })
+                severity_score += 3
+            
+            if primary_zone == 'shadows':
+                recommendations.append({
+                    'issue': 'Shadow Crushing',
+                    'severity': 'medium',
+                    'affected_areas': 'Dark areas of the image',
+                    'percentage_affected': analysis_results.get('aggregate_patterns', {}).get('shadow_percentage', 0)
+                })
+                severity_score += 2
         
-        if edge_ratio > 0.5:
+        if edge_ratio > 0.5 and not boundary_edges:
             recommendations.append({
                 'issue': 'Edge Enhancement Artifacts',
                 'severity': 'medium',
@@ -772,7 +933,7 @@ class ActiveAreaBrngAnalyzer:
                     'timecode': self.format_timecode(timestamp)
                 })
                 
-                print(f"  ✓ Saved: {thumbnail_filename}")
+                print(f"  ✔ Saved: {thumbnail_filename}")
         
         return saved_thumbnails
     
@@ -804,6 +965,7 @@ class ActiveAreaBrngAnalyzer:
         # Analyze samples
         frame_violations = []
         aggregate_patterns = defaultdict(list)
+        boundary_edges_detected = []
         
         print(f"\nAnalyzing {len(frame_samples)} samples...")
         
@@ -830,7 +992,23 @@ class ActiveAreaBrngAnalyzer:
                 
                 # Aggregate patterns
                 aggregate_patterns['edge_ratios'].append(pattern_analysis['edge_violation_ratio'])
-                aggregate_patterns['primary_zones'].append(pattern_analysis['luma_distribution']['primary_zone'])
+                
+                # Track boundary artifacts
+                if pattern_analysis.get('boundary_artifacts'):
+                    ba = pattern_analysis['boundary_artifacts']
+                    if ba.get('left_edge'):
+                        boundary_edges_detected.append('left')
+                    if ba.get('right_edge'):
+                        boundary_edges_detected.append('right')
+                    if ba.get('top_edge'):
+                        boundary_edges_detected.append('top')
+                    if ba.get('bottom_edge'):
+                        boundary_edges_detected.append('bottom')
+                
+                # Only count luma zones if not boundary artifacts
+                if not pattern_analysis.get('boundary_artifacts', {}).get('left_edge') and \
+                   not pattern_analysis.get('boundary_artifacts', {}).get('right_edge'):
+                    aggregate_patterns['primary_zones'].append(pattern_analysis['luma_distribution']['primary_zone'])
                 
                 if pattern_analysis['systematic_patterns']['horizontal_banding']:
                     aggregate_patterns['horizontal_banding_frames'].append(frame_idx)
@@ -855,13 +1033,21 @@ class ActiveAreaBrngAnalyzer:
             else:
                 primary_zone = 'none'
             
+            # Calculate boundary artifact statistics
+            boundary_artifact_frames = len([f for f in frame_violations 
+                                           if any(f.get('pattern_analysis', {}).get('boundary_artifacts', {}).values())])
+            boundary_artifact_percentage = (boundary_artifact_frames / len(frame_violations)) * 100 if frame_violations else 0
+            
             aggregate_summary = {
                 'primary_violation_zone': primary_zone,
                 'avg_edge_violation_ratio': float(np.mean(aggregate_patterns['edge_ratios'])) if aggregate_patterns['edge_ratios'] else 0.0,
                 'horizontal_banding_frames': len(aggregate_patterns.get('horizontal_banding_frames', [])),
                 'macroblock_frames': len(aggregate_patterns.get('macroblock_frames', [])),
                 'highlight_percentage': sum(1 for z in aggregate_patterns['primary_zones'] if z == 'highlights') / len(aggregate_patterns['primary_zones']) * 100 if aggregate_patterns['primary_zones'] else 0,
-                'shadow_percentage': sum(1 for z in aggregate_patterns['primary_zones'] if z == 'shadows') / len(aggregate_patterns['primary_zones']) * 100 if aggregate_patterns['primary_zones'] else 0
+                'shadow_percentage': sum(1 for z in aggregate_patterns['primary_zones'] if z == 'shadows') / len(aggregate_patterns['primary_zones']) * 100 if aggregate_patterns['primary_zones'] else 0,
+                'boundary_edges_detected': boundary_edges_detected,
+                'boundary_artifact_frames': boundary_artifact_frames,
+                'boundary_artifact_percentage': boundary_artifact_percentage
             }
         else:
             avg_violation_pct = 0.0
@@ -912,13 +1098,16 @@ class ActiveAreaBrngAnalyzer:
         actionable_report = self.generate_actionable_report(analysis)
         analysis['actionable_report'] = actionable_report
         
+        # Before saving, convert all numpy types
+        analysis = self._convert_numpy_types(analysis)
+
         # Save analysis
         with open(self.analysis_output, 'w') as f:
             json.dump(analysis, f, indent=2)
         
-        print(f"✓ Analysis complete. Results saved to: {self.analysis_output}")
+        print(f"✔ Analysis complete. Results saved to: {self.analysis_output}")
         if saved_thumbnails:
-            print(f"✓ Saved {len(saved_thumbnails)} diagnostic thumbnail(s) to: {self.thumbnails_dir}")
+            print(f"✔ Saved {len(saved_thumbnails)} diagnostic thumbnail(s) to: {self.thumbnails_dir}")
         
         return analysis
     
@@ -964,8 +1153,18 @@ class ActiveAreaBrngAnalyzer:
             for rec in report['recommendations']:
                 print(f"  • {rec['issue']} ({rec['severity']} severity)")
                 print(f"    Affects: {rec['affected_areas']}")
+                if 'description' in rec:
+                    print(f"    Description: {rec['description']}")
                 if 'temporal_nature' in rec:
                     print(f"    Nature: {rec['temporal_nature']}")
+        
+        # Check for boundary artifacts specifically
+        aggregate = analysis.get('aggregate_patterns', {})
+        if aggregate.get('boundary_artifact_frames', 0) > 0:
+            print(f"\n⚠️ BOUNDARY ARTIFACT NOTE:")
+            print(f"  {aggregate['boundary_artifact_frames']} frames show edge artifacts")
+            print(f"  This suggests the active area detection may have missed some blanking")
+            print(f"  Consider re-running border detection with adjusted parameters")
         
         # Problem timestamps
         if report.get('timestamp_ranges'):
@@ -993,7 +1192,7 @@ class ActiveAreaBrngAnalyzer:
                     self.highlighted_video.unlink()
                 if self.original_video.exists():
                     self.original_video.unlink()
-                print("✓ Removed intermediate videos")
+                print("✔ Removed intermediate videos")
             else:
                 print(f"ℹ️ Kept intermediate videos in: {self.temp_dir}")
             
@@ -1001,7 +1200,7 @@ class ActiveAreaBrngAnalyzer:
             if self.temp_dir.exists():
                 if not any(self.temp_dir.iterdir()):
                     self.temp_dir.rmdir()
-                    print("✓ Cleaned up temporary directory")
+                    print("✔ Cleaned up temporary directory")
         except Exception as e:
             print(f"⚠️ Could not clean up temp files: {e}")
 
