@@ -85,7 +85,7 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
     checks_config = config_mgr.get_config('checks', ChecksConfig)
     
     # Check if access file should be generated
-    if checks_config.outputs.access_file != 'yes':
+    if not checks_config.outputs.access_file:
         return None
 
     access_output_path = os.path.join(source_directory, f'{video_id}_access.mp4')
