@@ -112,8 +112,106 @@ class ConfigManager:
             
         return file_path if os.path.exists(file_path) else None
 
+    def _migrate_yes_no_to_bool(self, value: Any) -> Any:
+        """
+        Convert "yes"/"no" strings to booleans for backward compatibility.
+        
+        Args:
+            value: The value to potentially convert
+            
+        Returns:
+            Boolean if value was "yes"/"no", otherwise returns value unchanged
+        """
+        if isinstance(value, str):
+            if value.lower() == "yes":
+                return True
+            elif value.lower() == "no":
+                return False
+        return value
+
+    def _migrate_bool_to_yes_no(self, value: Any) -> Any:
+        """
+        Convert boolean values to "yes"/"no" strings for backward compatibility when saving.
+        This is used temporarily during the migration period.
+        
+        Args:
+            value: The value to potentially convert
+            
+        Returns:
+            "yes"/"no" if value was boolean, otherwise returns value unchanged
+        """
+        if isinstance(value, bool):
+            return "yes" if value else "no"
+        return value
+
+    def _migrate_config_data(self, config_data: dict, config_name: str) -> dict:
+        """
+        Migrate configuration data from old format to new format.
+        Specifically converts "yes"/"no" strings to booleans for checks config.
+        
+        Args:
+            config_data: The raw configuration dictionary
+            config_name: Name of the configuration being migrated
+            
+        Returns:
+            Migrated configuration dictionary
+        """
+        if config_name == 'checks':
+            # Migrate outputs section
+            if 'outputs' in config_data:
+                for key in ['access_file', 'report']:
+                    if key in config_data['outputs']:
+                        config_data['outputs'][key] = self._migrate_yes_no_to_bool(
+                            config_data['outputs'][key]
+                        )
+            
+            # Migrate fixity section
+            if 'fixity' in config_data:
+                for key in ['check_fixity', 'validate_stream_fixity', 'embed_stream_fixity', 
+                           'output_fixity', 'overwrite_stream_fixity']:
+                    if key in config_data['fixity']:
+                        config_data['fixity'][key] = self._migrate_yes_no_to_bool(
+                            config_data['fixity'][key]
+                        )
+            
+            # Migrate tools section
+            if 'tools' in config_data:
+                tools = config_data['tools']
+                
+                # Basic tools (exiftool, ffprobe, mediainfo, mediatrace)
+                for tool in ['exiftool', 'ffprobe', 'mediainfo', 'mediatrace']:
+                    if tool in tools:
+                        for key in ['check_tool', 'run_tool']:
+                            if key in tools[tool]:
+                                tools[tool][key] = self._migrate_yes_no_to_bool(
+                                    tools[tool][key]
+                                )
+                
+                # QCTools
+                if 'qctools' in tools:
+                    if 'run_tool' in tools['qctools']:
+                        tools['qctools']['run_tool'] = self._migrate_yes_no_to_bool(
+                            tools['qctools']['run_tool']
+                        )
+                
+                # MediaConch
+                if 'mediaconch' in tools:
+                    if 'run_mediaconch' in tools['mediaconch']:
+                        tools['mediaconch']['run_mediaconch'] = self._migrate_yes_no_to_bool(
+                            tools['mediaconch']['run_mediaconch']
+                        )
+                
+                # QCT Parse
+                if 'qct_parse' in tools:
+                    if 'run_tool' in tools['qct_parse']:
+                        tools['qct_parse']['run_tool'] = self._migrate_yes_no_to_bool(
+                            tools['qct_parse']['run_tool']
+                        )
+        
+        return config_data
+
     def _load_json_config(self, config_name: str, use_last_used: bool = False) -> dict:
-        """Load JSON config from file."""
+        """Load JSON config from file with migration support."""
         config_path = None
         
         if use_last_used:
@@ -130,7 +228,12 @@ class ConfigManager:
             
         try:
             with open(config_path, 'r') as f:
-                return json.load(f)
+                config_data = json.load(f)
+                
+            # Apply migration for backward compatibility
+            config_data = self._migrate_config_data(config_data, config_name)
+            
+            return config_data
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing config file {config_path}: {str(e)}")
 
@@ -234,7 +337,7 @@ class ConfigManager:
         if config_name in self._configs:
             return self._configs[config_name]
             
-        # Load config data from file
+        # Load config data from file (with migration)
         config_data = self._load_json_config(config_name, use_last_used=use_last_used)
         
         # Convert to dataclass and cache
@@ -242,7 +345,6 @@ class ConfigManager:
         self._configs[config_name] = config
         
         return config
-
 
     def save_config(self, config_name: str, is_last_used: bool = False) -> None:
         """
@@ -261,8 +363,15 @@ class ConfigManager:
         save_path = os.path.join(self._user_config_dir, filename)
         
         try:
+            # Convert to dictionary
+            config_dict = asdict(config)
+            
+            # Note: We're now saving booleans directly. 
+            # During migration period, you could use _migrate_bool_to_yes_no if needed
+            # to maintain compatibility with older versions
+            
             with open(save_path, 'w') as f:
-                json.dump(asdict(config), f, indent=2)
+                json.dump(config_dict, f, indent=2)
             logger.info(f"Saved config to {save_path}")
         except Exception as e:
             logger.error(f"Error saving config to {save_path}: {str(e)}")
