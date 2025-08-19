@@ -23,7 +23,7 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
                                border_threshold=10, border_edge_sample_width=100, 
                                border_sample_frames=30, border_padding=5,
                                # Auto-retry settings
-                               auto_retry_borders=True, boundary_artifact_threshold=20):
+                               auto_retry_borders=True, boundary_artifact_threshold=10):  # Lowered from 20
     """
     Perform comprehensive video analysis with intelligent border re-detection
     
@@ -46,7 +46,7 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
         border_sample_frames: Number of frames to sample (default: 30)
         border_padding: Extra pixels to add for tighter active area (default: 5)
         auto_retry_borders: Automatically retry border detection if artifacts found (default: True)
-        boundary_artifact_threshold: Percentage of frames with artifacts to trigger retry (default: 20%)
+        boundary_artifact_threshold: Percentage of frames with artifacts to trigger retry (default: 10%)
     """
     video_path = Path(video_path)
     
@@ -111,28 +111,64 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
     border_retry_performed = False
     if auto_retry_borders and brng_results:
         aggregate = brng_results.get('aggregate_patterns', {})
+        
+        # Check for the clear signal from improved analyzer
+        requires_adjustment = aggregate.get('requires_border_adjustment', False)
+        
+        # Also check percentages as fallback
         boundary_artifacts = aggregate.get('boundary_artifact_percentage', 0)
+        continuous_edge_pct = aggregate.get('continuous_edge_percentage', 0)
         boundary_edges = aggregate.get('boundary_edges_detected', [])
         
-        if boundary_artifacts > boundary_artifact_threshold and boundary_edges:
+        # Use either the clear signal OR percentage thresholds
+        should_retry = requires_adjustment or (
+            boundary_artifacts > boundary_artifact_threshold and boundary_edges
+        ) or (
+            continuous_edge_pct > 5  # Continuous edges are more serious
+        )
+        
+        if should_retry:
             print("="*80)
             print("⚠️  BOUNDARY ARTIFACTS DETECTED - ADJUSTING BORDER DETECTION")
             print("="*80)
-            print(f"Found boundary artifacts in {boundary_artifacts:.1f}% of frames")
-            print(f"Affected edges: {', '.join(set(boundary_edges))}")
+            
+            if requires_adjustment:
+                print("BRNG analyzer flagged that border adjustment is required")
+            
+            if continuous_edge_pct > 0:
+                print(f"Found continuous edge artifacts in {continuous_edge_pct:.1f}% of frames")
+            elif boundary_artifacts > 0:
+                print(f"Found boundary artifacts in {boundary_artifacts:.1f}% of frames")
+            
+            if boundary_edges:
+                print(f"Affected edges: {', '.join(set(boundary_edges))}")
+            
             print("Re-running border detection with adjusted parameters...")
             
             # Calculate adjusted parameters based on which edges have artifacts
-            adjusted_threshold = border_threshold + 5  # Increase threshold
-            adjusted_padding = border_padding + 5      # More padding
-            adjusted_sample_frames = min(border_sample_frames + 20, 100)  # More samples
-            adjusted_edge_width = border_edge_sample_width + 50  # Scan further
+            # More aggressive adjustments for continuous edges
+            if continuous_edge_pct > 5:
+                # Strong adjustments for continuous edge artifacts
+                adjusted_threshold = border_threshold + 10  # Much higher threshold
+                adjusted_padding = border_padding + 10      # Much more padding
+                adjusted_sample_frames = min(border_sample_frames + 30, 100)
+                adjusted_edge_width = min(border_edge_sample_width + 100, 200)
+            else:
+                # Moderate adjustments for scattered edge artifacts
+                adjusted_threshold = border_threshold + 5
+                adjusted_padding = border_padding + 5
+                adjusted_sample_frames = min(border_sample_frames + 20, 100)
+                adjusted_edge_width = border_edge_sample_width + 50
             
-            # If specific edges are problematic, we could adjust more aggressively
-            if 'left' in boundary_edges or 'right' in boundary_edges:
-                adjusted_edge_width += 50  # Extra scanning for horizontal edges
-            if 'top' in boundary_edges or 'bottom' in boundary_edges:
-                adjusted_padding += 5  # Extra padding for vertical edges
+            # Edge-specific adjustments
+            if 'left' in boundary_edges:
+                adjusted_edge_width = min(adjusted_edge_width + 30, 250)
+            if 'right' in boundary_edges:
+                adjusted_edge_width = min(adjusted_edge_width + 30, 250)
+            if 'top' in boundary_edges:
+                adjusted_padding += 3
+            if 'bottom' in boundary_edges:
+                adjusted_padding += 3
             
             print(f"  Adjusted parameters:")
             print(f"    Threshold: {border_threshold} → {adjusted_threshold}")
@@ -141,6 +177,7 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             print(f"    Padding: {border_padding} → {adjusted_padding}")
             
             # Re-run border detection
+            print("\nRe-detecting borders with adjusted parameters...")
             border_results = detect_video_borders(
                 video_path, 
                 output_dir, 
@@ -175,11 +212,18 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
                 # Check if the retry was successful
                 new_aggregate = brng_results.get('aggregate_patterns', {})
                 new_boundary_artifacts = new_aggregate.get('boundary_artifact_percentage', 0)
+                new_continuous_edges = new_aggregate.get('continuous_edge_percentage', 0)
+                new_requires_adjustment = new_aggregate.get('requires_border_adjustment', False)
                 
-                if new_boundary_artifacts < boundary_artifacts:
-                    print(f"✔ Boundary artifacts reduced from {boundary_artifacts:.1f}% to {new_boundary_artifacts:.1f}%")
+                if not new_requires_adjustment:
+                    print(f"✔ Border adjustment successful!")
+                    if continuous_edge_pct > 0:
+                        print(f"  Continuous edge artifacts reduced from {continuous_edge_pct:.1f}% to {new_continuous_edges:.1f}%")
+                    if boundary_artifacts > 0 and new_boundary_artifacts < boundary_artifacts:
+                        print(f"  Boundary artifacts reduced from {boundary_artifacts:.1f}% to {new_boundary_artifacts:.1f}%")
                 else:
-                    print(f"⚠️ Boundary artifacts still present ({new_boundary_artifacts:.1f}%) - may need manual adjustment")
+                    print(f"⚠️ Some edge artifacts remain ({new_boundary_artifacts:.1f}%) - may need manual adjustment")
+                    print("  Consider further increasing border detection parameters")
             else:
                 print("Still no borders detected after adjustment")
                 brng_results = analyze_active_area_brng(
@@ -223,6 +267,7 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
         print(f"\n1. Border Detection:")
         if border_retry_performed:
             print(f"   ⚠️ Borders adjusted after initial BRNG analysis")
+            print(f"   ✔ Automatic border correction applied")
         print(f"   Active area: {w}x{h} ({active_percentage:.1f}% of frame)")
         print(f"   Borders: L={x}px, R={border_results['video_properties']['width']-x-w}px, T={y}px, B={border_results['video_properties']['height']-y-h}px")
         
@@ -232,12 +277,17 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
         print(f"\n1. Border Detection: No borders detected (full frame active)")
     
     # Active Area BRNG Analysis
-    print(f"\n2. Active Area BRNG Analysis (differential detection, up to {brng_duration}s):")
+    print(f"\n2. Active Area BRNG Analysis (improved detection, up to {brng_duration}s):")
     if brng_results:
         actionable_report = brng_results.get('actionable_report', {})
         analyzed_region = 'active area' if brng_results['video_info'].get('active_area') else 'full frame'
         
-        print(f"   Method: Differential detection")
+        # Note about skipped content
+        content_start = brng_results.get('video_info', {}).get('content_start_time', 0)
+        if content_start > 0:
+            print(f"   Skipped test patterns: Started at {content_start:.1f}s")
+        
+        print(f"   Method: Differential detection with edge emphasis")
         print(f"   Region analyzed: {analyzed_region}")
         if border_retry_performed:
             print(f"   ✔ Using adjusted borders from retry")
@@ -248,15 +298,10 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
             print(f"   Frames with violations: {brng_results['frames_with_violations']}/{brng_results['total_frames_analyzed']}")
             print(f"   Maximum violation: {brng_results['max_violation_percentage']:.4f}% of pixels")
             
-            # Show specific issues detected
-            if actionable_report.get('recommendations'):
-                issues = [rec['issue'] for rec in actionable_report['recommendations']]
-                print(f"   Issues detected: {', '.join(issues[:3])}")
-            
-            # Show temporal pattern
-            temporal = brng_results.get('temporal_analysis')
-            if temporal:
-                print(f"   Temporal pattern: {temporal.get('temporal_pattern', 'unknown')} - {temporal.get('interpretation', '')}")
+            # Show if edge violations remain
+            aggregate = brng_results.get('aggregate_patterns', {})
+            if aggregate.get('edge_violation_percentage', 0) > 0:
+                print(f"   Edge violations: {aggregate['edge_violation_percentage']:.1f}% of frames")
         else:
             print(f"   ✔ No BRNG violations detected")
         
@@ -291,7 +336,14 @@ def analyze_video_comprehensive(video_path, output_dir=None, start_time=120, dur
     
     if border_retry_performed:
         print("✔ Border detection was automatically adjusted based on BRNG analysis")
-        print("   → This should provide more accurate results for all analyses")
+        print("   → This provides more accurate results for all analyses")
+    
+    # Check if any edge issues remain
+    if brng_results:
+        aggregate = brng_results.get('aggregate_patterns', {})
+        if aggregate.get('requires_border_adjustment'):
+            print("⚠️ Edge artifacts still detected - consider manual border adjustment")
+            print(f"   Edges affected: {', '.join(aggregate.get('boundary_edges_detected', []))}")
     
     # Compare FFprobe and BRNG results
     ffprobe_data = None
