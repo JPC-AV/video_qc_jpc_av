@@ -142,9 +142,9 @@ class ChecksTab(ThemeableMixin):
             checks_config = config_mgr.get_config('checks', ChecksConfig)
             
             # Simple heuristic to determine which profile is closest to current config
-            if checks_config.tools.exiftool.run_tool == "yes":
+            if checks_config.tools.exiftool.run_tool:  
                 self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
-            elif checks_config.tools.qctools.run_tool == "yes":
+            elif checks_config.tools.qctools.run_tool:  
                 self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
             else:
                 # Check if it matches any custom profile

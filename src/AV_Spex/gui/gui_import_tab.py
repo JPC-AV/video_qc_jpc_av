@@ -76,13 +76,13 @@ class ImportTab(ThemeableMixin):
                     if hasattr(self.main_window, 'checks_profile_dropdown'):
                         self.main_window.checks_profile_dropdown.blockSignals(True)
                         
-                        # Set based on exiftool.run_tool value (same logic as in gui_checks_tab.py)
-                        if checks_config.tools.exiftool.run_tool == "yes":
+                        # Set based on exiftool.run_tool value (using boolean now)
+                        if checks_config.tools.exiftool.run_tool:
                             self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
-                        elif checks_config.tools.exiftool.run_tool == "no" and checks_config.tools.exiftool.check_tool == "yes":
+                        elif not checks_config.tools.exiftool.run_tool and checks_config.tools.exiftool.check_tool:
                             self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
                         else:
-                            # Fallback to "All Off" if neither "yes" nor "no"
+                            # Fallback to "All Off" if both are False
                             self.main_window.checks_profile_dropdown.setCurrentText("All Off")
                         
                         self.main_window.checks_profile_dropdown.blockSignals(False)
@@ -212,13 +212,13 @@ class ImportTab(ThemeableMixin):
                     if hasattr(self.main_window, 'checks_profile_dropdown'):
                         self.main_window.checks_profile_dropdown.blockSignals(True)
                         
-                        # Set based on exiftool.run_tool value (same logic as in gui_checks_tab.py)
-                        if checks_config.tools.exiftool.run_tool == "yes":
+                        # Set based on exiftool.run_tool value (using boolean now)
+                        if checks_config.tools.exiftool.run_tool:
                             self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
-                        elif checks_config.tools.exiftool.run_tool == "no":
+                        elif not checks_config.tools.exiftool.run_tool:
                             self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
                         else:
-                            # Fallback to "All Off" if neither "yes" nor "no"
+                            # Fallback to "All Off" if both are False
                             self.main_window.checks_profile_dropdown.setCurrentText("All Off")
                         
                         self.main_window.checks_profile_dropdown.blockSignals(False)
