@@ -39,6 +39,99 @@ class VideoBorderDetector:
         
         print(f"✓ Video loaded: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
     
+    def detect_simple_borders(video_path, border_size=25, output_dir=None):
+        """
+        Simple border detection that assumes a fixed border size on all edges.
+        This is the "dumb" version that doesn't analyze content.
+        
+        Args:
+            video_path (str): Path to the video file
+            border_size (int): Number of pixels to crop from each edge (default: 25)
+            output_dir (str, optional): Directory to save border data JSON
+            
+        Returns:
+            dict: Border detection results with active area
+        """
+        import cv2
+        import json
+        from pathlib import Path
+        
+        video_path = Path(video_path)
+        video_name = video_path.stem
+        
+        # Open video to get dimensions
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            logger.error(f"Cannot open video file: {video_path}")
+            return None
+        
+        # Get video properties
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = total_frames / fps if fps > 0 else 0
+        
+        cap.release()
+        
+        # Calculate active area (simple fixed borders)
+        active_x = border_size
+        active_y = border_size
+        active_width = width - (2 * border_size)
+        active_height = height - (2 * border_size)
+        
+        # Ensure we don't have negative dimensions
+        if active_width <= 0 or active_height <= 0:
+            logger.warning(f"Border size {border_size} is too large for video {width}x{height}")
+            # Fall back to full frame
+            active_x = 0
+            active_y = 0
+            active_width = width
+            active_height = height
+            actual_border_size = 0
+        else:
+            actual_border_size = border_size
+        
+        # Prepare results in the same format as the sophisticated detector
+        results = {
+            'video_file': str(video_path),
+            'video_properties': {
+                'width': width,
+                'height': height,
+                'fps': float(fps),
+                'duration': float(duration),
+                'total_frames': total_frames
+            },
+            'active_area': [active_x, active_y, active_width, active_height],
+            'border_regions': {
+                'left_border': (0, 0, actual_border_size, height) if actual_border_size > 0 else None,
+                'right_border': (width - actual_border_size, 0, actual_border_size, height) if actual_border_size > 0 else None,
+                'top_border': (0, 0, width, actual_border_size) if actual_border_size > 0 else None,
+                'bottom_border': (0, height - actual_border_size, width, actual_border_size) if actual_border_size > 0 else None
+            },
+            'detection_method': 'simple_fixed',
+            'border_size_used': actual_border_size,
+            'head_switching_artifacts': None  # Not detected in simple mode
+        }
+        
+        # Log what we found
+        logger.info(f"Simple border detection complete for {video_name}")
+        logger.info(f"  Video dimensions: {width}x{height}")
+        logger.info(f"  Using fixed border: {actual_border_size}px on all sides")
+        logger.info(f"  Active area: {active_width}x{active_height} at ({active_x},{active_y})")
+        
+        # Save to JSON if output directory provided
+        if output_dir:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(exist_ok=True)
+            
+            json_path = output_dir / f"{video_name}_border_data.json"
+            with open(json_path, 'w') as f:
+                json.dump(results, f, indent=2)
+            logger.info(f"  Border data saved to: {json_path}")
+        
+        return results
+    
     def assess_frame_quality(self, frame, previous_frame=None, strict_mode=False):
         """
         Comprehensive frame quality assessment to identify suitable video content frames

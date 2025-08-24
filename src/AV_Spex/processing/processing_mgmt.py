@@ -20,6 +20,9 @@ from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_
 from AV_Spex.checks.make_access import process_access_file
 from AV_Spex.checks.qct_parse import run_qctparse
 from AV_Spex.checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
+from AV_Spex.checks.border_detector import detect_video_borders
+from AV_Spex.checks.ffmpeg_signalstats_analyzer import analyze_video_signalstats
+from AV_Spex.checks.active_area_brng_analyzer import analyze_active_area_brng
 
 
 class ProcessingManager:
@@ -256,15 +259,266 @@ class ProcessingManager:
             self.signals.output_progress.emit("Preparing report...")
         if self.check_cancelled():
             return None
+        
+        frame_analysis_results = None
+        frame_config = getattr(self.checks_config.outputs, 'frame_analysis', None)
+        
+        if frame_config and frame_config.enabled == 'yes':
+            if self.signals:
+                self.signals.output_progress.emit("Performing frame analysis...")
+            
+            frame_analysis_results = self.process_frame_analysis(
+                video_path, source_directory, destination_directory, video_id
+            )
+            
+            processing_results['frame_analysis'] = frame_analysis_results
 
         # Generate final HTML report
         processing_results['html_report'] = generate_final_report(
             video_id, source_directory, report_directory, destination_directory,
             video_path=video_path,
-            check_cancelled=self.check_cancelled, signals=self.signals
+            frame_analysis=frame_analysis_results,
+            check_cancelled=self.check_cancelled, 
+            signals=self.signals
         )
-
+        
         return processing_results
+    
+    def process_frame_analysis(self, video_path, source_directory, destination_directory, video_id):
+        """
+        Process comprehensive frame analysis including border detection,
+        BRNG violations, and optionally signalstats (only with sophisticated borders).
+        
+        Args:
+            video_path (str): Path to the input video file
+            source_directory (str): Source directory for the video
+            destination_directory (str): Destination directory for output files
+            video_id (str): Unique identifier for the video
+            
+        Returns:
+            dict: Analysis results from all three components
+        """
+        
+        if self.check_cancelled():
+            return None
+        
+        analysis_results = {
+            'border_results': None,
+            'brng_results': None,
+            'signalstats_results': None,
+            'border_retry_performed': False,
+            'border_detection_method': None,
+            'signalstats_skipped_reason': None,
+            'color_bars_detected': False,
+            'color_bars_end_time': None
+        }
+        
+        # Access the frame analysis config
+        frame_config = self.checks_config.outputs.frame_analysis
+        
+        if frame_config.enabled != 'yes':
+            logger.info("Frame analysis not enabled in config")
+            return analysis_results
+        
+        # Use the config values
+        use_sophisticated = frame_config.border_detection_mode == "sophisticated"
+        border_pixels = frame_config.simple_border_pixels
+        skip_color_bars = frame_config.brng_skip_color_bars == "yes"
+        
+        # Check for color bars if enabled
+        color_bars_end_seconds = None
+        if skip_color_bars:
+            report_directory = Path(source_directory) / f"{video_id}_report_csvs"
+            if report_directory.exists():
+                colorbars_csv = report_directory / "qct-parse_colorbars_durations.csv"
+                if colorbars_csv.exists():
+                    start_seconds, end_seconds = parse_colorbars_duration_csv(str(colorbars_csv))
+                    if end_seconds:
+                        color_bars_end_seconds = end_seconds
+                        analysis_results['color_bars_detected'] = True
+                        analysis_results['color_bars_end_time'] = end_seconds
+                        logger.info(f"Color bars detected by qct-parse, ending at {end_seconds:.1f}s")
+        
+        # Step 1: Border Detection
+        if use_sophisticated:
+            if self.signals:
+                self.signals.output_progress.emit("Detecting video borders (sophisticated analysis)...")
+            
+            logger.info("Using sophisticated border detection with frame quality analysis")
+            analysis_results['border_detection_method'] = 'sophisticated'
+            
+            border_results = detect_video_borders(
+                video_path,
+                destination_directory,
+                target_viz_time=frame_config.sophisticated_viz_time,
+                search_window=frame_config.sophisticated_search_window,
+                threshold=frame_config.sophisticated_threshold,
+                edge_sample_width=frame_config.sophisticated_edge_sample_width,
+                sample_frames=frame_config.sophisticated_sample_frames,
+                padding=frame_config.sophisticated_padding
+            )
+        else:
+            if self.signals:
+                self.signals.output_progress.emit(f"Applying simple {border_pixels}px border detection...")
+            
+            logger.info(f"Using simple border detection with {border_pixels}px borders")
+            analysis_results['border_detection_method'] = 'simple'
+            
+            border_results = detect_simple_borders(
+                video_path,
+                border_size=border_pixels,
+                output_dir=destination_directory
+            )
+        
+        if self.check_cancelled():
+            return None
+        
+        analysis_results['border_results'] = border_results
+        
+        # Get the path to the border data file
+        border_data_path = Path(destination_directory) / f"{video_id}_border_data.json"
+        
+        # Step 2: BRNG Analysis (runs for both simple and sophisticated)
+        if self.signals:
+            self.signals.output_progress.emit("Analyzing BRNG violations...")
+        
+        brng_results = None
+        if border_results and border_results.get('active_area'):
+            brng_results = analyze_active_area_brng(
+                video_path=video_path,
+                border_data_path=border_data_path,
+                output_dir=destination_directory,
+                duration_limit=getattr(frame_config, 'brng_duration_limit', 300)
+            )
+        else:
+            # Analyze full frame if no borders detected
+            brng_results = analyze_active_area_brng(
+                video_path=video_path,
+                border_data_path=None,
+                output_dir=destination_directory,
+                duration_limit=getattr(frame_config, 'brng_duration_limit', 300)
+            )
+        
+        if self.check_cancelled():
+            return None
+        
+        analysis_results['brng_results'] = brng_results
+        
+        # Step 3: Check if border adjustment is needed (only for sophisticated mode)
+        if use_sophisticated and brng_results and frame_config.auto_retry_borders == 'yes':
+            aggregate = brng_results.get('aggregate_patterns', {})
+            requires_adjustment = aggregate.get('requires_border_adjustment', False)
+            
+            if requires_adjustment:
+                if self.signals:
+                    self.signals.output_progress.emit("Re-detecting borders with adjusted parameters...")
+                
+                logger.warning("BRNG analysis detected boundary artifacts - adjusting border detection")
+                
+                # Re-run sophisticated border detection with adjusted parameters
+                adjusted_threshold = getattr(frame_config, 'border_threshold', 10) + 5
+                adjusted_edge_width = getattr(frame_config, 'border_edge_sample_width', 100) + 50
+                adjusted_samples = min(getattr(frame_config, 'border_sample_frames', 30) + 20, 100)
+                adjusted_padding = getattr(frame_config, 'border_padding', 5) + 5
+                
+                border_results = detect_video_borders(
+                    video_path,
+                    destination_directory,
+                    target_viz_time=getattr(frame_config, 'border_viz_time', 150),
+                    search_window=getattr(frame_config, 'border_search_window', 120),
+                    threshold=adjusted_threshold,
+                    edge_sample_width=adjusted_edge_width,
+                    sample_frames=adjusted_samples,
+                    padding=adjusted_padding
+                )
+                
+                analysis_results['border_retry_performed'] = True
+                analysis_results['border_results'] = border_results
+                
+                # Re-run BRNG analysis with new borders
+                if self.signals:
+                    self.signals.output_progress.emit("Re-analyzing BRNG with adjusted borders...")
+                
+                if border_results and border_results.get('active_area'):
+                    brng_results = analyze_active_area_brng(
+                        video_path=video_path,
+                        border_data_path=border_data_path,
+                        output_dir=destination_directory,
+                        duration_limit=getattr(frame_config, 'brng_duration_limit', 300)
+                    )
+                    analysis_results['brng_results'] = brng_results
+        
+        if self.check_cancelled():
+            return None
+        
+        # Step 4: FFprobe Signalstats Analysis (ONLY if sophisticated border detection was used)
+        if use_sophisticated:
+            if self.signals:
+                self.signals.output_progress.emit("Running FFprobe signalstats analysis...")
+            
+            logger.info("Running signalstats analysis (sophisticated borders detected)")
+            
+            signalstats_results = analyze_video_signalstats(
+                video_path=video_path,
+                border_data_path=border_data_path if border_results else None,
+                output_dir=destination_directory,
+                start_time=getattr(frame_config, 'signalstats_start_time', 120),
+                duration=getattr(frame_config, 'signalstats_duration', 60)
+            )
+            
+            analysis_results['signalstats_results'] = signalstats_results
+        else:
+            # Skip signalstats for simple border detection
+            logger.info("Skipping signalstats analysis (requires sophisticated border detection)")
+            analysis_results['signalstats_skipped_reason'] = 'simple_borders'
+            
+            if self.signals:
+                self.signals.output_progress.emit("Skipping signalstats (simple borders mode)...")
+        
+        # Log summary
+        self._log_broadcast_analysis_summary(analysis_results, video_id)
+        
+        if self.signals:
+            self.signals.step_completed.emit("Broadcast Analysis")
+        
+        return analysis_results
+    
+    def _log_broadcast_analysis_summary(self, analysis_results, video_id):
+        """Log a summary of the broadcast analysis results"""
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"FRAME ANALYSIS SUMMARY - {video_id}")
+        logger.info(f"{'='*60}")
+        
+        # Border detection summary
+        detection_method = analysis_results.get('border_detection_method', 'unknown')
+        logger.info(f"Border detection method: {detection_method}")
+        
+        if analysis_results['border_results'] and analysis_results['border_results'].get('active_area'):
+            x, y, w, h = analysis_results['border_results']['active_area']
+            logger.info(f"Active area: {w}x{h} at ({x},{y})")
+            
+            if detection_method == 'simple':
+                border_size = analysis_results['border_results'].get('border_size_used', 25)
+                logger.info(f"  Using fixed {border_size}px borders")
+            elif analysis_results['border_retry_performed']:
+                logger.info("  ✓ Borders adjusted after BRNG analysis")
+        else:
+            logger.info("No borders detected - full frame active")
+        
+        # BRNG analysis summary
+        if analysis_results['brng_results']:
+            report = analysis_results['brng_results'].get('actionable_report', {})
+            logger.info(f"BRNG Assessment: {report.get('overall_assessment', 'Complete')}")
+            logger.info(f"Priority: {report.get('action_priority', 'none').upper()}")
+        
+        # Signalstats summary
+        if analysis_results['signalstats_results']:
+            logger.info(f"Signalstats: {analysis_results['signalstats_results'].get('diagnosis', 'Complete')}")
+        elif analysis_results.get('signalstats_skipped_reason') == 'simple_borders':
+            logger.info("Signalstats: Skipped (requires sophisticated border detection)")
+        
+        logger.info(f"{'='*60}\n")
     
 
 def find_qctools_report(source_directory, video_id):
@@ -325,7 +579,8 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     
     results = {
         'qctools_output_path': None,
-        'qctools_check_output': None
+        'qctools_check_output': None,
+        'color_bars_end_time': None
     }
 
     if check_cancelled and check_cancelled():
@@ -382,6 +637,13 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             run_qctparse(video_path, results['qctools_output_path'], report_directory, check_cancelled=check_cancelled)
             if signals:
                 signals.step_completed.emit("QCT Parse")
+             # After qct-parse completes, check for color bars results
+            colorbars_csv = Path(report_directory) / "qct-parse_colorbars_durations.csv"
+            if colorbars_csv.exists():
+                start_seconds, end_seconds = parse_colorbars_duration_csv(str(colorbars_csv))
+                if end_seconds:
+                    results['color_bars_end_time'] = end_seconds
+                    logger.info(f"Color bars detected, ending at {end_seconds:.1f}s")
 
     return results
 
@@ -486,7 +748,6 @@ def extract_percentage(output_line, signals=None):
             except (ValueError, IndexError):
                 pass
 
-
 def check_tool_metadata(tool_name, output_path):
     """
     Check metadata for a specific tool if configured.
@@ -572,3 +833,49 @@ def setup_mediaconch_policy(user_policy_path: str = None) -> str:
     except Exception as e:
         logger.critical(f"Error setting up MediaConch policy: {str(e)}")
         return None
+    
+def parse_colorbars_duration_csv(csv_path):
+    """
+    Parse the qct-parse color bars duration CSV to extract start and end times.
+    
+    Args:
+        csv_path (str): Path to qct-parse_colorbars_durations.csv
+        
+    Returns:
+        tuple: (start_time_seconds, end_time_seconds) or (None, None) if no bars found
+    """
+    import csv
+    
+    if not os.path.exists(csv_path):
+        return None, None
+    
+    try:
+        with open(csv_path, 'r') as csvfile:
+            reader = csv.reader(csvfile)
+            rows = list(reader)
+            
+            if len(rows) >= 2 and "color bars found" in rows[0][0]:
+                # Color bars were found - parse the timestamps
+                # Format is HH:MM:SS.ssss
+                start_str = rows[1][0]
+                end_str = rows[1][1] if len(rows[1]) > 1 else None
+                
+                # Convert timestamp string to seconds
+                def timestamp_to_seconds(ts_str):
+                    parts = ts_str.split(':')
+                    if len(parts) == 3:
+                        hours = int(parts[0])
+                        minutes = int(parts[1])
+                        seconds = float(parts[2])
+                        return hours * 3600 + minutes * 60 + seconds
+                    return 0
+                
+                start_seconds = timestamp_to_seconds(start_str)
+                end_seconds = timestamp_to_seconds(end_str) if end_str else start_seconds
+                
+                return start_seconds, end_seconds
+                
+    except Exception as e:
+        logger.warning(f"Could not parse color bars duration CSV: {e}")
+        
+    return None, None

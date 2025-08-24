@@ -234,12 +234,39 @@ class SpexConfig:
     qct_parse_values: QCTParseValues
     signalflow_profiles: Dict[str, Dict] = field(default_factory=dict)
 
+@dataclass
+class FrameAnalysisConfig:
+    """Configuration for frame analysis (borders, BRNG violations, signalstats)"""
+    enabled: str = "no"
+    
+    # Border detection settings
+    border_detection_mode: str = "simple"  # "simple" or "sophisticated"
+    simple_border_pixels: int = 25
+    
+    # Sophisticated border detection parameters
+    sophisticated_threshold: int = 10
+    sophisticated_edge_sample_width: int = 100
+    sophisticated_sample_frames: int = 30
+    sophisticated_padding: int = 5
+    sophisticated_viz_time: int = 150
+    sophisticated_search_window: int = 120
+    auto_retry_borders: str = "yes"
+    
+    # BRNG analysis settings
+    brng_duration_limit: int = 300
+    brng_skip_color_bars: str = "yes"  # Use qct-parse color bars detection
+    
+    # Signalstats settings (only runs with sophisticated borders)
+    signalstats_start_time: int = 120
+    signalstats_duration: int = 60
+
 # Output configuration
 @dataclass
 class OutputsConfig:
     access_file: str
     report: str
     qctools_ext: str
+    frame_analysis: FrameAnalysisConfig = field(default_factory=FrameAnalysisConfig)
 
 # Fixity configuration
 @dataclass

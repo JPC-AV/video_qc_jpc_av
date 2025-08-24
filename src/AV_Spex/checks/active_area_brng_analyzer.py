@@ -19,6 +19,8 @@ from collections import defaultdict
 from scipy import ndimage, signal
 import shlex
 
+from AV_Spex.utils.log_setup import logger
+
 
 class ActiveAreaBrngAnalyzer:
     """
@@ -999,7 +1001,7 @@ class ActiveAreaBrngAnalyzer:
 
 
 def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None, 
-                            duration_limit=300):
+                            duration_limit=300, skip_start_seconds=None):
     """
     Main function to analyze BRNG violations with improved detection.
     
@@ -1008,19 +1010,33 @@ def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None,
         border_data_path: Path to border detection JSON
         output_dir: Output directory for results
         duration_limit: Maximum seconds to process
+        skip_start_seconds: Skip this many seconds from start (e.g., for color bars)
     
     Returns:
         Analysis results dictionary
     """
     analyzer = ActiveAreaBrngAnalyzer(video_path, border_data_path, output_dir)
     
-    # First, find where content starts (skip color bars)
+    # Determine skip time - use the greater of color bars end or content start detection
+    skip_seconds = 0
+    
+    # First check if we should skip color bars
+    if skip_start_seconds:
+        skip_seconds = skip_start_seconds
+        logger.info(f"Will skip first {skip_seconds:.1f}s based on color bars detection")
+    
+    # Also check for test patterns (but only if not already skipping past them)
     cap = cv2.VideoCapture(str(video_path))
-    content_start_frame = analyzer.find_content_start(cap)
-    skip_seconds = content_start_frame / analyzer.fps if analyzer.fps > 0 else 0
+    content_start_frame = analyzer.find_content_start(cap, max_seconds=30)
+    content_start_seconds = content_start_frame / analyzer.fps if analyzer.fps > 0 else 0
     cap.release()
     
-    # Process with ffmpeg, skipping test patterns
+    # Use the greater of the two skip times
+    if content_start_seconds > skip_seconds:
+        skip_seconds = content_start_seconds
+        logger.info(f"Additional test patterns detected, extending skip to {skip_seconds:.1f}s")
+    
+    # Process with ffmpeg, skipping the determined amount
     if not analyzer.process_with_ffmpeg(duration_limit, skip_start_seconds=skip_seconds):
         print("FFmpeg processing failed")
         return None
@@ -1029,6 +1045,12 @@ def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None,
     analysis = analyzer.analyze_video_comprehensive(duration_limit)
     
     if analysis:
+        # Add information about what was skipped
+        analysis['skip_info'] = {
+            'total_skipped_seconds': skip_seconds,
+            'color_bars_skip': skip_start_seconds if skip_start_seconds else 0,
+            'test_pattern_skip': content_start_seconds
+        }
         analyzer.print_summary(analysis)
     
     # Clean up temp files
