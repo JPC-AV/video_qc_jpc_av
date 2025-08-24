@@ -862,7 +862,7 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
     
     checks_config = config_mgr.get_config('checks', ChecksConfig)
 
-    if checks_config.outputs.report != 'yes':
+    if not checks_config.outputs.report:
         return None
 
     try:
