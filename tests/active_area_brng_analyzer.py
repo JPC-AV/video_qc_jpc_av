@@ -783,43 +783,127 @@ class ActiveAreaBrngAnalyzer:
                 # Top-right: Highlighted frame
                 viz[:h, w:] = frame_h
                 
-                # Bottom-left: Violation mask
-                violation_mask = self.detect_brng_violations_differential(frame_h, frame_o)
-                violation_colored = cv2.cvtColor(violation_mask, cv2.COLOR_GRAY2BGR)
-                violation_colored[:, :, 1] = violation_mask  # Make it greenish
-                viz[h:, :w] = violation_colored
+                # Bottom-left: Extract cyan-highlighted pixels from the highlighted frame
+                # Create a mask for cyan pixels in the highlighted frame
+                frame_h_hsv = cv2.cvtColor(frame_h, cv2.COLOR_BGR2HSV)
+                cyan_mask = cv2.inRange(frame_h_hsv, 
+                                    np.array([80, 100, 100]),   # Lower cyan threshold
+                                    np.array([110, 255, 255]))  # Upper cyan threshold
                 
-                # Bottom-right: Analysis overlay on original
-                overlay = frame_o.copy()
-                violation_overlay = np.zeros_like(overlay)
-                violation_overlay[:, :, 2] = violation_mask  # Red channel
-                overlay = cv2.addWeighted(overlay, 0.7, violation_overlay, 0.3, 0)
-                viz[h:, w:] = overlay
+                # Create violations-only visualization
+                violations_only = np.zeros_like(frame_o)
+                # Show cyan violations as bright cyan on black background
+                violations_only[cyan_mask > 0] = [255, 255, 0]  # Cyan in BGR
+                viz[h:, :w] = violations_only
                 
-                # Add text labels
+                # Bottom-right: Analysis information overlay
+                info_panel = np.zeros((h, w, 3), dtype=np.uint8)
+                
+                # Add analysis info text to the info panel
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                cv2.putText(viz, "Original", (10, 30), font, 1, (255, 255, 255), 2)
-                cv2.putText(viz, "BRNG Highlighted", (w+10, 30), font, 1, (255, 255, 255), 2)
-                cv2.putText(viz, "Violations Only", (10, h+30), font, 1, (255, 255, 255), 2)
-                cv2.putText(viz, "Overlay", (w+10, h+30), font, 1, (255, 255, 255), 2)
+                font_scale = 0.6
+                color = (255, 255, 255)  # White text
+                thickness = 1
+                line_height = 25
                 
-                # Add analysis info
+                # Prepare analysis information
                 diagnostics_text = ', '.join(frame_data.get('diagnostics', ['Unknown'])[:2])
-                info_text = [
+                info_lines = [
+                    f"Frame: {frame_idx}",
                     f"Time: {self.format_timecode(timestamp)}",
                     f"Violations: {frame_data['violation_percentage']:.4f}%",
+                    f"Pixels: {frame_data['violation_pixels']}",
                     f"Pattern: {diagnostics_text}"
                 ]
                 
                 # Add edge info if present
                 if frame_data.get('has_edge_violations'):
                     edges = ', '.join(frame_data.get('affected_edges', []))
-                    info_text.append(f"Edges: {edges}")
+                    info_lines.append(f"Edges: {edges}")
                 
-                y_offset = h*2 - 100
-                for line in info_text:
-                    cv2.putText(viz, line, (10, y_offset), font, 0.6, (255, 255, 255), 1)
-                    y_offset += 25
+                if frame_data.get('has_continuous_edges'):
+                    info_lines.append("Continuous edge artifacts")
+                
+                # Add pattern analysis details
+                pattern_analysis = frame_data.get('pattern_analysis', {})
+                if pattern_analysis:
+                    spatial = pattern_analysis.get('spatial_patterns', {})
+                    if spatial.get('edge_concentrated'):
+                        info_lines.append("Edge-concentrated violations")
+                    if spatial.get('has_boundary_artifacts'):
+                        severity = spatial.get('boundary_severity', 'unknown')
+                        info_lines.append(f"Boundary artifacts: {severity}")
+                
+                # Draw text lines on info panel (centered)
+                y_position = 30
+                for line in info_lines:
+                    # Wrap long lines if necessary
+                    if len(line) > 35:  # Approximate character limit
+                        words = line.split(' ')
+                        current_line = ""
+                        for word in words:
+                            if len(current_line + " " + word) <= 35:
+                                current_line += " " + word if current_line else word
+                            else:
+                                if current_line:
+                                    # Center the text
+                                    text_size = cv2.getTextSize(current_line, font, font_scale, thickness)[0]
+                                    x_position = (w - text_size[0]) // 2
+                                    cv2.putText(info_panel, current_line, (x_position, y_position), 
+                                            font, font_scale, color, thickness)
+                                    y_position += line_height
+                                current_line = word
+                        if current_line:
+                            # Center the text
+                            text_size = cv2.getTextSize(current_line, font, font_scale, thickness)[0]
+                            x_position = (w - text_size[0]) // 2
+                            cv2.putText(info_panel, current_line, (x_position, y_position), 
+                                    font, font_scale, color, thickness)
+                            y_position += line_height
+                    else:
+                        # Center the text
+                        text_size = cv2.getTextSize(line, font, font_scale, thickness)[0]
+                        x_position = (w - text_size[0]) // 2
+                        cv2.putText(info_panel, line, (x_position, y_position), 
+                                font, font_scale, color, thickness)
+                        y_position += line_height
+                    
+                    # Stop if we're running out of space
+                    if y_position > h - 30:
+                        break
+                
+                # Add a centered title for the info panel
+                title_text = "ANALYSIS DETAILS"
+                title_size = cv2.getTextSize(title_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+                title_x = (w - title_size[0]) // 2
+                cv2.putText(info_panel, title_text, (title_x, 20), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)  # Cyan title
+                
+                viz[h:, w:] = info_panel
+                
+                # Add labels for each quadrant
+                label_font = cv2.FONT_HERSHEY_SIMPLEX
+                label_scale = 1.0
+                label_color = (255, 255, 255)
+                label_thickness = 2
+                
+                # Add background rectangles for better text visibility
+                cv2.rectangle(viz, (5, 5), (200, 35), (0, 0, 0), -1)
+                cv2.rectangle(viz, (w+5, 5), (w+200, 35), (0, 0, 0), -1)
+                cv2.rectangle(viz, (5, h+5), (250, h+35), (0, 0, 0), -1)
+                # Center the background rectangle for "Analysis Details"
+                analysis_label = "Analysis Details"
+                analysis_label_size = cv2.getTextSize(analysis_label, label_font, label_scale, label_thickness)[0]
+                analysis_bg_x = w + (w - analysis_label_size[0]) // 2 - 10
+                analysis_bg_width = analysis_label_size[0] + 20
+                cv2.rectangle(viz, (analysis_bg_x, h+5), (analysis_bg_x + analysis_bg_width, h+35), (0, 0, 0), -1)
+                
+                cv2.putText(viz, "Original", (10, 25), label_font, label_scale, label_color, label_thickness)
+                cv2.putText(viz, "BRNG Highlighted", (w+10, 25), label_font, label_scale, label_color, label_thickness)
+                cv2.putText(viz, "Violations Only", (10, h+25), label_font, label_scale, label_color, label_thickness)
+                # Center the "Analysis Details" label
+                analysis_x = w + (w - analysis_label_size[0]) // 2
+                cv2.putText(viz, analysis_label, (analysis_x, h+25), label_font, label_scale, label_color, label_thickness)
                 
                 # Save thumbnail
                 timecode_str = self.format_filename_timecode(timestamp)
@@ -835,7 +919,7 @@ class ActiveAreaBrngAnalyzer:
                     'timecode': self.format_timecode(timestamp)
                 })
                 
-                print(f"  ✔ Saved: {thumbnail_filename}")
+                print(f"  ✓ Saved: {thumbnail_filename}")
         
         return saved_thumbnails
     
