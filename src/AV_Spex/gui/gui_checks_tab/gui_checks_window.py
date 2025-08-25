@@ -157,8 +157,8 @@ class ChecksWindow(QWidget, ThemeableMixin):
         sophisticated_params_layout.setContentsMargins(0, 0, 0, 0)
         
         # Frame Selection Parameters Group
-        frame_selection_group = QGroupBox("Frame Selection")
-        theme_manager.style_groupbox(frame_selection_group, "top left")
+        frame_selection_group = QGroupBox("Select Representative Frames")
+        theme_manager.style_groupbox(frame_selection_group, "top center")
         self.themed_group_boxes['frame_selection'] = frame_selection_group
         
         frame_selection_layout = QVBoxLayout()
@@ -198,7 +198,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         # Detection Parameters Group
         detection_params_group = QGroupBox("Detection Parameters")
-        theme_manager.style_groupbox(detection_params_group, "top left")
+        theme_manager.style_groupbox(detection_params_group, "top center")
         self.themed_group_boxes['detection_params'] = detection_params_group
         
         detection_params_layout = QVBoxLayout()
