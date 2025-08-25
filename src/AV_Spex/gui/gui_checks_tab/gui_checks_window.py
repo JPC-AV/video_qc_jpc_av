@@ -90,25 +90,36 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Add separator before Frame Analysis
         outputs_layout.addSpacing(10)
         
-        # Frame Analysis Section
+        # Frame Analysis Section - Main container with centered title
         self.frame_analysis_group = QGroupBox("Frame Analysis")
-        theme_manager.style_groupbox(self.frame_analysis_group, "top left")
+        theme_manager.style_groupbox(self.frame_analysis_group, "top center")
         self.themed_group_boxes['frame_analysis'] = self.frame_analysis_group
         
         frame_analysis_layout = QVBoxLayout()
         
-        # Enable Frame Analysis checkbox
+        # Enable Frame Analysis checkbox at the top level
         self.frame_analysis_enabled_cb = QCheckBox("Enable Frame Analysis")
         self.frame_analysis_enabled_cb.setStyleSheet("font-weight: bold;")
         frame_analysis_desc = QLabel("Perform border detection, BRNG analysis, and optional signalstats")
         frame_analysis_desc.setIndent(20)
         
-        # Border Detection Mode
+        frame_analysis_layout.addWidget(self.frame_analysis_enabled_cb)
+        frame_analysis_layout.addWidget(frame_analysis_desc)
+        frame_analysis_layout.addSpacing(10)
+        
+        # Border Detection Group Box
+        self.border_detection_group = QGroupBox("Border Detection")
+        theme_manager.style_groupbox(self.border_detection_group, "top left")
+        self.themed_group_boxes['border_detection'] = self.border_detection_group
+        
+        border_detection_layout = QVBoxLayout()
+        
+        # Border Detection Mode selector
         border_mode_widget = QWidget()
         border_mode_layout = QHBoxLayout(border_mode_widget)
-        border_mode_layout.setContentsMargins(20, 0, 0, 0)
+        border_mode_layout.setContentsMargins(0, 0, 0, 0)
         
-        border_mode_label = QLabel("Border Detection Mode:")
+        border_mode_label = QLabel("Detection Mode:")
         border_mode_label.setStyleSheet("font-weight: bold;")
         self.border_mode_combo = QComboBox()
         self.border_mode_combo.addItem("Simple", "simple")
@@ -118,13 +129,16 @@ class ChecksWindow(QWidget, ThemeableMixin):
         border_mode_layout.addWidget(self.border_mode_combo)
         border_mode_layout.addStretch()
         
+        border_detection_layout.addWidget(border_mode_widget)
+        
         # Simple Border Parameters
         self.simple_params_widget = QWidget()
         simple_params_layout = QVBoxLayout(self.simple_params_widget)
-        simple_params_layout.setContentsMargins(40, 0, 0, 0)
+        simple_params_layout.setContentsMargins(0, 0, 0, 0)
         
         simple_border_layout = QHBoxLayout()
         simple_border_label = QLabel("Border Pixels:")
+        simple_border_label.setStyleSheet("font-weight: bold;")
         self.simple_border_pixels_input = QLineEdit()
         self.simple_border_pixels_input.setMaximumWidth(60)
         self.simple_border_pixels_input.setText("25")
@@ -134,133 +148,226 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         simple_params_layout.addLayout(simple_border_layout)
         simple_params_desc = QLabel("Fixed number of pixels to crop from each edge")
-        simple_params_desc.setIndent(0)
+        simple_params_desc.setIndent(20)
         simple_params_layout.addWidget(simple_params_desc)
         
         # Sophisticated Border Parameters
         self.sophisticated_params_widget = QWidget()
         sophisticated_params_layout = QVBoxLayout(self.sophisticated_params_widget)
-        sophisticated_params_layout.setContentsMargins(40, 0, 0, 0)
+        sophisticated_params_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Create grid layout for sophisticated parameters
-        from PyQt6.QtWidgets import QGridLayout
-        soph_grid = QGridLayout()
+        # Frame Selection Parameters Group
+        frame_selection_group = QGroupBox("Frame Selection")
+        theme_manager.style_groupbox(frame_selection_group, "top left")
+        self.themed_group_boxes['frame_selection'] = frame_selection_group
         
-        # Row 0: Threshold and Edge Sample Width
-        soph_grid.addWidget(QLabel("Threshold:"), 0, 0)
-        self.soph_threshold_input = QLineEdit("10")
-        self.soph_threshold_input.setMaximumWidth(60)
-        soph_grid.addWidget(self.soph_threshold_input, 0, 1)
+        frame_selection_layout = QVBoxLayout()
         
-        soph_grid.addWidget(QLabel("Edge Sample Width:"), 0, 2)
-        self.soph_edge_width_input = QLineEdit("100")
-        self.soph_edge_width_input.setMaximumWidth(60)
-        soph_grid.addWidget(self.soph_edge_width_input, 0, 3)
-        
-        # Row 1: Sample Frames and Padding
-        soph_grid.addWidget(QLabel("Sample Frames:"), 1, 0)
-        self.soph_sample_frames_input = QLineEdit("30")
-        self.soph_sample_frames_input.setMaximumWidth(60)
-        soph_grid.addWidget(self.soph_sample_frames_input, 1, 1)
-        
-        soph_grid.addWidget(QLabel("Padding:"), 1, 2)
-        self.soph_padding_input = QLineEdit("5")
-        self.soph_padding_input.setMaximumWidth(60)
-        soph_grid.addWidget(self.soph_padding_input, 1, 3)
-        
-        # Row 2: Viz Time and Search Window
-        soph_grid.addWidget(QLabel("Viz Time (s):"), 2, 0)
+        # Median Search Time
+        median_time_layout = QHBoxLayout()
+        median_time_label = QLabel("Median Search Time (s):")
+        median_time_label.setStyleSheet("font-weight: bold;")
         self.soph_viz_time_input = QLineEdit("150")
         self.soph_viz_time_input.setMaximumWidth(60)
-        soph_grid.addWidget(self.soph_viz_time_input, 2, 1)
+        median_time_layout.addWidget(median_time_label)
+        median_time_layout.addWidget(self.soph_viz_time_input)
+        median_time_layout.addStretch()
         
-        soph_grid.addWidget(QLabel("Search Window (s):"), 2, 2)
+        median_time_desc = QLabel("Time to find representative frame for border detection")
+        median_time_desc.setIndent(20)
+        
+        # Search Window
+        search_window_layout = QHBoxLayout()
+        search_window_label = QLabel("Search Window (s):")
+        search_window_label.setStyleSheet("font-weight: bold;")
         self.soph_search_window_input = QLineEdit("120")
         self.soph_search_window_input.setMaximumWidth(60)
-        soph_grid.addWidget(self.soph_search_window_input, 2, 3)
+        search_window_layout.addWidget(search_window_label)
+        search_window_layout.addWidget(self.soph_search_window_input)
+        search_window_layout.addStretch()
         
-        sophisticated_params_layout.addLayout(soph_grid)
+        search_window_desc = QLabel("Window size for frame quality analysis")
+        search_window_desc.setIndent(20)
         
-        # Auto Retry Borders checkbox
+        frame_selection_layout.addLayout(median_time_layout)
+        frame_selection_layout.addWidget(median_time_desc)
+        frame_selection_layout.addLayout(search_window_layout)
+        frame_selection_layout.addWidget(search_window_desc)
+        
+        frame_selection_group.setLayout(frame_selection_layout)
+        
+        # Detection Parameters Group
+        detection_params_group = QGroupBox("Detection Parameters")
+        theme_manager.style_groupbox(detection_params_group, "top left")
+        self.themed_group_boxes['detection_params'] = detection_params_group
+        
+        detection_params_layout = QVBoxLayout()
+        
+        # Border Brightness Threshold
+        threshold_layout = QHBoxLayout()
+        threshold_label = QLabel("Brightness Threshold:")
+        threshold_label.setStyleSheet("font-weight: bold;")
+        self.soph_threshold_input = QLineEdit("10")
+        self.soph_threshold_input.setMaximumWidth(60)
+        threshold_layout.addWidget(threshold_label)
+        threshold_layout.addWidget(self.soph_threshold_input)
+        threshold_layout.addStretch()
+        
+        threshold_desc = QLabel("0 = pure black, 255 = pure white")
+        threshold_desc.setIndent(20)
+        
+        # Edge Sample Width
+        edge_width_layout = QHBoxLayout()
+        edge_width_label = QLabel("Edge Sample Width:")
+        edge_width_label.setStyleSheet("font-weight: bold;")
+        self.soph_edge_width_input = QLineEdit("100")
+        self.soph_edge_width_input.setMaximumWidth(60)
+        edge_width_layout.addWidget(edge_width_label)
+        edge_width_layout.addWidget(self.soph_edge_width_input)
+        edge_width_layout.addStretch()
+        
+        edge_width_desc = QLabel("Pixels to examine from each edge")
+        edge_width_desc.setIndent(20)
+        
+        # Sample Frames
+        sample_frames_layout = QHBoxLayout()
+        sample_frames_label = QLabel("Sample Frames:")
+        sample_frames_label.setStyleSheet("font-weight: bold;")
+        self.soph_sample_frames_input = QLineEdit("30")
+        self.soph_sample_frames_input.setMaximumWidth(60)
+        sample_frames_layout.addWidget(sample_frames_label)
+        sample_frames_layout.addWidget(self.soph_sample_frames_input)
+        sample_frames_layout.addStretch()
+        
+        sample_frames_desc = QLabel("Number of frames to sample across the video")
+        sample_frames_desc.setIndent(20)
+        
+        # Padding
+        padding_layout = QHBoxLayout()
+        padding_label = QLabel("Padding:")
+        padding_label.setStyleSheet("font-weight: bold;")
+        self.soph_padding_input = QLineEdit("5")
+        self.soph_padding_input.setMaximumWidth(60)
+        padding_layout.addWidget(padding_label)
+        padding_layout.addWidget(self.soph_padding_input)
+        padding_layout.addStretch()
+        
+        padding_desc = QLabel("Extra margin around detected borders")
+        padding_desc.setIndent(20)
+        
+        detection_params_layout.addLayout(threshold_layout)
+        detection_params_layout.addWidget(threshold_desc)
+        detection_params_layout.addLayout(edge_width_layout)
+        detection_params_layout.addWidget(edge_width_desc)
+        detection_params_layout.addLayout(sample_frames_layout)
+        detection_params_layout.addWidget(sample_frames_desc)
+        detection_params_layout.addLayout(padding_layout)
+        detection_params_layout.addWidget(padding_desc)
+        
+        detection_params_group.setLayout(detection_params_layout)
+        
+        # Auto Retry checkbox
         self.auto_retry_borders_cb = QCheckBox("Auto-retry border detection if BRNG detects edge artifacts")
+        self.auto_retry_borders_cb.setStyleSheet("font-weight: bold;")
+        auto_retry_desc = QLabel("Automatically adjusts borders if edge artifacts are found")
+        auto_retry_desc.setIndent(20)
+        
+        # Add sophisticated mode components
+        sophisticated_params_layout.addWidget(frame_selection_group)
+        sophisticated_params_layout.addWidget(detection_params_group)
         sophisticated_params_layout.addWidget(self.auto_retry_borders_cb)
-
-        sophisticated_desc = QLabel("Advanced border detection with frame quality analysis")
-        sophisticated_params_layout.addWidget(sophisticated_desc)
-                
-        # BRNG Analysis Parameters
-        brng_widget = QWidget()
-        brng_layout = QVBoxLayout(brng_widget)
-        brng_layout.setContentsMargins(20, 0, 0, 0)
+        sophisticated_params_layout.addWidget(auto_retry_desc)
         
-        brng_label = QLabel("BRNG Analysis Parameters")
-        brng_label.setStyleSheet("font-weight: bold;")
-        brng_layout.addWidget(brng_label)
+        # Add both parameter widgets to border detection layout
+        border_detection_layout.addWidget(self.simple_params_widget)
+        border_detection_layout.addWidget(self.sophisticated_params_widget)
         
-        brng_params_layout = QHBoxLayout()
-        brng_params_layout.setContentsMargins(20, 0, 0, 0)
+        self.border_detection_group.setLayout(border_detection_layout)
         
-        brng_params_layout.addWidget(QLabel("Duration Limit (s):"))
+        # BRNG Analysis Group Box
+        self.brng_group = QGroupBox("BRNG Analysis")
+        theme_manager.style_groupbox(self.brng_group, "top left")
+        self.themed_group_boxes['brng_analysis'] = self.brng_group
+        
+        brng_layout = QVBoxLayout()
+        
+        # Duration Limit
+        duration_layout = QHBoxLayout()
+        duration_label = QLabel("Duration Limit (s):")
+        duration_label.setStyleSheet("font-weight: bold;")
         self.brng_duration_input = QLineEdit("300")
         self.brng_duration_input.setMaximumWidth(60)
-        brng_params_layout.addWidget(self.brng_duration_input)
+        duration_layout.addWidget(duration_label)
+        duration_layout.addWidget(self.brng_duration_input)
+        duration_layout.addStretch()
         
-        brng_params_layout.addWidget(QLabel("    "))  # Spacer
+        duration_desc = QLabel("Maximum duration to analyze for BRNG violations")
+        duration_desc.setIndent(20)
         
+        # Skip Color Bars
         self.brng_skip_colorbars_cb = QCheckBox("Skip Color Bars")
-        brng_params_layout.addWidget(self.brng_skip_colorbars_cb)
-        brng_params_layout.addStretch()
+        self.brng_skip_colorbars_cb.setStyleSheet("font-weight: bold;")
+        skip_bars_desc = QLabel("Exclude color bar sections from BRNG analysis")
+        skip_bars_desc.setIndent(20)
         
-        brng_layout.addLayout(brng_params_layout)
+        brng_layout.addLayout(duration_layout)
+        brng_layout.addWidget(duration_desc)
+        brng_layout.addWidget(self.brng_skip_colorbars_cb)
+        brng_layout.addWidget(skip_bars_desc)
         
-        brng_desc = QLabel("Analyzes broadcast range violations in active picture area")
-        brng_desc.setIndent(20)
-        brng_layout.addWidget(brng_desc)
+        self.brng_group.setLayout(brng_layout)
         
-        # Signalstats Parameters (only shown for sophisticated mode)
-        self.signalstats_widget = QWidget()
-        signalstats_layout = QVBoxLayout(self.signalstats_widget)
-        signalstats_layout.setContentsMargins(20, 0, 0, 0)
+        # Signalstats Group Box (only visible in sophisticated mode)
+        self.signalstats_widget = QGroupBox("Signalstats Analysis")
+        theme_manager.style_groupbox(self.signalstats_widget, "top left")
+        self.themed_group_boxes['signalstats'] = self.signalstats_widget
         
-        signalstats_label = QLabel("Signalstats Parameters")
-        signalstats_label.setStyleSheet("font-weight: bold;")
-        signalstats_layout.addWidget(signalstats_label)
+        signalstats_layout = QVBoxLayout()
         
-        signalstats_params_layout = QHBoxLayout()
-        signalstats_params_layout.setContentsMargins(20, 0, 0, 0)
-        
-        signalstats_params_layout.addWidget(QLabel("Start Time (s):"))
+        # Start Time
+        start_time_layout = QHBoxLayout()
+        start_time_label = QLabel("Start Time (s):")
+        start_time_label.setStyleSheet("font-weight: bold;")
         self.signalstats_start_input = QLineEdit("120")
         self.signalstats_start_input.setMaximumWidth(60)
-        signalstats_params_layout.addWidget(self.signalstats_start_input)
+        start_time_layout.addWidget(start_time_label)
+        start_time_layout.addWidget(self.signalstats_start_input)
+        start_time_layout.addStretch()
         
-        signalstats_params_layout.addWidget(QLabel("Duration (s):"))
+        start_time_desc = QLabel("When to begin signalstats analysis")
+        start_time_desc.setIndent(20)
+        
+        # Duration
+        stats_duration_layout = QHBoxLayout()
+        stats_duration_label = QLabel("Duration (s):")
+        stats_duration_label.setStyleSheet("font-weight: bold;")
         self.signalstats_duration_input = QLineEdit("60")
         self.signalstats_duration_input.setMaximumWidth(60)
-        signalstats_params_layout.addWidget(self.signalstats_duration_input)
-        signalstats_params_layout.addStretch()
+        stats_duration_layout.addWidget(stats_duration_label)
+        stats_duration_layout.addWidget(self.signalstats_duration_input)
+        stats_duration_layout.addStretch()
         
-        signalstats_layout.addLayout(signalstats_params_layout)
+        stats_duration_desc = QLabel("How long to run signalstats analysis")
+        stats_duration_desc.setIndent(20)
         
-        signalstats_desc = QLabel("FFprobe signalstats analysis (requires sophisticated borders)")
-        signalstats_desc.setIndent(20)
-        signalstats_layout.addWidget(signalstats_desc)
+        signalstats_layout.addLayout(start_time_layout)
+        signalstats_layout.addWidget(start_time_desc)
+        signalstats_layout.addLayout(stats_duration_layout)
+        signalstats_layout.addWidget(stats_duration_desc)
         
-        # Add all frame analysis components to layout
-        frame_analysis_layout.addWidget(self.frame_analysis_enabled_cb)
-        frame_analysis_layout.addWidget(frame_analysis_desc)
-        frame_analysis_layout.addWidget(border_mode_widget)
-        frame_analysis_layout.addWidget(self.simple_params_widget)
-        frame_analysis_layout.addWidget(self.sophisticated_params_widget)
-        frame_analysis_layout.addWidget(brng_widget)
+        self.signalstats_widget.setLayout(signalstats_layout)
+        
+        # Add all sub-groups to frame analysis layout
+        frame_analysis_layout.addWidget(self.border_detection_group)
+        frame_analysis_layout.addWidget(self.brng_group)
         frame_analysis_layout.addWidget(self.signalstats_widget)
+        
+        # Initially hide sophisticated params and signalstats
+        self.sophisticated_params_widget.setVisible(False)
+        self.signalstats_widget.setVisible(False)
         
         self.frame_analysis_group.setLayout(frame_analysis_layout)
         outputs_layout.addWidget(self.frame_analysis_group)
-        
-        # Initially hide sophisticated params
-        self.sophisticated_params_widget.setVisible(False)
-        self.signalstats_widget.setVisible(False)
         
         self.outputs_group.setLayout(outputs_layout)
         main_layout.addWidget(self.outputs_group)
