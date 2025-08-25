@@ -12,7 +12,8 @@ from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils import config_edit
 from AV_Spex.utils.config_setup import (
     ChecksProfile, OutputsConfig, FixityConfig, ToolsConfig,
-    BasicToolConfig, QCToolsConfig, MediaConchConfig, QCTParseToolConfig
+    BasicToolConfig, QCToolsConfig, MediaConchConfig, QCTParseToolConfig,
+    FrameAnalysisConfig
 )
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
 
@@ -126,6 +127,18 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.qctools_ext_input = QLineEdit()
         self.qctools_ext_input.setText("qctools.xml.gz")
         outputs_layout.addWidget(self.qctools_ext_input, 2, 1)
+        
+        # Frame Analysis enabled
+        outputs_layout.addWidget(QLabel("Frame Analysis:"), 3, 0)
+        self.frame_analysis_enabled_combo = QComboBox()
+        self.frame_analysis_enabled_combo.addItems(["no", "yes"])
+        outputs_layout.addWidget(self.frame_analysis_enabled_combo, 3, 1)
+        
+        # Frame Analysis border mode (only show basic option here)
+        outputs_layout.addWidget(QLabel("Border Detection:"), 4, 0)
+        self.border_detection_combo = QComboBox()
+        self.border_detection_combo.addItems(["simple", "sophisticated"])
+        outputs_layout.addWidget(self.border_detection_combo, 4, 1)
         
         outputs_group.setLayout(outputs_layout)
         self.config_layout.addWidget(outputs_group)
@@ -371,6 +384,11 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             self.fixity_combos['embed_stream_fixity'].setCurrentText(current_config.fixity.embed_stream_fixity)
             self.fixity_combos['output_fixity'].setCurrentText(current_config.fixity.output_fixity)
             self.fixity_combos['overwrite_stream_fixity'].setCurrentText(current_config.fixity.overwrite_stream_fixity)
+
+            # Load frame analysis if it exists
+            if hasattr(current_config.outputs, 'frame_analysis'):
+                self.frame_analysis_enabled_combo.setCurrentText(current_config.outputs.frame_analysis.enabled)
+                self.border_detection_combo.setCurrentText(current_config.outputs.frame_analysis.border_detection_mode)
             
             # Load basic tools
             for tool_name in self.basic_tool_combos:
@@ -416,6 +434,11 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.access_file_combo.setCurrentText(profile.outputs.access_file)
         self.report_combo.setCurrentText(profile.outputs.report)
         self.qctools_ext_input.setText(profile.outputs.qctools_ext)
+
+        # Load frame analysis if it exists
+        if hasattr(profile.outputs, 'frame_analysis'):
+            self.frame_analysis_enabled_combo.setCurrentText(profile.outputs.frame_analysis.enabled)
+            self.border_detection_combo.setCurrentText(profile.outputs.frame_analysis.border_detection_mode)
         
         # Load fixity
         self.fixity_combos['check_fixity'].setCurrentText(profile.fixity.check_fixity)
@@ -462,6 +485,13 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         if not name:
             QMessageBox.warning(self, "Validation Error", "Profile name is required.")
             return None
+        
+        # Create frame analysis config with default values
+        frame_analysis = FrameAnalysisConfig(
+            enabled=self.frame_analysis_enabled_combo.currentText(),
+            border_detection_mode=self.border_detection_combo.currentText()
+            # Using defaults for other parameters
+        )
         
         # Create outputs config
         outputs = OutputsConfig(
