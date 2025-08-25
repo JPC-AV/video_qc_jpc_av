@@ -20,7 +20,7 @@ from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_
 from AV_Spex.checks.make_access import process_access_file
 from AV_Spex.checks.qct_parse import run_qctparse
 from AV_Spex.checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
-from AV_Spex.checks.border_detector import detect_video_borders
+from AV_Spex.checks.border_detector import detect_video_borders, detect_simple_borders
 from AV_Spex.checks.ffmpeg_signalstats_analyzer import analyze_video_signalstats
 from AV_Spex.checks.active_area_brng_analyzer import analyze_active_area_brng
 
@@ -277,7 +277,6 @@ class ProcessingManager:
         processing_results['html_report'] = generate_final_report(
             video_id, source_directory, report_directory, destination_directory,
             video_path=video_path,
-            frame_analysis=frame_analysis_results,
             check_cancelled=self.check_cancelled, 
             signals=self.signals
         )

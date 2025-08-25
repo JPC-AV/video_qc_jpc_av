@@ -1125,7 +1125,7 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
     return content_summary_html
 
 def generate_final_report(video_id, source_directory, report_directory, destination_directory, 
-                         video_path=None, frame_analysis=None, check_cancelled=None, signals=None):
+                         video_path=None, check_cancelled=None, signals=None):
     """
     Generate final HTML report if configured.
     
@@ -1135,7 +1135,6 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         report_directory (str): Directory containing report files
         destination_directory (str): Destination directory for output files
         video_path (str, optional): Path to the video file for thumbnail generation
-        frame_analysis (dict, optional): Frame analysis results to include in report
         check_cancelled (callable, optional): Function to check if cancelled
         signals (object, optional): Signals for GUI updates
         
@@ -1151,10 +1150,9 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
     try:
         html_report_path = os.path.join(source_directory, f'{video_id}_avspex_report.html')
         
-        # Generate HTML report with video path and frame analysis
+        # Generate HTML report with video path (no frame_analysis parameter needed)
         write_html_report(video_id, report_directory, destination_directory, html_report_path, 
-                         video_path=video_path, frame_analysis=frame_analysis, 
-                         check_cancelled=check_cancelled)
+                         video_path=video_path, check_cancelled=check_cancelled)
         
         logger.info(f"HTML report generated: {html_report_path}\n")
         if signals:
@@ -1168,7 +1166,8 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         return None
 
 
-def write_html_report(video_id, report_directory, destination_directory, html_report_path, video_path=None, check_cancelled=None):
+def write_html_report(video_id, report_directory, destination_directory, html_report_path, 
+                     video_path=None, check_cancelled=None):
 
     qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv = find_report_csvs(report_directory)
 
@@ -1265,7 +1264,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     )
     
     # Generate frame analysis HTML section
-    frame_analysis_html = generate_frame_analysis_html(frame_outputs, video_id)
+    frame_analysis_html = generate_frame_analysis_html(frame_outputs, video_id) if frame_outputs else ""
 
     # Initialize and create html from 
     mc_csv_html, mediaconch_csv_filename = prepare_file_section(mediaconch_csv, lambda path: csv_to_html_table(path, style_mismatched=False, mismatch_color="#ffbaba", match_color="#d2ffed", check_fail=True))

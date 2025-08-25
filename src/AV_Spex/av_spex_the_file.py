@@ -79,6 +79,7 @@ class ParsedArguments:
     import_config: Optional[str]
     mediaconch_policy: Optional[str]
     use_default_config: bool
+    frame_analysis: bool
 
 
 PROFILE_MAPPING = {
@@ -169,6 +170,36 @@ The scripts will confirm that the digital files conform to predetermined specifi
                     help='Import configs from JSON file')
     parser.add_argument("--mediaconch-policy",
                     help="Path to custom MediaConch policy XML file")
+    
+    # args for frame analysis
+    parser.add_argument(
+        '--frame-analysis',
+        action='store_true',
+        help='Enable frame analysis (BRNG violations, border detection, and signalstats)'
+    )
+    parser.add_argument(
+        '--frame-borders',
+        choices=['simple', 'sophisticated'],
+        default='simple',
+        help='Border detection mode for frame analysis (default: simple 25px borders)'
+    )
+    parser.add_argument(
+        '--frame-border-pixels',
+        type=int,
+        default=25,
+        help='Number of pixels to crop from each edge in simple border mode (default: 25)'
+    )
+    parser.add_argument(
+        '--frame-no-colorbar-skip',
+        action='store_true',
+        help='Disable automatic skipping of color bars detected by qct-parse'
+    )
+    parser.add_argument(
+        '--frame-brng-duration',
+        type=int,
+        default=300,
+        help='Maximum duration in seconds for BRNG analysis (default: 300)'
+    )
 
     args = parser.parse_args()
 
@@ -212,7 +243,8 @@ The scripts will confirm that the digital files conform to predetermined specifi
         export_file=args.export_file,
         import_config=args.import_config,
         mediaconch_policy=args.mediaconch_policy,
-        use_default_config=args.use_default_config
+        use_default_config=args.use_default_config,
+        frame_analysis=args.frame_analysis
     )
 
 
@@ -285,6 +317,35 @@ def run_cli_mode(args):
 
     if args.print_config_profile:
         config_edit.print_config(args.print_config_profile)
+
+    # Handle frame analysis configuration
+    if args.frame_analysis:
+        frame_updates = {
+            'outputs': {
+                'frame_analysis': {
+                    'enabled': 'yes'
+                }
+            }
+        }
+        
+        # Set border detection mode
+        if hasattr(args, 'frame_borders'):
+            frame_updates['outputs']['frame_analysis']['border_detection_mode'] = args.frame_borders
+        
+        # Set simple border pixels if specified
+        if hasattr(args, 'frame_border_pixels'):
+            frame_updates['outputs']['frame_analysis']['simple_border_pixels'] = args.frame_border_pixels
+        
+        # Handle color bar skip setting
+        if hasattr(args, 'frame_no_colorbar_skip') and args.frame_no_colorbar_skip:
+            frame_updates['outputs']['frame_analysis']['brng_skip_color_bars'] = 'no'
+        
+        # Set BRNG duration if specified
+        if hasattr(args, 'frame_brng_duration'):
+            frame_updates['outputs']['frame_analysis']['brng_duration_limit'] = args.frame_brng_duration
+        
+        config_mgr.update_config('checks', frame_updates)
+        config_mgr.save_config('checks', is_last_used=True)
 
     if args.dry_run_only:
         logger.critical("Dry run selected. Exiting now.")

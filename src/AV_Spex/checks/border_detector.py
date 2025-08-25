@@ -16,30 +16,9 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from pathlib import Path
 
+from AV_Spex.utils.log_setup import logger
 
-class VideoBorderDetector:
-    """
-    Detects blanking borders and active picture areas in video files
-    """
-    
-    def __init__(self, video_path, sample_frames=30):
-        self.video_path = str(video_path)
-        self.sample_frames = sample_frames
-        
-        self.cap = cv2.VideoCapture(self.video_path)
-        
-        if not self.cap.isOpened():
-            raise ValueError(f"Cannot open video file: {video_path}")
-            
-        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
-        self.duration = self.total_frames / self.fps if self.fps > 0 else 0
-        
-        print(f"✓ Video loaded: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
-    
-    def detect_simple_borders(video_path, border_size=25, output_dir=None):
+def detect_simple_borders(video_path, border_size=25, output_dir=None):
         """
         Simple border detection that assumes a fixed border size on all edges.
         This is the "dumb" version that doesn't analyze content.
@@ -131,6 +110,29 @@ class VideoBorderDetector:
             logger.info(f"  Border data saved to: {json_path}")
         
         return results
+
+class VideoBorderDetector:
+    """
+    Detects blanking borders and active picture areas in video files
+    """
+    
+    def __init__(self, video_path, sample_frames=30):
+        self.video_path = str(video_path)
+        self.sample_frames = sample_frames
+        
+        self.cap = cv2.VideoCapture(self.video_path)
+        
+        if not self.cap.isOpened():
+            raise ValueError(f"Cannot open video file: {video_path}")
+            
+        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+        self.duration = self.total_frames / self.fps if self.fps > 0 else 0
+        
+        print(f"✓ Video loaded: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
+    
     
     def assess_frame_quality(self, frame, previous_frame=None, strict_mode=False):
         """
