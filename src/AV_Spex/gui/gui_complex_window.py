@@ -1,0 +1,645 @@
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, QLineEdit,
+    QLabel, QComboBox, QPushButton, QScrollArea
+)
+from PyQt6.QtCore import Qt
+
+from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from AV_Spex.utils.config_setup import ChecksConfig
+from AV_Spex.utils.config_manager import ConfigManager
+
+config_mgr = ConfigManager()
+checks_config = config_mgr.get_config('checks', ChecksConfig)
+
+class ComplexWindow(QWidget, ThemeableMixin):
+    """Configuration window for complex analysis settings."""
+    
+    def __init__(self):
+        super().__init__()
+        self.is_loading = False
+
+        # Initialize themed_group_boxes before setup_theme_handling
+        self.themed_group_boxes = {}
+        
+        # Setup theme handling
+        self.setup_theme_handling()
+        
+        # Setup UI and load config
+        self.setup_ui()
+        self.load_config_values()
+
+    def setup_ui(self):
+        """Create fixed layout structure"""
+        main_layout = QVBoxLayout(self)
+
+        self.setup_frame_analysis_section(main_layout)
+        self.setup_qct_parse_section(main_layout)
+        self.connect_signals()
+        
+    # Frame Analysis Section
+    def setup_frame_analysis_section(self, main_layout):
+        """Set up the frame analysis section with palette-aware styling"""
+        theme_manager = ThemeManager.instance()
+        
+        # Frame Analysis Section - Main container with centered title
+        self.frame_analysis_group = QGroupBox("Frame Analysis")
+        theme_manager.style_groupbox(self.frame_analysis_group, "top center")
+        self.themed_group_boxes['frame_analysis'] = self.frame_analysis_group
+        
+        frame_analysis_layout = QVBoxLayout()
+        
+        # Enable Frame Analysis checkbox at the top level
+        self.frame_analysis_enabled_cb = QCheckBox("Enable Frame Analysis")
+        self.frame_analysis_enabled_cb.setStyleSheet("font-weight: bold;")
+        frame_analysis_desc = QLabel("Perform border detection, BRNG analysis, and optional signalstats")
+        frame_analysis_desc.setIndent(20)
+        
+        frame_analysis_layout.addWidget(self.frame_analysis_enabled_cb)
+        frame_analysis_layout.addWidget(frame_analysis_desc)
+        frame_analysis_layout.addSpacing(10)
+        
+        # Border Detection Group Box
+        self.border_detection_group = QGroupBox("Border Detection")
+        theme_manager.style_groupbox(self.border_detection_group, "top left")
+        self.themed_group_boxes['border_detection'] = self.border_detection_group
+        
+        border_detection_layout = QVBoxLayout()
+        
+        # Border Detection Mode selector
+        border_mode_widget = QWidget()
+        border_mode_layout = QHBoxLayout(border_mode_widget)
+        border_mode_layout.setContentsMargins(0, 0, 0, 0)
+        
+        border_mode_label = QLabel("Detection Mode:")
+        border_mode_label.setStyleSheet("font-weight: bold;")
+        self.border_mode_combo = QComboBox()
+        self.border_mode_combo.addItem("Simple", "simple")
+        self.border_mode_combo.addItem("Sophisticated", "sophisticated")
+        
+        border_mode_layout.addWidget(border_mode_label)
+        border_mode_layout.addWidget(self.border_mode_combo)
+        border_mode_layout.addStretch()
+        
+        border_detection_layout.addWidget(border_mode_widget)
+        
+        # Simple Border Parameters
+        self.simple_params_widget = QWidget()
+        simple_params_layout = QVBoxLayout(self.simple_params_widget)
+        simple_params_layout.setContentsMargins(0, 0, 0, 0)
+        
+        simple_border_layout = QHBoxLayout()
+        simple_border_label = QLabel("Border Pixels:")
+        simple_border_label.setStyleSheet("font-weight: bold;")
+        self.simple_border_pixels_input = QLineEdit()
+        self.simple_border_pixels_input.setMaximumWidth(60)
+        self.simple_border_pixels_input.setText("25")
+        simple_border_layout.addWidget(simple_border_label)
+        simple_border_layout.addWidget(self.simple_border_pixels_input)
+        simple_border_layout.addStretch()
+        
+        simple_params_layout.addLayout(simple_border_layout)
+        simple_params_desc = QLabel("Fixed number of pixels to crop from each edge")
+        simple_params_desc.setIndent(20)
+        simple_params_layout.addWidget(simple_params_desc)
+        
+        # Sophisticated Border Parameters
+        self.sophisticated_params_widget = QWidget()
+        sophisticated_params_layout = QVBoxLayout(self.sophisticated_params_widget)
+        sophisticated_params_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Frame Selection Parameters Group
+        frame_selection_group = QGroupBox("Select Representative Frames")
+        theme_manager.style_groupbox(frame_selection_group, "top center")
+        self.themed_group_boxes['frame_selection'] = frame_selection_group
+        
+        frame_selection_layout = QVBoxLayout()
+        
+        # Median Search Time
+        median_time_layout = QHBoxLayout()
+        median_time_label = QLabel("Median Search Time (s):")
+        median_time_label.setStyleSheet("font-weight: bold;")
+        self.soph_viz_time_input = QLineEdit("150")
+        self.soph_viz_time_input.setMaximumWidth(60)
+        median_time_layout.addWidget(median_time_label)
+        median_time_layout.addWidget(self.soph_viz_time_input)
+        median_time_layout.addStretch()
+        
+        median_time_desc = QLabel("Time to find representative frame for border detection")
+        median_time_desc.setIndent(20)
+        
+        # Search Window
+        search_window_layout = QHBoxLayout()
+        search_window_label = QLabel("Search Window (s):")
+        search_window_label.setStyleSheet("font-weight: bold;")
+        self.soph_search_window_input = QLineEdit("120")
+        self.soph_search_window_input.setMaximumWidth(60)
+        search_window_layout.addWidget(search_window_label)
+        search_window_layout.addWidget(self.soph_search_window_input)
+        search_window_layout.addStretch()
+        
+        search_window_desc = QLabel("Window size for frame quality analysis")
+        search_window_desc.setIndent(20)
+        
+        frame_selection_layout.addLayout(median_time_layout)
+        frame_selection_layout.addWidget(median_time_desc)
+        frame_selection_layout.addLayout(search_window_layout)
+        frame_selection_layout.addWidget(search_window_desc)
+        
+        frame_selection_group.setLayout(frame_selection_layout)
+        
+        # Detection Parameters Group
+        detection_params_group = QGroupBox("Detection Parameters")
+        theme_manager.style_groupbox(detection_params_group, "top center")
+        self.themed_group_boxes['detection_params'] = detection_params_group
+        
+        detection_params_layout = QVBoxLayout()
+        
+        # Border Brightness Threshold
+        threshold_layout = QHBoxLayout()
+        threshold_label = QLabel("Brightness Threshold:")
+        threshold_label.setStyleSheet("font-weight: bold;")
+        self.soph_threshold_input = QLineEdit("10")
+        self.soph_threshold_input.setMaximumWidth(60)
+        threshold_layout.addWidget(threshold_label)
+        threshold_layout.addWidget(self.soph_threshold_input)
+        threshold_layout.addStretch()
+        
+        threshold_desc = QLabel("0 = pure black, 255 = pure white")
+        threshold_desc.setIndent(20)
+        
+        # Edge Sample Width
+        edge_width_layout = QHBoxLayout()
+        edge_width_label = QLabel("Edge Sample Width:")
+        edge_width_label.setStyleSheet("font-weight: bold;")
+        self.soph_edge_width_input = QLineEdit("100")
+        self.soph_edge_width_input.setMaximumWidth(60)
+        edge_width_layout.addWidget(edge_width_label)
+        edge_width_layout.addWidget(self.soph_edge_width_input)
+        edge_width_layout.addStretch()
+        
+        edge_width_desc = QLabel("Pixels to examine from each edge")
+        edge_width_desc.setIndent(20)
+        
+        # Sample Frames
+        sample_frames_layout = QHBoxLayout()
+        sample_frames_label = QLabel("Sample Frames:")
+        sample_frames_label.setStyleSheet("font-weight: bold;")
+        self.soph_sample_frames_input = QLineEdit("30")
+        self.soph_sample_frames_input.setMaximumWidth(60)
+        sample_frames_layout.addWidget(sample_frames_label)
+        sample_frames_layout.addWidget(self.soph_sample_frames_input)
+        sample_frames_layout.addStretch()
+        
+        sample_frames_desc = QLabel("Number of frames to sample across the video")
+        sample_frames_desc.setIndent(20)
+        
+        # Padding
+        padding_layout = QHBoxLayout()
+        padding_label = QLabel("Padding:")
+        padding_label.setStyleSheet("font-weight: bold;")
+        self.soph_padding_input = QLineEdit("5")
+        self.soph_padding_input.setMaximumWidth(60)
+        padding_layout.addWidget(padding_label)
+        padding_layout.addWidget(self.soph_padding_input)
+        padding_layout.addStretch()
+        
+        padding_desc = QLabel("Extra margin around detected borders")
+        padding_desc.setIndent(20)
+        
+        detection_params_layout.addLayout(threshold_layout)
+        detection_params_layout.addWidget(threshold_desc)
+        detection_params_layout.addLayout(edge_width_layout)
+        detection_params_layout.addWidget(edge_width_desc)
+        detection_params_layout.addLayout(sample_frames_layout)
+        detection_params_layout.addWidget(sample_frames_desc)
+        detection_params_layout.addLayout(padding_layout)
+        detection_params_layout.addWidget(padding_desc)
+        
+        detection_params_group.setLayout(detection_params_layout)
+        
+        # Auto Retry checkbox
+        self.auto_retry_borders_cb = QCheckBox("Auto-retry border detection if BRNG detects edge artifacts")
+        self.auto_retry_borders_cb.setStyleSheet("font-weight: bold;")
+        auto_retry_desc = QLabel("Automatically adjusts borders if edge artifacts are found")
+        auto_retry_desc.setIndent(20)
+        
+        # Add sophisticated mode components
+        sophisticated_params_layout.addWidget(frame_selection_group)
+        sophisticated_params_layout.addWidget(detection_params_group)
+        sophisticated_params_layout.addWidget(self.auto_retry_borders_cb)
+        sophisticated_params_layout.addWidget(auto_retry_desc)
+        
+        # Add both parameter widgets to border detection layout
+        border_detection_layout.addWidget(self.simple_params_widget)
+        border_detection_layout.addWidget(self.sophisticated_params_widget)
+        
+        self.border_detection_group.setLayout(border_detection_layout)
+        
+        # BRNG Analysis Group Box
+        self.brng_group = QGroupBox("BRNG Analysis")
+        theme_manager.style_groupbox(self.brng_group, "top left")
+        self.themed_group_boxes['brng_analysis'] = self.brng_group
+        
+        brng_layout = QVBoxLayout()
+        
+        # Duration Limit
+        duration_layout = QHBoxLayout()
+        duration_label = QLabel("Duration Limit (s):")
+        duration_label.setStyleSheet("font-weight: bold;")
+        self.brng_duration_input = QLineEdit("300")
+        self.brng_duration_input.setMaximumWidth(60)
+        duration_layout.addWidget(duration_label)
+        duration_layout.addWidget(self.brng_duration_input)
+        duration_layout.addStretch()
+        
+        duration_desc = QLabel("Maximum duration to analyze for BRNG violations")
+        duration_desc.setIndent(20)
+        
+        # Skip Color Bars
+        self.brng_skip_colorbars_cb = QCheckBox("Skip Color Bars")
+        self.brng_skip_colorbars_cb.setStyleSheet("font-weight: bold;")
+        skip_bars_desc = QLabel("Exclude color bar sections from BRNG analysis")
+        skip_bars_desc.setIndent(20)
+        
+        brng_layout.addLayout(duration_layout)
+        brng_layout.addWidget(duration_desc)
+        brng_layout.addWidget(self.brng_skip_colorbars_cb)
+        brng_layout.addWidget(skip_bars_desc)
+        
+        self.brng_group.setLayout(brng_layout)
+        
+        # Signalstats Group Box (only visible in sophisticated mode)
+        self.signalstats_widget = QGroupBox("Signalstats Analysis")
+        theme_manager.style_groupbox(self.signalstats_widget, "top left")
+        self.themed_group_boxes['signalstats'] = self.signalstats_widget
+        
+        signalstats_layout = QVBoxLayout()
+        
+        # Start Time
+        start_time_layout = QHBoxLayout()
+        start_time_label = QLabel("Start Time (s):")
+        start_time_label.setStyleSheet("font-weight: bold;")
+        self.signalstats_start_input = QLineEdit("120")
+        self.signalstats_start_input.setMaximumWidth(60)
+        start_time_layout.addWidget(start_time_label)
+        start_time_layout.addWidget(self.signalstats_start_input)
+        start_time_layout.addStretch()
+        
+        start_time_desc = QLabel("When to begin signalstats analysis")
+        start_time_desc.setIndent(20)
+        
+        # Duration
+        stats_duration_layout = QHBoxLayout()
+        stats_duration_label = QLabel("Duration (s):")
+        stats_duration_label.setStyleSheet("font-weight: bold;")
+        self.signalstats_duration_input = QLineEdit("60")
+        self.signalstats_duration_input.setMaximumWidth(60)
+        stats_duration_layout.addWidget(stats_duration_label)
+        stats_duration_layout.addWidget(self.signalstats_duration_input)
+        stats_duration_layout.addStretch()
+        
+        stats_duration_desc = QLabel("How long to run signalstats analysis")
+        stats_duration_desc.setIndent(20)
+        
+        signalstats_layout.addLayout(start_time_layout)
+        signalstats_layout.addWidget(start_time_desc)
+        signalstats_layout.addLayout(stats_duration_layout)
+        signalstats_layout.addWidget(stats_duration_desc)
+        
+        self.signalstats_widget.setLayout(signalstats_layout)
+        
+        # Add all sub-groups to frame analysis layout
+        frame_analysis_layout.addWidget(self.border_detection_group)
+        frame_analysis_layout.addWidget(self.brng_group)
+        frame_analysis_layout.addWidget(self.signalstats_widget)
+        
+        # Initially hide sophisticated params and signalstats
+        self.sophisticated_params_widget.setVisible(False)
+        self.signalstats_widget.setVisible(False)
+        
+        self.frame_analysis_group.setLayout(frame_analysis_layout)
+        main_layout.addWidget(self.frame_analysis_group)
+        
+    # QCT Parse Section
+    def setup_qct_parse_section(self, main_layout):
+        """Set up the qct-parse section with palette-aware styling"""
+        theme_manager = ThemeManager.instance()
+        
+        # QCT Parse section
+        self.qct_group = QGroupBox("qct-parse")
+        theme_manager.style_groupbox(self.qct_group, "top center")
+        self.themed_group_boxes['qct'] = self.qct_group
+
+        qct_layout = QVBoxLayout()
+
+        # Checkboxes with descriptions on second line
+        self.run_qctparse_cb = QCheckBox("Run Tool")
+        self.run_qctparse_cb.setStyleSheet("font-weight: bold;")
+        run_qctparse_desc = QLabel("Run qct-parse tool on input video file")
+        run_qctparse_desc.setIndent(20)
+
+        self.bars_detection_cb = QCheckBox("Detect Color Bars")
+        self.bars_detection_cb.setStyleSheet("font-weight: bold;")
+        bars_detection_desc = QLabel("Detect color bars in the video content")
+        bars_detection_desc.setIndent(20)
+
+        self.evaluate_bars_cb = QCheckBox("Evaluate Color Bars")
+        self.evaluate_bars_cb.setStyleSheet("font-weight: bold;")
+        evaluate_bars_desc = QLabel("Compare content to color bars for validation")
+        evaluate_bars_desc.setIndent(20)
+
+        self.thumb_export_cb = QCheckBox("Thumbnail Export")
+        self.thumb_export_cb.setStyleSheet("font-weight: bold;")
+        thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
+        thumb_export_desc.setIndent(20)
+
+        # Content Filter
+        content_filter_label = QLabel("Content Detection")
+        content_filter_label.setStyleSheet("font-weight: bold;")
+        content_filter_desc = QLabel("Select type of content to detect in the video")
+        self.content_filter_combo = QComboBox()
+        self.content_filter_combo.addItem("Select options...", None)  # Store None as data
+
+        # Create a mapping of display text to actual values
+        content_filter_options = {
+            "All Black Detection": "allBlack",
+            "Static Content Detection": "static"
+        }
+
+        # Add items with display text and corresponding data value
+        for display_text, value in content_filter_options.items():
+            self.content_filter_combo.addItem(display_text, value)
+
+        # Add all widgets to the qct layout
+        qct_layout.addWidget(self.run_qctparse_cb)
+        qct_layout.addWidget(run_qctparse_desc)
+        qct_layout.addWidget(self.bars_detection_cb)
+        qct_layout.addWidget(bars_detection_desc)
+        qct_layout.addWidget(self.evaluate_bars_cb)
+        qct_layout.addWidget(evaluate_bars_desc)
+        qct_layout.addWidget(self.thumb_export_cb)
+        qct_layout.addWidget(thumb_export_desc)
+        qct_layout.addWidget(content_filter_label)
+        qct_layout.addWidget(content_filter_desc)
+        qct_layout.addWidget(self.content_filter_combo)
+        
+        # Tagname
+        tagname_label = QLabel("Tag Name")
+        tagname_label.setStyleSheet("font-weight: bold;")
+        tagname_desc = QLabel("Input ad hoc tags using this format: YMIN, lt, 100 (tag name, lt or gt, number value)")
+        self.tagname_input = QLineEdit()
+        self.tagname_input.setPlaceholderText("None")
+        qct_layout.addWidget(tagname_label)
+        qct_layout.addWidget(tagname_desc)
+        qct_layout.addWidget(self.tagname_input)
+        
+        self.qct_group.setLayout(qct_layout)
+        main_layout.addWidget(self.qct_group)
+
+    def on_theme_changed(self, palette):
+        """Handle theme changes for ComplexWindow"""
+        # Apply the palette directly
+        self.setPalette(palette)
+        
+        # Get the theme manager
+        theme_manager = ThemeManager.instance()
+        
+        # Update all tracked group boxes with their specific title positions
+        for key, group_box in self.themed_group_boxes.items():
+            # Preserve the title position if set
+            position = group_box.property("title_position") or "top left"
+            theme_manager.style_groupbox(group_box, position)
+        
+        # Style all buttons
+        theme_manager.style_buttons(self)
+            
+        # Force repaint
+        self.update()
+
+    def connect_signals(self):
+        """Connect all widget signals to their handlers"""
+        # Frame Analysis signals
+        self.frame_analysis_enabled_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'enabled'])
+        )
+        self.border_mode_combo.currentIndexChanged.connect(self.on_frame_analysis_mode_changed)
+
+        # Simple parameters
+        self.simple_border_pixels_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('simple_border_pixels', text)
+        )
+
+        # Sophisticated parameters
+        self.soph_threshold_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('sophisticated_threshold', text)
+        )
+        self.soph_edge_width_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('sophisticated_edge_sample_width', text)
+        )
+        self.soph_sample_frames_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('sophisticated_sample_frames', text)
+        )
+        self.soph_padding_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('sophisticated_padding', text)
+        )
+        self.soph_viz_time_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('sophisticated_viz_time', text)
+        )
+        self.soph_search_window_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('sophisticated_search_window', text)
+        )
+        self.auto_retry_borders_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'auto_retry_borders'])
+        )
+
+        # BRNG parameters
+        self.brng_duration_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('brng_duration_limit', text)
+        )
+        self.brng_skip_colorbars_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'brng_skip_color_bars'])
+        )
+
+        # Signalstats parameters
+        self.signalstats_start_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('signalstats_start_time', text)
+        )
+        self.signalstats_duration_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('signalstats_duration', text)
+        )
+        
+        # QCT Parse
+        self.run_qctparse_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['tools', 'qct_parse', 'run_tool'])
+        )
+        self.bars_detection_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'barsDetection'])
+        )
+        self.evaluate_bars_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'evaluateBars'])
+        )
+        self.thumb_export_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'thumbExport'])
+        )
+        self.content_filter_combo.currentIndexChanged.connect(
+            lambda index: self.on_qct_combo_changed(self.content_filter_combo.itemData(index), 'contentFilter')
+        )
+        self.tagname_input.textChanged.connect(
+            lambda text: self.on_tagname_changed(text)
+        )
+
+    def load_config_values(self):
+        """Load current config values into UI elements"""
+        # Set loading flag to True
+        self.is_loading = True
+
+        checks_config = config_mgr.get_config('checks', ChecksConfig)
+        
+        # Frame Analysis
+        if hasattr(checks_config.outputs, 'frame_analysis'):
+            frame_config = checks_config.outputs.frame_analysis
+            
+            self.frame_analysis_enabled_cb.setChecked(frame_config.enabled.lower() == 'yes')
+            
+            # Set border detection mode
+            mode_index = self.border_mode_combo.findData(frame_config.border_detection_mode)
+            if mode_index >= 0:
+                self.border_mode_combo.setCurrentIndex(mode_index)
+            
+            # Load parameter values
+            self.simple_border_pixels_input.setText(str(frame_config.simple_border_pixels))
+            self.soph_threshold_input.setText(str(frame_config.sophisticated_threshold))
+            self.soph_edge_width_input.setText(str(frame_config.sophisticated_edge_sample_width))
+            self.soph_sample_frames_input.setText(str(frame_config.sophisticated_sample_frames))
+            self.soph_padding_input.setText(str(frame_config.sophisticated_padding))
+            self.soph_viz_time_input.setText(str(frame_config.sophisticated_viz_time))
+            self.soph_search_window_input.setText(str(frame_config.sophisticated_search_window))
+            self.auto_retry_borders_cb.setChecked(frame_config.auto_retry_borders.lower() == 'yes')
+            self.brng_duration_input.setText(str(frame_config.brng_duration_limit))
+            self.brng_skip_colorbars_cb.setChecked(frame_config.brng_skip_color_bars.lower() == 'yes')
+            self.signalstats_start_input.setText(str(frame_config.signalstats_start_time))
+            self.signalstats_duration_input.setText(str(frame_config.signalstats_duration))
+            
+            # Show/hide appropriate widgets based on mode
+            if frame_config.border_detection_mode == "simple":
+                self.simple_params_widget.setVisible(True)
+                self.sophisticated_params_widget.setVisible(False)
+                self.signalstats_widget.setVisible(False)
+            else:
+                self.simple_params_widget.setVisible(False)
+                self.sophisticated_params_widget.setVisible(True)
+                self.signalstats_widget.setVisible(True)
+        
+        # QCT Parse
+        qct = checks_config.tools.qct_parse
+        self.run_qctparse_cb.setChecked(qct.run_tool.lower() == 'yes')
+        self.bars_detection_cb.setChecked(qct.barsDetection)
+        self.evaluate_bars_cb.setChecked(qct.evaluateBars)
+        self.thumb_export_cb.setChecked(qct.thumbExport)
+        
+        if qct.contentFilter:
+            # Find the item with the matching data
+            for i in range(self.content_filter_combo.count()):
+                if self.content_filter_combo.itemData(i) == qct.contentFilter[0]:
+                    self.content_filter_combo.setCurrentIndex(i)
+                    break
+        if qct.tagname is not None:
+            self.tagname_input.setText(qct.tagname)
+
+        # Set loading flag back to False after everything is loaded
+        self.is_loading = False
+
+    def on_checkbox_changed(self, state, path):
+        """Handle changes in yes/no checkboxes"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+
+        new_value = 'yes' if Qt.CheckState(state) == Qt.CheckState.Checked else 'no'
+        
+        if path[0] == "tools" and len(path) > 2:
+            tool_name = path[1]
+            field = path[2]
+            updates = {'tools': {tool_name: {field: new_value}}}
+        elif len(path) == 3:  # Handle nested structures like outputs.frame_analysis.field
+            section = path[0]
+            subsection = path[1]
+            field = path[2]
+            updates = {section: {subsection: {field: new_value}}}
+        else:
+            section = path[0]
+            field = path[1]
+            updates = {section: {field: new_value}}
+            
+        config_mgr.update_config('checks', updates)
+
+    def on_boolean_changed(self, state, path):
+        """Handle changes in boolean checkboxes"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        
+        if path[0] == "tools" and path[1] == "qct_parse":
+            updates = {'tools': {'qct_parse': {path[2]: new_value}}}
+            config_mgr.update_config('checks', updates)
+
+    def on_frame_analysis_mode_changed(self, index):
+        """Handle border detection mode changes"""
+        if self.is_loading:
+            return
+        
+        mode = self.border_mode_combo.itemData(index)
+        
+        # Show/hide appropriate parameter widgets
+        if mode == "simple":
+            self.simple_params_widget.setVisible(True)
+            self.sophisticated_params_widget.setVisible(False)
+            self.signalstats_widget.setVisible(False)
+        else:  # sophisticated
+            self.simple_params_widget.setVisible(False)
+            self.sophisticated_params_widget.setVisible(True)
+            self.signalstats_widget.setVisible(True)
+        
+        # Update config
+        updates = {'outputs': {'frame_analysis': {'border_detection_mode': mode}}}
+        config_mgr.update_config('checks', updates)
+
+    def on_frame_analysis_param_changed(self, param_name, value):
+        """Handle frame analysis parameter changes"""
+        if self.is_loading:
+            return
+        
+        # Convert to appropriate type
+        if param_name in ['simple_border_pixels', 'sophisticated_threshold', 'sophisticated_edge_sample_width',
+                        'sophisticated_sample_frames', 'sophisticated_padding', 'sophisticated_viz_time',
+                        'sophisticated_search_window', 'brng_duration_limit', 'signalstats_start_time',
+                        'signalstats_duration']:
+            try:
+                # Handle empty string case
+                value = int(value) if value.strip() else 0
+            except ValueError:
+                return  # Don't update config if conversion fails
+        
+        updates = {'outputs': {'frame_analysis': {param_name: value}}}
+        config_mgr.update_config('checks', updates)
+
+    def on_qct_combo_changed(self, value, field):
+        """Handle changes in QCT Parse combo boxes"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+
+        values = [value] if value is not None else []
+        updates = {'tools': {'qct_parse': {field: values}}}
+        config_mgr.update_config('checks', updates)
+
+    def on_tagname_changed(self, text):
+        """Handle changes in tagname field"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+
+        updates = {'tools': {'qct_parse': {'tagname': text if text else None}}}
+        config_mgr.update_config('checks', updates)
