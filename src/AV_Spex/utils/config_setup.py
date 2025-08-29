@@ -251,6 +251,7 @@ class FrameAnalysisConfig:
     sophisticated_viz_time: int = 150
     sophisticated_search_window: int = 120
     auto_retry_borders: str = "yes"
+    max_border_retries: int = 5
     
     # BRNG analysis settings
     brng_duration_limit: int = 300

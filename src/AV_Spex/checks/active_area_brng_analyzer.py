@@ -672,63 +672,141 @@ class ActiveAreaBrngAnalyzer:
         with open(self.analysis_output, 'w') as f:
             json.dump(analysis, f, indent=2)
         
-        logger.debug(f"✔ Analysis complete. Results saved to: {self.analysis_output}")
+        logger.debug(f"\n✔ Analysis complete. Results saved to: {self.analysis_output}\n")
         if saved_thumbnails:
             logger.info(f"✔ Saved {len(saved_thumbnails)} diagnostic thumbnail(s) to: {self.thumbnails_dir}")
         
         return analysis
     
-    def generate_actionable_report(self, analysis_results):
+    
+    def generate_actionable_report(self, analysis_results, previous_results=None, refinement_progress=None):
         """
         Generate specific, actionable recommendations based on violation patterns.
+        Now includes refinement progress analysis.
         """
         recommendations = []
         severity_score = 0
         
         aggregate = analysis_results.get('aggregate_patterns', {})
         
-        # Check for boundary artifacts FIRST (highest priority)
-        if aggregate.get('requires_border_adjustment'):
-            edges = aggregate.get('boundary_edges_detected', [])
-            recommendations.append({
-                'issue': 'Border Detection Needs Adjustment',
-                'severity': 'high',
-                'affected_areas': f"Frame edges: {', '.join(edges)}",
-                'description': 'Active area detection missed blanking/border regions',
-                'action_required': 'Re-run border detection with adjusted parameters',
-                'percentage_affected': aggregate.get('continuous_edge_percentage', 0)
-            })
-            severity_score += 5  # High severity to trigger re-detection
-        elif aggregate.get('edge_violation_percentage', 0) > 5:
-            # Minor edge violations but not continuous
-            recommendations.append({
-                'issue': 'Minor Edge Artifacts',
-                'severity': 'low',
-                'affected_areas': f"Frame edges: {', '.join(aggregate.get('boundary_edges_detected', []))}",
-                'description': 'Occasional edge violations, may be acceptable',
-                'percentage_affected': aggregate.get('edge_violation_percentage', 0)
-            })
-            severity_score += 1
-        
-        # Generate overall assessment
-        if aggregate.get('requires_border_adjustment'):
-            overall_assessment = "Border detection adjustment required - edges contain violations"
-            action_priority = "high"
-        elif severity_score == 0:
-            overall_assessment = "Video is broadcast-safe with no significant issues"
-            action_priority = "none"
-        elif severity_score < 3:
-            overall_assessment = "Minor broadcast range issues detected"
-            action_priority = "low"
+        # Use refinement progress if available
+        if refinement_progress:
+            if refinement_progress['should_continue']:
+                border_adjustment_needed = True
+                adjustment_reason = refinement_progress['reason']
+            else:
+                border_adjustment_needed = refinement_progress['recommendation'] not in ['stop_acceptable', 'stop_minimal_progress']
+                adjustment_reason = refinement_progress['reason']
         else:
-            overall_assessment = "Broadcast range issues requiring attention"
-            action_priority = "medium"
+            # Fallback to old logic but with more nuanced thresholds
+            continuous_pct = aggregate.get('continuous_edge_percentage', 0)
+            edge_pct = aggregate.get('edge_violation_percentage', 0)
+            
+            # More sophisticated decision making
+            if continuous_pct > 25:  # Very high
+                border_adjustment_needed = True
+                adjustment_reason = 'high_continuous_violations'
+            elif continuous_pct > 15 and edge_pct > 20:  # Both moderately high
+                border_adjustment_needed = True  
+                adjustment_reason = 'moderate_combined_violations'
+            elif continuous_pct > 10 and len(aggregate.get('boundary_edges_detected', [])) >= 3:  # Multiple edges
+                border_adjustment_needed = True
+                adjustment_reason = 'multiple_edge_violations'
+            else:
+                border_adjustment_needed = False
+                adjustment_reason = 'acceptable_levels'
+        
+        # Generate recommendations based on analysis
+        if border_adjustment_needed:
+            edges = aggregate.get('boundary_edges_detected', [])
+            
+            if adjustment_reason == 'significant_improvement':
+                recommendations.append({
+                    'issue': 'Border Detection Improving - Continue Adjustment',
+                    'severity': 'medium',
+                    'affected_areas': f"Frame edges: {', '.join(edges)}",
+                    'description': 'Border refinement is working - continue with current approach',
+                    'action_required': 'Continue border detection refinement',
+                    'percentage_affected': aggregate.get('continuous_edge_percentage', 0)
+                })
+                severity_score += 2
+            elif adjustment_reason == 'acceptable_low_levels':
+                recommendations.append({
+                    'issue': 'Minor Edge Violations - Consider Acceptable',
+                    'severity': 'low',
+                    'affected_areas': f"Frame edges: {', '.join(edges)}",
+                    'description': 'Low levels of edge violations may be acceptable for this content',
+                    'action_required': 'Review if current quality is sufficient',
+                    'percentage_affected': aggregate.get('continuous_edge_percentage', 0)
+                })
+                severity_score += 1
+            else:
+                recommendations.append({
+                    'issue': 'Border Detection Needs Adjustment',
+                    'severity': 'high',
+                    'affected_areas': f"Frame edges: {', '.join(edges)}",
+                    'description': f'Active area detection needs refinement ({adjustment_reason})',
+                    'action_required': 'Re-run border detection with adjusted parameters',
+                    'percentage_affected': aggregate.get('continuous_edge_percentage', 0)
+                })
+                severity_score += 5
+        else:
+            # Check for other types of violations
+            total_violations = analysis_results.get('frames_with_violations', 0)
+            total_analyzed = analysis_results.get('total_frames_analyzed', 1)
+            violation_rate = (total_violations / total_analyzed) * 100
+            
+            if violation_rate > 10:
+                recommendations.append({
+                    'issue': 'Content-Based BRNG Violations',
+                    'severity': 'medium',
+                    'affected_areas': 'Video content',
+                    'description': 'Violations appear to be in content rather than blanking areas',
+                    'action_required': 'Review source material or encoding parameters',
+                    'percentage_affected': violation_rate
+                })
+                severity_score += 2
+        
+        # Generate overall assessment with refinement context
+        if refinement_progress:
+            if refinement_progress['improvement_score'] > 5:
+                overall_assessment = "Border refinement is working well - significant improvement detected"
+                action_priority = "low" if not border_adjustment_needed else "medium"
+            elif refinement_progress['improvement_score'] > 1:
+                overall_assessment = "Border refinement showing modest improvement"
+                action_priority = "medium"
+            elif refinement_progress['reason'] == 'acceptable_low_levels':
+                overall_assessment = "Video quality acceptable with current border settings"
+                action_priority = "none"
+            elif refinement_progress['reason'] == 'minimal_progress':
+                overall_assessment = "Border refinement has reached practical limits"
+                action_priority = "review"
+            else:
+                overall_assessment = "Border refinement not yielding expected improvements"
+                action_priority = "high"
+        else:
+            # Fallback to original logic
+            if border_adjustment_needed:
+                overall_assessment = "Border detection adjustment required - edges contain violations"
+                action_priority = "high"
+            elif severity_score == 0:
+                overall_assessment = "Video is broadcast-safe with no significant issues"
+                action_priority = "none"
+            elif severity_score < 3:
+                overall_assessment = "Minor broadcast range issues detected"
+                action_priority = "low"
+            else:
+                overall_assessment = "Broadcast range issues requiring attention"
+                action_priority = "medium"
         
         return {
             'overall_assessment': overall_assessment,
             'action_priority': action_priority,
             'severity_score': severity_score,
             'recommendations': recommendations,
+            'requires_border_adjustment': border_adjustment_needed,
+            'adjustment_reason': adjustment_reason,
+            'refinement_progress': refinement_progress,
             'summary_statistics': {
                 'total_frames_analyzed': analysis_results.get('total_frames_analyzed', 0),
                 'frames_with_violations': analysis_results.get('frames_with_violations', 0),
@@ -999,6 +1077,140 @@ class ActiveAreaBrngAnalyzer:
         except Exception as e:
             logger.warning(f"⚠️ Could not clean up temp files: {e}")
 
+    
+    def analyze_refinement_progress(self, current_results, previous_results=None):
+        """
+        Analyze if border refinement is making meaningful progress
+        Returns recommendation for whether to continue refining
+        """
+        if not previous_results:
+            return {
+                'should_continue': True,
+                'reason': 'first_attempt',
+                'improvement_score': 0,
+                'recommendation': 'continue'
+            }
+        
+        current_agg = current_results.get('aggregate_patterns', {})
+        previous_agg = previous_results.get('aggregate_patterns', {})
+        
+        # Extract key metrics with safer defaults
+        curr_edge_pct = current_agg.get('edge_violation_percentage', 0)
+        prev_edge_pct = previous_agg.get('edge_violation_percentage', 0)
+        
+        curr_cont_pct = current_agg.get('continuous_edge_percentage', 0)
+        prev_cont_pct = previous_agg.get('continuous_edge_percentage', 0)
+        
+        curr_avg_violation = current_results.get('average_violation_percentage', 0)
+        prev_avg_violation = previous_results.get('average_violation_percentage', 0)
+        
+        curr_max_violation = current_results.get('max_violation_percentage', 0)
+        prev_max_violation = previous_results.get('max_violation_percentage', 0)
+        
+        curr_frames_with_violations = current_results.get('frames_with_violations', 0)
+        prev_frames_with_violations = previous_results.get('frames_with_violations', 0)
+        
+        # Get worst frame pixel percentages (most important metric)
+        curr_worst_frames = current_results.get('worst_frames', [])
+        prev_worst_frames = previous_results.get('worst_frames', [])
+        
+        curr_worst_pixels = curr_worst_frames[0]['violation_percentage'] if curr_worst_frames else 0
+        prev_worst_pixels = prev_worst_frames[0]['violation_percentage'] if prev_worst_frames else 0
+        
+        # Calculate improvements (positive = better)
+        edge_improvement = prev_edge_pct - curr_edge_pct
+        continuous_improvement = prev_cont_pct - curr_cont_pct
+        avg_violation_improvement = prev_avg_violation - curr_avg_violation
+        max_violation_improvement = prev_max_violation - curr_max_violation
+        frame_count_improvement = prev_frames_with_violations - curr_frames_with_violations
+        worst_pixels_improvement = prev_worst_pixels - curr_worst_pixels
+        
+        # Calculate improvement score with better weighting
+        # Prioritize worst frame pixel reduction (this is the clearest signal)
+        improvement_score = (
+            worst_pixels_improvement * 1000 +  # Scale up since these are small percentages
+            frame_count_improvement * 10 +     # Frame count reduction is very important
+            edge_improvement * 2 +             # Edge improvements
+            continuous_improvement * 2 +       # Continuous edge improvements
+            max_violation_improvement * 0.1 +  # Max violation (less reliable)
+            avg_violation_improvement * 0.01   # Average violation (least reliable)
+        )
+        
+        # Log detailed progress for debugging
+        logger.info(f"\n=== PROGRESS ANALYSIS ===")
+        logger.info(f"Worst frame pixels: {prev_worst_pixels:.4f}% → {curr_worst_pixels:.4f}% (improvement: {worst_pixels_improvement:.4f}%)")
+        logger.info(f"Frame count: {prev_frames_with_violations} → {curr_frames_with_violations} (improvement: {frame_count_improvement})")
+        logger.info(f"Edge violations: {prev_edge_pct:.1f}% → {curr_edge_pct:.1f}% (improvement: {edge_improvement:.1f}%)")
+        logger.info(f"Continuous edge: {prev_cont_pct:.1f}% → {curr_cont_pct:.1f}% (improvement: {continuous_improvement:.1f}%)")
+        logger.info(f"Improvement score: {improvement_score:.2f}")
+        
+        # Decision logic with more nuanced thresholds
+        analysis = {
+            'should_continue': False,
+            'reason': 'unknown',
+            'improvement_score': improvement_score,
+            'metrics': {
+                'edge_improvement': edge_improvement,
+                'continuous_improvement': continuous_improvement,
+                'avg_violation_improvement': avg_violation_improvement,
+                'max_violation_improvement': max_violation_improvement,
+                'frame_count_improvement': frame_count_improvement,
+                'worst_pixels_improvement': worst_pixels_improvement
+            }
+        }
+        
+        # Decision logic based on improvement score and absolute levels
+        if worst_pixels_improvement > 0.02:  # 0.02% improvement in worst pixels
+            analysis.update({
+                'should_continue': True,
+                'reason': 'significant_pixel_improvement',
+                'recommendation': 'continue'
+            })
+            logger.info(f"✓ Significant pixel improvement detected, continuing refinement")
+        elif improvement_score > 10:
+            analysis.update({
+                'should_continue': True,
+                'reason': 'significant_overall_improvement',
+                'recommendation': 'continue'
+            })
+            logger.info(f"✓ Significant overall improvement detected, continuing refinement")
+        elif improvement_score > 2:
+            analysis.update({
+                'should_continue': True,
+                'reason': 'modest_improvement',
+                'recommendation': 'continue_cautiously'
+            })
+            logger.info(f"✓ Modest improvement detected, continuing cautiously")
+        elif curr_worst_pixels < 0.01:  # Less than 0.01% worst pixels
+            analysis.update({
+                'should_continue': False,
+                'reason': 'excellent_quality_achieved',
+                'recommendation': 'stop_excellent'
+            })
+            logger.info(f"✓ Excellent quality achieved (worst pixels < 0.01%)")
+        elif curr_worst_pixels < 0.03 and improvement_score > -2:  # Decent quality, not getting worse
+            analysis.update({
+                'should_continue': False,
+                'reason': 'acceptable_quality_achieved', 
+                'recommendation': 'stop_acceptable'
+            })
+            logger.info(f"✓ Acceptable quality achieved (worst pixels < 0.03%)")
+        elif improvement_score > -5 and curr_cont_pct <= prev_cont_pct:  # Not getting worse
+            analysis.update({
+                'should_continue': True,
+                'reason': 'stable_continue',
+                'recommendation': 'continue_one_more'
+            })
+            logger.info(f"→ Progress is stable, trying one more adjustment")
+        else:
+            analysis.update({
+                'should_continue': False,
+                'reason': 'minimal_progress_or_regression',
+                'recommendation': 'stop_regression'
+            })
+            logger.info(f"⚠ Minimal progress or regression, stopping refinement")
+        
+        return analysis
 
 def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None, 
                             duration_limit=300, skip_start_seconds=None):

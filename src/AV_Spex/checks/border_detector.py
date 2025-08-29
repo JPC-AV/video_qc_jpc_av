@@ -31,9 +31,6 @@ def detect_simple_borders(video_path, border_size=25, output_dir=None):
         Returns:
             dict: Border detection results with active area
         """
-        import cv2
-        import json
-        from pathlib import Path
         
         video_path = Path(video_path)
         video_name = video_path.stem

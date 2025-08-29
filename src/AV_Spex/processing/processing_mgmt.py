@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import time
 import re
+import cv2
 from pathlib import Path
 
 from AV_Spex.processing import run_tools
@@ -260,6 +261,7 @@ class ProcessingManager:
         if self.check_cancelled():
             return None
         
+        # Frame Analysis
         frame_analysis_results = None
         frame_config = getattr(self.checks_config.outputs, 'frame_analysis', None)
         
@@ -287,6 +289,7 @@ class ProcessingManager:
         """
         Process comprehensive frame analysis including border detection,
         BRNG violations, and optionally signalstats (only with sophisticated borders).
+        Now includes iterative border refinement to handle sub-black blanking areas.
         
         Args:
             video_path (str): Path to the input video file
@@ -306,10 +309,12 @@ class ProcessingManager:
             'brng_results': None,
             'signalstats_results': None,
             'border_retry_performed': False,
+            'border_retry_count': 0,
             'border_detection_method': None,
             'signalstats_skipped_reason': None,
             'color_bars_detected': False,
-            'color_bars_end_time': None
+            'color_bars_end_time': None,
+            'border_refinement_history': []  # Track refinement attempts
         }
         
         # Access the frame analysis config
@@ -323,6 +328,7 @@ class ProcessingManager:
         use_sophisticated = frame_config.border_detection_mode == "sophisticated"
         border_pixels = frame_config.simple_border_pixels
         skip_color_bars = frame_config.brng_skip_color_bars == "yes"
+        max_border_retries = frame_config.max_border_retries
         
         # Check for color bars if enabled
         color_bars_end_seconds = None
@@ -338,7 +344,7 @@ class ProcessingManager:
                         analysis_results['color_bars_end_time'] = end_seconds
                         logger.info(f"Color bars detected by qct-parse, ending at {end_seconds:.1f}s")
         
-        # Step 1: Border Detection
+        # Step 1: Initial Border Detection
         if use_sophisticated:
             if self.signals:
                 self.signals.output_progress.emit("Detecting video borders (sophisticated analysis)...")
@@ -374,80 +380,27 @@ class ProcessingManager:
         
         analysis_results['border_results'] = border_results
         
-        # EMIT SIGNAL FOR BORDER DETECTION COMPLETION
-        if self.signals:
-            self.signals.step_completed.emit("Frame Analysis - Border Detection")
-        
         # Get the path to the border data file
         border_data_path = Path(destination_directory) / f"{video_id}_border_data.json"
         
-        # Step 2: BRNG Analysis (runs for both simple and sophisticated)
+        # EMIT SIGNAL FOR INITIAL BORDER DETECTION COMPLETION
         if self.signals:
-            self.signals.output_progress.emit("Analyzing BRNG violations...")
-        
-        brng_results = None
-        if border_results and border_results.get('active_area'):
-            brng_results = analyze_active_area_brng(
-                video_path=video_path,
-                border_data_path=border_data_path,
-                output_dir=destination_directory,
-                duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
-                skip_start_seconds=color_bars_end_seconds
-            )
-        else:
-            # Analyze full frame if no borders detected
-            brng_results = analyze_active_area_brng(
-                video_path=video_path,
-                border_data_path=None,
-                output_dir=destination_directory,
-                duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
-                skip_start_seconds=color_bars_end_seconds
-            )
-        
-        if self.check_cancelled():
-            return None
-        
-        analysis_results['brng_results'] = brng_results
-        
-        # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
-        if self.signals:
-            self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
-        
-        # Step 3: Check if border adjustment is needed (only for sophisticated mode)
-        if use_sophisticated and brng_results and frame_config.auto_retry_borders == 'yes':
-            aggregate = brng_results.get('aggregate_patterns', {})
-            requires_adjustment = aggregate.get('requires_border_adjustment', False)
+            self.signals.step_completed.emit("Frame Analysis - Border Detection")
+
+        # Step 2: Iterative Border Refinement Loop (only for sophisticated mode with auto-retry)
+        if use_sophisticated and frame_config.auto_retry_borders == 'yes':
+            retry_count = 0
+            previous_brng_results = None  # Store previous results for comparison
             
-            if requires_adjustment:
+            while retry_count <= max_border_retries:
+                # Step 2a: BRNG Analysis
                 if self.signals:
-                    self.signals.output_progress.emit("Re-detecting borders with adjusted parameters...")
+                    if retry_count == 0:
+                        self.signals.output_progress.emit("Analyzing BRNG violations...")
+                    else:
+                        self.signals.output_progress.emit(f"Re-analyzing BRNG (attempt {retry_count + 1})...")
                 
-                logger.warning("BRNG analysis detected boundary artifacts - adjusting border detection\n")
-                
-                # Re-run sophisticated border detection with adjusted parameters
-                adjusted_threshold = getattr(frame_config, 'border_threshold', 10) + 5
-                adjusted_edge_width = getattr(frame_config, 'border_edge_sample_width', 100) + 50
-                adjusted_samples = min(getattr(frame_config, 'border_sample_frames', 30) + 20, 100)
-                adjusted_padding = getattr(frame_config, 'border_padding', 5) + 5
-                
-                border_results = detect_video_borders(
-                    video_path,
-                    destination_directory,
-                    target_viz_time=getattr(frame_config, 'border_viz_time', 150),
-                    search_window=getattr(frame_config, 'border_search_window', 120),
-                    threshold=adjusted_threshold,
-                    edge_sample_width=adjusted_edge_width,
-                    sample_frames=adjusted_samples,
-                    padding=adjusted_padding
-                )
-                
-                analysis_results['border_retry_performed'] = True
-                analysis_results['border_results'] = border_results
-                
-                # Re-run BRNG analysis with new borders
-                if self.signals:
-                    self.signals.output_progress.emit("Re-analyzing BRNG with adjusted borders...")
-                
+                brng_results = None
                 if border_results and border_results.get('active_area'):
                     brng_results = analyze_active_area_brng(
                         video_path=video_path,
@@ -456,12 +409,306 @@ class ProcessingManager:
                         duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
                         skip_start_seconds=color_bars_end_seconds
                     )
-                    analysis_results['brng_results'] = brng_results
+                else:
+                    # Analyze full frame if no borders detected
+                    brng_results = analyze_active_area_brng(
+                        video_path=video_path,
+                        border_data_path=None,
+                        output_dir=destination_directory,
+                        duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                        skip_start_seconds=color_bars_end_seconds
+                    )
+                
+                if self.check_cancelled():
+                    return None
+                
+                analysis_results['brng_results'] = brng_results
+                
+                # Analyze refinement progress using the improved logic
+                from AV_Spex.checks.active_area_brng_analyzer import ActiveAreaBrngAnalyzer
+                temp_analyzer = ActiveAreaBrngAnalyzer(video_path, border_data_path, destination_directory)
+                
+                refinement_progress = temp_analyzer.analyze_refinement_progress(
+                    brng_results, previous_brng_results
+                )
+                
+                # Generate updated actionable report with progress analysis
+                actionable_report = temp_analyzer.generate_actionable_report(
+                    brng_results, previous_brng_results, refinement_progress
+                )
+                brng_results['actionable_report'] = actionable_report
+                brng_results['refinement_progress'] = refinement_progress
+                
+                # Extract decision from refined analysis
+                requires_adjustment = actionable_report.get('requires_border_adjustment', False)
+                adjustment_reason = actionable_report.get('adjustment_reason', 'unknown')
+                
+                # Record refinement attempt with enhanced data
+                aggregate = brng_results.get('aggregate_patterns', {}) if brng_results else {}
+                refinement_record = {
+                    'attempt': retry_count + 1,
+                    'requires_adjustment': requires_adjustment,
+                    'adjustment_reason': adjustment_reason,
+                    'edge_violation_percentage': aggregate.get('edge_violation_percentage', 0),
+                    'continuous_edge_percentage': aggregate.get('continuous_edge_percentage', 0),
+                    'affected_edges': aggregate.get('boundary_edges_detected', []),
+                    'improvement_score': refinement_progress.get('improvement_score', 0),
+                    'should_continue': refinement_progress.get('should_continue', False),
+                    'progress_reason': refinement_progress.get('reason', 'unknown')
+                }
+                
+                if border_results and border_results.get('active_area'):
+                    refinement_record['active_area'] = border_results['active_area']
+                
+                analysis_results['border_refinement_history'].append(refinement_record)
+                
+                # Enhanced decision logic based on refinement progress
+                should_stop = False
+                stop_reason = ""
+                
+                if not requires_adjustment:
+                    should_stop = True
+                    stop_reason = f"BRNG analysis acceptable ({adjustment_reason})"
+                elif retry_count >= max_border_retries:
+                    should_stop = True
+                    stop_reason = f"Maximum attempts reached ({max_border_retries + 1})"
+                elif not refinement_progress.get('should_continue', True):
+                    should_stop = True
+                    stop_reason = f"Progress analysis recommends stopping ({refinement_progress.get('reason', 'unknown')})"
+                elif refinement_progress.get('improvement_score', 0) < -5:
+                    should_stop = True
+                    stop_reason = "Refinement making results worse"
+                
+                if should_stop:
+                    final_worst_pixels = brng_results.get('worst_frames', [{}])[0].get('violation_percentage', 0) if brng_results else 0
+                    
+                    if adjustment_reason in ['excellent_quality_achieved', 'acceptable_quality_achieved']:
+                        logger.info(f"✓ Border refinement successful after {retry_count + 1} attempt(s)")
+                        logger.info(f"  Final result: worst frame violations = {final_worst_pixels:.4f}% pixels")
+                        logger.info(f"  Quality assessment: {adjustment_reason.replace('_', ' ')}")
+                    elif improvement_score > 5:
+                        logger.info(f"✓ Border refinement achieved good improvement after {retry_count + 1} attempt(s)")
+                        logger.info(f"  Improvement score: {improvement_score:.1f}")
+                        logger.info(f"  Final violations: {final_worst_pixels:.4f}% pixels")
+                    else:
+                        logger.warning(f"⚠ Border refinement stopped after {retry_count + 1} attempt(s) - {stop_reason}")
+                        logger.warning(f"  Final violations: {final_worst_pixels:.4f}% pixels")
+                        if retry_count >= max_border_retries:
+                            logger.warning("  Consider reviewing source material or manually setting border coordinates")
+                    break
+                
+                # Continue with border adjustment
+                retry_count += 1
+                analysis_results['border_retry_count'] = retry_count
+                
+                if self.signals:
+                    improvement_score = refinement_progress.get('improvement_score', 0)
+                    if improvement_score > 1:
+                        self.signals.output_progress.emit(f"Refining borders - progress detected (attempt {retry_count + 1})...")
+                    else:
+                        self.signals.output_progress.emit(f"Adjusting borders based on BRNG findings (attempt {retry_count + 1})...")
+                
+                logger.warning(f"BRNG analysis: {adjustment_reason} - continuing border refinement (attempt {retry_count})")
+                
+                # Get current active area
+                if border_results and border_results.get('active_area'):
+                    current_x, current_y, current_w, current_h = border_results['active_area']
+                    
+                    # Calculate expansion based on affected edges, violation severity, and progress
+                    affected_edges = aggregate.get('boundary_edges_detected', [])
+                    violation_percentage = aggregate.get('continuous_edge_percentage', 0)
+                    improvement_score = refinement_progress.get('improvement_score', 0)
+                    
+                    # Adaptive expansion based on progress
+                    improvement_score = refinement_progress.get('improvement_score', 0)
+                    progress_reason = refinement_progress.get('reason', 'unknown')
+
+                    if progress_reason == 'significant_pixel_improvement':
+                        # Great progress - use moderate expansion to build on success
+                        base_expansion = 6 + (retry_count * 3)
+                        logger.info(f"  Significant pixel improvement detected - using moderate expansion")
+                    elif improvement_score > 10:
+                        # Good overall progress - conservative expansion
+                        base_expansion = 4 + (retry_count * 2)
+                        logger.info(f"  Good overall progress detected - using conservative expansion")
+                    elif improvement_score > 0:
+                        # Some progress - moderate expansion
+                        base_expansion = 7 + (retry_count * 4)
+                        logger.info(f"  Some progress detected - using moderate expansion")
+                    else:
+                        # Little/no progress or regression - try more aggressive change
+                        base_expansion = 10 + (retry_count * 6)
+                        logger.info(f"  Minimal progress - using aggressive expansion strategy")
+
+                    # Scale by violation severity (but cap maximum expansion)
+                    if violation_percentage > 50:
+                        base_expansion = min(25, int(base_expansion * 1.3))  # Cap at 25px
+                    elif violation_percentage > 25:
+                        base_expansion = min(20, int(base_expansion * 1.1))  # Cap at 20px
+                    elif violation_percentage < 15:
+                        base_expansion = max(3, int(base_expansion * 0.8))   # Minimum 3px
+                    else:
+                        base_expansion = min(15, base_expansion)             # Cap at 15px for normal cases
+
+                    logger.info(f"  Final expansion amount: {base_expansion}px (violation %: {violation_percentage:.1f}, score: {improvement_score:.1f})")
+                    
+                    # Scale by violation severity
+                    if violation_percentage > 50:
+                        base_expansion = int(base_expansion * 1.5)
+                    elif violation_percentage < 15:
+                        base_expansion = max(2, int(base_expansion * 0.7))
+                    
+                    # Apply expansion to affected edges only (smarter targeting)
+                    expansion_x_left = base_expansion if 'left' in affected_edges else 0
+                    expansion_x_right = base_expansion if 'right' in affected_edges else 0
+                    expansion_y_top = base_expansion if 'top' in affected_edges else 0
+                    expansion_y_bottom = base_expansion if 'bottom' in affected_edges else 0
+                    
+                    # Calculate new active area coordinates
+                    new_x = max(0, current_x + expansion_x_left)
+                    new_y = max(0, current_y + expansion_y_top)
+                    new_w = max(100, current_w - expansion_x_left - expansion_x_right)
+                    new_h = max(100, current_h - expansion_y_top - expansion_y_bottom)
+                    
+                    # Ensure we don't exceed video boundaries
+                    cap = cv2.VideoCapture(video_path)
+                    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    cap.release()
+                    
+                    new_w = min(new_w, video_width - new_x)
+                    new_h = min(new_h, video_height - new_y)
+                    
+                    # Log what we're doing
+                    expansion_info = []
+                    if expansion_x_left > 0:
+                        expansion_info.append(f"L+{expansion_x_left}")
+                    if expansion_x_right > 0:
+                        expansion_info.append(f"R+{expansion_x_right}")
+                    if expansion_y_top > 0:
+                        expansion_info.append(f"T+{expansion_y_top}")
+                    if expansion_y_bottom > 0:
+                        expansion_info.append(f"B+{expansion_y_bottom}")
+                    
+                    logger.info(f"  Expanding borders: {', '.join(expansion_info) if expansion_info else 'no expansion needed'}")
+                    logger.info(f"  New active area: {new_w}x{new_h} at ({new_x},{new_y})")
+                    logger.info(f"  Previous active area: {current_w}x{current_h} at ({current_x},{current_y})")
+                    
+                    if improvement_score > 0:
+                        logger.info(f"  Improvement score: +{improvement_score:.1f} (refinement working)")
+                    elif improvement_score < -1:
+                        logger.warning(f"  Improvement score: {improvement_score:.1f} (refinement may not be helping)")
+                    
+                    # Create updated border results
+                    border_results = {
+                        **border_results,
+                        'active_area': [new_x, new_y, new_w, new_h],
+                        'border_adjustment_attempt': retry_count,
+                        'expanded_from_brng_analysis': True,
+                        'expansion_applied': {
+                            'left': expansion_x_left,
+                            'right': expansion_x_right,
+                            'top': expansion_y_top,
+                            'bottom': expansion_y_bottom,
+                            'affected_edges': affected_edges,
+                            'violation_percentage': violation_percentage,
+                            'improvement_score': improvement_score,
+                            'progress_reason': refinement_progress.get('reason', 'unknown')
+                        }
+                    }
+                    
+                    # Update border regions
+                    left_border_width = new_x
+                    right_border_start = new_x + new_w
+                    right_border_width = video_width - right_border_start
+                    top_border_height = new_y
+                    bottom_border_start = new_y + new_h
+                    bottom_border_height = video_height - bottom_border_start
+                    
+                    border_results['border_regions'] = {
+                        'left_border': (0, 0, left_border_width, video_height) if left_border_width > 0 else None,
+                        'right_border': (right_border_start, 0, right_border_width, video_height) if right_border_width > 0 else None,
+                        'top_border': (0, 0, video_width, top_border_height) if top_border_height > 0 else None,
+                        'bottom_border': (0, bottom_border_start, video_width, bottom_border_height) if bottom_border_height > 0 else None
+                    }
+                    
+                    # Update the border data file
+                    import json
+                    updated_border_data = {
+                        **border_results,
+                        'detection_method': 'sophisticated_with_smart_brng_refinement',
+                        'brng_refinement_applied': True,
+                        'refinement_attempt': retry_count,
+                        'refinement_progress': refinement_progress
+                    }
+                    
+                    # Convert numpy types for JSON serialization
+                    def convert_numpy_types(obj):
+                        import numpy as np
+                        if isinstance(obj, np.integer):
+                            return int(obj)
+                        elif isinstance(obj, np.floating):
+                            return float(obj)
+                        elif isinstance(obj, np.ndarray):
+                            return obj.tolist()
+                        elif isinstance(obj, dict):
+                            return {key: convert_numpy_types(value) for key, value in obj.items()}
+                        elif isinstance(obj, list):
+                            return [convert_numpy_types(item) for item in obj]
+                        return obj
+                    
+                    updated_border_data = convert_numpy_types(updated_border_data)
+                    
+                    with open(border_data_path, 'w') as f:
+                        json.dump(updated_border_data, f, indent=2)
+                    
+                    analysis_results['border_results'] = border_results
+                    analysis_results['border_retry_performed'] = True
+                    
+                    # Store current results for next iteration comparison
+                    previous_brng_results = brng_results.copy() if brng_results else None
+                    
+                else:
+                    logger.warning("No border results to refine - cannot adjust borders")
+                    break
+            
+            # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
+            if self.signals:
+                self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
+                
+        else:
+            # No iterative refinement - just run BRNG once
+            if self.signals:
+                self.signals.output_progress.emit("Analyzing BRNG violations...")
+            
+            brng_results = None
+            if border_results and border_results.get('active_area'):
+                brng_results = analyze_active_area_brng(
+                    video_path=video_path,
+                    border_data_path=border_data_path,
+                    output_dir=destination_directory,
+                    duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                    skip_start_seconds=color_bars_end_seconds
+                )
+            else:
+                brng_results = analyze_active_area_brng(
+                    video_path=video_path,
+                    border_data_path=None,
+                    output_dir=destination_directory,
+                    duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                    skip_start_seconds=color_bars_end_seconds
+                )
+            
+            if self.check_cancelled():
+                return None
+            
+            analysis_results['brng_results'] = brng_results
+            
+            # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
+            if self.signals:
+                self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
         
-        if self.check_cancelled():
-            return None
-        
-        # Step 4: FFprobe Signalstats Analysis (ONLY if sophisticated border detection was used)
+        # Step 3: FFprobe Signalstats Analysis (ONLY if sophisticated border detection was used)
         if use_sophisticated:
             if self.signals:
                 self.signals.output_progress.emit("Running FFprobe signalstats analysis...")
@@ -489,10 +736,8 @@ class ProcessingManager:
             if self.signals:
                 self.signals.output_progress.emit("Skipping signalstats (simple borders mode)...")
         
-        # Log summary
+        # Log comprehensive summary
         self._log_broadcast_analysis_summary(analysis_results, video_id)
-        
-        # Note: Removed the generic "Broadcast Analysis" signal since we're now using specific substep signals
         
         return analysis_results
     
