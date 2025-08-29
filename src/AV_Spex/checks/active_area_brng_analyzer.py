@@ -90,11 +90,11 @@ class ActiveAreaBrngAnalyzer:
             
             if self.border_data and self.border_data.get('active_area'):
                 self.active_area = tuple(self.border_data['active_area'])
-                print(f"✔ Loaded border data. Active area: {self.active_area}")
+                logger.debug(f"✔ Loaded border data. Active area: {self.active_area}")
             else:
-                print("⚠️ Border data doesn't contain active area")
+                logger.debug("⚠️ Border data doesn't contain active area")
         except Exception as e:
-            print(f"⚠️ Could not load border data: {e}")
+            logger.debug(f"⚠️ Could not load border data: {e}")
     
     def detect_color_bars_or_test_pattern(self, frame):
         """
@@ -172,7 +172,7 @@ class ActiveAreaBrngAnalyzer:
         Find where actual content starts (skip color bars, black frames, etc.)
         Returns frame index where content begins
         """
-        print(f"  Detecting content start (skipping test patterns)...")
+        logger.debug(f"  Detecting content start (skipping test patterns)...")
         
         check_interval = max(1, int(self.fps))  # Check every second
         max_frames = int(max_seconds * self.fps)
@@ -195,10 +195,10 @@ class ActiveAreaBrngAnalyzer:
             # Check if it has reasonable content characteristics
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if np.std(gray) > 15:  # Has some variation
-                print(f"  Content starts at frame {frame_idx} ({frame_idx/self.fps:.1f}s)")
+                logger.debug(f"  Content starts at frame {frame_idx} ({frame_idx/self.fps:.1f}s)")
                 return frame_idx
         
-        print(f"  No clear content start found, using frame 0")
+        logger.debug(f"  No clear content start found, using frame 0")
         return 0
     
     def process_with_ffmpeg(self, duration_limit=300, skip_start_seconds=0):
@@ -206,22 +206,22 @@ class ActiveAreaBrngAnalyzer:
         Process video with ffmpeg signalstats, creating both highlighted and original versions
         for differential analysis.
         """
-        print(f"\nProcessing video with ffmpeg signalstats...")
+        logger.debug(f"\nProcessing video with ffmpeg signalstats...")
         
         # Build filter chain for active area crop
         crop_filter = ""
         if self.active_area:
             x, y, w, h = self.active_area
             crop_filter = f"crop={w}:{h}:{x}:{y},"
-            print(f"  Cropping to active area: {w}x{h} at ({x},{y})")
+            logger.debug(f"  Cropping to active area: {w}x{h} at ({x},{y})")
         else:
-            print("  No border data - analyzing full frame")
+            logger.debug("  No border data - analyzing full frame")
         
         # Add seek position if skipping start
         seek_args = []
         if skip_start_seconds > 0:
             seek_args = ["-ss", str(skip_start_seconds)]
-            print(f"  Skipping first {skip_start_seconds} seconds")
+            logger.debug(f"  Skipping first {skip_start_seconds} seconds")
         
         # Create highlighted version with BRNG violations marked in cyan
         highlighted_cmd = [
@@ -251,23 +251,23 @@ class ActiveAreaBrngAnalyzer:
             str(self.original_video)
         ]
         
-        print(f"  Processing up to {duration_limit} seconds...")
+        logger.debug(f"  Processing up to {duration_limit} seconds...")
         
         try:
             # Process highlighted version
-            print("  Creating highlighted version...")
+            logger.debug("  Creating highlighted version...")
             result = subprocess.run(highlighted_cmd, capture_output=True, text=True, check=True)
             
             # Process original version
-            print("  Creating original version for comparison...")
+            logger.debug("  Creating original version for comparison...")
             result = subprocess.run(original_cmd, capture_output=True, text=True, check=True)
             
-            print(f"✔ FFmpeg processing complete")
+            logger.debug(f"✔ FFmpeg processing complete")
             return True
         except subprocess.CalledProcessError as e:
-            print(f"✗ FFmpeg error: {e}")
+            logger.debug(f"✗ FFmpeg error: {e}")
             if e.stderr:
-                print(f"  Error details: {e.stderr[:500]}")
+                logger.warning(f"  Error details: {e.stderr[:500]}")
             return False
     
     def detect_brng_violations_differential(self, frame_highlighted, frame_original):
@@ -457,8 +457,8 @@ class ActiveAreaBrngAnalyzer:
         Adaptively sample video based on scene changes and content complexity.
         Skips test patterns at the beginning.
         """
-        print("\nPerforming adaptive video sampling...")
-        print(f"  Starting from frame {content_start_frame} to skip test patterns")
+        logger.debug("\nPerforming adaptive video sampling...")
+        logger.debug(f"  Starting from frame {content_start_frame} to skip test patterns")
         
         # Adjust total frames based on content start
         adjusted_total_frames = self.total_frames - content_start_frame
@@ -499,21 +499,21 @@ class ActiveAreaBrngAnalyzer:
             if ret_h and ret_o:
                 frame_samples.append((idx, frame_h, frame_o))
         
-        print(f"  Collected {len(frame_samples)} frame samples")
+        logger.debug(f"  Collected {len(frame_samples)} frame samples")
         return frame_samples
     
     def analyze_video_comprehensive(self, duration_limit=300):
         """
         Comprehensive analysis using differential detection and adaptive sampling
         """
-        print(f"\nPerforming comprehensive BRNG analysis...")
+        logger.debug(f"\nPerforming comprehensive BRNG analysis...")
         
         # Open both videos
         cap_highlighted = cv2.VideoCapture(str(self.highlighted_video))
         cap_original = cv2.VideoCapture(str(self.original_video))
         
         if not cap_highlighted.isOpened() or not cap_original.isOpened():
-            print("✗ Could not open processed videos")
+            logger.error("✗ Could not open processed videos")
             return None
         
         # Get video properties from highlighted version
@@ -522,7 +522,7 @@ class ActiveAreaBrngAnalyzer:
         width = int(cap_highlighted.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap_highlighted.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        print(f"  Video: {width}x{height}, {fps:.2f} fps, {total_frames} frames")
+        logger.debug(f"  Video: {width}x{height}, {fps:.2f} fps, {total_frames} frames")
         
         # Find where actual content starts (skip color bars)
         cap_temp = cv2.VideoCapture(str(self.original_video))
@@ -538,7 +538,7 @@ class ActiveAreaBrngAnalyzer:
         edge_violation_frames = []
         continuous_edge_frames = []
         
-        print(f"\nAnalyzing {len(frame_samples)} samples...")
+        logger.debug(f"\nAnalyzing {len(frame_samples)} samples...")
         
         for idx, (frame_idx, frame_h, frame_o) in enumerate(frame_samples):
             # Differential detection
@@ -672,9 +672,9 @@ class ActiveAreaBrngAnalyzer:
         with open(self.analysis_output, 'w') as f:
             json.dump(analysis, f, indent=2)
         
-        print(f"✔ Analysis complete. Results saved to: {self.analysis_output}")
+        logger.debug(f"✔ Analysis complete. Results saved to: {self.analysis_output}")
         if saved_thumbnails:
-            print(f"✔ Saved {len(saved_thumbnails)} diagnostic thumbnail(s) to: {self.thumbnails_dir}")
+            logger.info(f"✔ Saved {len(saved_thumbnails)} diagnostic thumbnail(s) to: {self.thumbnails_dir}")
         
         return analysis
     
@@ -757,7 +757,7 @@ class ActiveAreaBrngAnalyzer:
         """
         Save diagnostic thumbnails showing violations with analysis overlay
         """
-        print(f"\nSaving diagnostic thumbnails for worst frames...")
+        logger.info(f"\nSaving diagnostic thumbnails for worst frames...")
         
         saved_thumbnails = []
         
@@ -921,63 +921,63 @@ class ActiveAreaBrngAnalyzer:
                     'timecode': self.format_timecode(timestamp)
                 })
                 
-                print(f"  ✓ Saved: {thumbnail_filename}")
+                logger.info(f"  ✓ Saved: {thumbnail_filename}")
         
         return saved_thumbnails
     
     def print_summary(self, analysis):
         """Print enhanced analysis summary"""
-        print("\n" + "="*80)
-        print("ACTIVE AREA BRNG ANALYSIS RESULTS - IMPROVED")
-        print("="*80)
+        logger.debug("\n" + "="*80)
+        logger.debug("ACTIVE AREA BRNG ANALYSIS RESULTS - IMPROVED")
+        logger.debug("="*80)
         
         info = analysis['video_info']
         
         if info['active_area']:
-            print(f"Active Area: {info['active_area'][2]}x{info['active_area'][3]} at ({info['active_area'][0]},{info['active_area'][1]})")
+            logger.debug(f"Active Area: {info['active_area'][2]}x{info['active_area'][3]} at ({info['active_area'][0]},{info['active_area'][1]})")
         else:
-            print("Analyzed: Full frame (no border data)")
+            logger.debug("Analyzed: Full frame (no border data)")
         
-        print(f"Video: {info['width']}x{info['height']}, {info['duration']:.1f}s")
+        logger.debug(f"Video: {info['width']}x{info['height']}, {info['duration']:.1f}s")
         
         # Note about skipped content
         if info.get('content_start_time', 0) > 0:
-            print(f"Skipped test patterns: Started analysis at {info['content_start_time']:.1f}s")
+            logger.debug(f"Skipped test patterns: Started analysis at {info['content_start_time']:.1f}s")
         
-        print(f"Frames analyzed: {analysis['total_frames_analyzed']}")
+        logger.debug(f"Frames analyzed: {analysis['total_frames_analyzed']}")
         
         report = analysis.get('actionable_report', {})
         
-        print(f"\n{report.get('overall_assessment', 'Analysis complete')}")
-        print(f"Priority: {report.get('action_priority', 'none').upper()}")
+        logger.debug(f"\n{report.get('overall_assessment', 'Analysis complete')}\n")
+        logger.debug(f"Priority: {report.get('action_priority', 'none').upper()}")
         
         # HIGHLIGHT EDGE VIOLATIONS
         aggregate = analysis.get('aggregate_patterns', {})
         if aggregate.get('requires_border_adjustment'):
-            print("\n⚠️  BORDER ADJUSTMENT REQUIRED")
-            print(f"  Continuous edge violations detected on: {', '.join(aggregate.get('boundary_edges_detected', []))}")
-            print(f"  {aggregate.get('continuous_edge_percentage', 0):.1f}% of frames have continuous edge artifacts")
-            print("  → Re-run border detection with adjusted parameters")
+            logger.debug("\n⚠️  BORDER ADJUSTMENT REQUIRED")
+            logger.debug(f"  Continuous edge violations detected on: {', '.join(aggregate.get('boundary_edges_detected', []))}")
+            logger.debug(f"  {aggregate.get('continuous_edge_percentage', 0):.1f}% of frames have continuous edge artifacts")
+            logger.debug("  → Re-run border detection with adjusted parameters")
         elif aggregate.get('edge_violation_percentage', 0) > 0:
-            print(f"\nEdge violations: {aggregate['edge_violation_percentage']:.1f}% of frames")
-            print(f"  Affected edges: {', '.join(aggregate.get('boundary_edges_detected', []))}")
+            logger.debug(f"\nEdge violations: {aggregate['edge_violation_percentage']:.1f}% of frames")
+            logger.debug(f"  Affected edges: {', '.join(aggregate.get('boundary_edges_detected', []))}")
         
         if analysis['frames_with_violations'] > 0:
-            print(f"\nVIOLATION STATISTICS:")
-            print(f"  Frames with violations: {analysis['frames_with_violations']}/{analysis['total_frames_analyzed']}")
-            print(f"  Average violation: {analysis['average_violation_percentage']:.4f}% of pixels")
-            print(f"  Maximum violation: {analysis['max_violation_percentage']:.4f}% of pixels")
+            logger.debug(f"\nVIOLATION STATISTICS:")
+            logger.debug(f"  Frames with violations: {analysis['frames_with_violations']}/{analysis['total_frames_analyzed']}")
+            logger.debug(f"  Average violation: {analysis['average_violation_percentage']:.4f}% of pixels")
+            logger.debug(f"  Maximum violation: {analysis['max_violation_percentage']:.4f}% of pixels")
         
         # Worst frames (if not all edge artifacts)
         if analysis.get('worst_frames'):
-            print("\nWORST FRAMES:")
+            logger.info("\nWORST FRAMES:")
             for i, frame in enumerate(analysis['worst_frames'][:3], 1):
                 edge_note = " [EDGE]" if frame.get('has_edge_violations') else ""
-                print(f"  {i}. Frame {frame['frame']} ({frame['timecode']}) - {frame['violation_percentage']:.4f}% pixels{edge_note}")
+                logger.info(f"  {i}. Frame {frame['frame']} ({frame['timecode']}) - {frame['violation_percentage']:.4f}% pixels{edge_note}")
                 if frame.get('diagnostics'):
-                    print(f"     Issues: {', '.join(frame['diagnostics'][:2])}")
+                    logger.info(f"     Issues: {', '.join(frame['diagnostics'][:2])}")
         
-        print("="*80)
+        logger.debug("="*80)
     
     def cleanup(self, keep_intermediates=False):
         """Clean up temporary files"""
@@ -987,17 +987,17 @@ class ActiveAreaBrngAnalyzer:
                     self.highlighted_video.unlink()
                 if self.original_video.exists():
                     self.original_video.unlink()
-                print("✔ Removed intermediate videos")
+                logger.debug("\n✔ Removed intermediate videos")
             else:
-                print(f"ℹ️ Kept intermediate videos in: {self.temp_dir}")
+                logger.debug(f"ℹ️ Kept intermediate videos in: {self.temp_dir}")
             
             # Remove temp directory if empty
             if self.temp_dir.exists():
                 if not any(self.temp_dir.iterdir()):
                     self.temp_dir.rmdir()
-                    print("✔ Cleaned up temporary directory")
+                    logger.debug("✔ Cleaned up temporary directory")
         except Exception as e:
-            print(f"⚠️ Could not clean up temp files: {e}")
+            logger.warning(f"⚠️ Could not clean up temp files: {e}")
 
 
 def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None, 
@@ -1023,7 +1023,7 @@ def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None,
     # First check if we should skip color bars
     if skip_start_seconds:
         skip_seconds = skip_start_seconds
-        logger.info(f"Will skip first {skip_seconds:.1f}s based on color bars detection")
+        logger.info(f"Will skip first {skip_seconds:.1f}s based on color bars detection\n")
     
     # Also check for test patterns (but only if not already skipping past them)
     cap = cv2.VideoCapture(str(video_path))
@@ -1038,7 +1038,7 @@ def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None,
     
     # Process with ffmpeg, skipping the determined amount
     if not analyzer.process_with_ffmpeg(duration_limit, skip_start_seconds=skip_seconds):
-        print("FFmpeg processing failed")
+        logger.error("FFmpeg processing failed")
         return None
     
     # Comprehensive analysis

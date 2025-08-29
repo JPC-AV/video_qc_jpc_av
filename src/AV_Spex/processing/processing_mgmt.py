@@ -374,6 +374,10 @@ class ProcessingManager:
         
         analysis_results['border_results'] = border_results
         
+        # EMIT SIGNAL FOR BORDER DETECTION COMPLETION
+        if self.signals:
+            self.signals.step_completed.emit("Frame Analysis - Border Detection")
+        
         # Get the path to the border data file
         border_data_path = Path(destination_directory) / f"{video_id}_border_data.json"
         
@@ -387,7 +391,8 @@ class ProcessingManager:
                 video_path=video_path,
                 border_data_path=border_data_path,
                 output_dir=destination_directory,
-                duration_limit=getattr(frame_config, 'brng_duration_limit', 300)
+                duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                skip_start_seconds=color_bars_end_seconds
             )
         else:
             # Analyze full frame if no borders detected
@@ -395,13 +400,18 @@ class ProcessingManager:
                 video_path=video_path,
                 border_data_path=None,
                 output_dir=destination_directory,
-                duration_limit=getattr(frame_config, 'brng_duration_limit', 300)
+                duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                skip_start_seconds=color_bars_end_seconds
             )
         
         if self.check_cancelled():
             return None
         
         analysis_results['brng_results'] = brng_results
+        
+        # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
+        if self.signals:
+            self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
         
         # Step 3: Check if border adjustment is needed (only for sophisticated mode)
         if use_sophisticated and brng_results and frame_config.auto_retry_borders == 'yes':
@@ -412,7 +422,7 @@ class ProcessingManager:
                 if self.signals:
                     self.signals.output_progress.emit("Re-detecting borders with adjusted parameters...")
                 
-                logger.warning("BRNG analysis detected boundary artifacts - adjusting border detection")
+                logger.warning("BRNG analysis detected boundary artifacts - adjusting border detection\n")
                 
                 # Re-run sophisticated border detection with adjusted parameters
                 adjusted_threshold = getattr(frame_config, 'border_threshold', 10) + 5
@@ -443,7 +453,8 @@ class ProcessingManager:
                         video_path=video_path,
                         border_data_path=border_data_path,
                         output_dir=destination_directory,
-                        duration_limit=getattr(frame_config, 'brng_duration_limit', 300)
+                        duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                        skip_start_seconds=color_bars_end_seconds
                     )
                     analysis_results['brng_results'] = brng_results
         
@@ -455,7 +466,7 @@ class ProcessingManager:
             if self.signals:
                 self.signals.output_progress.emit("Running FFprobe signalstats analysis...")
             
-            logger.info("Running signalstats analysis (sophisticated borders detected)")
+            logger.info("\nRunning signalstats analysis (sophisticated borders detected)")
             
             signalstats_results = analyze_video_signalstats(
                 video_path=video_path,
@@ -466,6 +477,10 @@ class ProcessingManager:
             )
             
             analysis_results['signalstats_results'] = signalstats_results
+            
+            # EMIT SIGNAL FOR SIGNALSTATS COMPLETION
+            if self.signals:
+                self.signals.step_completed.emit("Frame Analysis - Signalstats")
         else:
             # Skip signalstats for simple border detection
             logger.info("Skipping signalstats analysis (requires sophisticated border detection)")
@@ -477,8 +492,7 @@ class ProcessingManager:
         # Log summary
         self._log_broadcast_analysis_summary(analysis_results, video_id)
         
-        if self.signals:
-            self.signals.step_completed.emit("Broadcast Analysis")
+        # Note: Removed the generic "Broadcast Analysis" signal since we're now using specific substep signals
         
         return analysis_results
     

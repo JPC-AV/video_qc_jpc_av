@@ -187,6 +187,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             if checks_config.tools.mediaconch.run_mediaconch == "yes":
                 self._add_step_item("MediaConch Validation")
             
+            
             # Metadata tools - note consistent naming
             if checks_config.tools.exiftool.run_tool == "yes" or checks_config.tools.exiftool.check_tool == "yes":
                 self._add_step_item("Exiftool")
@@ -202,6 +203,14 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
                 self._add_step_item("QCTools")
             if checks_config.tools.qct_parse.run_tool == "yes":
                 self._add_step_item("QCT Parse")
+            
+            # Frame Analysis
+            if hasattr(checks_config.outputs, 'frame_analysis') and checks_config.outputs.frame_analysis.enabled == "yes":
+                self._add_step_item("Frame Analysis - Border Detection")
+                self._add_step_item("Frame Analysis - BRNG Analysis")
+                # Only add signalstats if in sophisticated mode
+                if checks_config.outputs.frame_analysis.border_detection_mode == "sophisticated":
+                    self._add_step_item("Frame Analysis - Signalstats")
             
             # Output files
             if checks_config.outputs.access_file == "yes":

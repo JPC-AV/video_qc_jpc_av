@@ -14,6 +14,7 @@ import numpy as np
 from pathlib import Path
 import cv2
 
+from AV_Spex.utils.log_setup import logger
 
 class FFprobeAnalyzer:
     """
@@ -38,15 +39,15 @@ class FFprobeAnalyzer:
             result = subprocess.run(['ffprobe', '-version'], 
                                   capture_output=True, text=True)
             if result.returncode == 0:
-                print("✓ FFprobe found")
+                logger.debug("✓ FFprobe found")
             else:
-                print("⚠️  FFprobe may not be properly installed")
+                logger.error("⚠️  FFprobe may not be properly installed")
         except FileNotFoundError:
-            print("⚠️  FFprobe not found in PATH")
-            print("   Install with: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)")
+            logger.error("⚠️  FFprobe not found in PATH")
+            logger.error("   Install with: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)")
             raise
         except Exception as e:
-            print(f"⚠️  Could not check FFprobe: {e}")
+            logger.error(f"⚠️  Could not check FFprobe: {e}")
             
     def get_video_properties(self):
         """Get basic video properties using FFprobe"""
@@ -102,15 +103,15 @@ class FFprobeAnalyzer:
                     if count_result.returncode == 0:
                         frame_count = int(count_result.stdout.strip())
                         self.duration = frame_count / self.fps if self.fps > 0 else 0
-                        print(f"✓ Calculated duration from {frame_count} frames")
+                        logger.info(f"✓ Calculated duration from {frame_count} frames")
                 except:
                     # Final fallback - use a very conservative estimate
                     self.duration = 0
                     
-            print(f"✓ Video properties: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
+            logger.info(f"✓ Video properties: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
             
         except Exception as e:
-            print(f"Error getting video properties: {e}")
+            logger.error(f"Error getting video properties: {e}")
             # Fallback to OpenCV for basic properties
             cap = cv2.VideoCapture(self.video_path)
             if cap.isOpened():
@@ -120,7 +121,7 @@ class FFprobeAnalyzer:
                 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 self.duration = total_frames / self.fps if self.fps > 0 else 0
                 cap.release()
-                print(f"✓ Using OpenCV fallback: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
+                logger.warning(f"✓ Using OpenCV fallback: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
             else:
                 raise ValueError(f"Cannot open video file: {self.video_path}")
     
@@ -139,14 +140,14 @@ class FFprobeAnalyzer:
             
             # Check for 10-bit formats
             if any(fmt in pix_fmt for fmt in ['p010', 'yuv420p10', 'yuv422p10', 'yuv444p10']):
-                print(f"✓ Detected 10-bit video format: {pix_fmt}")
+                logger.info(f"✓ Detected 10-bit video format: {pix_fmt}")
                 return 10
             else:
-                print(f"✓ Detected 8-bit video format: {pix_fmt}")
+                logger.info(f"✓ Detected 8-bit video format: {pix_fmt}")
                 return 8
                 
         except Exception as e:
-            print(f"⚠️  Could not detect bit depth: {e}, assuming 8-bit")
+            logger.error(f"⚠️  Could not detect bit depth: {e}, assuming 8-bit")
             return 8
         
     def analyze_with_ffprobe(self, active_area=None, start_time=120, duration=60, region_name="frame"):
@@ -161,12 +162,12 @@ class FFprobeAnalyzer:
         """
         # Check if video is long enough
         if self.duration < start_time + duration:
-            print(f"⚠️  Video duration ({self.duration:.1f}s) is shorter than requested analysis period ({start_time}s + {duration}s)")
+            logger.warning(f"⚠️  Video duration ({self.duration:.1f}s) is shorter than requested analysis period ({start_time}s + {duration}s)")
             if self.duration > start_time:
                 duration = self.duration - start_time
-                print(f"   Adjusting duration to {duration:.1f}s")
+                logger.debug(f"   Adjusting duration to {duration:.1f}s")
             else:
-                print(f"   Falling back to first {min(duration, self.duration):.1f}s")
+                logger.debug(f"   Falling back to first {min(duration, self.duration):.1f}s")
                 start_time = 0
                 duration = min(duration, self.duration)
         
@@ -194,27 +195,27 @@ class FFprobeAnalyzer:
             '-of', 'csv=p=0'
         ]
         
-        print(f"\nRunning FFprobe signalstats analysis on {region_name}...")
+        logger.debug(f"\nRunning FFprobe signalstats analysis on {region_name}...")
         if active_area:
             x, y, w, h = active_area
-            print(f"  Region: {w}x{h} at ({x},{y})")
+            logger.info(f"  Region: {w}x{h} at ({x},{y})")
         else:
-            print(f"  Region: full frame {self.width}x{self.height}")
-        print(f"  Time range: {start_time}s to {end_time}s ({duration}s duration)")
+            logger.info(f"  Region: full frame {self.width}x{self.height}")
+        logger.info(f"  Time range: {start_time}s to {end_time}s ({duration}s duration)")
             
         # Run FFprobe and capture output
         try:
             result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode != 0:
-                print(f"FFprobe error: {result.stderr}")
+                logger.error(f"FFprobe error: {result.stderr}")
                 return None
                 
             # Parse CSV output
             return self.parse_ffprobe_output(result.stdout, region_name)
             
         except Exception as e:
-            print(f"Error running FFprobe: {e}")
+            logger.error(f"Error running FFprobe: {e}")
             return None
             
     def parse_ffprobe_output(self, output, region_name="frame"):
@@ -258,9 +259,9 @@ class FFprobeAnalyzer:
             results['violation_percentage'] = (results['frames_with_violations'] / 
                                              results['frames_analyzed']) * 100
                                              
-        print(f"  Analyzed {results['frames_analyzed']} frames")
-        print(f"  Frames with violations: {results['frames_with_violations']} ({results['violation_percentage']:.1f}%)")
-        print(f"  Avg BRNG: {results['avg_brng']:.4f}%, Max BRNG: {results['max_brng']:.4f}%")
+        logger.info(f"  Analyzed {results['frames_analyzed']} frames")
+        logger.warning(f"  Frames with violations: {results['frames_with_violations']} ({results['violation_percentage']:.1f}%)")
+        logger.info(f"  Avg BRNG: {results['avg_brng']:.4f}%, Max BRNG: {results['max_brng']:.4f}%")
         
         return results
     
@@ -276,13 +277,13 @@ class FFprobeAnalyzer:
         results = {}
         
         if not border_regions:
-            print("No border regions provided")
+            logger.error("No border regions provided")
             return results
         
         for region_name, coords in border_regions.items():
             if coords:
                 x, y, w, h = coords
-                print(f"\nAnalyzing {region_name}: {w}x{h} at ({x},{y})")
+                logger.debug(f"\nAnalyzing {region_name}: {w}x{h} at ({x},{y})")
                 results[region_name] = self.analyze_with_ffprobe(
                     active_area=coords,
                     start_time=start_time,
@@ -300,11 +301,11 @@ class FFprobeAnalyzer:
             with open(border_data_path, 'r') as f:
                 border_data = json.load(f)
             
-            print(f"✓ Loaded border data from {border_data_path}")
+            logger.info(f"✓ Loaded border data from {border_data_path}")
             return border_data
         
         except Exception as e:
-            print(f"⚠️ Could not load border data: {e}")
+            logger.error(f"⚠️ Could not load border data: {e}")
             return None
 
 
@@ -331,9 +332,9 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
     else:
         output_dir = video_path.parent
         
-    print(f"Processing: {video_path.name}")
-    print(f"Using FFprobe signalstats BRNG analysis (simplified)")
-    print(f"Analyzing from {start_time//60}:{start_time%60:02d} to {(start_time+duration)//60}:{(start_time+duration)%60:02d}")
+    logger.debug(f"Processing: {video_path.name}\n")
+    logger.info(f"Using FFprobe signalstats BRNG analysis\n")
+    logger.debug(f"Analyzing from {start_time//60}:{start_time%60:02d} to {(start_time+duration)//60}:{(start_time+duration)%60:02d}\n")
     
     analyzer = FFprobeAnalyzer(video_path)
     
@@ -345,11 +346,11 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
         border_data = analyzer.load_border_data(border_data_path)
         if border_data and border_data.get('active_area'):
             active_area = tuple(border_data['active_area'])
-            print(f"Using active area from border data: {active_area}")
+            logger.info(f"Using active area from border data: {active_area}")
     
     # If no border data, analyze full frame as fallback
     if not active_area:
-        print("\nNo border data available - analyzing full frame...")
+        logger.debug("\nNo border data available - analyzing full frame...")
         full_results = analyzer.analyze_with_ffprobe(
             active_area=None, 
             start_time=start_time,
@@ -360,7 +361,7 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
         border_results = None
     else:
         # Analyze active area only
-        print("\nAnalyzing active area...")
+        logger.debug("\nAnalyzing active area...")
         active_results = analyzer.analyze_with_ffprobe(
             active_area=active_area,
             start_time=start_time,
@@ -371,7 +372,7 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
         # Analyze border regions if available
         border_results = None
         if border_data.get('border_regions'):
-            print("\nAnalyzing border regions...")
+            logger.debug("\nAnalyzing border regions...")
             border_results = analyzer.analyze_border_regions_from_data(
                 border_data['border_regions'],
                 start_time=start_time,
@@ -397,25 +398,25 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
     }
     
     # Analysis and diagnosis
-    print("\n" + "="*80)
-    print("FFPROBE SIGNALSTATS ANALYSIS RESULTS (SIMPLIFIED)")
-    print("="*80)
-    print(f"\nVideo: {analyzer.bit_depth}-bit")
-    print(f"Analysis period: {start_time//60}:{start_time%60:02d} to {(start_time+duration)//60}:{(start_time+duration)%60:02d}")
+    logger.debug("\n" + "="*80)
+    logger.debug("FFPROBE SIGNALSTATS ANALYSIS RESULTS")
+    logger.debug("="*80)
+    logger.debug(f"\nVideo: {analyzer.bit_depth}-bit")
+    logger.info(f"Analysis period: {start_time//60}:{start_time%60:02d} to {(start_time+duration)//60}:{(start_time+duration)%60:02d}")
     
     if active_results:
-        print(f"\n🎯 ACTIVE AREA ANALYSIS:")
-        print(f"   Frames with violations: {active_results['frames_with_violations']}/{active_results['frames_analyzed']} ({active_results['violation_percentage']:.1f}%)")
-        print(f"   Average BRNG: {active_results['avg_brng']:.4f}%")
-        print(f"   Maximum BRNG: {active_results['max_brng']:.4f}%")
+        logger.info(f"\n🎯 ACTIVE AREA ANALYSIS:")
+        logger.debug(f"   Frames with violations: {active_results['frames_with_violations']}/{active_results['frames_analyzed']} ({active_results['violation_percentage']:.1f}%)")
+        logger.debug(f"   Average BRNG: {active_results['avg_brng']:.4f}%")
+        logger.debug(f"   Maximum BRNG: {active_results['max_brng']:.4f}%")
     elif full_results:
-        print(f"\n📺 FULL FRAME ANALYSIS (no border data available):")
-        print(f"   Frames with violations: {full_results['frames_with_violations']}/{full_results['frames_analyzed']} ({full_results['violation_percentage']:.1f}%)")
-        print(f"   Average BRNG: {full_results['avg_brng']:.4f}%")
-        print(f"   Maximum BRNG: {full_results['max_brng']:.4f}%")
+        logger.info(f"\n📺 FULL FRAME ANALYSIS (no border data available):")
+        logger.debug(f"   Frames with violations: {full_results['frames_with_violations']}/{full_results['frames_analyzed']} ({full_results['violation_percentage']:.1f}%)")
+        logger.debug(f"   Average BRNG: {full_results['avg_brng']:.4f}%")
+        logger.debug(f"   Maximum BRNG: {full_results['max_brng']:.4f}%")
     
     if border_results:
-        print(f"\n🔴 BORDER REGIONS ANALYSIS:")
+        logger.info(f"\n🔴 BORDER REGIONS ANALYSIS:")
         for region, data in border_results.items():
             if data:
                 print(f"   {region}: {data['violation_percentage']:.1f}% violations, avg BRNG: {data['avg_brng']:.4f}%")
@@ -443,47 +444,47 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
         if frame_violation_pct < 10 and max_brng < 0.01:
             # Very minor violations - less than 10% of frames and less than 0.01% of pixels
             report['diagnosis'] = "✓ Video appears broadcast-compliant"
-            print(f"\n✅ DIAGNOSIS: Video appears to be within broadcast range")
-            print(f"   Minimal violations: {frame_violation_pct:.1f}% of frames, max {max_brng:.4f}% pixels affected")
+            logger.info(f"\n✅ DIAGNOSIS: Video appears to be within broadcast range")
+            logger.info(f"   Minimal violations: {frame_violation_pct:.1f}% of frames, max {max_brng:.4f}% pixels affected")
             
         elif frame_violation_pct < 50 and max_brng < 0.1:
             # Minor violations - common in professional content
             report['diagnosis'] = "ℹ️ Minor BRNG violations detected - likely acceptable"
-            print(f"\n✅ DIAGNOSIS: Minor broadcast range violations detected")
-            print(f"   {frame_violation_pct:.1f}% of frames affected, but only {max_brng:.4f}% pixels maximum")
-            print("   → These levels are typically acceptable for broadcast")
+            logger.info(f"\n✅ DIAGNOSIS: Minor broadcast range violations detected")
+            logger.info(f"   {frame_violation_pct:.1f}% of frames affected, but only {max_brng:.4f}% pixels maximum")
+            logger.info("   → These levels are typically acceptable for broadcast")
             
         elif frame_violation_pct > 80 and max_brng < 0.5:
             # Many frames affected but still minor pixel violations
             report['diagnosis'] = "⚠️ Widespread minor BRNG violations"
-            print(f"\n⚠️ DIAGNOSIS: Widespread but minor broadcast violations")
-            print(f"   {frame_violation_pct:.1f}% of frames affected, up to {max_brng:.4f}% pixels")
-            print("   → Review recommended, but may be acceptable depending on content")
+            logger.info(f"\n⚠️ DIAGNOSIS: Widespread but minor broadcast violations")
+            logger.info(f"   {frame_violation_pct:.1f}% of frames affected, up to {max_brng:.4f}% pixels")
+            logger.info("   → Review recommended, but may be acceptable depending on content")
             
         elif max_brng > 2.0 or (frame_violation_pct > 50 and max_brng > 1.0):
             # Significant violations - needs correction
             report['diagnosis'] = "⚠️ Significant BRNG violations requiring correction"
-            print(f"\n⚠️ DIAGNOSIS: Significant broadcast range violations detected")
-            print(f"   {frame_violation_pct:.1f}% of frames with up to {max_brng:.4f}% pixels out of range")
-            print("   → Levels adjustment recommended for broadcast compliance")
+            logger.info(f"\n⚠️ DIAGNOSIS: Significant broadcast range violations detected")
+            logger.info(f"   {frame_violation_pct:.1f}% of frames with up to {max_brng:.4f}% pixels out of range")
+            logger.info("   → Levels adjustment recommended for broadcast compliance")
             
         elif max_brng > 5.0:
             # Severe violations
             report['diagnosis'] = "🔴 Severe BRNG violations"
-            print(f"\n🔴 DIAGNOSIS: Severe broadcast range violations")
-            print(f"   {frame_violation_pct:.1f}% of frames with up to {max_brng:.4f}% pixels out of range")
-            print("   → Video requires levels correction before broadcast")
+            logger.info(f"\n🔴 DIAGNOSIS: Severe broadcast range violations")
+            logger.info(f"   {frame_violation_pct:.1f}% of frames with up to {max_brng:.4f}% pixels out of range")
+            logger.info("   → Video requires levels correction before broadcast")
             
         else:
             # Moderate violations
             report['diagnosis'] = "⚠️ Moderate BRNG violations detected"
-            print(f"\n⚠️ DIAGNOSIS: Moderate broadcast range violations")
-            print(f"   {frame_violation_pct:.1f}% of frames, max {max_brng:.4f}% pixels affected")
-            print("   → Review recommended for broadcast compliance")
+            logger.info(f"\n⚠️ DIAGNOSIS: Moderate broadcast range violations")
+            logger.info(f"   {frame_violation_pct:.1f}% of frames, max {max_brng:.4f}% pixels affected")
+            logger.info("   → Review recommended for broadcast compliance")
             
         # Additional note if borders have significantly more violations
         if border_violation_avg > frame_violation_pct * 2 and border_brng_avg > avg_brng * 2:
-            print("   Note: Border regions show higher violation rates than active content")
+            logger.info("   Note: Border regions show higher violation rates than active content")
             
     elif full_results:
         # Fallback diagnosis when no border data available
@@ -493,22 +494,22 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
         
         if frame_violation_pct < 10 and max_brng < 0.01:
             report['diagnosis'] = "✓ Video appears broadcast-compliant"
-            print(f"\n✅ DIAGNOSIS: Video appears to be within broadcast range")
+            logger.info(f"\n✅ DIAGNOSIS: Video appears to be within broadcast range")
         elif frame_violation_pct < 50 and max_brng < 0.1:
             report['diagnosis'] = "ℹ️ Minor BRNG violations detected"
-            print(f"\n✅ DIAGNOSIS: Minor violations - likely acceptable for broadcast")
+            logger.info(f"\n✅ DIAGNOSIS: Minor violations - likely acceptable for broadcast")
         elif max_brng > 2.0 or (frame_violation_pct > 50 and max_brng > 1.0):
             report['diagnosis'] = "⚠️ Significant BRNG violations found"
-            print(f"\n⚠️ DIAGNOSIS: Video contains significant broadcast range violations")
+            logger.info(f"\n⚠️ DIAGNOSIS: Video contains significant broadcast range violations")
         else:
             report['diagnosis'] = "⚠️ Moderate BRNG violations found"
-            print(f"\n⚠️ DIAGNOSIS: Video contains moderate broadcast range violations")
+            logger.info(f"\n⚠️ DIAGNOSIS: Video contains moderate broadcast range violations")
     
     # Save JSON report
     json_path = output_dir / f"{video_path.stem}_signalstats_analysis.json"
     with open(json_path, 'w') as f:
         json.dump(report, f, indent=2)
-    print(f"\nDetailed analysis report saved: {json_path}")
+    logger.info(f"\nDetailed analysis report saved: {json_path}")
     
     return report
 

@@ -107,7 +107,7 @@ def detect_simple_borders(video_path, border_size=25, output_dir=None):
             json_path = output_dir / f"{video_name}_border_data.json"
             with open(json_path, 'w') as f:
                 json.dump(results, f, indent=2)
-            logger.info(f"  Border data saved to: {json_path}")
+            logger.info(f"  Border data saved to: {json_path}\n")
         
         return results
 
@@ -131,7 +131,7 @@ class VideoBorderDetector:
         self.fps = self.cap.get(cv2.CAP_PROP_FPS)
         self.duration = self.total_frames / self.fps if self.fps > 0 else 0
         
-        print(f"✓ Video loaded: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s")
+        logger.info(f"✓ Video loaded: {self.width}x{self.height}, {self.fps:.2f}fps, {self.duration:.1f}s \n")
     
     
     def assess_frame_quality(self, frame, previous_frame=None, strict_mode=False):
@@ -311,7 +311,7 @@ class VideoBorderDetector:
         frames_checked = 0
         previous_frame = None
         
-        print(f"Evaluating frame quality (strict_mode={strict_mode})...")
+        logger.debug(f"Evaluating frame quality (strict_mode={strict_mode})...")
         
         for idx in frame_indices[:max_attempts]:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
@@ -329,14 +329,14 @@ class VideoBorderDetector:
                 quality_frames.append((idx, frame, assessment['scores']['overall_quality']))
             else:
                 if frames_checked <= 10:  # Only log first few rejections to avoid spam
-                    print(f"  Frame {idx} ({idx/self.fps:.1f}s) rejected: {', '.join(assessment['reasons_rejected'])}")
+                    logger.debug(f"  Frame {idx} ({idx/self.fps:.1f}s) rejected: {', '.join(assessment['reasons_rejected'])}")
             
             previous_frame = frame
         
         # Sort by quality score (highest first)
         quality_frames.sort(key=lambda x: x[2], reverse=True)
         
-        print(f"  Found {len(quality_frames)} suitable frames out of {frames_checked} checked")
+        logger.debug(f"  Found {len(quality_frames)} suitable frames out of {frames_checked} checked")
         
         return quality_frames
     
@@ -352,15 +352,15 @@ class VideoBorderDetector:
         quality_frames = self.select_quality_frames(frame_indices, strict_mode=False)
         
         if len(quality_frames) < 5:
-            print(f"⚠️ Only {len(quality_frames)} suitable frames found, relaxing criteria...")
+            logger.debug(f"⚠️ Only {len(quality_frames)} suitable frames found, relaxing criteria...")
             # Try again with less strict criteria
             quality_frames = self.select_quality_frames(frame_indices, strict_mode=False)
             
         if len(quality_frames) == 0:
-            print("⚠️ No suitable frames found for border detection")
+            logger.debug("⚠️ No suitable frames found for border detection")
             return None
         
-        print(f"Using {len(quality_frames)} high-quality frames for border detection...")
+        logger.debug(f"Using {len(quality_frames)} high-quality frames for border detection...")
         
         left_borders = []
         right_borders = []
@@ -430,17 +430,17 @@ class VideoBorderDetector:
         active_height = mode_bottom - mode_top
         
         if active_width < 100 or active_height < 100:
-            print("Warning: Detected active area seems too small")
+            logger.debug("Warning: Detected active area seems too small")
             return None
             
         result = (median_left, mode_top, active_width, active_height)
         
-        print(f"\nBorder detection statistics:")
-        print(f"  Left border: median={median_left} (std={np.std(left_borders):.1f})")
-        print(f"  Right border: median={median_right} (std={np.std(right_borders):.1f})")
-        print(f"  Top border: mode={mode_top} (variations={len(top_unique)})")
-        print(f"  Bottom border: mode={mode_bottom} (variations={len(bottom_unique)})")
-        print(f"  Active area (with {padding}px padding): {active_width}x{active_height} at ({median_left},{mode_top})")
+        logger.debug(f"\nBorder detection statistics:")
+        logger.debug(f"  Left border: median={median_left} (std={np.std(left_borders):.1f})")
+        logger.debug(f"  Right border: median={median_right} (std={np.std(right_borders):.1f})")
+        logger.debug(f"  Top border: mode={mode_top} (variations={len(top_unique)})")
+        logger.debug(f"  Bottom border: mode={mode_bottom} (variations={len(bottom_unique)})")
+        logger.debug(f"  Active area (with {padding}px padding): {active_width}x{active_height} at ({median_left},{mode_top})")
         
         return result
     
@@ -462,7 +462,7 @@ class VideoBorderDetector:
             analysis_height = min(analysis_height, self.height - analysis_y)
             
             if analysis_height <= 0 or crop_w <= 0:
-                print("⚠️ Invalid analysis region for head switching detection")
+                logger.debug("⚠️ Invalid analysis region for head switching detection")
                 return {
                     'frames_analyzed': 0,
                     'frames_with_artifacts': 0,
@@ -471,8 +471,8 @@ class VideoBorderDetector:
                     'error': 'Invalid analysis region'
                 }
             
-            print(f"\nAnalyzing bottom {analysis_height} lines for head switching artifacts...")
-            print(f"Analysis region: {crop_w}x{analysis_height} at ({crop_x},{analysis_y})")
+            logger.debug(f"\nAnalyzing bottom {analysis_height} lines for head switching artifacts...")
+            logger.debug(f"Analysis region: {crop_w}x{analysis_height} at ({crop_x},{analysis_y})")
             
             # Sample frames for analysis
             frame_indices = np.linspace(0, self.total_frames - 1, 
@@ -483,7 +483,7 @@ class VideoBorderDetector:
             quality_frames = self.select_quality_frames(frame_indices, strict_mode=False)
             
             if len(quality_frames) < 3:
-                print(f"⚠️ Only {len(quality_frames)} suitable frames for head switching analysis")
+                logger.debug(f"⚠️ Only {len(quality_frames)} suitable frames for head switching analysis")
             
             artifact_detections = []
             line_asymmetry_scores = []
@@ -666,23 +666,23 @@ class VideoBorderDetector:
                 results['severity'] = 'minor'
             
             # Report findings
-            print(f"  Quality frames used: {total_quality_frames}/{len(frame_indices)}")
-            print(f"  Frames with head switching artifacts: {results['frames_with_artifacts']}/{results['frames_analyzed']} ({results['artifact_percentage']:.1f}%)")
-            print(f"  Average asymmetry score: {results['avg_asymmetry']:.3f}")
-            print(f"  Horizontal discontinuities found: {results['total_discontinuities']}")
-            print(f"  Severity: {results['severity']}")
+            logger.debug(f"  Quality frames used: {total_quality_frames}/{len(frame_indices)}")
+            logger.debug(f"  Frames with head switching artifacts: {results['frames_with_artifacts']}/{results['frames_analyzed']} ({results['artifact_percentage']:.1f}%)")
+            logger.debug(f"  Average asymmetry score: {results['avg_asymmetry']:.3f}")
+            logger.debug(f"  Horizontal discontinuities found: {results['total_discontinuities']}")
+            logger.debug(f"  Severity: {results['severity']}")
             
             if results['severity'] != 'none':
-                print(f"  ⚠️  Head switching artifacts detected - check bottom of picture area")
+                logger.debug(f"  ⚠️  Head switching artifacts detected - check bottom of picture area")
                 if artifact_region_info:
-                    print(f"  Artifact region: {artifact_region_info['width']}px wide, starting at {artifact_region_info['relative_start']:.1%} of scan line")
+                    logger.debug(f"  Artifact region: {artifact_region_info['width']}px wide, starting at {artifact_region_info['relative_start']:.1%} of scan line")
             else:
-                print(f"  ✓ No significant head switching artifacts detected")
+                logger.info(f"  ✓ No significant head switching artifacts detected")
             
             return results
             
         except Exception as e:
-            print(f"⚠️ Error in head switching analysis: {e}")
+            logger.debug(f"⚠️ Error in head switching analysis: {e}")
             return {
                 'frames_analyzed': 0,
                 'frames_with_artifacts': 0,
@@ -697,7 +697,7 @@ class VideoBorderDetector:
         Returns dictionary with border region coordinates
         """
         if not active_area:
-            print("No active area detected, cannot analyze borders")
+            logger.debug("No active area detected, cannot analyze borders")
             return None
             
         x, y, w, h = active_area
@@ -706,26 +706,26 @@ class VideoBorderDetector:
         # Left border
         if x > 10:
             regions['left_border'] = (0, 0, int(x), int(self.height))
-            print(f"Left border region: {x}px wide")
+            logger.debug(f"Left border region: {x}px wide")
         
         # Right border  
         right_border_start = x + w
         if right_border_start < self.width - 10:
             right_width = self.width - right_border_start
             regions['right_border'] = (int(right_border_start), 0, int(right_width), int(self.height))
-            print(f"Right border region: {right_width}px wide")
+            logger.debug(f"Right border region: {right_width}px wide")
         
         # Top border
         if y > 10:
             regions['top_border'] = (0, 0, int(self.width), int(y))
-            print(f"Top border region: {y}px tall")
+            logger.debug(f"Top border region: {y}px tall")
         
         # Bottom border
         bottom_border_start = y + h
         if bottom_border_start < self.height - 10:
             bottom_height = self.height - bottom_border_start
             regions['bottom_border'] = (0, int(bottom_border_start), int(self.width), int(bottom_height))
-            print(f"Bottom border region: {bottom_height}px tall")
+            logger.debug(f"Bottom border region: {bottom_height}px tall")
             
         return regions
     
@@ -745,7 +745,7 @@ class VideoBorderDetector:
             start_frame = max(0, mid_point - window_frames // 2)
             end_frame = min(self.total_frames - 1, mid_point + window_frames // 2)
         
-        print(f"Searching for good representative frame between {start_frame/self.fps:.1f}s and {end_frame/self.fps:.1f}s...")
+        logger.debug(f"Searching for good representative frame between {start_frame/self.fps:.1f}s and {end_frame/self.fps:.1f}s...")
         
         # Check frames every 1 second in the search window
         check_interval = max(1, int(self.fps))
@@ -757,20 +757,20 @@ class VideoBorderDetector:
         if quality_frames:
             # Return the highest quality frame
             best_frame_idx, best_frame, best_score = quality_frames[0]
-            print(f"✓ Selected high-quality frame at {best_frame_idx/self.fps:.1f}s (quality score: {best_score:.3f})")
+            logger.info(f"✓ Selected high-quality frame at {best_frame_idx/self.fps:.1f}s (quality score: {best_score:.3f})")
             return best_frame
         else:
             # Fallback: try with less strict criteria
-            print("No frames met strict criteria, trying with relaxed standards...")
+            logger.debug("No frames met strict criteria, trying with relaxed standards...")
             quality_frames = self.select_quality_frames(frame_indices, strict_mode=False)
             
             if quality_frames:
                 best_frame_idx, best_frame, best_score = quality_frames[0]
-                print(f"✓ Selected frame at {best_frame_idx/self.fps:.1f}s (relaxed quality score: {best_score:.3f})")
+                logger.info(f"✓ Selected frame at {best_frame_idx/self.fps:.1f}s (relaxed quality score: {best_score:.3f})")
                 return best_frame
             else:
                 # Final fallback
-                print(f"⚠️ No suitable frame found, using target frame as fallback")
+                logger.warning(f"⚠️ No suitable frame found, using target frame as fallback")
                 fallback_frame = target_frame if target_frame < self.total_frames else self.total_frames // 2
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, fallback_frame)
                 ret, frame = self.cap.read()
@@ -992,8 +992,8 @@ def detect_video_borders(video_path, output_dir=None, target_viz_time=150, searc
     else:
         output_dir = video_path.parent
         
-    print(f"Processing: {video_path.name}")
-    print("Detecting blanking borders and active picture area with quality filtering...")
+    logger.debug(f"Processing: {video_path.name}")
+    logger.debug("Detecting blanking borders and active picture area with quality filtering...")
     
     detector = VideoBorderDetector(video_path)
     
@@ -1004,32 +1004,32 @@ def detect_video_borders(video_path, output_dir=None, target_viz_time=150, searc
     head_switching_results = detector.detect_head_switching_artifacts(active_area)
     
     if active_area:
-        print(f"\n✓ Active area detected: {active_area[2]}x{active_area[3]} at ({active_area[0]},{active_area[1]})")
+        logger.info(f"\n✓ Active area detected: {active_area[2]}x{active_area[3]} at ({active_area[0]},{active_area[1]})")
         
         # Generate visualization
         viz_path = output_dir / f"{video_path.stem}_border_detection.jpg"
         detector.generate_border_visualization(viz_path, active_area, head_switching_results, target_viz_time, search_window)
-        print(f"✓ Visualization saved: {viz_path}")
+        logger.info(f"✓ Visualization saved: {viz_path}")
         
         # Save border data
         data_path = output_dir / f"{video_path.stem}_border_data.json"
         results = detector.save_border_data(data_path, active_area, head_switching_results)
-        print(f"✓ Border data saved: {data_path}")
+        logger.info(f"✓ Border data saved: {data_path}")
         
     else:
-        print("⚠️ No clear borders detected")
+        logger.warning("⚠️ No clear borders detected")
         
         # Still generate visualization to show head switching artifacts
         viz_path = output_dir / f"{video_path.stem}_border_detection.jpg"
         detector.generate_border_visualization(viz_path, None, head_switching_results, target_viz_time, search_window)
-        print(f"✓ Visualization saved: {viz_path}")
+        logger.info(f"✓ Visualization saved: {viz_path}")
         
         results = detector.save_border_data(
             output_dir / f"{video_path.stem}_border_data.json",
             active_area, 
             head_switching_results
         )
-        print(f"✓ Border data saved: {output_dir / f'{video_path.stem}_border_data.json'}")
+        logger.info(f"✓ Border data saved: {output_dir / f'{video_path.stem}_border_data.json'}")
     
     detector.close()
     return results
@@ -1047,24 +1047,24 @@ if __name__ == "__main__":
         viz_time = 150
         search_window = 120
     
-    print(f"Using target time: {viz_time}s, search window: {search_window}s")
+    logger.debug(f"Using target time: {viz_time}s, search window: {search_window}s")
     results = detect_video_borders(video_file, target_viz_time=viz_time, search_window=search_window)
     
     if results['active_area']:
         x, y, w, h = results['active_area']
-        print(f"\nBorder Detection Summary:")
-        print(f"Active area: {w}x{h} at position ({x},{y})")
-        print(f"Borders: L={x}px, R={results['video_properties']['width']-x-w}px, T={y}px, B={results['video_properties']['height']-y-h}px")
+        logger.info(f"\nBorder Detection Summary:")
+        logger.info(f"Active area: {w}x{h} at position ({x},{y})")
+        logger.info(f"Borders: L={x}px, R={results['video_properties']['width']-x-w}px, T={y}px, B={results['video_properties']['height']-y-h}px")
     else:
-        print("\nNo borders detected - video appears to be full frame active content")
+        logger.info("\nNo borders detected - video appears to be full frame active content")
     
     # Head switching artifact summary
     if results.get('head_switching_artifacts'):
         hs_results = results['head_switching_artifacts']
-        print(f"\nHead Switching Artifact Analysis (Quality Filtering Applied):")
-        print(f"Quality frames used: {hs_results.get('quality_frames_used', 'N/A')}/{hs_results.get('total_frames_sampled', 'N/A')}")
-        print(f"Severity: {hs_results['severity']}")
+        logger.info(f"\nHead Switching Artifact Analysis (Quality Filtering Applied):")
+        logger.debug(f"Quality frames used: {hs_results.get('quality_frames_used', 'N/A')}/{hs_results.get('total_frames_sampled', 'N/A')}")
+        logger.debug(f"Severity: {hs_results['severity']}")
         if hs_results['severity'] != 'none':
-            print(f"Affected frames: {hs_results['frames_with_artifacts']}/{hs_results['frames_analyzed']} ({hs_results['artifact_percentage']:.1f}%)")
+            logger.debug(f"Affected frames: {hs_results['frames_with_artifacts']}/{hs_results['frames_analyzed']} ({hs_results['artifact_percentage']:.1f}%)")
         else:
-            print(f"✓ No significant head switching artifacts detected")
+            logger.info(f"✓ No significant head switching artifacts detected")
