@@ -285,6 +285,7 @@ class ProcessingManager:
         
         return processing_results
     
+    
     def process_frame_analysis(self, video_path, source_directory, destination_directory, video_id):
         """
         Process comprehensive frame analysis including border detection,
@@ -330,7 +331,7 @@ class ProcessingManager:
         skip_color_bars = frame_config.brng_skip_color_bars == "yes"
         max_border_retries = frame_config.max_border_retries
         
-        # Check for color bars if enabled
+        # Check for color bars if enabled and get the end time
         color_bars_end_seconds = None
         if skip_color_bars:
             report_directory = Path(source_directory) / f"{video_id}_report_csvs"
@@ -518,88 +519,90 @@ class ProcessingManager:
                     affected_edges = aggregate.get('boundary_edges_detected', [])
                     violation_percentage = aggregate.get('continuous_edge_percentage', 0)
                     improvement_score = refinement_progress.get('improvement_score', 0)
-                    
-                    # Adaptive expansion based on progress
-                    improvement_score = refinement_progress.get('improvement_score', 0)
                     progress_reason = refinement_progress.get('reason', 'unknown')
 
+                    # Adaptive base expansion based on progress (same as before)
                     if progress_reason == 'significant_pixel_improvement':
-                        # Great progress - use moderate expansion to build on success
                         base_expansion = 6 + (retry_count * 3)
                         logger.info(f"  Significant pixel improvement detected - using moderate expansion")
                     elif improvement_score > 10:
-                        # Good overall progress - conservative expansion
                         base_expansion = 4 + (retry_count * 2)
                         logger.info(f"  Good overall progress detected - using conservative expansion")
                     elif improvement_score > 0:
-                        # Some progress - moderate expansion
                         base_expansion = 7 + (retry_count * 4)
                         logger.info(f"  Some progress detected - using moderate expansion")
                     else:
-                        # Little/no progress or regression - try more aggressive change
                         base_expansion = 10 + (retry_count * 6)
                         logger.info(f"  Minimal progress - using aggressive expansion strategy")
 
                     # Scale by violation severity (but cap maximum expansion)
                     if violation_percentage > 50:
-                        base_expansion = min(25, int(base_expansion * 1.3))  # Cap at 25px
+                        base_expansion = min(25, int(base_expansion * 1.3))
                     elif violation_percentage > 25:
-                        base_expansion = min(20, int(base_expansion * 1.1))  # Cap at 20px
+                        base_expansion = min(20, int(base_expansion * 1.1))
                     elif violation_percentage < 15:
-                        base_expansion = max(3, int(base_expansion * 0.8))   # Minimum 3px
+                        base_expansion = max(3, int(base_expansion * 0.8))
                     else:
-                        base_expansion = min(15, base_expansion)             # Cap at 15px for normal cases
+                        base_expansion = min(15, base_expansion)
 
-                    logger.info(f"  Final expansion amount: {base_expansion}px (violation %: {violation_percentage:.1f}, score: {improvement_score:.1f})")
-                    
-                    # Scale by violation severity
-                    if violation_percentage > 50:
-                        base_expansion = int(base_expansion * 1.5)
-                    elif violation_percentage < 15:
-                        base_expansion = max(2, int(base_expansion * 0.7))
-                    
-                    # Apply expansion to affected edges only (smarter targeting)
-                    expansion_x_left = base_expansion if 'left' in affected_edges else 0
-                    expansion_x_right = base_expansion if 'right' in affected_edges else 0
-                    expansion_y_top = base_expansion if 'top' in affected_edges else 0
-                    expansion_y_bottom = base_expansion if 'bottom' in affected_edges else 0
-                    
-                    # Calculate new active area coordinates
+                    logger.info(f"  Base expansion amount: {base_expansion}px (violation %: {violation_percentage:.1f}, score: {improvement_score:.1f})")
+
+                    # IMPROVED: Apply different expansion factors based on typical analog video patterns
+                    expansion_factors = {
+                        'left': 1.0,    # Full expansion - blanking most common on sides
+                        'right': 1.0,   # Full expansion - blanking most common on sides  
+                        'top': 0.3,     # Minimal expansion - top blanking less common
+                        'bottom': 0.6   # Moderate expansion - head switching artifacts present but don't extend as far
+                    }
+
+                    # Calculate edge-specific expansions
+                    expansion_x_left = int(base_expansion * expansion_factors['left']) if 'left' in affected_edges else 0
+                    expansion_x_right = int(base_expansion * expansion_factors['right']) if 'right' in affected_edges else 0
+                    expansion_y_top = int(base_expansion * expansion_factors['top']) if 'top' in affected_edges else 0
+                    expansion_y_bottom = int(base_expansion * expansion_factors['bottom']) if 'bottom' in affected_edges else 0
+
+                    # Ensure minimum expansion if edge is affected (but respect the pattern-based limits)
+                    if 'top' in affected_edges and expansion_y_top < 1:
+                        expansion_y_top = 1  # At least 1 pixel if top edge has violations
+                    if 'bottom' in affected_edges and expansion_y_bottom < 2:
+                        expansion_y_bottom = 2  # At least 2 pixels if bottom edge has violations
+
+                    # Calculate new active area coordinates (rest remains the same)
                     new_x = max(0, current_x + expansion_x_left)
                     new_y = max(0, current_y + expansion_y_top)
                     new_w = max(100, current_w - expansion_x_left - expansion_x_right)
                     new_h = max(100, current_h - expansion_y_top - expansion_y_bottom)
-                    
+
                     # Ensure we don't exceed video boundaries
                     cap = cv2.VideoCapture(video_path)
                     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                     cap.release()
-                    
+
                     new_w = min(new_w, video_width - new_x)
                     new_h = min(new_h, video_height - new_y)
-                    
-                    # Log what we're doing
+
+                    # Enhanced logging to show the different expansion amounts
                     expansion_info = []
                     if expansion_x_left > 0:
-                        expansion_info.append(f"L+{expansion_x_left}")
+                        expansion_info.append(f"L+{expansion_x_left}px")
                     if expansion_x_right > 0:
-                        expansion_info.append(f"R+{expansion_x_right}")
+                        expansion_info.append(f"R+{expansion_x_right}px")
                     if expansion_y_top > 0:
-                        expansion_info.append(f"T+{expansion_y_top}")
+                        expansion_info.append(f"T+{expansion_y_top}px ({int(expansion_factors['top']*100)}% of base)")
                     if expansion_y_bottom > 0:
-                        expansion_info.append(f"B+{expansion_y_bottom}")
-                    
-                    logger.info(f"  Expanding borders: {', '.join(expansion_info) if expansion_info else 'no expansion needed'}")
+                        expansion_info.append(f"B+{expansion_y_bottom}px ({int(expansion_factors['bottom']*100)}% of base)")
+
+                    logger.info(f"  Analog-aware border expansion: {', '.join(expansion_info) if expansion_info else 'no expansion needed'}")
                     logger.info(f"  New active area: {new_w}x{new_h} at ({new_x},{new_y})")
                     logger.info(f"  Previous active area: {current_w}x{current_h} at ({current_x},{current_y})")
-                    
+
                     if improvement_score > 0:
                         logger.info(f"  Improvement score: +{improvement_score:.1f} (refinement working)")
                     elif improvement_score < -1:
                         logger.warning(f"  Improvement score: {improvement_score:.1f} (refinement may not be helping)")
-                    
-                    # Create updated border results
+
+                    # Update the expansion_applied section in border_results to reflect the new logic
                     border_results = {
                         **border_results,
                         'active_area': [new_x, new_y, new_w, new_h],
@@ -613,7 +616,14 @@ class ProcessingManager:
                             'affected_edges': affected_edges,
                             'violation_percentage': violation_percentage,
                             'improvement_score': improvement_score,
-                            'progress_reason': refinement_progress.get('reason', 'unknown')
+                            'progress_reason': refinement_progress.get('reason', 'unknown'),
+                            'expansion_factors_used': {
+                                'left': expansion_factors['left'] if 'left' in affected_edges else 0,
+                                'right': expansion_factors['right'] if 'right' in affected_edges else 0,
+                                'top': expansion_factors['top'] if 'top' in affected_edges else 0,
+                                'bottom': expansion_factors['bottom'] if 'bottom' in affected_edges else 0
+                            },
+                            'base_expansion': base_expansion
                         }
                     }
                     
@@ -707,27 +717,35 @@ class ProcessingManager:
             # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
             if self.signals:
                 self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
-        
-        # Step 3: FFprobe Signalstats Analysis (ONLY if sophisticated border detection was used)
+    
+        # Step 3: Enhanced FFprobe Signalstats Analysis (ONLY if sophisticated border detection was used)
         if use_sophisticated:
             if self.signals:
-                self.signals.output_progress.emit("Running FFprobe signalstats analysis...")
+                self.signals.output_progress.emit("Running enhanced FFprobe signalstats analysis...")
             
-            logger.info("\nRunning signalstats analysis (sophisticated borders detected)")
+            logger.info("\nRunning enhanced signalstats analysis with scene detection")
             
-            signalstats_results = analyze_video_signalstats(
-                video_path=video_path,
-                border_data_path=border_data_path if border_results else None,
-                output_dir=destination_directory,
-                start_time=getattr(frame_config, 'signalstats_start_time', 120),
-                duration=getattr(frame_config, 'signalstats_duration', 60)
-            )
+            # Extract content start information from BRNG analysis
+            content_start_time = 0
+            if analysis_results.get('brng_results') and analysis_results['brng_results'].get('video_info'):
+                content_start_time = analysis_results['brng_results']['video_info'].get('content_start_time', 0)
             
-            analysis_results['signalstats_results'] = signalstats_results
-            
-            # EMIT SIGNAL FOR SIGNALSTATS COMPLETION
-            if self.signals:
-                self.signals.step_completed.emit("Frame Analysis - Signalstats")
+            # Use the enhanced signalstats analyzer with scene detection and black segment avoidance
+        signalstats_results = analyze_video_signalstats(
+            video_path=video_path,
+            border_data_path=border_data_path if border_results else None,
+            output_dir=destination_directory,
+            content_start_time=content_start_time,
+            color_bars_end_time=color_bars_end_seconds,
+            analysis_duration=getattr(frame_config, 'signalstats_duration', 60),
+            num_analysis_periods=getattr(frame_config, 'signalstats_periods', 3),  # Increased to 3 for better coverage
+        )
+        
+        analysis_results['signalstats_results'] = signalstats_results
+        
+        # EMIT SIGNAL FOR SIGNALSTATS COMPLETION
+        if self.signals:
+            self.signals.step_completed.emit("Frame Analysis - Signalstats")
         else:
             # Skip signalstats for simple border detection
             logger.info("Skipping signalstats analysis (requires sophisticated border detection)")

@@ -31,6 +31,9 @@ class ActiveAreaBrngAnalyzer:
         self.video_path = Path(video_path)
         self.output_dir = Path(output_dir) if output_dir else self.video_path.parent
         self.output_dir.mkdir(exist_ok=True)
+
+        # Initialize skip offset
+        self.skip_offset = 0
         
         # Load border data if provided
         self.active_area = None
@@ -90,7 +93,7 @@ class ActiveAreaBrngAnalyzer:
             
             if self.border_data and self.border_data.get('active_area'):
                 self.active_area = tuple(self.border_data['active_area'])
-                logger.debug(f"✔ Loaded border data. Active area: {self.active_area}")
+                logger.debug(f"✔ Loaded border data. Active area: {self.active_area}\n")
             else:
                 logger.debug("⚠️ Border data doesn't contain active area")
         except Exception as e:
@@ -851,17 +854,23 @@ class ActiveAreaBrngAnalyzer:
             ret_o, frame_o = cap_original.read()
             
             if ret_h and ret_o:
-                # Create diagnostic visualization
+                # Create diagnostic visualization with padding
                 h, w = frame_h.shape[:2]
                 
-                # Create 2x2 grid visualization
-                viz = np.zeros((h*2, w*2, 3), dtype=np.uint8)
+                # Define padding between quadrants
+                padding = 10  # pixels between quadrants
+                border_color = (64, 64, 64)  # Dark gray border
+                
+                # Create larger canvas to accommodate padding
+                viz_height = h * 2 + padding
+                viz_width = w * 2 + padding
+                viz = np.full((viz_height, viz_width, 3), border_color, dtype=np.uint8)
                 
                 # Top-left: Original frame
-                viz[:h, :w] = frame_o
+                viz[0:h, 0:w] = frame_o
                 
-                # Top-right: Highlighted frame
-                viz[:h, w:] = frame_h
+                # Top-right: Highlighted frame (offset by padding)
+                viz[0:h, w+padding:w*2+padding] = frame_h
                 
                 # Bottom-left: Extract cyan-highlighted pixels from the highlighted frame
                 # Create a mask for cyan pixels in the highlighted frame
@@ -874,9 +883,9 @@ class ActiveAreaBrngAnalyzer:
                 violations_only = np.zeros_like(frame_o)
                 # Show cyan violations as bright cyan on black background
                 violations_only[cyan_mask > 0] = [255, 255, 0]  # Cyan in BGR
-                viz[h:, :w] = violations_only
+                viz[h+padding:h*2+padding, 0:w] = violations_only
                 
-                # Bottom-right: Analysis information overlay
+                # Bottom-right: Analysis information overlay (offset by padding)
                 info_panel = np.zeros((h, w, 3), dtype=np.uint8)
                 
                 # Add analysis info text to the info panel
@@ -888,14 +897,19 @@ class ActiveAreaBrngAnalyzer:
                 
                 # Prepare analysis information
                 diagnostics_text = ', '.join(frame_data.get('diagnostics', ['Unknown'])[:2])
+                
+                # Fix the timestamp calculation to account for skip offset
+                actual_timestamp = timestamp + self.skip_offset
+                actual_frame = int(frame_idx + (self.skip_offset * self.fps))
+
                 info_lines = [
-                    f"Frame: {frame_idx}",
-                    f"Time: {self.format_timecode(timestamp)}",
+                    f"Original Frame: {actual_frame}",
+                    f"Original Time: {self.format_timecode(actual_timestamp)}",
                     f"Violations: {frame_data['violation_percentage']:.4f}%",
                     f"Pixels: {frame_data['violation_pixels']}",
                     f"Pattern: {diagnostics_text}"
                 ]
-                
+                                
                 # Add edge info if present
                 if frame_data.get('has_edge_violations'):
                     edges = ', '.join(frame_data.get('affected_edges', []))
@@ -959,34 +973,58 @@ class ActiveAreaBrngAnalyzer:
                 cv2.putText(info_panel, title_text, (title_x, 20), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)  # Cyan title
                 
-                viz[h:, w:] = info_panel
+                # Place info panel in bottom-right with padding
+                viz[h+padding:h*2+padding, w+padding:w*2+padding] = info_panel
                 
-                # Add labels for each quadrant
+                # Add improved labels for each quadrant with better positioning
                 label_font = cv2.FONT_HERSHEY_SIMPLEX
                 label_scale = 1.0
                 label_color = (255, 255, 255)
                 label_thickness = 2
                 
-                # Add background rectangles for better text visibility
+                # Add background rectangles for better text visibility (adjusted for padding)
                 cv2.rectangle(viz, (5, 5), (200, 35), (0, 0, 0), -1)
-                cv2.rectangle(viz, (w+5, 5), (w+200, 35), (0, 0, 0), -1)
-                cv2.rectangle(viz, (5, h+5), (250, h+35), (0, 0, 0), -1)
-                # Center the background rectangle for "Analysis Details"
+                cv2.rectangle(viz, (w+padding+5, 5), (w+padding+200, 35), (0, 0, 0), -1)
+                cv2.rectangle(viz, (5, h+padding+5), (250, h+padding+35), (0, 0, 0), -1)
+                
+                # Center the background rectangle for "Analysis Details" (adjusted for padding)
                 analysis_label = "Analysis Details"
                 analysis_label_size = cv2.getTextSize(analysis_label, label_font, label_scale, label_thickness)[0]
-                analysis_bg_x = w + (w - analysis_label_size[0]) // 2 - 10
+                analysis_bg_x = w + padding + (w - analysis_label_size[0]) // 2 - 10
                 analysis_bg_width = analysis_label_size[0] + 20
-                cv2.rectangle(viz, (analysis_bg_x, h+5), (analysis_bg_x + analysis_bg_width, h+35), (0, 0, 0), -1)
+                cv2.rectangle(viz, (analysis_bg_x, h+padding+5), (analysis_bg_x + analysis_bg_width, h+padding+35), (0, 0, 0), -1)
                 
+                # Add labels (adjusted positions for padding)
                 cv2.putText(viz, "Original", (10, 25), label_font, label_scale, label_color, label_thickness)
-                cv2.putText(viz, "BRNG Highlighted", (w+10, 25), label_font, label_scale, label_color, label_thickness)
-                cv2.putText(viz, "Violations Only", (10, h+25), label_font, label_scale, label_color, label_thickness)
-                # Center the "Analysis Details" label
-                analysis_x = w + (w - analysis_label_size[0]) // 2
-                cv2.putText(viz, analysis_label, (analysis_x, h+25), label_font, label_scale, label_color, label_thickness)
+                cv2.putText(viz, "BRNG Highlighted", (w+padding+10, 25), label_font, label_scale, label_color, label_thickness)
+                cv2.putText(viz, "Violations Only", (10, h+padding+25), label_font, label_scale, label_color, label_thickness)
                 
-                # Save thumbnail
-                timecode_str = self.format_filename_timecode(timestamp)
+                # Center the "Analysis Details" label (adjusted for padding)
+                analysis_x = w + padding + (w - analysis_label_size[0]) // 2
+                cv2.putText(viz, analysis_label, (analysis_x, h+padding+25), label_font, label_scale, label_color, label_thickness)
+                
+                # Add crosshair lines to clearly separate quadrants
+                line_color = (128, 128, 128)  # Light gray
+                line_thickness = 2
+                
+                # Vertical divider line
+                cv2.line(viz, (w + padding//2, 0), (w + padding//2, viz_height), line_color, line_thickness)
+                
+                # Horizontal divider line  
+                cv2.line(viz, (0, h + padding//2), (viz_width, h + padding//2), line_color, line_thickness)
+                
+                # Save thumbnail with corrected timestamp
+                # Fix the timestamp calculation here too:
+                # Get skip offset from the analysis results
+                skip_offset = 0
+                if hasattr(self, 'skip_offset'):
+                    skip_offset = self.skip_offset
+                elif 'skip_info' in frame_data:
+                    skip_offset = frame_data['skip_info'].get('total_skipped_seconds', 0)
+                # You'll need to pass this info or store it in the analyzer
+                
+                actual_timestamp = timestamp + skip_offset  # Add skip offset
+                timecode_str = self.format_filename_timecode(actual_timestamp)
                 thumbnail_filename = f"{self.video_path.stem}_diagnostic_{timecode_str}.jpg"
                 thumbnail_path = self.thumbnails_dir / thumbnail_filename
                 
@@ -994,14 +1032,14 @@ class ActiveAreaBrngAnalyzer:
                 saved_thumbnails.append({
                     'filename': thumbnail_filename,
                     'path': str(thumbnail_path),
-                    'frame': frame_idx,
-                    'timestamp': timestamp,
-                    'timecode': self.format_timecode(timestamp)
+                    'frame': int(frame_idx + (skip_offset * self.fps)),  # Corrected frame number
+                    'timestamp': float(actual_timestamp),  # Corrected timestamp
+                    'timecode': self.format_timecode(actual_timestamp)  # Corrected timecode
                 })
                 
                 logger.info(f"  ✓ Saved: {thumbnail_filename}")
-        
-        return saved_thumbnails
+                    
+                return saved_thumbnails
     
     def print_summary(self, analysis):
         """Print enhanced analysis summary"""
@@ -1142,7 +1180,7 @@ class ActiveAreaBrngAnalyzer:
         logger.info(f"Frame count: {prev_frames_with_violations} → {curr_frames_with_violations} (improvement: {frame_count_improvement})")
         logger.info(f"Edge violations: {prev_edge_pct:.1f}% → {curr_edge_pct:.1f}% (improvement: {edge_improvement:.1f}%)")
         logger.info(f"Continuous edge: {prev_cont_pct:.1f}% → {curr_cont_pct:.1f}% (improvement: {continuous_improvement:.1f}%)")
-        logger.info(f"Improvement score: {improvement_score:.2f}")
+        logger.info(f"Improvement score: {improvement_score:.2f}\n")
         
         # Decision logic with more nuanced thresholds
         analysis = {
@@ -1228,6 +1266,9 @@ def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None,
         Analysis results dictionary
     """
     analyzer = ActiveAreaBrngAnalyzer(video_path, border_data_path, output_dir)
+    
+    # Store the skip offset in the analyzer instance
+    analyzer.skip_offset = skip_start_seconds if skip_start_seconds else 0
     
     # Determine skip time - use the greater of color bars end or content start detection
     skip_seconds = 0
