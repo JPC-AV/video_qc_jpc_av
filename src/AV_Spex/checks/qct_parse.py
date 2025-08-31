@@ -297,14 +297,22 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
     if bit_depth_10:
         YMAX_thresh = 800
         YMIN_thresh = 10
-        YDIF_thresh = 10
+        YDIF_thresh = 8.0     # Allow up to 8.0 for 10-bit (your real bars have ~6.5)
+        SATMAX_thresh = 250   # Key discriminator - real color bars have high saturation
+        URANGE_min = 500      # Real color bars have large chroma ranges
+        VRANGE_min = 500
     else:
         YMAX_thresh = 210
         YMIN_thresh = 10
         YDIF_thresh = 3.0
+        SATMAX_thresh = 100   # Scaled for 8-bit
+        URANGE_min = 150
+        VRANGE_min = 150
 
     barsStartString = None
     barsEndString = None
+    consecutive_non_bar_frames = 0
+    max_consecutive_non_bar_frames = 10  # Allow up to 10 consecutive bad frames before ending
 
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
@@ -329,17 +337,40 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
                     # Check conditions
                     if (float(framesList[middleFrame]['YMAX']) > YMAX_thresh and 
                         float(framesList[middleFrame]['YMIN']) < YMIN_thresh and 
-                        float(framesList[middleFrame]['YDIF']) < YDIF_thresh):
-                        if durationStart == "":
-                            durationStart = float(framesList[middleFrame][pkt])
-                            barsStartString = dts2ts(framesList[middleFrame][pkt])
-                            logger.debug("Bars start at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")")							
-                        durationEnd = float(framesList[middleFrame][pkt])
+                        float(framesList[middleFrame]['YDIF']) < YDIF_thresh and
+                        float(framesList[middleFrame]['SATMAX']) > SATMAX_thresh):
+                        
+                        # Additional validation: check chroma ranges
+                        umax = float(framesList[middleFrame]['UMAX'])
+                        umin = float(framesList[middleFrame]['UMIN'])
+                        vmax = float(framesList[middleFrame]['VMAX'])
+                        vmin = float(framesList[middleFrame]['VMIN'])
+                        
+                        urange = umax - umin
+                        vrange = vmax - vmin
+                        
+                        # Color bars should have large chroma ranges
+                        if urange > URANGE_min and vrange > VRANGE_min:
+                            # This looks like color bars
+                            consecutive_non_bar_frames = 0  # Reset counter
+                            if durationStart == "":
+                                durationStart = float(framesList[middleFrame][pkt])
+                                barsStartString = dts2ts(framesList[middleFrame][pkt])
+                                logger.debug("Bars start at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")")							
+                            durationEnd = float(framesList[middleFrame][pkt])
+                        else:
+                            # Failed chroma range check
+                            consecutive_non_bar_frames += 1
                     else:
-                        if durationStart != "" and durationEnd != "" and durationEnd - durationStart > 2:
-                            logger.debug("Bars ended at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")\n")
-                            barsEndString = dts2ts(framesList[middleFrame][pkt])
-                            break
+                        # Failed main color bar criteria
+                        consecutive_non_bar_frames += 1
+
+                    # Only end detection after many consecutive non-bar frames
+                    if (consecutive_non_bar_frames >= max_consecutive_non_bar_frames and 
+                        durationStart != "" and durationEnd != "" and durationEnd - durationStart > 2):
+                        logger.debug("Bars ended at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")\n")
+                        barsEndString = dts2ts(framesList[middleFrame][pkt])
+                        break
                 elem.clear() # we're done with that element so let's get it outta memory
     except Exception as e:
         logger.error(f"Error during bars detection parsing: {e}")
