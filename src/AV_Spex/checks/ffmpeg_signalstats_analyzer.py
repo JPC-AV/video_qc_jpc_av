@@ -25,31 +25,12 @@ class FFprobeAnalyzer:
     def __init__(self, video_path):
         self.video_path = str(video_path)
         
-        # Check FFprobe availability
-        self.check_ffprobe()
-        
         # Get video properties
         self.get_video_properties()
         
         # Detect bit depth
         self.bit_depth = self.detect_bit_depth()
         
-    def check_ffprobe(self):
-        """Check if FFprobe is available"""
-        try:
-            result = subprocess.run(['ffprobe', '-version'], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                logger.debug("✓ FFprobe found")
-            else:
-                logger.error("⚠️ FFprobe may not be properly installed")
-        except FileNotFoundError:
-            logger.error("⚠️ FFprobe not found in PATH")
-            logger.error("   Install with: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)")
-            raise
-        except Exception as e:
-            logger.error(f"⚠️ Could not check FFprobe: {e}")
-            
     def get_video_properties(self):
         """Get basic video properties using FFprobe"""
         try:

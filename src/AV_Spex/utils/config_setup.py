@@ -239,6 +239,11 @@ class FrameAnalysisConfig:
     """Configuration for frame analysis (borders, BRNG violations, signalstats)"""
     enabled: str = "no"
     
+    # Individual sub-step enable flags
+    enable_border_detection: str = "yes"  # Enable border detection sub-step
+    enable_brng_analysis: str = "yes"     # Enable BRNG analysis sub-step
+    enable_signalstats: str = "yes"       # Enable signalstats sub-step
+    
     # Border detection settings
     border_detection_mode: str = "simple"  # "simple" or "sophisticated"
     simple_border_pixels: int = 25
@@ -260,6 +265,7 @@ class FrameAnalysisConfig:
     # Signalstats settings (only runs with sophisticated borders)
     signalstats_start_time: int = 120
     signalstats_duration: int = 60
+    signalstats_periods: int = 3  # Number of analysis periods
 
 # Output configuration
 @dataclass

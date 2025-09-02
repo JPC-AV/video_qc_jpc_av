@@ -710,7 +710,7 @@ class VideoBorderDetector:
         if right_border_start < self.width - 10:
             right_width = self.width - right_border_start
             regions['right_border'] = (int(right_border_start), 0, int(right_width), int(self.height))
-            logger.debug(f"Right border region: {right_width}px wide")
+            logger.debug(f"Right border region: {right_width}px wide\n")
         
         # Top border
         if y > 10:
@@ -1006,12 +1006,12 @@ def detect_video_borders(video_path, output_dir=None, target_viz_time=150, searc
         # Generate visualization
         viz_path = output_dir / f"{video_path.stem}_border_detection.jpg"
         detector.generate_border_visualization(viz_path, active_area, head_switching_results, target_viz_time, search_window)
-        logger.info(f"✓ Visualization saved: {viz_path}")
+        logger.info(f"✓ Visualization saved: {viz_path}\n")
         
         # Save border data
         data_path = output_dir / f"{video_path.stem}_border_data.json"
         results = detector.save_border_data(data_path, active_area, head_switching_results)
-        logger.info(f"✓ Border data saved: {data_path}")
+        logger.info(f"✓ Border data saved: {data_path}\n")
         
     else:
         logger.warning("⚠️ No clear borders detected")

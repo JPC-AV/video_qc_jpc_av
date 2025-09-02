@@ -290,7 +290,7 @@ class ProcessingManager:
         """
         Process comprehensive frame analysis including border detection,
         BRNG violations, and optionally signalstats (only with sophisticated borders).
-        Now includes iterative border refinement to handle sub-black blanking areas.
+        Now with individual sub-step configuration.
         
         Args:
             video_path (str): Path to the input video file
@@ -299,7 +299,7 @@ class ProcessingManager:
             video_id (str): Unique identifier for the video
             
         Returns:
-            dict: Analysis results from all three components
+            dict: Analysis results from all enabled components
         """
         
         if self.check_cancelled():
@@ -324,6 +324,22 @@ class ProcessingManager:
         if frame_config.enabled != 'yes':
             logger.info("Frame analysis not enabled in config")
             return analysis_results
+            
+        # Check which sub-steps are enabled
+        border_detection_enabled = frame_config.enable_border_detection == 'yes'
+        brng_analysis_enabled = frame_config.enable_brng_analysis == 'yes'
+        signalstats_enabled = frame_config.enable_signalstats == 'yes'
+        
+        # Log which sub-steps are enabled
+        enabled_steps = []
+        if border_detection_enabled:
+            enabled_steps.append("Border Detection")
+        if brng_analysis_enabled:
+            enabled_steps.append("BRNG Analysis")
+        if signalstats_enabled:
+            enabled_steps.append("Signalstats")
+        
+        logger.info(f"Frame Analysis enabled with sub-steps: {', '.join(enabled_steps)}")
         
         # Use the config values
         use_sophisticated = frame_config.border_detection_mode == "sophisticated"
@@ -331,9 +347,9 @@ class ProcessingManager:
         skip_color_bars = frame_config.brng_skip_color_bars == "yes"
         max_border_retries = frame_config.max_border_retries
         
-        # Check for color bars if enabled and get the end time
+        # Check for color bars if BRNG is enabled and configured to skip them
         color_bars_end_seconds = None
-        if skip_color_bars:
+        if brng_analysis_enabled and skip_color_bars:
             report_directory = Path(source_directory) / f"{video_id}_report_csvs"
             if report_directory.exists():
                 colorbars_csv = report_directory / "qct-parse_colorbars_durations.csv"
@@ -345,162 +361,172 @@ class ProcessingManager:
                         analysis_results['color_bars_end_time'] = end_seconds
                         logger.info(f"Color bars detected by qct-parse, ending at {end_seconds:.1f}s")
         
-        # Step 1: Initial Border Detection
-        if use_sophisticated:
-            if self.signals:
-                self.signals.output_progress.emit("Detecting video borders (sophisticated analysis)...")
-            
-            logger.info("Using sophisticated border detection with frame quality analysis")
-            analysis_results['border_detection_method'] = 'sophisticated'
-            
-            border_results = detect_video_borders(
-                video_path,
-                destination_directory,
-                target_viz_time=frame_config.sophisticated_viz_time,
-                search_window=frame_config.sophisticated_search_window,
-                threshold=frame_config.sophisticated_threshold,
-                edge_sample_width=frame_config.sophisticated_edge_sample_width,
-                sample_frames=frame_config.sophisticated_sample_frames,
-                padding=frame_config.sophisticated_padding
-            )
-        else:
-            if self.signals:
-                self.signals.output_progress.emit(f"Applying simple {border_pixels}px border detection...")
-            
-            logger.info(f"Using simple border detection with {border_pixels}px borders")
-            analysis_results['border_detection_method'] = 'simple'
-            
-            border_results = detect_simple_borders(
-                video_path,
-                border_size=border_pixels,
-                output_dir=destination_directory
-            )
-        
-        if self.check_cancelled():
-            return None
-        
-        analysis_results['border_results'] = border_results
-        
-        # Get the path to the border data file
-        border_data_path = Path(destination_directory) / f"{video_id}_border_data.json"
-        
-        # EMIT SIGNAL FOR INITIAL BORDER DETECTION COMPLETION
-        if self.signals:
-            self.signals.step_completed.emit("Frame Analysis - Border Detection")
-
-        # Step 2: Iterative Border Refinement Loop (only for sophisticated mode with auto-retry)
-        if use_sophisticated and frame_config.auto_retry_borders == 'yes':
-            retry_count = 0
-            previous_brng_results = None  # Store previous results for comparison
-            
-            while retry_count <= max_border_retries:
-                # Step 2a: BRNG Analysis
+        # Step 1: Border Detection (if enabled)
+        border_results = None
+        if border_detection_enabled:
+            if use_sophisticated:
                 if self.signals:
-                    if retry_count == 0:
-                        self.signals.output_progress.emit("Analyzing BRNG violations...")
-                    else:
-                        self.signals.output_progress.emit(f"Re-analyzing BRNG (attempt {retry_count + 1})...")
+                    self.signals.output_progress.emit("Detecting video borders (sophisticated analysis)...")
                 
-                brng_results = None
-                if border_results and border_results.get('active_area'):
-                    brng_results = analyze_active_area_brng(
-                        video_path=video_path,
-                        border_data_path=border_data_path,
-                        output_dir=destination_directory,
-                        duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
-                        skip_start_seconds=color_bars_end_seconds
-                    )
-                else:
-                    # Analyze full frame if no borders detected
-                    brng_results = analyze_active_area_brng(
-                        video_path=video_path,
-                        border_data_path=None,
-                        output_dir=destination_directory,
-                        duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
-                        skip_start_seconds=color_bars_end_seconds
-                    )
+                logger.info("Using sophisticated border detection with frame quality analysis")
+                analysis_results['border_detection_method'] = 'sophisticated'
                 
-                if self.check_cancelled():
-                    return None
-                
-                analysis_results['brng_results'] = brng_results
-                
-                # Analyze refinement progress using the improved logic
-                from AV_Spex.checks.active_area_brng_analyzer import ActiveAreaBrngAnalyzer
-                temp_analyzer = ActiveAreaBrngAnalyzer(video_path, border_data_path, destination_directory)
-                
-                refinement_progress = temp_analyzer.analyze_refinement_progress(
-                    brng_results, previous_brng_results
+                border_results = detect_video_borders(
+                    video_path,
+                    destination_directory,
+                    target_viz_time=frame_config.sophisticated_viz_time,
+                    search_window=frame_config.sophisticated_search_window,
+                    threshold=frame_config.sophisticated_threshold,
+                    edge_sample_width=frame_config.sophisticated_edge_sample_width,
+                    sample_frames=frame_config.sophisticated_sample_frames,
+                    padding=frame_config.sophisticated_padding
                 )
+            else:
+                if self.signals:
+                    self.signals.output_progress.emit(f"Applying simple {border_pixels}px border detection...")
                 
-                # Generate updated actionable report with progress analysis
-                actionable_report = temp_analyzer.generate_actionable_report(
-                    brng_results, previous_brng_results, refinement_progress
+                logger.info(f"Using simple border detection with {border_pixels}px borders")
+                analysis_results['border_detection_method'] = 'simple'
+                
+                border_results = detect_simple_borders(
+                    video_path,
+                    border_size=border_pixels,
+                    output_dir=destination_directory
                 )
-                brng_results['actionable_report'] = actionable_report
-                brng_results['refinement_progress'] = refinement_progress
+            
+            if self.check_cancelled():
+                return None
+            
+            analysis_results['border_results'] = border_results
+
+            # EMIT SIGNAL FOR BORDER DETECTION COMPLETION
+            if self.signals:
+                self.signals.step_completed.emit("Frame Analysis - Border Detection")
+        else:
+            logger.info("Border detection sub-step is disabled")
+            analysis_results['border_detection_method'] = 'disabled'
+        
+        # Get the path to the border data file (if border detection was performed)
+        border_data_path = None
+        if border_results:
+            border_data_path = Path(destination_directory) / f"{video_id}_border_data.json"
+
+        # Step 2: BRNG Analysis (if enabled)
+        if brng_analysis_enabled:
+            # Iterative Border Refinement Loop (only for sophisticated mode with auto-retry and border detection enabled)
+            if border_detection_enabled and use_sophisticated and frame_config.auto_retry_borders == 'yes':
+                retry_count = 0
+                previous_brng_results = None  # Store previous results for comparison
                 
-                # Extract decision from refined analysis
-                requires_adjustment = actionable_report.get('requires_border_adjustment', False)
-                adjustment_reason = actionable_report.get('adjustment_reason', 'unknown')
-                
-                # Record refinement attempt with enhanced data
-                aggregate = brng_results.get('aggregate_patterns', {}) if brng_results else {}
-                refinement_record = {
-                    'attempt': retry_count + 1,
-                    'requires_adjustment': requires_adjustment,
-                    'adjustment_reason': adjustment_reason,
-                    'edge_violation_percentage': aggregate.get('edge_violation_percentage', 0),
-                    'continuous_edge_percentage': aggregate.get('continuous_edge_percentage', 0),
-                    'affected_edges': aggregate.get('boundary_edges_detected', []),
-                    'improvement_score': refinement_progress.get('improvement_score', 0),
-                    'should_continue': refinement_progress.get('should_continue', False),
-                    'progress_reason': refinement_progress.get('reason', 'unknown')
-                }
-                
-                if border_results and border_results.get('active_area'):
-                    refinement_record['active_area'] = border_results['active_area']
-                
-                analysis_results['border_refinement_history'].append(refinement_record)
-                
-                # Enhanced decision logic based on refinement progress
-                should_stop = False
-                stop_reason = ""
-                
-                if not requires_adjustment:
-                    should_stop = True
-                    stop_reason = f"BRNG analysis acceptable ({adjustment_reason})"
-                elif retry_count >= max_border_retries:
-                    should_stop = True
-                    stop_reason = f"Maximum attempts reached ({max_border_retries + 1})"
-                elif not refinement_progress.get('should_continue', True):
-                    should_stop = True
-                    stop_reason = f"Progress analysis recommends stopping ({refinement_progress.get('reason', 'unknown')})"
-                elif refinement_progress.get('improvement_score', 0) < -5:
-                    should_stop = True
-                    stop_reason = "Refinement making results worse"
-                
-                if should_stop:
-                    final_worst_pixels = brng_results.get('worst_frames', [{}])[0].get('violation_percentage', 0) if brng_results else 0
+                while retry_count <= max_border_retries:
+                    # Step 2a: BRNG Analysis
+                    if self.signals:
+                        if retry_count == 0:
+                            self.signals.output_progress.emit("Analyzing BRNG violations...")
+                        else:
+                            self.signals.output_progress.emit(f"Re-analyzing BRNG (attempt {retry_count + 1})...")
                     
-                    if adjustment_reason in ['excellent_quality_achieved', 'acceptable_quality_achieved']:
-                        logger.info(f"✓ Border refinement successful after {retry_count + 1} attempt(s)")
-                        logger.info(f"  Final result: worst frame violations = {final_worst_pixels:.4f}% pixels")
-                        logger.info(f"  Quality assessment: {adjustment_reason.replace('_', ' ')}")
-                    elif improvement_score > 5:
-                        logger.info(f"✓ Border refinement achieved good improvement after {retry_count + 1} attempt(s)")
-                        logger.info(f"  Improvement score: {improvement_score:.1f}")
-                        logger.info(f"  Final violations: {final_worst_pixels:.4f}% pixels")
+                    brng_results = None
+                    if border_results and border_results.get('active_area'):
+                        brng_results = analyze_active_area_brng(
+                            video_path=video_path,
+                            border_data_path=border_data_path,
+                            output_dir=destination_directory,
+                            duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                            skip_start_seconds=color_bars_end_seconds
+                        )
                     else:
-                        logger.warning(f"⚠ Border refinement stopped after {retry_count + 1} attempt(s) - {stop_reason}")
-                        logger.warning(f"  Final violations: {final_worst_pixels:.4f}% pixels")
-                        if retry_count >= max_border_retries:
-                            logger.warning("  Consider reviewing source material or manually setting border coordinates")
-                    break
-                
-                # Continue with border adjustment
-                retry_count += 1
-                analysis_results['border_retry_count'] = retry_count
+                        # Analyze full frame if no borders detected
+                        brng_results = analyze_active_area_brng(
+                            video_path=video_path,
+                            border_data_path=None,
+                            output_dir=destination_directory,
+                            duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                            skip_start_seconds=color_bars_end_seconds
+                        )
+                    
+                    if self.check_cancelled():
+                        return None
+                    
+                    analysis_results['brng_results'] = brng_results
+                    
+                    # Analyze refinement progress using the improved logic
+                    from AV_Spex.checks.active_area_brng_analyzer import ActiveAreaBrngAnalyzer
+                    temp_analyzer = ActiveAreaBrngAnalyzer(video_path, border_data_path, destination_directory)
+                    
+                    refinement_progress = temp_analyzer.analyze_refinement_progress(
+                        brng_results, previous_brng_results
+                    )
+                    
+                    # Generate updated actionable report with progress analysis
+                    actionable_report = temp_analyzer.generate_actionable_report(
+                        brng_results, previous_brng_results, refinement_progress
+                    )
+                    brng_results['actionable_report'] = actionable_report
+                    brng_results['refinement_progress'] = refinement_progress
+                    
+                    # Extract decision from refined analysis
+                    requires_adjustment = actionable_report.get('requires_border_adjustment', False)
+                    adjustment_reason = actionable_report.get('adjustment_reason', 'unknown')
+                    
+                    # Record refinement attempt with enhanced data
+                    aggregate = brng_results.get('aggregate_patterns', {}) if brng_results else {}
+                    refinement_record = {
+                        'attempt': retry_count + 1,
+                        'requires_adjustment': requires_adjustment,
+                        'adjustment_reason': adjustment_reason,
+                        'edge_violation_percentage': aggregate.get('edge_violation_percentage', 0),
+                        'continuous_edge_percentage': aggregate.get('continuous_edge_percentage', 0),
+                        'affected_edges': aggregate.get('boundary_edges_detected', []),
+                        'improvement_score': refinement_progress.get('improvement_score', 0),
+                        'should_continue': refinement_progress.get('should_continue', False),
+                        'progress_reason': refinement_progress.get('reason', 'unknown')
+                    }
+                    
+                    if border_results and border_results.get('active_area'):
+                        refinement_record['active_area'] = border_results['active_area']
+                    
+                    analysis_results['border_refinement_history'].append(refinement_record)
+                    
+                    # Enhanced decision logic based on refinement progress
+                    should_stop = False
+                    stop_reason = ""
+                    
+                    if not requires_adjustment:
+                        should_stop = True
+                        stop_reason = f"BRNG analysis acceptable ({adjustment_reason})"
+                    elif retry_count >= max_border_retries:
+                        should_stop = True
+                        stop_reason = f"Maximum attempts reached ({max_border_retries + 1})"
+                    elif not refinement_progress.get('should_continue', True):
+                        should_stop = True
+                        stop_reason = f"Progress analysis recommends stopping ({refinement_progress.get('reason', 'unknown')})"
+                    elif refinement_progress.get('improvement_score', 0) < -5:
+                        should_stop = True
+                        stop_reason = "Refinement making results worse"
+                    
+                    if should_stop:
+                        final_worst_pixels = brng_results.get('worst_frames', [{}])[0].get('violation_percentage', 0) if brng_results else 0
+                        improvement_score = refinement_progress.get('improvement_score', 0)
+                        
+                        if adjustment_reason in ['excellent_quality_achieved', 'acceptable_quality_achieved']:
+                            logger.info(f"✓ Border refinement successful after {retry_count + 1} attempt(s)")
+                            logger.info(f"  Final result: worst frame violations = {final_worst_pixels:.4f}% pixels")
+                            logger.info(f"  Quality assessment: {adjustment_reason.replace('_', ' ')}")
+                        elif improvement_score > 5:
+                            logger.info(f"✓ Border refinement achieved good improvement after {retry_count + 1} attempt(s)")
+                            logger.info(f"  Improvement score: {improvement_score:.1f}")
+                            logger.info(f"  Final violations: {final_worst_pixels:.4f}% pixels")
+                        else:
+                            logger.warning(f"⚠ Border refinement stopped after {retry_count + 1} attempt(s) - {stop_reason}")
+                            logger.warning(f"  Final violations: {final_worst_pixels:.4f}% pixels")
+                            if retry_count >= max_border_retries:
+                                logger.warning("  Consider reviewing source material or manually setting border coordinates")
+                        break
+                    
+                    # Continue with border adjustment (refinement logic continues as in original)
+                    retry_count += 1
+                    analysis_results['border_retry_count'] = retry_count
                 
                 if self.signals:
                     improvement_score = refinement_progress.get('improvement_score', 0)
@@ -678,81 +704,83 @@ class ProcessingManager:
                     # Store current results for next iteration comparison
                     previous_brng_results = brng_results.copy() if brng_results else None
                     
-                else:
-                    logger.warning("No border results to refine - cannot adjust borders")
-                    break
-            
-            # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
-            if self.signals:
-                self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
-                
-        else:
-            # No iterative refinement - just run BRNG once
-            if self.signals:
-                self.signals.output_progress.emit("Analyzing BRNG violations...")
-            
-            brng_results = None
-            if border_results and border_results.get('active_area'):
-                brng_results = analyze_active_area_brng(
-                    video_path=video_path,
-                    border_data_path=border_data_path,
-                    output_dir=destination_directory,
-                    duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
-                    skip_start_seconds=color_bars_end_seconds
-                )
+                # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
+                if self.signals:
+                    self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
+                    
             else:
-                brng_results = analyze_active_area_brng(
-                    video_path=video_path,
-                    border_data_path=None,
-                    output_dir=destination_directory,
-                    duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
-                    skip_start_seconds=color_bars_end_seconds
-                )
-            
-            if self.check_cancelled():
-                return None
-            
-            analysis_results['brng_results'] = brng_results
-            
-            # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
-            if self.signals:
-                self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
-    
-        # Step 3: Enhanced FFprobe Signalstats Analysis (ONLY if sophisticated border detection was used)
-        if use_sophisticated:
-            if self.signals:
-                self.signals.output_progress.emit("Running enhanced FFprobe signalstats analysis...")
-            
-            logger.info("\nRunning enhanced signalstats analysis with scene detection")
-            
-            # Extract content start information from BRNG analysis
-            content_start_time = 0
-            if analysis_results.get('brng_results') and analysis_results['brng_results'].get('video_info'):
-                content_start_time = analysis_results['brng_results']['video_info'].get('content_start_time', 0)
-            
-            # Use the enhanced signalstats analyzer with scene detection and black segment avoidance
-        signalstats_results = analyze_video_signalstats(
-            video_path=video_path,
-            border_data_path=border_data_path if border_results else None,
-            output_dir=destination_directory,
-            content_start_time=content_start_time,
-            color_bars_end_time=color_bars_end_seconds,
-            analysis_duration=getattr(frame_config, 'signalstats_duration', 60),
-            num_analysis_periods=getattr(frame_config, 'signalstats_periods', 3),  # Increased to 3 for better coverage
-        )
-        
-        analysis_results['signalstats_results'] = signalstats_results
-        
-        # EMIT SIGNAL FOR SIGNALSTATS COMPLETION
-        if self.signals:
-            self.signals.step_completed.emit("Frame Analysis - Signalstats")
+                # No iterative refinement - just run BRNG once
+                if self.signals:
+                    self.signals.output_progress.emit("Analyzing BRNG violations...")
+                
+                brng_results = None
+                if border_results and border_results.get('active_area'):
+                    brng_results = analyze_active_area_brng(
+                        video_path=video_path,
+                        border_data_path=border_data_path,
+                        output_dir=destination_directory,
+                        duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                        skip_start_seconds=color_bars_end_seconds
+                    )
+                else:
+                    brng_results = analyze_active_area_brng(
+                        video_path=video_path,
+                        border_data_path=None,
+                        output_dir=destination_directory,
+                        duration_limit=getattr(frame_config, 'brng_duration_limit', 300),
+                        skip_start_seconds=color_bars_end_seconds
+                    )
+                
+                if self.check_cancelled():
+                    return None
+                
+                analysis_results['brng_results'] = brng_results
+                
+                # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
+                if self.signals:
+                    self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
         else:
-            # Skip signalstats for simple border detection
-            logger.info("Skipping signalstats analysis (requires sophisticated border detection)")
-            analysis_results['signalstats_skipped_reason'] = 'simple_borders'
-            
-            if self.signals:
-                self.signals.output_progress.emit("Skipping signalstats (simple borders mode)...")
+            logger.info("BRNG analysis sub-step is disabled")
+    
+        # Step 3: Enhanced FFprobe Signalstats Analysis (if enabled)
+        if signalstats_enabled:
+            # Check dependencies: signalstats requires sophisticated border detection
+            if not border_detection_enabled:
+                logger.warning("Signalstats requires border detection to be enabled - skipping")
+                analysis_results['signalstats_skipped_reason'] = 'border_detection_disabled'
+            elif not use_sophisticated:
+                logger.info("Skipping signalstats analysis (requires sophisticated border detection)")
+                analysis_results['signalstats_skipped_reason'] = 'simple_borders'
+            else:
+                if self.signals:
+                    self.signals.output_progress.emit("Running enhanced FFprobe signalstats analysis...")
+                
+                logger.info("\nRunning enhanced signalstats analysis with scene detection")
+                
+                # Extract content start information from BRNG analysis
+                content_start_time = 0
+                if analysis_results.get('brng_results') and analysis_results['brng_results'].get('video_info'):
+                    content_start_time = analysis_results['brng_results']['video_info'].get('content_start_time', 0)
+                
+                # Use the enhanced signalstats analyzer with scene detection and black segment avoidance
+                signalstats_results = analyze_video_signalstats(
+                    video_path=video_path,
+                    border_data_path=border_data_path if border_results else None,
+                    output_dir=destination_directory,
+                    content_start_time=content_start_time,
+                    color_bars_end_time=color_bars_end_seconds,
+                    analysis_duration=getattr(frame_config, 'signalstats_duration', 60),
+                    num_analysis_periods=getattr(frame_config, 'signalstats_periods', 3),
+                )
+                
+                analysis_results['signalstats_results'] = signalstats_results
+                
+                # EMIT SIGNAL FOR SIGNALSTATS COMPLETION
+                if self.signals:
+                    self.signals.step_completed.emit("Frame Analysis - Signalstats")
+        else:
+            logger.info("Signalstats sub-step is disabled")
+            analysis_results['signalstats_skipped_reason'] = 'disabled'
         
         # Log comprehensive summary
         self._log_broadcast_analysis_summary(analysis_results, video_id)
