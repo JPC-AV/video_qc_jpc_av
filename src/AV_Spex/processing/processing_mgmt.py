@@ -506,7 +506,8 @@ class ProcessingManager:
                         stop_reason = "Refinement making results worse"
                     
                     if should_stop:
-                        final_worst_pixels = brng_results.get('worst_frames', [{}])[0].get('violation_percentage', 0) if brng_results else 0
+                        worst_frames = brng_results.get('worst_frames', []) if brng_results else []
+                        final_worst_pixels = worst_frames[0].get('violation_percentage', 0) if worst_frames else 0
                         improvement_score = refinement_progress.get('improvement_score', 0)
                         
                         if adjustment_reason in ['excellent_quality_achieved', 'acceptable_quality_achieved']:
