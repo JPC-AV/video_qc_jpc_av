@@ -358,6 +358,9 @@ class VideoBorderDetector:
             return None
         
         logger.debug(f"Using {len(quality_frames)} high-quality frames for border detection...")
+
+        # Check for vertical blanking lines
+        vertical_blanking = self.detect_vertical_blanking_lines(quality_frames)
         
         left_borders = []
         right_borders = []
@@ -411,6 +414,20 @@ class VideoBorderDetector:
         # Calculate stable borders
         median_left = int(np.median(left_borders))
         median_right = int(np.median(right_borders))
+
+        if vertical_blanking.get('left_blanking'):
+            detected_left = vertical_blanking['left_blanking'] + 2  # Add small buffer
+            if detected_left > median_left:
+                logger.debug(f"  Vertical blanking line detected at x={vertical_blanking['left_blanking']}")
+                logger.debug(f"  Adjusting left border from {median_left} to {detected_left}")
+                median_left = detected_left
+        
+        if vertical_blanking.get('right_blanking'):
+            detected_right = vertical_blanking['right_blanking'] - 2  # Subtract small buffer
+            if detected_right < median_right:
+                logger.debug(f"  Vertical blanking line detected at x={vertical_blanking['right_blanking']}")
+                logger.debug(f"  Adjusting right border from {median_right} to {detected_right}")
+                median_right = detected_right
         
         # Add padding for tighter active area
         padding = 5
@@ -440,6 +457,63 @@ class VideoBorderDetector:
         logger.debug(f"  Active area (with {padding}px padding): {active_width}x{active_height} at ({median_left},{mode_top})")
         
         return result
+    
+    def detect_vertical_blanking_lines(self, frames, edge_width=30):
+        """
+        Detect vertical blanking lines that might be missed by standard border detection.
+        These often appear as consistent vertical lines of violations in analog video.
+        
+        Args:
+            frames: List of (frame_idx, frame, quality_score) tuples
+            edge_width: How far from the edge to scan for vertical lines
+            
+        Returns:
+            dict: Detected blanking line positions for each edge
+        """
+        blanking_lines = {
+            'left': [],
+            'right': []
+        }
+        
+        for frame_idx, frame, _ in frames:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            h, w = gray.shape
+            
+            # Check left edge for vertical blanking lines
+            left_region = gray[:, :edge_width]
+            for x in range(edge_width):
+                column = left_region[:, x]
+                # Check if this column is consistently dark (potential blanking)
+                if np.mean(column) < 20:  # Dark threshold
+                    # Check for consistency (low variation)
+                    if np.std(column) < 10:
+                        blanking_lines['left'].append(x)
+                        
+            # Check right edge
+            right_region = gray[:, -edge_width:]
+            for x in range(edge_width):
+                column = right_region[:, x]
+                if np.mean(column) < 20 and np.std(column) < 10:
+                    blanking_lines['right'].append(w - edge_width + x)
+        
+        # Find the most common blanking positions
+        result = {}
+        if blanking_lines['left']:
+            # Find the rightmost consistent blanking line on the left
+            left_counts = np.bincount(blanking_lines['left'])
+            consistent_lines = np.where(left_counts >= len(frames) * 0.3)[0]  # 30% threshold
+            if len(consistent_lines) > 0:
+                result['left_blanking'] = int(np.max(consistent_lines))
+        
+        if blanking_lines['right']:
+            # Find the leftmost consistent blanking line on the right
+            right_counts = np.bincount([w - 1 - x for x in blanking_lines['right']])
+            consistent_lines = np.where(right_counts >= len(frames) * 0.3)[0]
+            if len(consistent_lines) > 0:
+                result['right_blanking'] = int(w - 1 - np.max(consistent_lines))
+        
+        return result
+
     
     def detect_head_switching_artifacts(self, active_area=None, sample_frames=20):
         """

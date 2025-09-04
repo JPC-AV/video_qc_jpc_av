@@ -32,67 +32,97 @@ class ComplexWindow(QWidget, ThemeableMixin):
         """Create fixed layout structure"""
         main_layout = QVBoxLayout(self)
 
-        self.setup_frame_analysis_section(main_layout)
+        # Reordered: QCT Parse first, then frame analysis sections
         self.setup_qct_parse_section(main_layout)
+        self.setup_frame_analysis_sections(main_layout)
         self.connect_signals()
         
-    # Frame Analysis Section
-    def setup_frame_analysis_section(self, main_layout):
-        """Set up the frame analysis section with palette-aware styling and individual sub-step controls"""
+    # QCT Parse Section (moved to top)
+    def setup_qct_parse_section(self, main_layout):
+        """Set up the qct-parse section with palette-aware styling"""
         theme_manager = ThemeManager.instance()
         
-        # Frame Analysis Section - Main container with centered title
-        self.frame_analysis_group = QGroupBox("Frame Analysis")
-        theme_manager.style_groupbox(self.frame_analysis_group, "top center")
-        self.themed_group_boxes['frame_analysis'] = self.frame_analysis_group
+        # QCT Parse section
+        self.qct_group = QGroupBox("qct-parse")
+        theme_manager.style_groupbox(self.qct_group, "top center")
+        self.themed_group_boxes['qct'] = self.qct_group
+
+        qct_layout = QVBoxLayout()
+
+        # Checkboxes with descriptions on second line
+        self.run_qctparse_cb = QCheckBox("Run Tool")
+        self.run_qctparse_cb.setStyleSheet("font-weight: bold;")
+        run_qctparse_desc = QLabel("Run qct-parse tool on input video file")
+        run_qctparse_desc.setIndent(20)
+
+        self.bars_detection_cb = QCheckBox("Detect Color Bars")
+        self.bars_detection_cb.setStyleSheet("font-weight: bold;")
+        bars_detection_desc = QLabel("Detect color bars in the video content")
+        bars_detection_desc.setIndent(20)
+
+        self.evaluate_bars_cb = QCheckBox("Evaluate Color Bars")
+        self.evaluate_bars_cb.setStyleSheet("font-weight: bold;")
+        evaluate_bars_desc = QLabel("Compare content to color bars for validation")
+        evaluate_bars_desc.setIndent(20)
+
+        self.thumb_export_cb = QCheckBox("Thumbnail Export")
+        self.thumb_export_cb.setStyleSheet("font-weight: bold;")
+        thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
+        thumb_export_desc.setIndent(20)
+
+        # Content Filter
+        content_filter_label = QLabel("Content Detection")
+        content_filter_label.setStyleSheet("font-weight: bold;")
+        content_filter_desc = QLabel("Select type of content to detect in the video")
+        self.content_filter_combo = QComboBox()
+        self.content_filter_combo.addItem("Select options...", None)  # Store None as data
+
+        # Create a mapping of display text to actual values
+        content_filter_options = {
+            "All Black Detection": "allBlack",
+            "Static Content Detection": "static"
+        }
+
+        # Add items with display text and corresponding data value
+        for display_text, value in content_filter_options.items():
+            self.content_filter_combo.addItem(display_text, value)
+
+        # Add all widgets to the qct layout
+        qct_layout.addWidget(self.run_qctparse_cb)
+        qct_layout.addWidget(run_qctparse_desc)
+        qct_layout.addWidget(self.bars_detection_cb)
+        qct_layout.addWidget(bars_detection_desc)
+        qct_layout.addWidget(self.evaluate_bars_cb)
+        qct_layout.addWidget(evaluate_bars_desc)
+        qct_layout.addWidget(self.thumb_export_cb)
+        qct_layout.addWidget(thumb_export_desc)
+        qct_layout.addWidget(content_filter_label)
+        qct_layout.addWidget(content_filter_desc)
+        qct_layout.addWidget(self.content_filter_combo)
         
-        frame_analysis_layout = QVBoxLayout()
+        # Tagname
+        tagname_label = QLabel("Tag Name")
+        tagname_label.setStyleSheet("font-weight: bold;")
+        tagname_desc = QLabel("Input ad hoc tags using this format: YMIN, lt, 100 (tag name, lt or gt, number value)")
+        self.tagname_input = QLineEdit()
+        self.tagname_input.setPlaceholderText("None")
+        qct_layout.addWidget(tagname_label)
+        qct_layout.addWidget(tagname_desc)
+        qct_layout.addWidget(self.tagname_input)
         
-        # Enable Frame Analysis checkbox at the top level
-        self.frame_analysis_enabled_cb = QCheckBox("Enable Frame Analysis")
-        self.frame_analysis_enabled_cb.setStyleSheet("font-weight: bold;")
-        frame_analysis_desc = QLabel("Perform border detection, BRNG analysis, and optional signalstats")
-        frame_analysis_desc.setIndent(20)
-        
-        frame_analysis_layout.addWidget(self.frame_analysis_enabled_cb)
-        frame_analysis_layout.addWidget(frame_analysis_desc)
-        frame_analysis_layout.addSpacing(10)
-        
-        # Sub-step Enable Controls Group
-        self.substeps_group = QGroupBox("Analysis Sub-Steps")
-        theme_manager.style_groupbox(self.substeps_group, "top left")
-        self.themed_group_boxes['substeps'] = self.substeps_group
-        
-        substeps_layout = QVBoxLayout()
-        
-        # Border Detection checkbox
-        self.enable_border_detection_cb = QCheckBox("Enable Border Detection")
-        self.enable_border_detection_cb.setStyleSheet("font-weight: bold;")
-        border_det_desc = QLabel("Detect and crop blanking borders from the video")
-        border_det_desc.setIndent(20)
-        
-        # BRNG Analysis checkbox
-        self.enable_brng_analysis_cb = QCheckBox("Enable BRNG Analysis")
-        self.enable_brng_analysis_cb.setStyleSheet("font-weight: bold;")
-        brng_desc = QLabel("Analyze broadcast range violations in the active area")
-        brng_desc.setIndent(20)
-        
-        # Signalstats checkbox
-        self.enable_signalstats_cb = QCheckBox("Enable Signalstats Analysis")
-        self.enable_signalstats_cb.setStyleSheet("font-weight: bold;")
-        signalstats_desc = QLabel("Enhanced FFprobe signalstats (requires sophisticated borders)")
-        signalstats_desc.setIndent(20)
-        
-        substeps_layout.addWidget(self.enable_border_detection_cb)
-        substeps_layout.addWidget(border_det_desc)
-        substeps_layout.addWidget(self.enable_brng_analysis_cb)
-        substeps_layout.addWidget(brng_desc)
-        substeps_layout.addWidget(self.enable_signalstats_cb)
-        substeps_layout.addWidget(signalstats_desc)
-        
-        self.substeps_group.setLayout(substeps_layout)
-        frame_analysis_layout.addWidget(self.substeps_group)
-        frame_analysis_layout.addSpacing(10)
+        self.qct_group.setLayout(qct_layout)
+        main_layout.addWidget(self.qct_group)
+
+    # Frame Analysis Sections (restructured)
+    def setup_frame_analysis_sections(self, main_layout):
+        """Set up the individual frame analysis sections"""
+        self.setup_border_detection_section(main_layout)
+        self.setup_brng_analysis_section(main_layout)
+        self.setup_signalstats_section(main_layout)
+
+    def setup_border_detection_section(self, main_layout):
+        """Set up the border detection section with enable checkbox"""
+        theme_manager = ThemeManager.instance()
         
         # Border Detection Group Box
         self.border_detection_group = QGroupBox("Border Detection Settings")
@@ -100,6 +130,16 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.themed_group_boxes['border_detection'] = self.border_detection_group
         
         border_detection_layout = QVBoxLayout()
+        
+        # Enable Border Detection checkbox (moved from substeps)
+        self.enable_border_detection_cb = QCheckBox("Enable Border Detection")
+        self.enable_border_detection_cb.setStyleSheet("font-weight: bold;")
+        border_det_desc = QLabel("Detect and crop blanking borders from the video")
+        border_det_desc.setIndent(20)
+        
+        border_detection_layout.addWidget(self.enable_border_detection_cb)
+        border_detection_layout.addWidget(border_det_desc)
+        border_detection_layout.addSpacing(10)
         
         # Border Detection Mode selector
         border_mode_widget = QWidget()
@@ -259,17 +299,44 @@ class ComplexWindow(QWidget, ThemeableMixin):
         auto_retry_desc = QLabel("Automatically adjusts borders if edge artifacts are found")
         auto_retry_desc.setIndent(20)
         
+        # Max Border Retries
+        max_retries_layout = QHBoxLayout()
+        max_retries_label = QLabel("Max Retries:")
+        max_retries_label.setStyleSheet("font-weight: bold;")
+        self.max_border_retries_input = QLineEdit("5")
+        self.max_border_retries_input.setMaximumWidth(60)
+        max_retries_layout.addWidget(max_retries_label)
+        max_retries_layout.addWidget(self.max_border_retries_input)
+        max_retries_layout.addStretch()
+        
+        max_retries_desc = QLabel("Maximum number of border adjustment attempts")
+        max_retries_desc.setIndent(20)
+        
         # Add sophisticated mode components
         sophisticated_params_layout.addWidget(frame_selection_group)
         sophisticated_params_layout.addWidget(detection_params_group)
         sophisticated_params_layout.addWidget(self.auto_retry_borders_cb)
         sophisticated_params_layout.addWidget(auto_retry_desc)
+        sophisticated_params_layout.addLayout(max_retries_layout)
+        sophisticated_params_layout.addWidget(max_retries_desc)
         
         # Add both parameter widgets to border detection layout
         border_detection_layout.addWidget(self.simple_params_widget)
         border_detection_layout.addWidget(self.sophisticated_params_widget)
         
+        # Initially hide sophisticated params
+        self.sophisticated_params_widget.setVisible(False)
+        
         self.border_detection_group.setLayout(border_detection_layout)
+        main_layout.addWidget(self.border_detection_group)
+        
+        # Connect enable/disable logic
+        self.enable_border_detection_cb.stateChanged.connect(self.update_border_detection_visibility)
+        self.border_mode_combo.currentIndexChanged.connect(self.update_border_detection_visibility)
+
+    def setup_brng_analysis_section(self, main_layout):
+        """Set up the BRNG analysis section with enable checkbox"""
+        theme_manager = ThemeManager.instance()
         
         # BRNG Analysis Group Box
         self.brng_group = QGroupBox("BRNG Analysis Settings")
@@ -277,6 +344,16 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.themed_group_boxes['brng_analysis'] = self.brng_group
         
         brng_layout = QVBoxLayout()
+        
+        # Enable BRNG Analysis checkbox (moved from substeps)
+        self.enable_brng_analysis_cb = QCheckBox("Enable BRNG Analysis")
+        self.enable_brng_analysis_cb.setStyleSheet("font-weight: bold;")
+        brng_desc = QLabel("Analyze broadcast range violations in the active area")
+        brng_desc.setIndent(20)
+        
+        brng_layout.addWidget(self.enable_brng_analysis_cb)
+        brng_layout.addWidget(brng_desc)
+        brng_layout.addSpacing(10)
         
         # Duration Limit
         duration_layout = QHBoxLayout()
@@ -303,13 +380,31 @@ class ComplexWindow(QWidget, ThemeableMixin):
         brng_layout.addWidget(skip_bars_desc)
         
         self.brng_group.setLayout(brng_layout)
+        main_layout.addWidget(self.brng_group)
         
-        # Signalstats Group Box (only visible in sophisticated mode)
-        self.signalstats_widget = QGroupBox("Signalstats Settings")
-        theme_manager.style_groupbox(self.signalstats_widget, "top left")
-        self.themed_group_boxes['signalstats'] = self.signalstats_widget
+        # Connect enable/disable logic
+        self.enable_brng_analysis_cb.stateChanged.connect(self.update_brng_analysis_visibility)
+
+    def setup_signalstats_section(self, main_layout):
+        """Set up the signalstats section with enable checkbox"""
+        theme_manager = ThemeManager.instance()
+        
+        # Signalstats Group Box
+        self.signalstats_group = QGroupBox("Signalstats Settings")
+        theme_manager.style_groupbox(self.signalstats_group, "top left")
+        self.themed_group_boxes['signalstats'] = self.signalstats_group
         
         signalstats_layout = QVBoxLayout()
+        
+        # Enable Signalstats checkbox (moved from substeps)
+        self.enable_signalstats_cb = QCheckBox("Enable Signalstats Analysis")
+        self.enable_signalstats_cb.setStyleSheet("font-weight: bold;")
+        signalstats_desc = QLabel("Enhanced FFprobe signalstats (requires sophisticated borders)")
+        signalstats_desc.setIndent(20)
+        
+        signalstats_layout.addWidget(self.enable_signalstats_cb)
+        signalstats_layout.addWidget(signalstats_desc)
+        signalstats_layout.addSpacing(10)
         
         # Start Time
         start_time_layout = QHBoxLayout()
@@ -357,156 +452,47 @@ class ComplexWindow(QWidget, ThemeableMixin):
         signalstats_layout.addLayout(periods_layout)
         signalstats_layout.addWidget(periods_desc)
         
-        self.signalstats_widget.setLayout(signalstats_layout)
-        
-        # Add all sub-groups to frame analysis layout
-        frame_analysis_layout.addWidget(self.border_detection_group)
-        frame_analysis_layout.addWidget(self.brng_group)
-        frame_analysis_layout.addWidget(self.signalstats_widget)
-        
-        # Initially hide sophisticated params and signalstats
-        self.sophisticated_params_widget.setVisible(False)
-        self.signalstats_widget.setVisible(False)
-        
-        self.frame_analysis_group.setLayout(frame_analysis_layout)
-        main_layout.addWidget(self.frame_analysis_group)
+        self.signalstats_group.setLayout(signalstats_layout)
+        main_layout.addWidget(self.signalstats_group)
         
         # Connect enable/disable logic
-        self.frame_analysis_enabled_cb.stateChanged.connect(self.update_frame_analysis_visibility)
-        self.enable_border_detection_cb.stateChanged.connect(self.update_substep_visibility)
-        self.enable_brng_analysis_cb.stateChanged.connect(self.update_substep_visibility)
-        self.enable_signalstats_cb.stateChanged.connect(self.update_substep_visibility)
-        self.border_mode_combo.currentIndexChanged.connect(self.update_substep_visibility)
+        self.enable_signalstats_cb.stateChanged.connect(self.update_signalstats_visibility)
 
-    def update_frame_analysis_visibility(self):
-        """Update visibility of frame analysis components based on main checkbox"""
-        enabled = self.frame_analysis_enabled_cb.isChecked()
-        
-        # Show/hide sub-steps group
-        self.substeps_group.setVisible(enabled)
-        
-        # Show/hide settings based on enabled sub-steps
-        if enabled:
-            self.update_substep_visibility()
-        else:
-            # Hide all settings when main is disabled
-            self.border_detection_group.setVisible(False)
-            self.brng_group.setVisible(False)
-            self.signalstats_widget.setVisible(False)
-
-    def update_substep_visibility(self):
-        """Update visibility of sub-step settings based on their checkboxes"""
-        if not self.frame_analysis_enabled_cb.isChecked():
-            return
-        
-        # Show/hide border detection settings
-        border_enabled = self.enable_border_detection_cb.isChecked()
-        self.border_detection_group.setVisible(border_enabled)
-        
-        # Show/hide BRNG settings
-        brng_enabled = self.enable_brng_analysis_cb.isChecked()
-        self.brng_group.setVisible(brng_enabled)
-        
-        # Show/hide signalstats settings (also depends on border mode)
-        signalstats_enabled = self.enable_signalstats_cb.isChecked()
+    def update_border_detection_visibility(self):
+        """Update visibility of border detection components"""
+        enabled = self.enable_border_detection_cb.isChecked()
         is_sophisticated = self.border_mode_combo.currentData() == "sophisticated"
+        
+        # Show/hide mode-specific parameters
+        self.simple_params_widget.setVisible(enabled and not is_sophisticated)
+        self.sophisticated_params_widget.setVisible(enabled and is_sophisticated)
+        
+        # Update signalstats availability
+        self.update_signalstats_dependency()
+
+    def update_brng_analysis_visibility(self):
+        """Update visibility of BRNG analysis components based on checkbox"""
+        # BRNG section is always visible, but could be used for future logic
+        pass
+
+    def update_signalstats_visibility(self):
+        """Update visibility of signalstats components based on dependencies"""
+        self.update_signalstats_dependency()
+
+    def update_signalstats_dependency(self):
+        """Update signalstats checkbox tooltip based on dependencies"""
         border_enabled = self.enable_border_detection_cb.isChecked()
+        is_sophisticated = self.border_mode_combo.currentData() == "sophisticated"
         
-        # Signalstats requires both border detection and sophisticated mode
-        self.signalstats_widget.setVisible(signalstats_enabled and is_sophisticated and border_enabled)
-        
-        # Update mode-specific parameter visibility
-        if border_enabled:
-            if is_sophisticated:
-                self.simple_params_widget.setVisible(False)
-                self.sophisticated_params_widget.setVisible(True)
-            else:
-                self.simple_params_widget.setVisible(True)
-                self.sophisticated_params_widget.setVisible(False)
-        
-        # Update signalstats checkbox tooltip based on dependencies
         if not border_enabled:
             self.enable_signalstats_cb.setToolTip("Requires border detection to be enabled")
+            self.enable_signalstats_cb.setEnabled(False)
         elif not is_sophisticated:
             self.enable_signalstats_cb.setToolTip("Requires sophisticated border detection mode")
+            self.enable_signalstats_cb.setEnabled(False)
         else:
             self.enable_signalstats_cb.setToolTip("")
-        
-    # QCT Parse Section
-    def setup_qct_parse_section(self, main_layout):
-        """Set up the qct-parse section with palette-aware styling"""
-        theme_manager = ThemeManager.instance()
-        
-        # QCT Parse section
-        self.qct_group = QGroupBox("qct-parse")
-        theme_manager.style_groupbox(self.qct_group, "top center")
-        self.themed_group_boxes['qct'] = self.qct_group
-
-        qct_layout = QVBoxLayout()
-
-        # Checkboxes with descriptions on second line
-        self.run_qctparse_cb = QCheckBox("Run Tool")
-        self.run_qctparse_cb.setStyleSheet("font-weight: bold;")
-        run_qctparse_desc = QLabel("Run qct-parse tool on input video file")
-        run_qctparse_desc.setIndent(20)
-
-        self.bars_detection_cb = QCheckBox("Detect Color Bars")
-        self.bars_detection_cb.setStyleSheet("font-weight: bold;")
-        bars_detection_desc = QLabel("Detect color bars in the video content")
-        bars_detection_desc.setIndent(20)
-
-        self.evaluate_bars_cb = QCheckBox("Evaluate Color Bars")
-        self.evaluate_bars_cb.setStyleSheet("font-weight: bold;")
-        evaluate_bars_desc = QLabel("Compare content to color bars for validation")
-        evaluate_bars_desc.setIndent(20)
-
-        self.thumb_export_cb = QCheckBox("Thumbnail Export")
-        self.thumb_export_cb.setStyleSheet("font-weight: bold;")
-        thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
-        thumb_export_desc.setIndent(20)
-
-        # Content Filter
-        content_filter_label = QLabel("Content Detection")
-        content_filter_label.setStyleSheet("font-weight: bold;")
-        content_filter_desc = QLabel("Select type of content to detect in the video")
-        self.content_filter_combo = QComboBox()
-        self.content_filter_combo.addItem("Select options...", None)  # Store None as data
-
-        # Create a mapping of display text to actual values
-        content_filter_options = {
-            "All Black Detection": "allBlack",
-            "Static Content Detection": "static"
-        }
-
-        # Add items with display text and corresponding data value
-        for display_text, value in content_filter_options.items():
-            self.content_filter_combo.addItem(display_text, value)
-
-        # Add all widgets to the qct layout
-        qct_layout.addWidget(self.run_qctparse_cb)
-        qct_layout.addWidget(run_qctparse_desc)
-        qct_layout.addWidget(self.bars_detection_cb)
-        qct_layout.addWidget(bars_detection_desc)
-        qct_layout.addWidget(self.evaluate_bars_cb)
-        qct_layout.addWidget(evaluate_bars_desc)
-        qct_layout.addWidget(self.thumb_export_cb)
-        qct_layout.addWidget(thumb_export_desc)
-        qct_layout.addWidget(content_filter_label)
-        qct_layout.addWidget(content_filter_desc)
-        qct_layout.addWidget(self.content_filter_combo)
-        
-        # Tagname
-        tagname_label = QLabel("Tag Name")
-        tagname_label.setStyleSheet("font-weight: bold;")
-        tagname_desc = QLabel("Input ad hoc tags using this format: YMIN, lt, 100 (tag name, lt or gt, number value)")
-        self.tagname_input = QLineEdit()
-        self.tagname_input.setPlaceholderText("None")
-        qct_layout.addWidget(tagname_label)
-        qct_layout.addWidget(tagname_desc)
-        qct_layout.addWidget(self.tagname_input)
-        
-        self.qct_group.setLayout(qct_layout)
-        main_layout.addWidget(self.qct_group)
+            self.enable_signalstats_cb.setEnabled(True)
 
     def on_theme_changed(self, palette):
         """Handle theme changes for ComplexWindow"""
@@ -530,11 +516,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
 
     def connect_signals(self):
         """Connect all widget signals to their handlers"""
-        # Frame Analysis main checkbox
-        self.frame_analysis_enabled_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'enabled'])
-        )
-        
         # Sub-step enable checkboxes
         self.enable_border_detection_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'enable_border_detection'])
@@ -627,8 +608,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         if hasattr(checks_config.outputs, 'frame_analysis'):
             frame_config = checks_config.outputs.frame_analysis
             
-            self.frame_analysis_enabled_cb.setChecked(frame_config.enabled.lower() == 'yes')
-            
             # Load sub-step enable states
             self.enable_border_detection_cb.setChecked(frame_config.enable_border_detection.lower() == 'yes')
             self.enable_brng_analysis_cb.setChecked(frame_config.enable_brng_analysis.lower() == 'yes')
@@ -655,7 +634,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.signalstats_periods_input.setText(str(getattr(frame_config, 'signalstats_periods', 3)))
             
             # Update visibility based on loaded state
-            self.update_frame_analysis_visibility()
+            self.update_border_detection_visibility()
+            self.update_brng_analysis_visibility()
+            self.update_signalstats_visibility()
         
         # QCT Parse
         qct = checks_config.tools.qct_parse
@@ -719,15 +700,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
         
         mode = self.border_mode_combo.itemData(index)
         
-        # Show/hide appropriate parameter widgets
-        if mode == "simple":
-            self.simple_params_widget.setVisible(True)
-            self.sophisticated_params_widget.setVisible(False)
-            self.signalstats_widget.setVisible(False)
-        else:  # sophisticated
-            self.simple_params_widget.setVisible(False)
-            self.sophisticated_params_widget.setVisible(True)
-            self.signalstats_widget.setVisible(True)
+        # Update visibility
+        self.update_border_detection_visibility()
         
         # Update config
         updates = {'outputs': {'frame_analysis': {'border_detection_mode': mode}}}
@@ -742,7 +716,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         if param_name in ['simple_border_pixels', 'sophisticated_threshold', 'sophisticated_edge_sample_width',
                         'sophisticated_sample_frames', 'sophisticated_padding', 'sophisticated_viz_time',
                         'sophisticated_search_window', 'brng_duration_limit', 'signalstats_start_time',
-                        'signalstats_duration', 'signalstats_periods']:
+                        'signalstats_duration', 'signalstats_periods', 'max_border_retries']:
             try:
                 # Handle empty string case
                 value = int(value) if value.strip() else 0

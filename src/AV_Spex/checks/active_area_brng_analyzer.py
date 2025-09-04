@@ -297,8 +297,8 @@ class ActiveAreaBrngAnalyzer:
     
     def detect_edge_violations(self, violation_mask, edge_width=10):
         """
-        Specifically check for violations at the very edges of the frame
-        Returns detailed information about edge violations
+        Enhanced edge violation detection that better identifies blanking patterns.
+        Detects linear patterns even when pixels aren't directly adjacent.
         """
         h, w = violation_mask.shape
         edge_info = {
@@ -306,63 +306,128 @@ class ActiveAreaBrngAnalyzer:
             'edges_affected': [],
             'edge_percentages': {},
             'continuous_edges': [],
-            'severity': 'none'
+            'linear_patterns': {},
+            'blanking_depth': {},  # How far the blanking extends from edge
+            'severity': 'none',
+            'expansion_recommendations': {}
         }
         
-        # Check each edge
+        # Define edges with increased scan depth
         edges_to_check = [
-            ('left', violation_mask[:, :edge_width]),
-            ('right', violation_mask[:, -edge_width:]),
-            ('top', violation_mask[:edge_width, :]),
-            ('bottom', violation_mask[-edge_width:, :])
+            ('left', violation_mask[:, :edge_width], 'vertical'),
+            ('right', violation_mask[:, -edge_width:], 'vertical'),
+            ('top', violation_mask[:edge_width, :], 'horizontal'),
+            ('bottom', violation_mask[-edge_width:, :], 'horizontal')
         ]
         
-        for edge_name, edge_region in edges_to_check:
+        for edge_name, edge_region, orientation in edges_to_check:
             if edge_region.size == 0:
                 continue
             
+            # Basic violation percentage
             violation_pixels = np.sum(edge_region > 0)
             total_pixels = edge_region.size
             violation_percentage = (violation_pixels / total_pixels) * 100 if total_pixels > 0 else 0
             
             edge_info['edge_percentages'][edge_name] = violation_percentage
             
-            if violation_percentage > 10:  # More than 10% of edge has violations
+            # Detect linear patterns (even if not perfectly continuous)
+            linear_score = 0
+            if orientation == 'vertical':
+                # For left/right edges, check for horizontal lines of violations
+                for row in range(edge_region.shape[0]):
+                    row_violations = edge_region[row, :]
+                    if np.any(row_violations > 0):
+                        # Check if violations form a line pattern (allowing gaps)
+                        violation_positions = np.where(row_violations > 0)[0]
+                        if len(violation_positions) >= 2:
+                            # Check if violations are roughly aligned (within 3 pixels of edge)
+                            if edge_name == 'left' and np.max(violation_positions) <= 3:
+                                linear_score += 1
+                            elif edge_name == 'right' and np.min(violation_positions) >= edge_width - 4:
+                                linear_score += 1
+                
+                # Calculate linear pattern percentage
+                linear_percentage = (linear_score / edge_region.shape[0]) * 100
+                
+            else:  # horizontal orientation
+                # For top/bottom edges, check for vertical lines of violations
+                for col in range(edge_region.shape[1]):
+                    col_violations = edge_region[:, col]
+                    if np.any(col_violations > 0):
+                        violation_positions = np.where(col_violations > 0)[0]
+                        if len(violation_positions) >= 2:
+                            if edge_name == 'top' and np.max(violation_positions) <= 3:
+                                linear_score += 1
+                            elif edge_name == 'bottom' and np.min(violation_positions) >= edge_width - 4:
+                                linear_score += 1
+                
+                linear_percentage = (linear_score / edge_region.shape[1]) * 100
+            
+            edge_info['linear_patterns'][edge_name] = linear_percentage
+            
+            # Determine how far blanking extends from the edge
+            if violation_percentage > 5:
+                if orientation == 'vertical':
+                    # Find the deepest violation from the edge
+                    max_depth = 0
+                    for row in range(edge_region.shape[0]):
+                        row_violations = np.where(edge_region[row, :] > 0)[0]
+                        if len(row_violations) > 0:
+                            if edge_name == 'left':
+                                depth = np.max(row_violations)
+                            else:  # right
+                                depth = edge_width - np.min(row_violations)
+                            max_depth = max(max_depth, depth)
+                else:  # horizontal
+                    max_depth = 0
+                    for col in range(edge_region.shape[1]):
+                        col_violations = np.where(edge_region[:, col] > 0)[0]
+                        if len(col_violations) > 0:
+                            if edge_name == 'top':
+                                depth = np.max(col_violations)
+                            else:  # bottom
+                                depth = edge_width - np.min(col_violations)
+                            max_depth = max(max_depth, depth)
+                
+                edge_info['blanking_depth'][edge_name] = max_depth
+            
+            # Determine if this edge has significant violations
+            # Lower thresholds for better detection
+            if violation_percentage > 5 or linear_percentage > 30:
                 edge_info['edges_affected'].append(edge_name)
                 edge_info['has_edge_violations'] = True
                 
-                # Check if it's a continuous line
-                if edge_name in ['left', 'right']:
-                    # Check vertical continuity
-                    edge_column = violation_mask[:, 0] if edge_name == 'left' else violation_mask[:, -1]
-                    continuity = np.sum(edge_column > 0) / h
-                    if continuity > 0.7:  # 70% of the edge height
-                        edge_info['continuous_edges'].append(edge_name)
-                else:
-                    # Check horizontal continuity
-                    edge_row = violation_mask[0, :] if edge_name == 'top' else violation_mask[-1, :]
-                    continuity = np.sum(edge_row > 0) / w
-                    if continuity > 0.7:  # 70% of the edge width
-                        edge_info['continuous_edges'].append(edge_name)
+                # Mark as continuous if we have strong linear patterns
+                if linear_percentage > 50:
+                    edge_info['continuous_edges'].append(edge_name)
+                
+                # Calculate recommended expansion based on blanking depth
+                if edge_name in edge_info['blanking_depth']:
+                    # Recommend expanding by at least the blanking depth plus buffer
+                    recommended_expansion = edge_info['blanking_depth'][edge_name] + 5
+                    edge_info['expansion_recommendations'][edge_name] = recommended_expansion
         
-        # Determine severity
+        # Refine severity assessment
         if len(edge_info['continuous_edges']) >= 2:
             edge_info['severity'] = 'high'
         elif len(edge_info['continuous_edges']) >= 1:
             edge_info['severity'] = 'medium'
         elif len(edge_info['edges_affected']) >= 2:
             edge_info['severity'] = 'low'
+        elif len(edge_info['edges_affected']) >= 1 and max(edge_info['linear_patterns'].values(), default=0) > 30:
+            edge_info['severity'] = 'low'
         
         return edge_info
     
     def analyze_violation_patterns(self, violation_mask, frame):
         """
-        Analyze BRNG violations with emphasis on edge detection
+        Analyze BRNG violations with enhanced edge pattern detection
         """
         h, w = violation_mask.shape
         
-        # FIRST: Check for edge violations (highest priority)
-        edge_violations = self.detect_edge_violations(violation_mask)
+        # Use improved edge detection
+        edge_violations = self.detect_edge_violations(violation_mask, edge_width=15)
         
         # Edge-based analysis
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -372,22 +437,23 @@ class ActiveAreaBrngAnalyzer:
         edge_violations_mask = cv2.bitwise_and(violation_mask, edges)
         edge_violation_ratio = np.sum(edge_violations_mask > 0) / max(1, np.sum(violation_mask > 0))
         
-        # Spatial distribution
+        # Spatial patterns with linear pattern info
         spatial_patterns = {
             'edge_concentrated': bool(edge_violation_ratio > 0.6),
             'has_boundary_artifacts': edge_violations['has_edge_violations'],
             'boundary_edges': edge_violations['edges_affected'],
-            'boundary_severity': edge_violations['severity']
+            'boundary_severity': edge_violations['severity'],
+            'linear_patterns_detected': any(v > 30 for v in edge_violations['linear_patterns'].values())
         }
         
-        # Analyze in context of luma zones (but not if edge violations)
+        # Analyze in context of luma zones (but not if strong edge violations)
         luma_distribution = {}
-        if not edge_violations['has_edge_violations']:
+        if not (edge_violations['has_edge_violations'] and edge_violations['severity'] in ['medium', 'high']):
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             luma_distribution = self._analyze_luma_zone_violations(violation_mask, gray)
         
-        # Generate diagnostic
-        diagnostic = self._generate_diagnostic(spatial_patterns, edge_violations, luma_distribution)
+        # Generate diagnostic with enhanced information
+        diagnostic = self._generate_enhanced_diagnostic(spatial_patterns, edge_violations, luma_distribution)
         
         return {
             'spatial_patterns': spatial_patterns,
@@ -395,8 +461,51 @@ class ActiveAreaBrngAnalyzer:
             'luma_distribution': luma_distribution,
             'edge_violation_ratio': float(edge_violation_ratio),
             'diagnostic': diagnostic,
-            'boundary_artifacts': edge_violations  # Make this easily accessible
+            'boundary_artifacts': edge_violations,
+            'linear_pattern_info': edge_violations.get('linear_patterns', {}),
+            'expansion_recommendations': edge_violations.get('expansion_recommendations', {})
         }
+
+
+    def _generate_enhanced_diagnostic(self, spatial_patterns, edge_violations, luma_distribution):
+        """Generate enhanced diagnostic with linear pattern information"""
+        diagnostics = []
+        
+        # Check for boundary artifacts with more detail
+        if edge_violations.get('has_edge_violations'):
+            edges_str = ', '.join(edge_violations.get('edges_affected', []))
+            linear_patterns = edge_violations.get('linear_patterns', {})
+            
+            # Report linear patterns if detected
+            high_linear_edges = [edge for edge, score in linear_patterns.items() if score > 50]
+            if high_linear_edges:
+                diagnostics.append(f"Linear blanking patterns on: {', '.join(high_linear_edges)}")
+            elif edge_violations.get('continuous_edges'):
+                diagnostics.append(f"Continuous edge artifacts ({edges_str})")
+            else:
+                diagnostics.append(f"Edge artifacts ({edges_str})")
+            
+            # Add expansion recommendation if available
+            if edge_violations.get('expansion_recommendations'):
+                diagnostics.append("Border adjustment recommended")
+            
+            # Add severity note
+            if edge_violations.get('severity') == 'high':
+                diagnostics.append("Border detection likely missed blanking")
+            elif edge_violations.get('severity') == 'medium':
+                diagnostics.append("Moderate blanking detected")
+        
+        # Only add other diagnostics if not primarily edge issues
+        if not edge_violations.get('has_edge_violations') or edge_violations.get('severity') == 'low':
+            # Luma zone diagnostics
+            if luma_distribution:
+                primary_zone = luma_distribution.get('primary_zone')
+                if primary_zone == 'highlights' and luma_distribution.get('highlight_ratio', 0) > 0.7:
+                    diagnostics.append("Highlight clipping")
+                elif primary_zone == 'subblack' and luma_distribution.get('subblack_ratio', 0) > 0.7:
+                    diagnostics.append("Sub-black detected")
+        
+        return diagnostics if diagnostics else ["General broadcast range violations"]
     
     def _analyze_luma_zone_violations(self, mask, gray_frame):
         """
@@ -540,6 +649,7 @@ class ActiveAreaBrngAnalyzer:
         frame_violations = []
         edge_violation_frames = []
         continuous_edge_frames = []
+        linear_pattern_frames = []  # NEW: Track frames with linear patterns
         
         logger.debug(f"\nAnalyzing {len(frame_samples)} samples...")
         
@@ -549,7 +659,7 @@ class ActiveAreaBrngAnalyzer:
             violation_pixels = int(np.sum(violation_mask > 0))
             
             if violation_pixels > 0:
-                # Pattern analysis with edge detection
+                # Pattern analysis with enhanced edge detection
                 pattern_analysis = self.analyze_violation_patterns(violation_mask, frame_o)
                 
                 # Store results
@@ -565,30 +675,58 @@ class ActiveAreaBrngAnalyzer:
                 }
                 frame_violations.append(frame_data)
                 
-                # Track edge violations specifically
+                # Track edge violations with more detail
                 if pattern_analysis['boundary_artifacts']['has_edge_violations']:
                     edge_violation_frames.append(frame_idx)
                     frame_data['has_edge_violations'] = True
                     frame_data['affected_edges'] = pattern_analysis['boundary_artifacts']['edges_affected']
+                    frame_data['linear_patterns'] = pattern_analysis['boundary_artifacts'].get('linear_patterns', {})
+                    frame_data['expansion_recommendations'] = pattern_analysis['boundary_artifacts'].get('expansion_recommendations', {})
                     
                     if pattern_analysis['boundary_artifacts']['continuous_edges']:
                         continuous_edge_frames.append(frame_idx)
                         frame_data['has_continuous_edges'] = True
-            
-            # Progress indicator
-            if (idx + 1) % 20 == 0:
-                print(f"  Processed {idx + 1}/{len(frame_samples)} samples")
+                    
+                    # Track linear patterns
+                    if pattern_analysis['spatial_patterns'].get('linear_patterns_detected'):
+                        linear_pattern_frames.append(frame_idx)
+                        frame_data['has_linear_patterns'] = True
         
-        # Calculate aggregate statistics with emphasis on edge violations
+        # Calculate enhanced aggregate statistics
         aggregate_summary = {}
         
         if frame_violations:
             avg_violation_pct = np.mean([f['violation_percentage'] for f in frame_violations])
             max_violation_pct = np.max([f['violation_percentage'] for f in frame_violations])
+            linear_pattern_percentage = (len(linear_pattern_frames) / len(frame_samples)) * 100
             
             # Calculate edge violation statistics
             edge_violation_percentage = (len(edge_violation_frames) / len(frame_samples)) * 100
             continuous_edge_percentage = (len(continuous_edge_frames) / len(frame_samples)) * 100
+            linear_pattern_percentage = (len(linear_pattern_frames) / len(frame_samples)) * 100
+
+            # Aggregate linear pattern scores across all frames
+            all_linear_patterns = {}
+            for edge in ['left', 'right', 'top', 'bottom']:
+                edge_scores = [f.get('linear_patterns', {}).get(edge, 0) 
+                            for f in frame_violations if 'linear_patterns' in f]
+                if edge_scores:
+                    all_linear_patterns[edge] = np.mean(edge_scores)
+            
+            # Aggregate expansion recommendations
+            all_expansion_recs = {}
+            for f in frame_violations:
+                if 'expansion_recommendations' in f:
+                    for edge, rec in f['expansion_recommendations'].items():
+                        if edge not in all_expansion_recs:
+                            all_expansion_recs[edge] = []
+                        all_expansion_recs[edge].append(rec)
+            
+            # Calculate consensus expansion recommendations
+            consensus_expansions = {}
+            for edge, recs in all_expansion_recs.items():
+                if recs:
+                    consensus_expansions[edge] = int(np.percentile(recs, 75))  # Use 75th percentile
             
             # Collect all affected edges
             all_affected_edges = []
@@ -600,12 +738,24 @@ class ActiveAreaBrngAnalyzer:
             
             aggregate_summary = {
                 'edge_violation_frames': len(edge_violation_frames),
-                'edge_violation_percentage': float(edge_violation_percentage),
+                'edge_violation_percentage': float((len(edge_violation_frames) / len(frame_samples)) * 100),
                 'continuous_edge_frames': len(continuous_edge_frames),
-                'continuous_edge_percentage': float(continuous_edge_percentage),
-                'boundary_edges_detected': unique_edges,
-                'boundary_artifact_percentage': float(edge_violation_percentage),  # For compatibility
-                'requires_border_adjustment': bool(continuous_edge_percentage > 10)  # Clear signal
+                'continuous_edge_percentage': float((len(continuous_edge_frames) / len(frame_samples)) * 100),
+                'linear_pattern_frames': len(linear_pattern_frames),
+                'linear_pattern_percentage': float(linear_pattern_percentage),
+                'linear_pattern_percentages': all_linear_patterns,
+                'boundary_edges_detected': list(set(all_affected_edges)),
+                'consensus_expansion_recommendations': consensus_expansions,
+                'edge_violation_details': {  # Pass detailed info for smart expansion
+                    'linear_patterns': all_linear_patterns,
+                    'expansion_recommendations': consensus_expansions,
+                    'blanking_depth': {}  # Will be populated if we detect blanking depth
+                },
+                'requires_border_adjustment': bool(
+                    linear_pattern_percentage > 20 or 
+                    continuous_edge_percentage > 10 or
+                    len(consensus_expansions) > 0
+                )
             }
         else:
             avg_violation_pct = 0.0
@@ -619,24 +769,71 @@ class ActiveAreaBrngAnalyzer:
                 'boundary_artifact_percentage': 0.0,
                 'requires_border_adjustment': False
             }
+
+        # Separate frames into categories
+        edge_only_violations = []
+        content_violations = []
+        mixed_violations = []
         
-        # Find worst frames (excluding those that are just edge artifacts)
-        non_edge_violations = [f for f in frame_violations if not f.get('has_continuous_edges', False)]
-        if non_edge_violations:
-            worst_frames = sorted(non_edge_violations, 
-                                key=lambda x: x['violation_pixels'], 
-                                reverse=True)[:10]
-        else:
-            worst_frames = sorted(frame_violations, 
-                                key=lambda x: x['violation_pixels'], 
-                                reverse=True)[:10]
+        for frame_data in frame_violations:
+            # Check if this is primarily an edge violation
+            if frame_data.get('has_edge_violations'):
+                pattern_analysis = frame_data.get('pattern_analysis', {})
+                edge_info = pattern_analysis.get('edge_violations', {})
+                
+                # Check if violations are concentrated at edges
+                if edge_info.get('severity') in ['high', 'medium']:
+                    # This is primarily an edge violation
+                    edge_only_violations.append(frame_data)
+                elif frame_data['violation_percentage'] > 0.5:
+                    # Mixed - has edge violations but also significant content violations
+                    mixed_violations.append(frame_data)
+                else:
+                    # Minor edge violations with minimal overall impact
+                    edge_only_violations.append(frame_data)
+            else:
+                # No edge violations - this is a content violation
+                content_violations.append(frame_data)
         
-        # Save diagnostic thumbnails for worst non-edge frames
+        # Select worst frames prioritizing content violations over edge violations
+        worst_frames = []
+        
+        # First, add content violations (these are the real problems)
+        if content_violations:
+            worst_frames.extend(sorted(content_violations, 
+                                    key=lambda x: x['violation_pixels'], 
+                                    reverse=True)[:5])
+        
+        # Then add mixed violations if we need more
+        if len(worst_frames) < 5 and mixed_violations:
+            remaining = 5 - len(worst_frames)
+            worst_frames.extend(sorted(mixed_violations, 
+                                    key=lambda x: x['violation_pixels'], 
+                                    reverse=True)[:remaining])
+        
+        # Only add edge-only violations if we have no other violations
+        if len(worst_frames) == 0 and edge_only_violations:
+            # But mark them specially so we know they're edge-only
+            edge_frames = sorted(edge_only_violations, 
+                            key=lambda x: x['violation_pixels'], 
+                            reverse=True)[:3]
+            for frame in edge_frames:
+                frame['edge_only'] = True
+            worst_frames.extend(edge_frames)
+        
+        # Don't save diagnostic thumbnails for edge-only violations
         saved_thumbnails = []
         if worst_frames:
-            saved_thumbnails = self.save_diagnostic_thumbnails(
-                worst_frames, cap_highlighted, cap_original, num_thumbnails=min(5, len(worst_frames))
-            )
+            # Filter out edge-only frames from thumbnail generation
+            frames_for_thumbnails = [f for f in worst_frames if not f.get('edge_only', False)]
+            
+            if frames_for_thumbnails:
+                saved_thumbnails = self.save_diagnostic_thumbnails(
+                    frames_for_thumbnails, cap_highlighted, cap_original, 
+                    num_thumbnails=min(5, len(frames_for_thumbnails))
+                )
+            elif len(worst_frames) > 0:
+                logger.info("  Skipping thumbnails - violations are only at frame edges (expected in blanking areas)")
         
         cap_highlighted.release()
         cap_original.release()
@@ -872,17 +1069,13 @@ class ActiveAreaBrngAnalyzer:
                 # Top-right: Highlighted frame (offset by padding)
                 viz[0:h, w+padding:w*2+padding] = frame_h
                 
-                # Bottom-left: Extract cyan-highlighted pixels from the highlighted frame
-                # Create a mask for cyan pixels in the highlighted frame
-                frame_h_hsv = cv2.cvtColor(frame_h, cv2.COLOR_BGR2HSV)
-                cyan_mask = cv2.inRange(frame_h_hsv, 
-                                    np.array([80, 100, 100]),   # Lower cyan threshold
-                                    np.array([110, 255, 255]))  # Upper cyan threshold
-                
+                # Bottom-left: Extract violations using differential detection (same method as main analysis)
+                violation_mask = self.detect_brng_violations_differential(frame_h, frame_o)
+
                 # Create violations-only visualization
                 violations_only = np.zeros_like(frame_o)
-                # Show cyan violations as bright cyan on black background
-                violations_only[cyan_mask > 0] = [255, 255, 0]  # Cyan in BGR
+                # Show violations as bright cyan on black background
+                violations_only[violation_mask > 0] = [255, 255, 0]  # Cyan in BGR
                 viz[h+padding:h*2+padding, 0:w] = violations_only
                 
                 # Bottom-right: Analysis information overlay (offset by padding)
@@ -1086,12 +1279,22 @@ class ActiveAreaBrngAnalyzer:
         
         # Worst frames (if not all edge artifacts)
         if analysis.get('worst_frames'):
-            logger.info("\nWORST FRAMES:")
-            for i, frame in enumerate(analysis['worst_frames'][:3], 1):
-                edge_note = " [EDGE]" if frame.get('has_edge_violations') else ""
-                logger.info(f"  {i}. Frame {frame['frame']} ({frame['timecode']}) - {frame['violation_percentage']:.4f}% pixels{edge_note}")
-                if frame.get('diagnostics'):
-                    logger.info(f"     Issues: {', '.join(frame['diagnostics'][:2])}")
+            # Check if all worst frames are edge-only
+            all_edge_only = all(f.get('edge_only', False) for f in analysis['worst_frames'])
+            
+            if all_edge_only:
+                logger.info("\nEDGE VIOLATIONS ONLY:")
+                logger.info("  All violations occur at frame edges (blanking areas)")
+                logger.info("  This is expected behavior for analog video with blanking")
+                logger.info("  Border detection successfully identified active area")
+            else:
+                logger.info("\nWORST FRAMES (Content Violations):")
+                for i, frame in enumerate(analysis['worst_frames'][:3], 1):
+                    if not frame.get('edge_only', False):
+                        edge_note = " [MIXED]" if frame.get('has_edge_violations') else ""
+                        logger.info(f"  {i}. Frame {frame['frame']} ({frame['timecode']}) - {frame['violation_percentage']:.4f}% pixels{edge_note}")
+                        if frame.get('diagnostics'):
+                            logger.info(f"     Issues: {', '.join(frame['diagnostics'][:2])}")
         
         logger.debug("="*80)
     
@@ -1132,123 +1335,76 @@ class ActiveAreaBrngAnalyzer:
         current_agg = current_results.get('aggregate_patterns', {})
         previous_agg = previous_results.get('aggregate_patterns', {})
         
-        # Extract key metrics with safer defaults
+        # Extract metrics
         curr_edge_pct = current_agg.get('edge_violation_percentage', 0)
         prev_edge_pct = previous_agg.get('edge_violation_percentage', 0)
         
-        curr_cont_pct = current_agg.get('continuous_edge_percentage', 0)
-        prev_cont_pct = previous_agg.get('continuous_edge_percentage', 0)
+        curr_linear_patterns = current_agg.get('linear_pattern_percentages', {})
+        prev_linear_patterns = previous_agg.get('linear_pattern_percentages', {})
         
-        curr_avg_violation = current_results.get('average_violation_percentage', 0)
-        prev_avg_violation = previous_results.get('average_violation_percentage', 0)
-        
-        curr_max_violation = current_results.get('max_violation_percentage', 0)
-        prev_max_violation = previous_results.get('max_violation_percentage', 0)
-        
-        curr_frames_with_violations = current_results.get('frames_with_violations', 0)
-        prev_frames_with_violations = previous_results.get('frames_with_violations', 0)
-        
-        # Get worst frame pixel percentages (most important metric)
         curr_worst_frames = current_results.get('worst_frames', [])
         prev_worst_frames = previous_results.get('worst_frames', [])
         
         curr_worst_pixels = curr_worst_frames[0]['violation_percentage'] if curr_worst_frames else 0
         prev_worst_pixels = prev_worst_frames[0]['violation_percentage'] if prev_worst_frames else 0
         
-        # Calculate improvements (positive = better)
+        # Calculate improvements
         edge_improvement = prev_edge_pct - curr_edge_pct
-        continuous_improvement = prev_cont_pct - curr_cont_pct
-        avg_violation_improvement = prev_avg_violation - curr_avg_violation
-        max_violation_improvement = prev_max_violation - curr_max_violation
-        frame_count_improvement = prev_frames_with_violations - curr_frames_with_violations
         worst_pixels_improvement = prev_worst_pixels - curr_worst_pixels
         
-        # Calculate improvement score with better weighting
-        # Prioritize worst frame pixel reduction (this is the clearest signal)
-        improvement_score = (
-            worst_pixels_improvement * 1000 +  # Scale up since these are small percentages
-            frame_count_improvement * 10 +     # Frame count reduction is very important
-            edge_improvement * 2 +             # Edge improvements
-            continuous_improvement * 2 +       # Continuous edge improvements
-            max_violation_improvement * 0.1 +  # Max violation (less reliable)
-            avg_violation_improvement * 0.01   # Average violation (least reliable)
-        )
-        
-        # Log detailed progress for debugging
-        logger.info(f"\n=== PROGRESS ANALYSIS ===")
-        logger.info(f"Worst frame pixels: {prev_worst_pixels:.4f}% → {curr_worst_pixels:.4f}% (improvement: {worst_pixels_improvement:.4f}%)")
-        logger.info(f"Frame count: {prev_frames_with_violations} → {curr_frames_with_violations} (improvement: {frame_count_improvement})")
-        logger.info(f"Edge violations: {prev_edge_pct:.1f}% → {curr_edge_pct:.1f}% (improvement: {edge_improvement:.1f}%)")
-        logger.info(f"Continuous edge: {prev_cont_pct:.1f}% → {curr_cont_pct:.1f}% (improvement: {continuous_improvement:.1f}%)")
-        logger.info(f"Improvement score: {improvement_score:.2f}\n")
-        
-        # Decision logic with more nuanced thresholds
-        analysis = {
-            'should_continue': False,
-            'reason': 'unknown',
-            'improvement_score': improvement_score,
-            'metrics': {
-                'edge_improvement': edge_improvement,
-                'continuous_improvement': continuous_improvement,
-                'avg_violation_improvement': avg_violation_improvement,
-                'max_violation_improvement': max_violation_improvement,
-                'frame_count_improvement': frame_count_improvement,
-                'worst_pixels_improvement': worst_pixels_improvement
+        # Check if we're stuck in a pattern
+        if abs(worst_pixels_improvement) < 0.001 and abs(edge_improvement) < 1:
+            # Almost no change - we're stuck
+            return {
+                'should_continue': False,
+                'reason': 'no_progress',
+                'improvement_score': 0,
+                'recommendation': 'stop_no_progress'
             }
-        }
         
-        # Decision logic based on improvement score and absolute levels
-        if worst_pixels_improvement > 0.02:  # 0.02% improvement in worst pixels
-            analysis.update({
-                'should_continue': True,
-                'reason': 'significant_pixel_improvement',
-                'recommendation': 'continue'
-            })
-            logger.info(f"✓ Significant pixel improvement detected, continuing refinement")
-        elif improvement_score > 10:
-            analysis.update({
-                'should_continue': True,
-                'reason': 'significant_overall_improvement',
-                'recommendation': 'continue'
-            })
-            logger.info(f"✓ Significant overall improvement detected, continuing refinement")
-        elif improvement_score > 2:
-            analysis.update({
-                'should_continue': True,
-                'reason': 'modest_improvement',
-                'recommendation': 'continue_cautiously'
-            })
-            logger.info(f"✓ Modest improvement detected, continuing cautiously")
-        elif curr_worst_pixels < 0.01:  # Less than 0.01% worst pixels
-            analysis.update({
+        # Check if we've achieved good quality
+        if curr_worst_pixels < 0.01 and curr_edge_pct < 5:
+            return {
                 'should_continue': False,
                 'reason': 'excellent_quality_achieved',
+                'improvement_score': 100,
                 'recommendation': 'stop_excellent'
-            })
-            logger.info(f"✓ Excellent quality achieved (worst pixels < 0.01%)")
-        elif curr_worst_pixels < 0.03 and improvement_score > -2:  # Decent quality, not getting worse
-            analysis.update({
-                'should_continue': False,
-                'reason': 'acceptable_quality_achieved', 
-                'recommendation': 'stop_acceptable'
-            })
-            logger.info(f"✓ Acceptable quality achieved (worst pixels < 0.03%)")
-        elif improvement_score > -5 and curr_cont_pct <= prev_cont_pct:  # Not getting worse
-            analysis.update({
-                'should_continue': True,
-                'reason': 'stable_continue',
-                'recommendation': 'continue_one_more'
-            })
-            logger.info(f"→ Progress is stable, trying one more adjustment")
-        else:
-            analysis.update({
-                'should_continue': False,
-                'reason': 'minimal_progress_or_regression',
-                'recommendation': 'stop_regression'
-            })
-            logger.info(f"⚠ Minimal progress or regression, stopping refinement")
+            }
         
-        return analysis
+        if curr_worst_pixels < 0.1 and curr_edge_pct < 10:
+            return {
+                'should_continue': False,
+                'reason': 'acceptable_quality_achieved',
+                'improvement_score': 50,
+                'recommendation': 'stop_acceptable'
+            }
+        
+        # Check if we're making meaningful progress
+        if worst_pixels_improvement > 0.5 or edge_improvement > 10:
+            return {
+                'should_continue': True,
+                'reason': 'significant_improvement',
+                'improvement_score': worst_pixels_improvement * 100 + edge_improvement,
+                'recommendation': 'continue'
+            }
+        
+        # Check if linear patterns are still present
+        max_linear = max(curr_linear_patterns.values(), default=0) if curr_linear_patterns else 0
+        if max_linear > 40:
+            return {
+                'should_continue': True,
+                'reason': 'linear_patterns_present',
+                'improvement_score': worst_pixels_improvement * 50,
+                'recommendation': 'continue_targeted'
+            }
+        
+        # Default: stop if we're not making progress
+        return {
+            'should_continue': False,
+            'reason': 'minimal_progress',
+            'improvement_score': worst_pixels_improvement * 10,
+            'recommendation': 'stop_minimal_progress'
+        }
 
 def analyze_active_area_brng(video_path, border_data_path=None, output_dir=None, 
                             duration_limit=300, skip_start_seconds=None):
