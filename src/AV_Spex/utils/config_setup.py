@@ -237,7 +237,6 @@ class SpexConfig:
 @dataclass
 class FrameAnalysisConfig:
     """Configuration for frame analysis (borders, BRNG violations, signalstats)"""
-    enabled: str = "no"
     
     # Individual sub-step enable flags
     enable_border_detection: str = "yes"  # Enable border detection sub-step

@@ -79,7 +79,9 @@ class ParsedArguments:
     import_config: Optional[str]
     mediaconch_policy: Optional[str]
     use_default_config: bool
-    frame_analysis: bool
+    enable_border_detection: Optional[str]
+    enable_brng_analysis: Optional[str]
+    enable_signalstats: Optional[str]
 
 
 PROFILE_MAPPING = {
@@ -172,10 +174,21 @@ The scripts will confirm that the digital files conform to predetermined specifi
                     help="Path to custom MediaConch policy XML file")
     
     # args for frame analysis
+    # Enable/disable individual sub-steps
     parser.add_argument(
-        '--frame-analysis',
-        action='store_true',
-        help='Enable frame analysis (BRNG violations, border detection, and signalstats)'
+        '--enable-border-detection',
+        choices=['yes', 'no'],
+        help='Enable/disable border detection in frame analysis'
+    )
+    parser.add_argument(
+        '--enable-brng-analysis', 
+        choices=['yes', 'no'],
+        help='Enable/disable BRNG analysis in frame analysis'
+    )
+    parser.add_argument(
+        '--enable-signalstats',
+        choices=['yes', 'no'],
+        help='Enable/disable signalstats in frame analysis'
     )
     parser.add_argument(
         '--frame-borders',
@@ -244,7 +257,9 @@ The scripts will confirm that the digital files conform to predetermined specifi
         import_config=args.import_config,
         mediaconch_policy=args.mediaconch_policy,
         use_default_config=args.use_default_config,
-        frame_analysis=args.frame_analysis
+        enable_border_detection=getattr(args, 'enable_border_detection', None),
+        enable_brng_analysis=getattr(args, 'enable_brng_analysis', None),
+        enable_signalstats=getattr(args, 'enable_signalstats', None)
     )
 
 
@@ -318,32 +333,34 @@ def run_cli_mode(args):
     if args.print_config_profile:
         config_edit.print_config(args.print_config_profile)
 
-    # Handle frame analysis configuration
-    if args.frame_analysis:
-        frame_updates = {
-            'outputs': {
-                'frame_analysis': {
-                    'enabled': 'yes'
-                }
-            }
-        }
-        
-        # Set border detection mode
-        if hasattr(args, 'frame_borders'):
-            frame_updates['outputs']['frame_analysis']['border_detection_mode'] = args.frame_borders
-        
-        # Set simple border pixels if specified
-        if hasattr(args, 'frame_border_pixels'):
-            frame_updates['outputs']['frame_analysis']['simple_border_pixels'] = args.frame_border_pixels
-        
-        # Handle color bar skip setting
-        if hasattr(args, 'frame_no_colorbar_skip') and args.frame_no_colorbar_skip:
-            frame_updates['outputs']['frame_analysis']['brng_skip_color_bars'] = 'no'
-        
-        # Set BRNG duration if specified
-        if hasattr(args, 'frame_brng_duration'):
-            frame_updates['outputs']['frame_analysis']['brng_duration_limit'] = args.frame_brng_duration
-        
+    # Handle individual frame analysis sub-step configuration
+    frame_updates = {'outputs': {'frame_analysis': {}}}
+
+    # Handle enabling/disabling individual sub-steps
+    if args.enable_border_detection:
+        frame_updates['outputs']['frame_analysis']['enable_border_detection'] = args.enable_border_detection
+
+    if args.enable_brng_analysis:
+        frame_updates['outputs']['frame_analysis']['enable_brng_analysis'] = args.enable_brng_analysis
+
+    if args.enable_signalstats:
+        frame_updates['outputs']['frame_analysis']['enable_signalstats'] = args.enable_signalstats
+
+    # Handle configuration of how sub-steps work
+    if hasattr(args, 'frame_borders'):
+        frame_updates['outputs']['frame_analysis']['border_detection_mode'] = args.frame_borders
+
+    if hasattr(args, 'frame_border_pixels'):
+        frame_updates['outputs']['frame_analysis']['simple_border_pixels'] = args.frame_border_pixels
+
+    if hasattr(args, 'frame_no_colorbar_skip') and args.frame_no_colorbar_skip:
+        frame_updates['outputs']['frame_analysis']['brng_skip_color_bars'] = 'no'
+
+    if hasattr(args, 'frame_brng_duration'):
+        frame_updates['outputs']['frame_analysis']['brng_duration_limit'] = args.frame_brng_duration
+
+    # Only update config if there are actual changes
+    if frame_updates['outputs']['frame_analysis']:
         config_mgr.update_config('checks', frame_updates)
         config_mgr.save_config('checks', is_last_used=True)
 

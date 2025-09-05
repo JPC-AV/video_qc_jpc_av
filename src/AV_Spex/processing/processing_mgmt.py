@@ -264,8 +264,13 @@ class ProcessingManager:
         # Frame Analysis
         frame_analysis_results = None
         frame_config = getattr(self.checks_config.outputs, 'frame_analysis', None)
-        
-        if frame_config and frame_config.enabled == 'yes':
+
+        # Check if any frame analysis sub-steps are enabled
+        if frame_config and any([
+            frame_config.enable_border_detection == 'yes',
+            frame_config.enable_brng_analysis == 'yes', 
+            frame_config.enable_signalstats == 'yes'
+        ]):
             if self.signals:
                 self.signals.output_progress.emit("Performing frame analysis...")
             
@@ -275,16 +280,16 @@ class ProcessingManager:
             
             processing_results['frame_analysis'] = frame_analysis_results
 
-        # Generate final HTML report
-        processing_results['html_report'] = generate_final_report(
-            video_id, source_directory, report_directory, destination_directory,
-            video_path=video_path,
-            check_cancelled=self.check_cancelled, 
-            signals=self.signals
-        )
-        
-        return processing_results
-    
+            # Generate final HTML report
+            processing_results['html_report'] = generate_final_report(
+                video_id, source_directory, report_directory, destination_directory,
+                video_path=video_path,
+                check_cancelled=self.check_cancelled, 
+                signals=self.signals
+            )
+            
+            return processing_results
+
     
     def process_frame_analysis(self, video_path, source_directory, destination_directory, video_id):
         """
@@ -323,15 +328,16 @@ class ProcessingManager:
         
         # Access the frame analysis config
         frame_config = self.checks_config.outputs.frame_analysis
-        
-        if frame_config.enabled != 'yes':
-            logger.info("Frame analysis not enabled in config")
-            return analysis_results
             
         # Check which sub-steps are enabled
         border_detection_enabled = frame_config.enable_border_detection == 'yes'
         brng_analysis_enabled = frame_config.enable_brng_analysis == 'yes'
         signalstats_enabled = frame_config.enable_signalstats == 'yes'
+
+        # If no sub-steps are enabled, return early
+        if not any([border_detection_enabled, brng_analysis_enabled, signalstats_enabled]):
+            logger.info("No frame analysis sub-steps enabled")
+            return analysis_results
         
         # Log which sub-steps are enabled
         enabled_steps = []
