@@ -1122,9 +1122,12 @@ class ActiveAreaBrngAnalyzer:
                         info_lines.append(f"Boundary artifacts: {severity}")
                 
                 # Draw text lines on info panel (centered)
-                y_position = 30
+                # First, calculate total height needed for all text
+                total_text_height = 0
+                processed_lines = []
+
+                # Process all lines to handle wrapping and calculate total height
                 for line in info_lines:
-                    # Wrap long lines if necessary
                     if len(line) > 35:  # Approximate character limit
                         words = line.split(' ')
                         current_line = ""
@@ -1133,38 +1136,45 @@ class ActiveAreaBrngAnalyzer:
                                 current_line += " " + word if current_line else word
                             else:
                                 if current_line:
-                                    # Center the text
-                                    text_size = cv2.getTextSize(current_line, font, font_scale, thickness)[0]
-                                    x_position = (w - text_size[0]) // 2
-                                    cv2.putText(info_panel, current_line, (x_position, y_position), 
-                                            font, font_scale, color, thickness)
-                                    y_position += line_height
+                                    processed_lines.append(current_line)
+                                    total_text_height += line_height
                                 current_line = word
                         if current_line:
-                            # Center the text
-                            text_size = cv2.getTextSize(current_line, font, font_scale, thickness)[0]
-                            x_position = (w - text_size[0]) // 2
-                            cv2.putText(info_panel, current_line, (x_position, y_position), 
-                                    font, font_scale, color, thickness)
-                            y_position += line_height
+                            processed_lines.append(current_line)
+                            total_text_height += line_height
                     else:
-                        # Center the text
-                        text_size = cv2.getTextSize(line, font, font_scale, thickness)[0]
-                        x_position = (w - text_size[0]) // 2
-                        cv2.putText(info_panel, line, (x_position, y_position), 
-                                font, font_scale, color, thickness)
-                        y_position += line_height
-                    
-                    # Stop if we're running out of space
-                    if y_position > h - 30:
-                        break
-                
+                        processed_lines.append(line)
+                        total_text_height += line_height
+
+                # Add height for title
+                title_height = 30  # Space for title and padding
+                total_content_height = total_text_height + title_height
+
+                # Calculate starting y position to center the content vertically
+                start_y = (h - total_content_height) // 2
+                if start_y < 30:  # Ensure minimum top margin
+                    start_y = 30
+
                 # Add a centered title for the info panel
                 title_text = "ANALYSIS DETAILS"
                 title_size = cv2.getTextSize(title_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
                 title_x = (w - title_size[0]) // 2
-                cv2.putText(info_panel, title_text, (title_x, 20), 
+                cv2.putText(info_panel, title_text, (title_x, start_y), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)  # Cyan title
+
+                # Draw processed lines starting from calculated position
+                y_position = start_y + title_height
+                for line in processed_lines:
+                    # Center each line horizontally
+                    text_size = cv2.getTextSize(line, font, font_scale, thickness)[0]
+                    x_position = (w - text_size[0]) // 2
+                    cv2.putText(info_panel, line, (x_position, y_position), 
+                            font, font_scale, color, thickness)
+                    y_position += line_height
+                    
+                    # Stop if we're running out of space
+                    if y_position > h - 20:  # Leave some bottom margin
+                        break
                 
                 # Place info panel in bottom-right with padding
                 viz[h+padding:h*2+padding, w+padding:w*2+padding] = info_panel
@@ -1180,22 +1190,11 @@ class ActiveAreaBrngAnalyzer:
                 cv2.rectangle(viz, (w+padding+5, 5), (w+padding+200, 35), (0, 0, 0), -1)
                 cv2.rectangle(viz, (5, h+padding+5), (250, h+padding+35), (0, 0, 0), -1)
                 
-                # Center the background rectangle for "Analysis Details" (adjusted for padding)
-                analysis_label = "Analysis Details"
-                analysis_label_size = cv2.getTextSize(analysis_label, label_font, label_scale, label_thickness)[0]
-                analysis_bg_x = w + padding + (w - analysis_label_size[0]) // 2 - 10
-                analysis_bg_width = analysis_label_size[0] + 20
-                cv2.rectangle(viz, (analysis_bg_x, h+padding+5), (analysis_bg_x + analysis_bg_width, h+padding+35), (0, 0, 0), -1)
-                
                 # Add labels (adjusted positions for padding)
                 cv2.putText(viz, "Original", (10, 25), label_font, label_scale, label_color, label_thickness)
                 cv2.putText(viz, "BRNG Highlighted", (w+padding+10, 25), label_font, label_scale, label_color, label_thickness)
                 cv2.putText(viz, "Violations Only", (10, h+padding+25), label_font, label_scale, label_color, label_thickness)
-                
-                # Center the "Analysis Details" label (adjusted for padding)
-                analysis_x = w + padding + (w - analysis_label_size[0]) // 2
-                cv2.putText(viz, analysis_label, (analysis_x, h+padding+25), label_font, label_scale, label_color, label_thickness)
-                
+
                 # Add crosshair lines to clearly separate quadrants
                 line_color = (128, 128, 128)  # Light gray
                 line_thickness = 2
