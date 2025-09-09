@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-FFprobe Signalstats Analyzer (Enhanced with Scene Detection)
+FFprobe Signalstats Analyzer (Enhanced with QCTools Integration)
 
-Uses ffprobe with lavfi to analyze broadcast range violations (BRNG) in video files.
-Now leverages scene detection and frame quality assessment from other components
-to analyze optimal sections of video content rather than fixed time ranges.
+Uses existing QCTools reports when available to pre-screen BRNG violations,
+only running FFprobe signalstats when necessary based on QCTools data.
+Falls back to direct FFprobe analysis when QCTools reports are unavailable.
 """
 
 import json
@@ -13,13 +13,144 @@ import shlex
 import numpy as np
 from pathlib import Path
 import cv2
+import gzip
+import io
+import os
+from lxml import etree
 
 from AV_Spex.utils.log_setup import logger
+
+
+def generate_comprehensive_final_summary(video_id, border_data, signalstats_results, border_results, analysis_decisions):
+    """Generate comprehensive summary including all analysis results and smart decisions"""
+    
+    summary_lines = []
+    summary_lines.append("=" * 60)
+    summary_lines.append(f"FRAME ANALYSIS SUMMARY - {video_id}")
+    summary_lines.append("=" * 60)
+    
+    # Border Detection Summary (Robust handling of different structures)
+    if border_data:
+        method = border_data.get('detection_method', 'sophisticated')
+        summary_lines.append(f"Border detection method: {method}")
+        
+        # Handle active_area - try different possible structures
+        if 'active_area' in border_data:
+            area = border_data['active_area']
+            try:
+                if isinstance(area, dict):
+                    # Dict structure: {'x': 12, 'y': 5, 'width': 694, 'height': 475}
+                    x = area.get('x', 0)
+                    y = area.get('y', 0) 
+                    w = area.get('width', 0)
+                    h = area.get('height', 0)
+                elif isinstance(area, (list, tuple)) and len(area) >= 4:
+                    # List structure: [12, 5, 694, 475]
+                    x, y, w, h = area[0], area[1], area[2], area[3]
+                else:
+                    # Try to extract from string or other format
+                    logger.debug(f"Unexpected active_area format: {area}")
+                    x = y = w = h = 0
+                
+                if w > 0 and h > 0:
+                    summary_lines.append(f"Active area: {w}x{h} at ({x},{y})")
+            except Exception as e:
+                logger.debug("Error parsing active_area: {e}")
+        
+        # Try to find border widths from multiple possible locations
+        border_widths_found = False
+        
+        # Try border_regions structure
+        if 'border_regions' in border_data:
+            regions = border_data['border_regions']
+            try:
+                if 'left_border' in regions:
+                    left_data = regions['left_border']
+                    if isinstance(left_data, (list, tuple)) and len(left_data) >= 3:
+                        summary_lines.append(f"Left border region: {left_data[2]}px wide")
+                        border_widths_found = True
+                
+                if 'right_border' in regions:
+                    right_data = regions['right_border']
+                    if isinstance(right_data, (list, tuple)) and len(right_data) >= 3:
+                        summary_lines.append(f"Right border region: {right_data[2]}px wide")
+                        border_widths_found = True
+            except Exception as e:
+                logger.debug(f"Error parsing border_regions: {e}")
+        
+        # If not found in border_regions, try other locations
+        if not border_widths_found:
+            # Look for direct keys
+            for key in ['left_border_width', 'right_border_width', 'left_width', 'right_width']:
+                if key in border_data:
+                    width = border_data[key]
+                    border_type = 'Left' if 'left' in key else 'Right'
+                    summary_lines.append(f"{border_type} border region: {width}px wide")
+                    border_widths_found = True
+        
+        # Add special findings
+        head_switching_keys = ['head_switching_detected', 'head_switching_artifacts', 'head_switching']
+        for key in head_switching_keys:
+            if border_data.get(key):
+                severity = border_data.get('head_switching_severity', 'moderate')
+                summary_lines.append(f"⚠️ Head switching artifacts detected - {severity} severity")
+                break
+    
+    # Enhanced Signalstats Summary with Smart Status
+    if signalstats_results:
+        violation_pct = signalstats_results['violation_percentage']
+        max_brng = signalstats_results['max_brng']
+        
+        # Smart status determination
+        if violation_pct < 5 and max_brng < 0.1:
+            status_emoji = "✅"
+            status_text = "Excellent broadcast compliance"
+            action = "No action needed"
+        elif violation_pct < 15 and max_brng < 1.0:
+            status_emoji = "✅"
+            status_text = "Good broadcast compliance"
+            action = "Minor violations acceptable"
+        elif violation_pct < 35 and max_brng < 2.0:
+            status_emoji = "⚠️"
+            status_text = "Moderate BRNG violations detected"
+            action = "Review recommended for broadcast compliance"
+        elif violation_pct < 60 and max_brng < 5.0:
+            status_emoji = "⚠️"
+            status_text = "Concerning violations"
+            action = "Correction likely needed"
+        else:
+            status_emoji = "❌"
+            status_text = "Severe violations"
+            action = "Significant correction required"
+        
+        summary_lines.append(f"Signalstats: {status_emoji} {status_text}")
+        summary_lines.append(f"   {violation_pct:.1f}% of frames, max {max_brng:.4f}% pixels affected")
+        summary_lines.append(f"   → {action}")
+        
+        # Show border analysis results if available
+        if border_results:
+            summary_lines.append("Border analysis:")
+            for region_name, data in border_results.items():
+                if isinstance(data, dict) and 'violation_percentage' in data and 'avg_brng' in data:
+                    summary_lines.append(f"   {region_name}: {data['violation_percentage']:.1f}% violations, "
+                                       f"avg {data['avg_brng']:.4f}% BRNG")
+    
+    # Show analysis optimization decisions
+    if analysis_decisions:
+        summary_lines.append("")
+        summary_lines.append("Analysis optimizations:")
+        for decision in analysis_decisions[-5:]:  # Show last 5 decisions
+            summary_lines.append(f"   • {decision}")
+    
+    summary_lines.append("=" * 60)
+    
+    return "\n".join(summary_lines)
+
 
 class FFprobeAnalyzer:
     """
     Analyzes video files using FFprobe signalstats for broadcast range compliance
-    Enhanced with intelligent scene detection and frame quality assessment
+    Enhanced with QCTools report parsing for intelligent analysis decisions
     """
     
     def __init__(self, video_path):
@@ -31,6 +162,198 @@ class FFprobeAnalyzer:
         # Detect bit depth
         self.bit_depth = self.detect_bit_depth()
         
+        # Check for QCTools report
+        self.qctools_report_path = self.find_qctools_report()
+        
+        # Initialize decision tracking
+        self._active_area_results = None
+        self._border_analysis_decisions = []
+        
+    def find_qctools_report(self):
+        """Find existing QCTools report for this video"""
+        video_path = Path(self.video_path)
+        video_id = video_path.stem
+        
+        # Look for QCTools reports in common locations
+        search_patterns = [
+            # In same directory as video
+            video_path.parent / f"{video_id}.qctools.xml.gz",
+            video_path.parent / f"{video_id}.qctools.mkv",
+            # In metadata subdirectories
+            video_path.parent / f"{video_id}_qc_metadata" / f"{video_id}.qctools.xml.gz",
+            video_path.parent / f"{video_id}_qc_metadata" / f"{video_id}.mkv.qctools.mkv",
+            video_path.parent / f"{video_id}_vrecord_metadata" / f"{video_id}.qctools.xml.gz",
+            video_path.parent / f"{video_id}_vrecord_metadata" / f"{video_id}.mkv.qctools.mkv",
+        ]
+        
+        for pattern in search_patterns:
+            if pattern.exists():
+                # If it's an MKV, we need to extract the XML first
+                if str(pattern).endswith('.mkv'):
+                    xml_path = self.extract_xml_from_mkv(str(pattern))
+                    if xml_path and Path(xml_path).exists():
+                        logger.info(f"✓ Found QCTools report (extracted from MKV): {xml_path}\n")
+                        return xml_path
+                else:
+                    logger.info(f"✓ Found QCTools report: {pattern}")
+                    return str(pattern)
+        
+        logger.info("ℹ No existing QCTools report found, will use direct FFprobe analysis")
+        return None
+    
+    def extract_xml_from_mkv(self, mkv_path):
+        """Extract qctools.xml.gz from QCTools MKV container"""
+        xml_path = mkv_path.replace('.qctools.mkv', '.qctools.xml.gz')
+        
+        if Path(xml_path).exists():
+            return xml_path
+            
+        try:
+            cmd = [
+                'ffmpeg', '-hide_banner', '-loglevel', 'panic',
+                '-dump_attachment:t:0', xml_path,
+                '-i', mkv_path
+            ]
+            result = subprocess.run(cmd, capture_output=True)
+            
+            if result.returncode == 0 and Path(xml_path).exists():
+                return xml_path
+        except Exception as e:
+            logger.warning(f"Could not extract XML from MKV: {e}")
+        
+        return None
+    
+    def parse_qctools_brng(self, start_time, end_time):
+        """
+        Parse BRNG values from QCTools report for a specific time range
+        
+        Returns:
+            dict: Statistics about BRNG violations in the time range
+        """
+        if not self.qctools_report_path:
+            return None
+            
+        logger.debug(f"Parsing QCTools BRNG data for {start_time:.1f}s to {end_time:.1f}s")
+        
+        brng_values = []
+        frames_analyzed = 0
+        frames_with_violations = 0
+        
+        try:
+            with gzip.open(self.qctools_report_path, 'rb') as gz_file:
+                # Create parser
+                parser = etree.iterparse(gz_file, events=('end',), tag='frame')
+                
+                for event, elem in parser:
+                    if elem.attrib.get('media_type') == 'video':
+                        # Get timestamp - try both pkt_dts_time and pkt_pts_time
+                        timestamp_str = elem.attrib.get('pkt_dts_time') or elem.attrib.get('pkt_pts_time')
+                        if not timestamp_str:
+                            continue
+                            
+                        timestamp = float(timestamp_str)
+                        
+                        # Check if within our time range
+                        if timestamp >= start_time and timestamp <= end_time:
+                            # Find BRNG value in frame tags
+                            for tag in elem:
+                                if tag.attrib.get('key', '').endswith('BRNG'):
+                                    brng_value = float(tag.attrib['value'])
+                                    brng_values.append(brng_value)
+                                    frames_analyzed += 1
+                                    if brng_value > 0:
+                                        frames_with_violations += 1
+                                    break
+                        
+                        # Stop if past our time range
+                        elif timestamp > end_time:
+                            break
+                    
+                    # Clear element to save memory
+                    elem.clear()
+                    
+        except Exception as e:
+            logger.error(f"Error parsing QCTools report: {e}")
+            return None
+        
+        if not brng_values:
+            logger.warning("No BRNG data found in QCTools report for specified time range")
+            return None
+        
+        # Calculate statistics (BRNG values in QCTools are 0-1 proportions)
+        results = {
+            'source': 'qctools',
+            'frames_analyzed': frames_analyzed,
+            'frames_with_violations': frames_with_violations,
+            'brng_values': brng_values,
+            'avg_brng': np.mean(brng_values) * 100,  # Convert to percentage
+            'max_brng': np.max(brng_values) * 100,
+            'min_brng': np.min(brng_values) * 100,
+            'violation_percentage': (frames_with_violations / frames_analyzed * 100) if frames_analyzed > 0 else 0
+        }
+        
+        logger.info(f"  QCTools BRNG: {frames_with_violations}/{frames_analyzed} frames with violations ({results['violation_percentage']:.1f}%)")
+        logger.info(f"  Max BRNG: {results['max_brng']:.4f}%, Avg: {results['avg_brng']:.4f}%")
+        
+        return results
+    
+    def should_run_ffprobe_analysis(self, qctools_results, region_type='full_frame', active_area_results=None):
+        """
+        Enhanced decision logic for whether to run FFprobe signalstats
+        
+        Args:
+            qctools_results: BRNG statistics from QCTools
+            region_type: 'full_frame', 'active_area', or 'borders'
+            active_area_results: Results from active area analysis (for border decision making)
+            
+        Returns:
+            tuple: (should_run: bool, reason: str)
+        """
+        if not qctools_results:
+            return True, "No QCTools data available"
+        
+        max_brng = qctools_results['max_brng']
+        violation_pct = qctools_results['violation_percentage']
+        
+        # Enhanced thresholds for smarter decisions
+        if region_type == 'full_frame':
+            # Very strict threshold for full frame - if violations are minimal, skip
+            if max_brng < 0.02 and violation_pct < 1:
+                return False, f"Negligible violations (QCTools: {violation_pct:.2f}% frames, {max_brng:.4f}% max BRNG)"
+            elif max_brng < 0.05 and violation_pct < 3:
+                return False, f"Minimal violations (QCTools: {violation_pct:.1f}% frames, {max_brng:.4f}% max BRNG)"
+                
+        elif region_type == 'active_area':
+            # For active area, be slightly more lenient
+            if max_brng < 0.02 and violation_pct < 2:
+                return False, f"Negligible active area violations (QCTools: {violation_pct:.2f}% frames, {max_brng:.4f}% max BRNG)"
+            elif max_brng < 0.1 and violation_pct < 10:
+                return False, f"Low active area violations (QCTools: {violation_pct:.1f}% frames, {max_brng:.4f}% max BRNG)"
+                
+        elif region_type == 'borders':
+            # Much smarter border analysis decision logic
+            if max_brng < 0.02:
+                return False, f"QCTools violations too low to warrant border analysis ({max_brng:.4f}% max BRNG)"
+            
+            # Compare with active area if available
+            if active_area_results and qctools_results:
+                active_violation_pct = active_area_results.get('violation_percentage', 0)
+                active_max_brng = active_area_results.get('max_brng', 0)
+                
+                # Calculate relative difference
+                violation_diff = abs(violation_pct - active_violation_pct)
+                brng_diff = abs(max_brng - active_max_brng)
+                
+                # If differences are minimal, skip border analysis
+                if violation_diff < 5 and brng_diff < 0.2:
+                    return False, f"Active area similar to full frame (diff: {violation_diff:.1f}% violations, {brng_diff:.4f}% BRNG)"
+                
+                # If active area is already very clean, likely no border issues
+                if active_violation_pct < 5 and active_max_brng < 0.1:
+                    return False, f"Active area already very clean ({active_violation_pct:.1f}% violations, {active_max_brng:.4f}% max BRNG)"
+        
+        return True, f"Analysis warranted ({violation_pct:.1f}% violations, {max_brng:.4f}% max BRNG)"
+    
     def get_video_properties(self):
         """Get basic video properties using FFprobe"""
         try:
@@ -475,7 +798,7 @@ class FFprobeAnalyzer:
 
     def analyze_multiple_periods(self, active_area=None, analysis_periods=None, region_name="frame"):
         """
-        Analyze multiple periods and combine results
+        Analyze multiple periods and combine results with enhanced decision tracking
         """
         if not analysis_periods:
             analysis_periods = [(120, 60)]  # Fallback to original behavior
@@ -484,15 +807,45 @@ class FFprobeAnalyzer:
         combined_brng_values = []
         total_frames = 0
         total_violations = 0
+        analysis_decisions = []  # Track analysis decisions
+        qctools_cache = {}  # Cache QCTools results by time period
         
         for i, (start_time, duration) in enumerate(analysis_periods, 1):
             logger.debug(f"\n--- Analysis Period {i}/{len(analysis_periods)} ---")
-            period_result = self.analyze_with_ffprobe(
-                active_area=active_area,
-                start_time=start_time,
-                duration=duration,
-                region_name=f"{region_name}_period_{i}"
-            )
+            
+            # First, try to get data from QCTools if available
+            qctools_results = None
+            cache_key = f"{start_time:.1f}_{duration:.1f}"
+            
+            if self.qctools_report_path:
+                # Check cache first
+                if cache_key in qctools_cache:
+                    qctools_results = qctools_cache[cache_key]
+                    logger.debug(f"  Using cached QCTools data for period {i}")
+                else:
+                    end_time = start_time + duration
+                    qctools_results = self.parse_qctools_brng(start_time, end_time)
+                    if qctools_results:
+                        qctools_cache[cache_key] = qctools_results
+            
+            # Enhanced decision making with active area comparison
+            active_area_results = getattr(self, '_active_area_results', None) if region_name.startswith('border') else None
+            should_run, reason = self.should_run_ffprobe_analysis(qctools_results, region_name.split('_')[0], active_area_results)
+            analysis_decisions.append(f"Period {i}: {reason}")
+            
+            if should_run:
+                # Run FFprobe analysis
+                period_result = self.analyze_with_ffprobe(
+                    active_area=active_area,
+                    start_time=start_time,
+                    duration=duration,
+                    region_name=f"{region_name}_period_{i}"
+                )
+            else:
+                # Use QCTools results instead
+                period_result = qctools_results
+                period_result['region_name'] = f"{region_name}_period_{i}"
+                logger.info(f"  Using QCTools data instead of FFprobe for period {i}")
             
             if period_result:
                 all_results.append(period_result)
@@ -503,15 +856,21 @@ class FFprobeAnalyzer:
         if not all_results:
             return None
             
-        # Create combined results
+        # Create combined results with analysis decisions
         combined_result = {
             'region_name': region_name,
             'analysis_periods': len(analysis_periods),
             'frames_analyzed': total_frames,
             'frames_with_violations': total_violations,
             'brng_values': combined_brng_values,
-            'period_results': all_results
+            'period_results': all_results,
+            'data_source': 'mixed' if any(r.get('source') == 'qctools' for r in all_results) else 'ffprobe',
+            'analysis_decisions': analysis_decisions
         }
+        
+        # Store active area results for border analysis decisions
+        if region_name == "active area":
+            self._active_area_results = combined_result
         
         # Calculate combined statistics
         if combined_brng_values:
@@ -530,6 +889,9 @@ class FFprobeAnalyzer:
         logger.info(f"  Total frames analyzed: {total_frames} across {len(analysis_periods)} periods")
         logger.warning(f"  Frames with violations: {total_violations} ({combined_result['violation_percentage']:.1f}%)")
         logger.info(f"  Avg BRNG: {combined_result['avg_brng']:.4f}%, Max BRNG: {combined_result['max_brng']:.4f}%")
+
+        # Store the cache for potential reuse
+        self._qctools_cache = qctools_cache
         
         return combined_result
             
@@ -544,7 +906,8 @@ class FFprobeAnalyzer:
             'brng_values': [],
             'avg_brng': 0.0,
             'max_brng': 0.0,
-            'violation_percentage': 0.0
+            'violation_percentage': 0.0,
+            'source': 'ffprobe'
         }
         
         lines = output.strip().split('\n')
@@ -583,13 +946,69 @@ class FFprobeAnalyzer:
     def analyze_border_regions_from_data(self, border_regions, analysis_periods):
         """
         Analyze border regions using pre-calculated border data and good time periods
-        Only analyzes left and right borders (skips top and bottom)
+        Enhanced with smart decision making
         """
         results = {}
         
         if not border_regions:
             logger.error("No border regions provided")
             return results
+        
+        # Use cached QCTools data if available
+        full_frame_qctools = None
+        if hasattr(self, '_qctools_cache') and self._qctools_cache:
+            logger.debug("Using cached QCTools data for border analysis decision")
+            # Combine cached results
+            all_brng_values = []
+            total_frames = 0
+            total_violations = 0
+            
+            for cached_result in self._qctools_cache.values():
+                total_frames += cached_result['frames_analyzed']
+                total_violations += cached_result['frames_with_violations']
+                all_brng_values.extend(cached_result['brng_values'])
+            
+            if all_brng_values:
+                full_frame_qctools = {
+                    'frames_analyzed': total_frames,
+                    'frames_with_violations': total_violations,
+                    'brng_values': all_brng_values,
+                    'avg_brng': np.mean(all_brng_values) * 100,
+                    'max_brng': np.max(all_brng_values) * 100,
+                    'violation_percentage': (total_violations / total_frames * 100) if total_frames > 0 else 0,
+                    'source': 'cached'
+                }
+        elif self.qctools_report_path and analysis_periods:
+            # Only parse if we don't have cached data (shouldn't happen now)
+            logger.debug("No cached data available, parsing QCTools for border analysis")
+            # ... keep existing parsing code as fallback ...
+        
+        # Enhanced border analysis decision logic
+        analysis_decisions = []
+        
+        if full_frame_qctools and full_frame_qctools['max_brng'] < 0.1:
+            analysis_decisions.append("Skipped border analysis: QCTools violations too low for border-related issues")
+            logger.info("→ Skipping border analysis (full frame violations too low to be border-related)")
+            return {'analysis_decisions': analysis_decisions}
+        
+        # Check if we should analyze borders based on active area comparison
+        if hasattr(self, '_active_area_results') and self._active_area_results:
+            active_results = self._active_area_results
+            qc_violation_pct = full_frame_qctools['violation_percentage'] if full_frame_qctools else 100
+            active_violation_pct = active_results['violation_percentage']
+            
+            violation_diff = qc_violation_pct - active_violation_pct
+            
+            if violation_diff < 10:
+                analysis_decisions.append(f"Skipped border analysis: Active area violations similar to full frame (diff: {violation_diff:.1f}%)")
+                logger.info(f"→ Skipping border analysis: Active area violations similar to full frame")
+                return {'analysis_decisions': analysis_decisions}
+            elif violation_diff > 20:
+                analysis_decisions.append(f"Prioritizing border analysis: Significant difference detected ({violation_diff:.1f}% violation difference)")
+                logger.info(f"→ Prioritizing border analysis: {violation_diff:.1f}% difference between full frame and active area")
+        
+        # Store analysis decisions for later use
+        self._border_analysis_decisions = analysis_decisions
         
         # Only analyze left and right borders
         borders_to_analyze = ['left_border', 'right_border']
@@ -621,13 +1040,64 @@ class FFprobeAnalyzer:
         except Exception as e:
             logger.error(f"⚠️ Could not load border data: {e}")
             return None
+        
+
+    def find_good_analysis_periods_with_hints(self, content_start_time=0, color_bars_end_time=None, 
+                                            target_duration=60, num_periods=3, min_gap=30,
+                                            quality_frame_hints=None):
+        """
+        Find analysis periods using hints from border detection about good frames.
+        
+        Args:
+            quality_frame_hints: List of (time_seconds, quality_score) tuples from border detection
+        """
+        # Determine the earliest start time
+        effective_start = max(content_start_time, color_bars_end_time or 0)
+        effective_start += 10  # 10 second buffer
+        
+        # If we have quality frame hints from border detection, use them
+        if quality_frame_hints and len(quality_frame_hints) >= num_periods:
+            logger.debug("Using quality frame hints from border detection")
+            
+            # Sort hints by quality score
+            sorted_hints = sorted(quality_frame_hints, key=lambda x: x[1], reverse=True)
+            
+            good_periods = []
+            used_times = []
+            
+            for time_hint, quality_score in sorted_hints:
+                if len(good_periods) >= num_periods:
+                    break
+                    
+                # Check if this time is far enough from already selected periods
+                too_close = False
+                for used_time in used_times:
+                    if abs(time_hint - used_time) < min_gap + target_duration:
+                        too_close = True
+                        break
+                
+                if not too_close and time_hint >= effective_start:
+                    # Use this as a center point for an analysis period
+                    period_start = max(effective_start, time_hint - target_duration/2)
+                    if period_start + target_duration <= self.duration - 30:
+                        good_periods.append((period_start, target_duration))
+                        used_times.append(time_hint)
+                        logger.debug(f"  ✓ Selected period around quality frame at {time_hint:.1f}s (quality: {quality_score:.3f})")
+            
+            if len(good_periods) >= num_periods:
+                return good_periods
+        
+        # Fall back to original method if hints don't work out
+        return self.find_good_analysis_periods(content_start_time, color_bars_end_time, 
+                                            target_duration, num_periods, min_gap)
 
 
 def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None, 
                              content_start_time=0, color_bars_end_time=None,
-                             analysis_duration=60, num_analysis_periods=3):
+                             analysis_duration=60, num_analysis_periods=3,
+                             quality_frame_hints=None, border_detection_method='unknown'):
     """
-    Enhanced signalstats analysis using scene detection and frame quality assessment
+    Enhanced signalstats analysis using QCTools reports when available
     
     Args:
         video_path: Path to video file
@@ -650,17 +1120,27 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
         output_dir = video_path.parent
         
     logger.debug(f"Processing: {video_path.name}\n")
-    logger.info(f"Using enhanced FFprobe signalstats with scene detection\n")
+    logger.info(f"Using enhanced FFprobe signalstats with QCTools integration\n")
     
     analyzer = FFprobeAnalyzer(video_path)
     
-    # Find good analysis periods using enhanced scene detection
-    analysis_periods = analyzer.find_good_analysis_periods(
-        content_start_time=content_start_time,
-        color_bars_end_time=color_bars_end_time,
-        target_duration=analysis_duration,
-        num_periods=num_analysis_periods
-    )
+    # Find good analysis periods - use hints if available from sophisticated detection
+    if border_detection_method == 'sophisticated' and quality_frame_hints:
+        analysis_periods = analyzer.find_good_analysis_periods_with_hints(
+            content_start_time=content_start_time,
+            color_bars_end_time=color_bars_end_time,
+            target_duration=analysis_duration,
+            num_periods=num_analysis_periods,
+            quality_frame_hints=quality_frame_hints
+        )
+    else:
+        # Original method for simple borders or no hints
+        analysis_periods = analyzer.find_good_analysis_periods(
+            content_start_time=content_start_time,
+            color_bars_end_time=color_bars_end_time,
+            target_duration=analysis_duration,
+            num_periods=num_analysis_periods
+        )
     
     # Load border data if provided
     border_data = None
@@ -706,7 +1186,8 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
     report = {
         'video_file': str(video_path),
         'bit_depth': analyzer.bit_depth,
-        'analysis_method': 'FFprobe signalstats (enhanced with scene detection)',
+        'analysis_method': 'FFprobe signalstats with QCTools integration' if analyzer.qctools_report_path else 'FFprobe signalstats (no QCTools report)',
+        'qctools_report_used': analyzer.qctools_report_path is not None,
         'analysis_periods': [{'start': start, 'duration': duration} for start, duration in analysis_periods],
         'scene_detection_used': True,
         'content_start_time': content_start_time,
@@ -720,37 +1201,70 @@ def analyze_video_signalstats(video_path, border_data_path=None, output_dir=None
         }
     }
     
-    # Analysis and diagnosis
+    # Collect all analysis decisions from various sources
+    all_analysis_decisions = []
+    
+    if active_results and 'analysis_decisions' in active_results:
+        all_analysis_decisions.extend(active_results['analysis_decisions'])
+    
+    if border_results:
+        for region_data in border_results.values():
+            if isinstance(region_data, dict) and 'analysis_decisions' in region_data:
+                all_analysis_decisions.extend(region_data['analysis_decisions'])
+    
+    # Add border analysis decisions if available
+    if hasattr(analyzer, '_border_analysis_decisions'):
+        all_analysis_decisions.extend(analyzer._border_analysis_decisions)
+    
+    # Enhanced analysis and diagnosis with comprehensive summary
     logger.debug("\n" + "="*80)
     logger.debug("ENHANCED FFPROBE SIGNALSTATS ANALYSIS RESULTS")
     logger.debug("="*80)
     logger.debug(f"\nVideo: {analyzer.bit_depth}-bit")
     
+    if analyzer.qctools_report_path:
+        logger.info("📊 Using existing QCTools report for intelligent analysis")
+        all_analysis_decisions.append("Using QCTools report for intelligent analysis")
+
     total_duration = sum(duration for _, duration in analysis_periods)
     logger.info(f"Analysis: {len(analysis_periods)} periods totaling {total_duration:.1f}s")
+    
     if color_bars_end_time:
         logger.info(f"Color bars skipped: 0s to {color_bars_end_time:.1f}s")
     if content_start_time > 0:
         logger.info(f"Content starts at: {content_start_time:.1f}s")
-    
+
     if active_results:
         logger.info(f"\n🎯 ACTIVE AREA ANALYSIS:")
         logger.debug(f"   Frames with violations: {active_results['frames_with_violations']}/{active_results['frames_analyzed']} ({active_results['violation_percentage']:.1f}%)")
         logger.debug(f"   Average BRNG: {active_results['avg_brng']:.4f}%")
         logger.debug(f"   Maximum BRNG: {active_results['max_brng']:.4f}%")
+        if active_results.get('data_source') == 'qctools':
+            logger.debug("   (Data from QCTools report)")
     elif full_results:
         logger.info(f"\n📺 FULL FRAME ANALYSIS (no border data available):")
         logger.debug(f"   Frames with violations: {full_results['frames_with_violations']}/{full_results['frames_analyzed']} ({full_results['violation_percentage']:.1f}%)")
         logger.debug(f"   Average BRNG: {full_results['avg_brng']:.4f}%")
         logger.debug(f"   Maximum BRNG: {full_results['max_brng']:.4f}%")
-    
+        if full_results.get('data_source') == 'qctools':
+            logger.debug("   (Data from QCTools report)")
+
     if border_results:
         logger.info(f"\n🔴 BORDER REGIONS ANALYSIS:")
-        # Only show left and right border results
-        for region in ['left_border', 'right_border']:
-            data = border_results.get(region)
-            if data:
-                print(f"   {region}: {data['violation_percentage']:.1f}% violations, avg BRNG: {data['avg_brng']:.4f}%")
+        # Debug the structure first
+        
+        for region_name, data in border_results.items():
+            if isinstance(data, dict) and 'violation_percentage' in data:
+                logger.info(f"   {region_name}: {data['violation_percentage']:.1f}% violations, avg BRNG: {data['avg_brng']:.4f}%")
+            elif region_name == 'analysis_decisions':
+                continue  # Skip analysis_decisions
+
+    # Generate and display enhanced summary
+    video_id = video_path.stem
+    enhanced_summary = generate_comprehensive_final_summary(
+        video_id, border_data, active_results or full_results, border_results, all_analysis_decisions
+    )
+    print("\n" + enhanced_summary)
     
     # Determine diagnosis (same logic as before but with enhanced data)
     primary_result = active_results or full_results

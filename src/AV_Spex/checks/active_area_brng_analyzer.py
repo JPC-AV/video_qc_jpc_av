@@ -209,7 +209,7 @@ class ActiveAreaBrngAnalyzer:
         Process video with ffmpeg signalstats, creating both highlighted and original versions
         for differential analysis.
         """
-        logger.debug(f"\nProcessing video with ffmpeg signalstats...")
+        logger.debug(f"\Creating temporary sample videos with ffmpeg signalstats filter...")
         
         # Build filter chain for active area crop
         crop_filter = ""

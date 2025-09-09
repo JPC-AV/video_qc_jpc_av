@@ -296,20 +296,14 @@ class ProcessingManager:
         Process comprehensive frame analysis including border detection,
         BRNG violations, and optionally signalstats (only with sophisticated borders).
         Now with individual sub-step configuration.
-        
-        Args:
-            video_path (str): Path to the input video file
-            source_directory (str): Source directory for the video
-            destination_directory (str): Destination directory for output files
-            video_id (str): Unique identifier for the video
-            
-        Returns:
-            dict: Analysis results from all enabled components
         """
         
         if self.check_cancelled():
             return None
         
+        # Initialize content_start_time at the beginning
+        content_start_time = 0  # Default to start of video
+    
         analysis_results = {
             'border_results': None,
             'brng_results': None,
@@ -320,10 +314,9 @@ class ProcessingManager:
             'signalstats_skipped_reason': None,
             'color_bars_detected': False,
             'color_bars_end_time': None,
-            'border_refinement_history': []  # Track refinement attempts
+            'border_refinement_history': []
         }
 
-        self.config_mgr.refresh_configs()
         self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
         
         # Access the frame analysis config
@@ -627,6 +620,10 @@ class ProcessingManager:
                     return None
                 
                 analysis_results['brng_results'] = brng_results
+
+                if analysis_results.get('brng_results') and analysis_results['brng_results'].get('video_info'):
+                    content_start_time = analysis_results['brng_results']['video_info'].get('content_start_time', 0)
+                    logger.debug(f"Updated content_start_time from BRNG analysis: {content_start_time:.1f}s")
                 
                 # EMIT SIGNAL FOR BRNG ANALYSIS COMPLETION
                 if self.signals:
@@ -636,25 +633,17 @@ class ProcessingManager:
     
         # Step 3: Enhanced FFprobe Signalstats Analysis (if enabled)
         if signalstats_enabled:
-            # Check dependencies: signalstats requires sophisticated border detection
+            # Check dependencies: signalstats requires border detection
             if not border_detection_enabled:
                 logger.warning("Signalstats requires border detection to be enabled - skipping")
                 analysis_results['signalstats_skipped_reason'] = 'border_detection_disabled'
-            elif not use_sophisticated:
-                logger.info("Skipping signalstats analysis (requires sophisticated border detection)")
-                analysis_results['signalstats_skipped_reason'] = 'simple_borders'
             else:
                 if self.signals:
                     self.signals.output_progress.emit("Running enhanced FFprobe signalstats analysis...")
                 
                 logger.info("\nRunning enhanced signalstats analysis with scene detection")
                 
-                # Extract content start information from BRNG analysis
-                content_start_time = 0
-                if analysis_results.get('brng_results') and analysis_results['brng_results'].get('video_info'):
-                    content_start_time = analysis_results['brng_results']['video_info'].get('content_start_time', 0)
-                
-                # Use the enhanced signalstats analyzer with scene detection and black segment avoidance
+                # Use the border detection method from analysis_results
                 signalstats_results = analyze_video_signalstats(
                     video_path=video_path,
                     border_data_path=border_data_path if border_results else None,
@@ -663,6 +652,7 @@ class ProcessingManager:
                     color_bars_end_time=color_bars_end_seconds,
                     analysis_duration=getattr(frame_config, 'signalstats_duration', 60),
                     num_analysis_periods=getattr(frame_config, 'signalstats_periods', 3),
+                    border_detection_method=analysis_results['border_detection_method']  # Use this
                 )
                 
                 analysis_results['signalstats_results'] = signalstats_results

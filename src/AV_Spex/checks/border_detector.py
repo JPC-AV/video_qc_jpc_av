@@ -1004,11 +1004,19 @@ class VideoBorderDetector:
     
     def save_border_data(self, output_path, active_area=None, head_switching_results=None):
         """
-        Save border detection results to JSON file
+        Save border detection results to JSON file with quality frame hints
         """
         border_regions = None
         if active_area:
             border_regions = self.analyze_border_regions(active_area)
+        
+        # Collect quality frame hints if using sophisticated detection
+        quality_frame_hints = []
+        if hasattr(self, '_quality_frames_cache'):
+            # Store the best quality frames found during detection
+            for frame_idx, frame, quality_score in self._quality_frames_cache[:10]:
+                time_seconds = frame_idx / self.fps
+                quality_frame_hints.append((time_seconds, quality_score))
         
         data = {
             'video_file': self.video_path,
@@ -1022,6 +1030,7 @@ class VideoBorderDetector:
             'active_area': [int(x) for x in active_area] if active_area else None,
             'border_regions': border_regions,
             'head_switching_artifacts': head_switching_results,
+            'quality_frame_hints': quality_frame_hints,  # Add this
             'detection_settings': {
                 'sample_frames': int(self.sample_frames),
                 'threshold': 10,
