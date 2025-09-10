@@ -332,6 +332,9 @@ class VideoBorderDetector:
         
         # Sort by quality score (highest first)
         quality_frames.sort(key=lambda x: x[2], reverse=True)
+
+        # Store for potential reuse
+        self._quality_frames_cache = quality_frames
         
         logger.debug(f"  Found {len(quality_frames)} suitable frames out of {frames_checked} checked")
         
@@ -1110,6 +1113,14 @@ def detect_video_borders(video_path, output_dir=None, target_viz_time=150, searc
             head_switching_results
         )
         logger.info(f"✓ Border data saved: {output_dir / f'{video_path.stem}_border_data.json'}")
+
+    # Store quality frames for signalstats to use
+    quality_frame_hints = []
+    if hasattr(detector, '_quality_frames_cache'):
+        for frame_idx, frame, quality_score in detector._quality_frames_cache[:10]:
+            time_seconds = frame_idx / detector.fps
+            quality_frame_hints.append([time_seconds, quality_score])
+        results['quality_frame_hints'] = quality_frame_hints
     
     detector.close()
     return results

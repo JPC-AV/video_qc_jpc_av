@@ -643,6 +643,11 @@ class ProcessingManager:
                 
                 logger.info("\nRunning enhanced signalstats analysis with scene detection")
                 
+                # Extract quality frame hints if available from sophisticated detection
+                quality_frame_hints = None
+                if border_results and 'quality_frame_hints' in border_results:
+                    quality_frame_hints = border_results.get('quality_frame_hints')
+                
                 # Use the border detection method from analysis_results
                 signalstats_results = analyze_video_signalstats(
                     video_path=video_path,
@@ -652,7 +657,8 @@ class ProcessingManager:
                     color_bars_end_time=color_bars_end_seconds,
                     analysis_duration=getattr(frame_config, 'signalstats_duration', 60),
                     num_analysis_periods=getattr(frame_config, 'signalstats_periods', 3),
-                    border_detection_method=analysis_results['border_detection_method']  # Use this
+                    border_detection_method=analysis_results['border_detection_method'],
+                    quality_frame_hints=quality_frame_hints
                 )
                 
                 analysis_results['signalstats_results'] = signalstats_results
@@ -660,9 +666,9 @@ class ProcessingManager:
                 # EMIT SIGNAL FOR SIGNALSTATS COMPLETION
                 if self.signals:
                     self.signals.step_completed.emit("Frame Analysis - Signalstats")
-        else:
-            logger.info("Signalstats sub-step is disabled")
-            analysis_results['signalstats_skipped_reason'] = 'disabled'
+                else:
+                    logger.info("Signalstats sub-step is disabled")
+                    analysis_results['signalstats_skipped_reason'] = 'disabled'
         
         # Log comprehensive summary
         self._log_broadcast_analysis_summary(analysis_results, video_id)

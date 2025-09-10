@@ -300,15 +300,11 @@ class FFprobeAnalyzer:
     def should_run_ffprobe_analysis(self, qctools_results, region_type='full_frame', active_area_results=None):
         """
         Enhanced decision logic for whether to run FFprobe signalstats
-        
-        Args:
-            qctools_results: BRNG statistics from QCTools
-            region_type: 'full_frame', 'active_area', or 'borders'
-            active_area_results: Results from active area analysis (for border decision making)
-            
-        Returns:
-            tuple: (should_run: bool, reason: str)
         """
+        # For border regions, always skip - they're expected to be black
+        if region_type in ['left_border', 'right_border', 'top_border', 'bottom_border']:
+            return False, "Border regions are expected to violate BRNG (they're black/blanking)"
+        
         if not qctools_results:
             return True, "No QCTools data available"
         
@@ -329,28 +325,6 @@ class FFprobeAnalyzer:
                 return False, f"Negligible active area violations (QCTools: {violation_pct:.2f}% frames, {max_brng:.4f}% max BRNG)"
             elif max_brng < 0.1 and violation_pct < 10:
                 return False, f"Low active area violations (QCTools: {violation_pct:.1f}% frames, {max_brng:.4f}% max BRNG)"
-                
-        elif region_type == 'borders':
-            # Much smarter border analysis decision logic
-            if max_brng < 0.02:
-                return False, f"QCTools violations too low to warrant border analysis ({max_brng:.4f}% max BRNG)"
-            
-            # Compare with active area if available
-            if active_area_results and qctools_results:
-                active_violation_pct = active_area_results.get('violation_percentage', 0)
-                active_max_brng = active_area_results.get('max_brng', 0)
-                
-                # Calculate relative difference
-                violation_diff = abs(violation_pct - active_violation_pct)
-                brng_diff = abs(max_brng - active_max_brng)
-                
-                # If differences are minimal, skip border analysis
-                if violation_diff < 5 and brng_diff < 0.2:
-                    return False, f"Active area similar to full frame (diff: {violation_diff:.1f}% violations, {brng_diff:.4f}% BRNG)"
-                
-                # If active area is already very clean, likely no border issues
-                if active_violation_pct < 5 and active_max_brng < 0.1:
-                    return False, f"Active area already very clean ({active_violation_pct:.1f}% violations, {active_max_brng:.4f}% max BRNG)"
         
         return True, f"Analysis warranted ({violation_pct:.1f}% violations, {max_brng:.4f}% max BRNG)"
     
@@ -821,7 +795,9 @@ class FFprobeAnalyzer:
                 # Check cache first
                 if cache_key in qctools_cache:
                     qctools_results = qctools_cache[cache_key]
-                    logger.debug(f"  Using cached QCTools data for period {i}")
+                    # Don't log this for border regions to avoid confusion
+                    if not region_name.startswith('border'):
+                        logger.debug(f"  Using cached QCTools data for period {i}")
                 else:
                     end_time = start_time + duration
                     qctools_results = self.parse_qctools_brng(start_time, end_time)
@@ -945,87 +921,14 @@ class FFprobeAnalyzer:
     
     def analyze_border_regions_from_data(self, border_regions, analysis_periods):
         """
-        Analyze border regions using pre-calculated border data and good time periods
-        Enhanced with smart decision making
+        Skip border region analysis - borders are expected to be black and violate BRNG
         """
-        results = {}
+        logger.info("\nSkipping border region analysis (borders are expected to violate BRNG)")
+        return {
+            'analysis_decisions': ["Border analysis skipped - borders are expected to be black/blanking"],
+            'skipped': True
+        }
         
-        if not border_regions:
-            logger.error("No border regions provided")
-            return results
-        
-        # Use cached QCTools data if available
-        full_frame_qctools = None
-        if hasattr(self, '_qctools_cache') and self._qctools_cache:
-            logger.debug("Using cached QCTools data for border analysis decision")
-            # Combine cached results
-            all_brng_values = []
-            total_frames = 0
-            total_violations = 0
-            
-            for cached_result in self._qctools_cache.values():
-                total_frames += cached_result['frames_analyzed']
-                total_violations += cached_result['frames_with_violations']
-                all_brng_values.extend(cached_result['brng_values'])
-            
-            if all_brng_values:
-                full_frame_qctools = {
-                    'frames_analyzed': total_frames,
-                    'frames_with_violations': total_violations,
-                    'brng_values': all_brng_values,
-                    'avg_brng': np.mean(all_brng_values) * 100,
-                    'max_brng': np.max(all_brng_values) * 100,
-                    'violation_percentage': (total_violations / total_frames * 100) if total_frames > 0 else 0,
-                    'source': 'cached'
-                }
-        elif self.qctools_report_path and analysis_periods:
-            # Only parse if we don't have cached data (shouldn't happen now)
-            logger.debug("No cached data available, parsing QCTools for border analysis")
-            # ... keep existing parsing code as fallback ...
-        
-        # Enhanced border analysis decision logic
-        analysis_decisions = []
-        
-        if full_frame_qctools and full_frame_qctools['max_brng'] < 0.1:
-            analysis_decisions.append("Skipped border analysis: QCTools violations too low for border-related issues")
-            logger.info("→ Skipping border analysis (full frame violations too low to be border-related)")
-            return {'analysis_decisions': analysis_decisions}
-        
-        # Check if we should analyze borders based on active area comparison
-        if hasattr(self, '_active_area_results') and self._active_area_results:
-            active_results = self._active_area_results
-            qc_violation_pct = full_frame_qctools['violation_percentage'] if full_frame_qctools else 100
-            active_violation_pct = active_results['violation_percentage']
-            
-            violation_diff = qc_violation_pct - active_violation_pct
-            
-            if violation_diff < 10:
-                analysis_decisions.append(f"Skipped border analysis: Active area violations similar to full frame (diff: {violation_diff:.1f}%)")
-                logger.info(f"→ Skipping border analysis: Active area violations similar to full frame")
-                return {'analysis_decisions': analysis_decisions}
-            elif violation_diff > 20:
-                analysis_decisions.append(f"Prioritizing border analysis: Significant difference detected ({violation_diff:.1f}% violation difference)")
-                logger.info(f"→ Prioritizing border analysis: {violation_diff:.1f}% difference between full frame and active area")
-        
-        # Store analysis decisions for later use
-        self._border_analysis_decisions = analysis_decisions
-        
-        # Only analyze left and right borders
-        borders_to_analyze = ['left_border', 'right_border']
-        
-        for region_name in borders_to_analyze:
-            coords = border_regions.get(region_name)
-            if coords:
-                x, y, w, h = coords
-                logger.debug(f"\nAnalyzing {region_name}: {w}x{h} at ({x},{y})")
-                results[region_name] = self.analyze_multiple_periods(
-                    active_area=coords,
-                    analysis_periods=analysis_periods,
-                    region_name=region_name
-                )
-        
-        return results
-    
     def load_border_data(self, border_data_path):
         """
         Load border detection data from JSON file created by border_detector.py
