@@ -270,8 +270,6 @@ class QCTParseToolConfig:
     run_tool: bool
     barsDetection: bool
     evaluateBars: bool
-    contentFilter: List[str]
-    tagname: Optional[str]
     thumbExport: bool
 
 @dataclass
