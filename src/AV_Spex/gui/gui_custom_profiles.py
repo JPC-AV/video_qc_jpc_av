@@ -315,12 +315,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.thumb_export_check = QCheckBox()
         qct_parse_layout.addWidget(self.thumb_export_check, 3, 1)
         
-        # Tag name (remains as text input)
-        qct_parse_layout.addWidget(QLabel("Tag Name:"), 4, 0)
-        self.tagname_input = QLineEdit()
-        self.tagname_input.setPlaceholderText("Optional tag name...")
-        qct_parse_layout.addWidget(self.tagname_input, 4, 1)
-        
         qct_parse_group.setLayout(qct_parse_layout)
         parent_layout.addWidget(qct_parse_group)
     
@@ -391,8 +385,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             self.bars_detection_check.setChecked(qct_config.barsDetection)
             self.evaluate_bars_check.setChecked(qct_config.evaluateBars)
             self.thumb_export_check.setChecked(qct_config.thumbExport)
-            if qct_config.tagname:
-                self.tagname_input.setText(qct_config.tagname)
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load current config: {str(e)}")
@@ -443,8 +435,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.bars_detection_check.setChecked(qct_config.barsDetection)
         self.evaluate_bars_check.setChecked(qct_config.evaluateBars)
         self.thumb_export_check.setChecked(qct_config.thumbExport)
-        if qct_config.tagname:
-            self.tagname_input.setText(qct_config.tagname)
     
     def get_profile_from_form(self):
         """Create a ChecksProfile from the form data."""
@@ -499,8 +489,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
                 run_tool=self.qct_parse_run_check.isChecked(),
                 barsDetection=self.bars_detection_check.isChecked(),
                 evaluateBars=self.evaluate_bars_check.isChecked(),
-                contentFilter=[],  # Empty for now, could be extended
-                tagname=self.tagname_input.text() if self.tagname_input.text() else None,
                 thumbExport=self.thumb_export_check.isChecked()
             )
         )

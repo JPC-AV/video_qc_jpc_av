@@ -147,7 +147,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
     def setup_tools_section(self, main_layout):
         """Set up the tools section with palette-aware styling"""
         theme_manager = ThemeManager.instance()
-    
+
         # Main Tools group box with centered title
         self.tools_group = QGroupBox("Tools")
         theme_manager.style_groupbox(self.tools_group, "top center")
@@ -254,7 +254,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.mediaconch_group.setLayout(mediaconch_layout)
         tools_layout.addWidget(self.mediaconch_group)
 
-        # QCT Parse section
+        # QCT Parse section - SIMPLIFIED WITHOUT CONTENT DETECTION AND TAG NAME
         self.qct_group = QGroupBox("qct-parse")
         theme_manager.style_groupbox(self.qct_group, "top left")
         self.themed_group_boxes['qct'] = self.qct_group
@@ -282,24 +282,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
         thumb_export_desc.setIndent(20)
 
-        # Content Filter
-        content_filter_label = QLabel("Content Detection")
-        content_filter_label.setStyleSheet("font-weight: bold;")
-        content_filter_desc = QLabel("Select type of content to detect in the video")
-        self.content_filter_combo = QComboBox()
-        self.content_filter_combo.addItem("Select options...", None)  # Store None as data
-
-        # Create a mapping of display text to actual values
-        content_filter_options = {
-            "All Black Detection": "allBlack",
-            "Static Content Detection": "static"
-        }
-
-        # Add items with display text and corresponding data value
-        for display_text, value in content_filter_options.items():
-            self.content_filter_combo.addItem(display_text, value)
-
-        # Add all widgets to the qct layout
+        # Add all widgets to the qct layout 
         qct_layout.addWidget(self.run_qctparse_cb)
         qct_layout.addWidget(run_qctparse_desc)
         qct_layout.addWidget(self.bars_detection_cb)
@@ -308,22 +291,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
         qct_layout.addWidget(evaluate_bars_desc)
         qct_layout.addWidget(self.thumb_export_cb)
         qct_layout.addWidget(thumb_export_desc)
-        qct_layout.addWidget(content_filter_label)
-        qct_layout.addWidget(content_filter_desc)
-        qct_layout.addWidget(self.content_filter_combo)
 
         self.qct_group.setLayout(qct_layout)
         tools_layout.addWidget(self.qct_group)
-        
-        # Tagname
-        tagname_label = QLabel("Tag Name")
-        tagname_label.setStyleSheet("font-weight: bold;")
-        tagname_desc = QLabel("Input ad hoc tags using this format: YMIN, lt, 100 (tag name, lt or gt, number value)")
-        self.tagname_input = QLineEdit()
-        self.tagname_input.setPlaceholderText("None")
-        qct_layout.addWidget(tagname_label)
-        qct_layout.addWidget(tagname_desc)
-        qct_layout.addWidget(self.tagname_input)
         
         self.tools_group.setLayout(tools_layout)
         main_layout.addWidget(self.tools_group)
@@ -415,12 +385,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.thumb_export_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'thumbExport'])
         )
-        self.content_filter_combo.currentIndexChanged.connect(
-            lambda index: self.on_qct_combo_changed(self.content_filter_combo.itemData(index), 'contentFilter')
-        )
-        self.tagname_input.textChanged.connect(
-            lambda text: self.on_tagname_changed(text)
-        )
 
     def load_config_values(self):
         """Load current config values into UI elements"""
@@ -476,11 +440,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.evaluate_bars_cb.setChecked(qct.evaluateBars)
         self.thumb_export_cb.setChecked(qct.thumbExport)
         
-        if qct.contentFilter:
-            self.content_filter_combo.setCurrentText(qct.contentFilter[0])
-        if qct.tagname is not None:
-            self.tagname_input.setText(qct.tagname)
-
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
 

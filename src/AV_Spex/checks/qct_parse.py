@@ -156,7 +156,7 @@ def dts2ts(frame_pkt_dts_time):
 
 
 # finds stuff over/under threshold
-def threshFinder(qct_parse, video_path, inFrame, startObj, pkt, tag, over, thumbPath, thumbDelay, thumbExportDelay, profile_name, failureInfo, adhoc_tag):
+def threshFinder(qct_parse, video_path, inFrame, startObj, pkt, tag, over, thumbPath, thumbDelay, thumbExportDelay, profile_name, failureInfo):
     """
     Compares tagValue in frameDict (from qctools.xml.gz) with threshold from config
 
@@ -182,21 +182,10 @@ def threshFinder(qct_parse, video_path, inFrame, startObj, pkt, tag, over, thumb
     tagValue = float(inFrame[tag])
     frame_pkt_dts_time = inFrame[pkt]
 
-    if adhoc_tag:
-        operator_string = None
-        for tag_list in qct_parse['tagname']:
-            if tag == tag_list[0]:
-                operator_string = tag_list[1]
-                break
-        if operator_string == "gt":
-            comparision = operator.gt
-        elif operator_string == "lt":
-            comparision = operator.lt
+    if "MIN" in tag or "LOW" in tag:
+        comparision = operator.lt
     else:
-        if "MIN" in tag or "LOW" in tag:
-            comparision = operator.lt
-        else:
-            comparision = operator.gt
+        comparision = operator.gt
 	
     if comparision(float(tagValue), float(over)): # if the attribute is over usr set threshold
         timeStampString = dts2ts(frame_pkt_dts_time)
@@ -419,134 +408,6 @@ def evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize):
     return maxBarsDict
 
 
-def find_common_durations(content_over):
-    """
-    Identifies common durations across different content tags.
-
-    Extracts tags and their associated durations from content_over dictionary, and uses set
-    intersection to find durations that are common across all tags.
-
-    Parameters:
-        content_over (dict): A dictionary with tags as keys and sets of durations (strings) as values.
-
-    Returns:
-        set: A set containing durations that are common across all provided tags.
-    """
-
-    # Extract all tags and their durations into a dictionary of sets
-    tag_durations = {tag: set(durations) for tag, durations in content_over.items()}
-
-    # Use set intersection to find common durations across all tags
-    common_durations = set.intersection(*tag_durations.values())
-    return common_durations
-
-
-def print_consecutive_durations(durations,qctools_check_output,contentFilter_name,video_path,qct_parse,startObj,thumbPath):
-    """
-    Intended to be used with detectContentFilter and find_common_durations
-    
-    Writes the start and end times of consecutive segments to a file and logs them.
-
-    This function takes a list of durations (each a string in 'HH:MM:SS' format), sorts them,
-    and identifies consecutive segments where the time difference between segments is less than 5 seconds.
-    These segments are then written to a specified output file.
-
-    Parameters:
-        durations (list of str): A list of time durations in 'HH:MM:SS' format.
-        qctools_check_output (str): The file path where the output should be written.
-        contentFilter_name (str): The name of the content filter used to determine the thresholds.
-        video_path (str): Path to the video file.
-        qct_parse (dict): qct-parse dictionary from command_config.yaml 
-        thumbPath (str): Path where thumbnails are saved.
-
-    Returns:
-        None
-    """
-
-    logger.info(f"Segments found within thresholds of content filter {contentFilter_name}:")
-
-    sorted_durations = sorted(durations, key=lambda x: list(map(float, x.split(':'))))
-
-    start_time = None
-    end_time = None
-    thumbDelay = 0
-
-    with open(qctools_check_output, 'w') as f:
-        f.write("qct-parse content detection summary:\n")
-        f.write(f"Segments found within thresholds of content filter {contentFilter_name}:\n")
-
-        for i in range(len(sorted_durations)):
-            if start_time is None:
-                start_time = sorted_durations[i]
-                end_time = sorted_durations[i]
-            else:
-                current_time = sorted_durations[i]
-                previous_time = sorted_durations[i - 1]
-
-                current_seconds = sum(x * float(t) for x, t in zip([3600, 60, 1], current_time.split(':')))
-                previous_seconds = sum(x * float(t) for x, t in zip([3600, 60, 1], previous_time.split(':')))
-
-                if current_seconds - previous_seconds < 5:
-                    end_time = current_time
-                else:
-                    if start_time != end_time:
-                        logger.info(f"{start_time} - {end_time}")
-                        f.write(f"{start_time} - {end_time}\n")
-                    else:
-                        logger.info(start_time)
-                        f.write(f"{start_time}\n")
-                  # if qct_parse['thumbExport']:
-                  #     printThumb(video_path, "thumbnail", contentFilter_name, startObj, thumbPath, "output", start_time)
-                    start_time = current_time
-                    end_time = current_time
-
-        # Print the last range or single time
-        if start_time and end_time:
-            if start_time != end_time:
-                logger.info(f"{start_time} - {end_time}")
-                f.write(f"{start_time} - {end_time}\n")
-            else:
-                logger.info(start_time)
-                f.write(f"{start_time}\n")
-            logger.debug(f"")
-          # if qct_parse['thumbExport']:
-          #     printThumb(video_path, "thumbnail", contentFilter_name, startObj, thumbPath, "output", start_time)
-
-
-# Modified version of detectBars for finding segments that meet all thresholds instead of any thresholds (like analyze does)
-def detectContentFilter(startObj, pkt, contentFilter_name, contentFilter_dict, qctools_check_output, framesList, qct_parse, thumbPath, video_path):
-    """
-    Checks values against thresholds of multiple values
-
-    Parameters:
-        startObj (qctools.xml.gz): A gzip-compressed XML file containing frame attributes.
-        pkt (str): The attribute key used to extract timestamps from <frame> tag in qctools.xml.gz.
-        contentFilter_name (str): The name of the content filter configuration to apply.
-        contentFilter_dict (dict): Dictionary of content filter values from qct-parse[content] section of config.yaml 
-        qctools_check_output (str): The file path where segments meeting the content filter criteria are written.
-        framesList: List of frameDict dictionaries
-        qct_parse (dict): qct-parse dictionary from command_config.yaml 
-        thumbPath (str): Path where thumbnails are saved.
-        video_path (str): Path to the video file.
-    """
-    
-    content_over = {tag: [] for tag in contentFilter_dict}
-
-    for frameDict in framesList:
-        for tag, config_value in contentFilter_dict.items():
-            tag_threshold, op_string = config_value.split(", ")
-            thresh = float(tag_threshold)
-            comp_op = operator_mapping[op_string]
-            if tag in frameDict and comp_op(float(frameDict[tag]), thresh):
-                content_over[tag].append(dts2ts(frameDict[pkt]))
-
-    common_durations = find_common_durations(content_over)
-    if common_durations:
-        print_consecutive_durations(common_durations, qctools_check_output, contentFilter_name, video_path, qct_parse, startObj, thumbPath)
-    else:
-        logger.error(f"No segments found matching content filter: {contentFilter_name}\n")
-
-
 def getCompFromConfig(qct_parse, profile, tag):
    """
    Determines the comparison operator based on profile and tag.
@@ -650,7 +511,7 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
                         tag = k
                         over = float(v)
                         # ACTUALLY DO THE THING ONCE FOR EACH TAG
-                        frameOver, thumbDelay, failureInfo = threshFinder(qct_parse, video_path, framesList[-1], startObj, pkt, tag, over, thumbPath, thumbDelay, thumbExportDelay, profile_name, failureInfo, adhoc_tag)
+                        frameOver, thumbDelay, failureInfo = threshFinder(qct_parse, video_path, framesList[-1], startObj, pkt, tag, over, thumbPath, thumbDelay, thumbExportDelay, profile_name, failureInfo)
                         if frameOver is True:
                             kbeyond[k] = kbeyond[k] + 1 # note the over in the key over dict
                             if not frame_pkt_dts_time in fots: # make sure that we only count each over frame once
@@ -1070,42 +931,6 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     # Determine if video values are 10 bit depth
     bit_depth_10 = detectBitdepth(startObj,pkt,framesList,buffSize)
-
-    if check_cancelled():
-        return None
-
-    ######## Iterate Through the XML for content detection ########
-    if qct_parse['contentFilter']:
-        for filter_name in qct_parse['contentFilter']:
-            logger.debug(f"Checking for segments of {os.path.basename(video_path)} that match the content filter {filter_name}\n")
-            if hasattr(spex_config.qct_parse_values.content, filter_name):
-                raw_dict = asdict(getattr(spex_config.qct_parse_values.content, filter_name))
-                # Convert the [value, operation] lists to "value, operation" strings
-                contentFilter_dict = {
-                    key: f"{value[0]}, {value[1]}" 
-                    for key, value in raw_dict.items()
-                }
-                qctools_content_check_output = os.path.join(report_directory, f"qct-parse_contentFilter_{filter_name}_summary.csv")
-                detectContentFilter(startObj, pkt, filter_name, contentFilter_dict, qctools_content_check_output, framesList, qct_parse, thumbPath, video_path)
-
-    if check_cancelled():
-        return None
-
-    if qct_parse['tagname']:
-        logger.debug(f"Starting qct-parse analysis against user input tag thresholds on {baseName}\n")
-        # set profile and thumbExportDelay for ad hoc tag check
-        profile = fullTagList
-        thumbExportDelay = 9000
-        # set profile_name
-        profile_name = 'tag_check'
-        # check xml against thresholds, return kbeyond (dictionary of tags:framecount exceeding), frameCount (total # of frames), and overallFrameFail (total # of failed frames)
-        kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag = True, check_cancelled=check_cancelled)
-        tag_fails_csv_path = os.path.join(report_directory, "qct-parse_tags_failures.csv")
-        if failureInfo:
-            save_failures_to_csv(failureInfo, tag_fails_csv_path)
-        qctools_tag_check_output = os.path.join(report_directory, "qct-parse_tags_summary.csv")
-        printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_tag_check_output)
-        logger.debug(f"qct-parse summary written to {qctools_tag_check_output}\n")
 
     if check_cancelled():
         return None
