@@ -2,6 +2,7 @@ from dataclasses import asdict
 from typing import Optional, TypeVar, Type, List, Dict, Union, Any, get_type_hints, get_origin, get_args
 import json
 import os
+import glob
 from pathlib import Path
 import appdirs
 import sys
@@ -111,6 +112,32 @@ class ConfigManager:
             file_path = os.path.join(self._bundle_dir, 'config', filename)
             
         return file_path if os.path.exists(file_path) else None
+
+    def _cleanup_corrupted_configs(self) -> None:
+        """
+        Delete all last_used config files and clear the config cache.
+        This is called when config loading fails to reset to a clean state.
+        """
+        # Delete all last_used config files
+        pattern = os.path.join(self._user_config_dir, "last_used_*_config.json")
+        last_used_files = glob.glob(pattern)
+        
+        deleted_count = 0
+        for file_path in last_used_files:
+            try:
+                os.remove(file_path)
+                logger.info(f"Deleted corrupted config file: {os.path.basename(file_path)}")
+                deleted_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete {file_path}: {str(e)}")
+        
+        # Clear the entire config cache to ensure clean state
+        self._configs.clear()
+        
+        if deleted_count > 0:
+            logger.info(f"Cleaned up {deleted_count} corrupted config file(s), will use default configs")
+        else:
+            logger.info("No last_used config files found to clean up")
 
     def _migrate_yes_no_to_bool(self, value: Any) -> Any:
         """
@@ -323,7 +350,7 @@ class ConfigManager:
     def get_config(self, config_name: str, config_class: Type[T], 
                    use_last_used: bool = True) -> T:
         """
-        Get configuration as a dataclass instance.
+        Get configuration as a dataclass instance with automatic recovery from corrupted configs.
         
         Args:
             config_name: Name of the configuration
@@ -336,15 +363,37 @@ class ConfigManager:
         # Return cached config if available
         if config_name in self._configs:
             return self._configs[config_name]
+        
+        try:
+            # Load config data from file (with migration)
+            config_data = self._load_json_config(config_name, use_last_used=use_last_used)
             
-        # Load config data from file (with migration)
-        config_data = self._load_json_config(config_name, use_last_used=use_last_used)
-        
-        # Convert to dataclass and cache
-        config = self._deserialize_dataclass(config_class, config_data)
-        self._configs[config_name] = config
-        
-        return config
+            # Convert to dataclass and cache
+            config = self._deserialize_dataclass(config_class, config_data)
+            self._configs[config_name] = config
+            
+            return config
+            
+        except Exception as e:
+            # If we were trying to use last_used config and it failed,
+            # clean up corrupted configs and try again with defaults
+            if use_last_used:
+                logger.warning(f"Failed to load last_used {config_name} config: {str(e)}")
+                logger.info("Detected incompatible config format - cleaning up and using defaults")
+                
+                # Clean up corrupted configs
+                self._cleanup_corrupted_configs()
+                
+                # Retry with default config (recursive call with use_last_used=False)
+                try:
+                    return self.get_config(config_name, config_class, use_last_used=False)
+                except Exception as fallback_error:
+                    logger.error(f"Failed to load default {config_name} config after cleanup: {str(fallback_error)}")
+                    raise fallback_error
+            else:
+                # If default config also failed, this is a more serious problem
+                logger.error(f"Failed to load default {config_name} config: {str(e)}")
+                raise
 
     def save_config(self, config_name: str, is_last_used: bool = False) -> None:
         """
