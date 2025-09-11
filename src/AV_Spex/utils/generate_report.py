@@ -1045,6 +1045,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     else:
         tags_summary_html = None
 
+    existing_thumbs = find_qct_thumbs(report_directory)
+    no_qct_parse_files = (
+        not profile_fails_csv and 
+        not tag_fails_csv and 
+        not colorbars_eval_fails_csv and 
+        not existing_thumbs
+    )
+
     if check_cancelled():
         return
 
@@ -1134,6 +1142,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3>{difference_csv_filename}</h3>
         {diff_csv_html}
+        """
+
+    if no_qct_parse_files:
+        html_template += """
+        <h3>QCT-Parse Analysis</h3>
+        <div style="background-color: #fff3cd; padding: 15px; border: 1px solid #856404; margin: 10px 0; border-radius: 5px;">
+            <p style="margin: 0; color: #856404;"><strong>Information:</strong> QCT-Parse analysis was not performed for this video. Quality control analysis sections are not available in this report.</p>
+        </div>
         """
 
     if colorbars_html:
