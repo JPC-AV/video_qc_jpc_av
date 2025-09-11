@@ -332,7 +332,8 @@ def embed_fixity(video_path, check_cancelled=None, signals=None):
         checks_config = config_mgr.get_config('checks', ChecksConfig)
 
         if existing_video_hash or existing_audio_hash:
-            if checks_config.fixity.overwrite_stream_fixity == 'yes':
+            # Now using boolean check
+            if checks_config.fixity.overwrite_stream_fixity:
                 logger.debug('Removing old stream hashes before embedding new ones.')
                 cleaned_tags = remove_existing_stream_hashes(existing_tags)
                 updated_tags = add_stream_hash_tag(cleaned_tags, video_hash, audio_hash)
@@ -417,9 +418,9 @@ def process_embedded_fixity(video_path, check_cancelled=None, signals=None):
         embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
     else:
         logger.critical("Existing stream hashes found!")
-        if checks_config.fixity.overwrite_stream_fixity == 'yes':
+        # Now using boolean check
+        if checks_config.fixity.overwrite_stream_fixity:
             logger.critical('New stream hashes will be generated and old hashes will be overwritten!\n')
             embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
         else:
             logger.error('Not writing new stream hashes to MKV. Overwrite is disabled.\n')
-

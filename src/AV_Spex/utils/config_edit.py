@@ -24,9 +24,15 @@ def format_config_value(value, indent=0, is_nested=False):
     
     if isinstance(value, list):
         return ', '.join(str(item) for item in value)
-        
+    
+    # Handle boolean values
+    if isinstance(value, bool):
+        return "✅" if value else "❌"
+    
+    # Legacy support for any remaining "yes"/"no" strings (shouldn't happen with new system)
     if value == 'yes': return "✅"
     if value == 'no': return "❌"
+    
     return str(value)
 
 
@@ -308,40 +314,47 @@ def apply_profile(selected_profile):
         config_mgr.update_config('checks', updates)
 
 
-def update_tool_setting(tool_names: List[str], value: str):
+def update_tool_setting(tool_names: List[str], value: bool):
     """
     Update specific tool settings using config_mgr.update_config
     Args:
         tool_names: List of strings in format 'tool.field'
-        value: 'yes' or 'no' (or True/False for qct_parse)
+        value: Boolean value (True or False)
     """
-    updates = {'tools': {}}
+    updates = {'tools': {}, 'fixity': {}}
     
     for tool_spec in tool_names:
         try:
             tool_name, field = tool_spec.split('.')
             
-            # Special handling for qct_parse which uses booleans instead of yes/no
-            if tool_name == 'qct_parse':
-                if value.lower() not in ('yes', 'no'):
-                    logger.warning(f"Invalid value '{value}' for qct_parse. Must be 'yes' or 'no'")
-                    continue
-                bool_value = True if value.lower() == 'yes' else False
-                updates['tools'][tool_name] = {field: bool_value}
-                
-            # Special handling for mediaconch which has different field names
-            elif tool_name == 'mediaconch':
-                if field not in ('run_mediaconch'):
-                    logger.warning(f"Invalid field '{field}' for mediaconch. To turn mediaconch on/off use 'mediaconch.run_mediaconch'.")
-                    continue
-                updates['tools'][tool_name] = {field: value}
-
-            elif tool_name == 'fixity':
-                updates['fixity'] = {}
-                if field not in ('check_fixity','validate_stream_fixity','embed_stream_fixity','output_fixity','overwrite_stream_fixity'):
+            # Handle fixity settings separately (not in tools)
+            if tool_name == 'fixity':
+                if field not in ('check_fixity', 'validate_stream_fixity', 'embed_stream_fixity', 
+                               'output_fixity', 'overwrite_stream_fixity'):
                     logger.warning(f"Invalid field '{field}' for fixity settings")
                     continue
                 updates['fixity'][field] = value
+                
+            # Special handling for mediaconch which has different field names
+            elif tool_name == 'mediaconch':
+                if field not in ('run_mediaconch',):
+                    logger.warning(f"Invalid field '{field}' for mediaconch. To turn mediaconch on/off use 'mediaconch.run_mediaconch'.")
+                    continue
+                updates['tools'][tool_name] = {field: value}
+                
+            # QCTools only has run_tool
+            elif tool_name == 'qctools':
+                if field not in ('run_tool',):
+                    logger.warning(f"Invalid field '{field}' for qctools. Must be 'run_tool'")
+                    continue
+                updates['tools'][tool_name] = {field: value}
+                
+            # QCT Parse uses booleans for all fields
+            elif tool_name == 'qct_parse':
+                if field not in ('run_tool', 'barsDetection', 'evaluateBars', 'thumbExport'):
+                    logger.warning(f"Invalid field '{field}' for qct_parse")
+                    continue
+                updates['tools'][tool_name] = {field: value}
                 
             # Standard tools with check_tool/run_tool fields
             else:
@@ -350,19 +363,29 @@ def update_tool_setting(tool_names: List[str], value: str):
                     continue
                 updates['tools'][tool_name] = {field: value}
                 
-            logger.debug(f"{tool_name}.{field} will be set to '{value}'")
+            logger.debug(f"{tool_name}.{field} will be set to {value}")
             
         except ValueError:
             logger.warning(f"Invalid format '{tool_spec}'. Expected format: tool.field")
     
+    # Remove empty dictionaries before updating
+    if not updates['tools']:
+        del updates['tools']
+    if not updates['fixity']:
+        del updates['fixity']
+    
     if updates:  # Only update if we have changes
         config_mgr.update_config('checks', updates)
 
+
 def toggle_on(tool_names: List[str]):
-    update_tool_setting(tool_names, 'yes')
+    """Turn on specified tool settings."""
+    update_tool_setting(tool_names, True)
+
 
 def toggle_off(tool_names: List[str]):
-    update_tool_setting(tool_names, 'no')
+    """Turn off specified tool settings."""
+    update_tool_setting(tool_names, False)
 
 
 def get_custom_profiles_config():
@@ -381,6 +404,7 @@ def get_available_custom_profiles() -> List[str]:
     """Get list of available custom profile names."""
     profiles_config = get_custom_profiles_config()
     return list(profiles_config.custom_profiles.keys())
+
 
 def get_custom_profile(profile_name: str) -> Optional[ChecksProfile]:
     """Get a specific custom profile by name."""
@@ -429,6 +453,7 @@ def save_custom_profile(profile: ChecksProfile):
         traceback.print_exc()
         raise
 
+
 def delete_custom_profile(profile_name: str) -> bool:
     """Delete a custom profile using ConfigManager's replace_config_section method."""
     profiles_config = get_custom_profiles_config()
@@ -448,6 +473,7 @@ def delete_custom_profile(profile_name: str) -> bool:
     except Exception as e:
         logger.error(f"Error deleting custom profile '{profile_name}': {str(e)}")
         return False
+
 
 def apply_custom_profile(profile_name: str):
     """Apply a custom profile to the current checks configuration."""
@@ -472,6 +498,7 @@ def apply_custom_profile(profile_name: str):
         logger.error(f"Error applying custom profile '{profile_name}': {str(e)}")
         return False
 
+
 def create_profile_from_current_config(profile_name: str, description: str = "") -> ChecksProfile:
     """Create a new custom profile from the current checks configuration."""
     current_config = config_mgr.get_config('checks', ChecksConfig)
@@ -486,6 +513,7 @@ def create_profile_from_current_config(profile_name: str, description: str = "")
     )
     
     return new_profile
+
 
 def get_all_profiles() -> Dict[str, Union[dict, ChecksProfile]]:
     """Get all available profiles (both built-in and custom)."""
@@ -505,128 +533,34 @@ def get_all_profiles() -> Dict[str, Union[dict, ChecksProfile]]:
     return all_profiles
 
 
+# Profile definitions with boolean values
 profile_step1 = {
     "tools": {
-        "qctools": {
-            "run_tool": "no"   
-        },
         "exiftool": {
-            "check_tool": "yes",
-            "run_tool": "yes"
+            "check_tool": True,
+            "run_tool": True
         },
         "ffprobe": {
-            "check_tool": "yes",
-            "run_tool": "yes"
+            "check_tool": True,
+            "run_tool": True
         },
         "mediaconch": {
             "mediaconch_policy": "JPC_AV_NTSC_MKV_2025_03_26.xml",
-            "run_mediaconch": "yes"
+            "run_mediaconch": True
         },
         "mediainfo": {
-            "check_tool": "yes",
-            "run_tool": "yes"
+            "check_tool": True,
+            "run_tool": True
         },
         "mediatrace": {
-            "check_tool": "yes",
-            "run_tool": "yes"
+            "check_tool": True,
+            "run_tool": True
         },
         "qctools": {
-            "run_tool": "no"
+            "run_tool": False
         },
         "qct_parse": {
-            "run_tool": "no"
-        }
-    },
-    "outputs": {
-        "access_file": "no",
-        "report": "no",
-        "qctools_ext": "qctools.xml.gz"
-    },
-    "fixity": {
-        "check_fixity": "no",
-        "validate_stream_fixity": "no",
-        "embed_stream_fixity": "yes",
-        "output_fixity": "yes",
-        "overwrite_stream_fixity": "no"
-    }
-}
-
-profile_step2 = {
-    "tools": {
-        "exiftool": {
-            "check_tool": "yes",
-            "run_tool": "no"
-        },
-        "ffprobe": {
-            "check_tool": "yes",
-            "run_tool": "no"
-        },
-        "mediaconch": {
-            "mediaconch_policy": "JPC_AV_NTSC_MKV_2024-09-20.xml",
-            "run_mediaconch": "yes"
-        },
-        "mediainfo": {
-            "check_tool": "yes",
-            "run_tool": "no"
-        },
-        "mediatrace": {
-            "check_tool": "yes",
-            "run_tool": "no"
-        },
-        "qctools": {
-            "run_tool": "yes"
-        },
-        "qct_parse": {
-            "run_tool": "yes",
-            "barsDetection": True,
-            "evaluateBars": True,
-            "contentFilter": [],
-            "profile": [],
-            "tagname": None,
-            "thumbExport": True
-        }
-    },
-    "outputs": {
-        "access_file": "no",
-        "report": "yes",
-        "qctools_ext": "qctools.xml.gz"
-    },
-    "fixity": {
-        "check_fixity": "yes",
-        "validate_stream_fixity": "yes",
-        "embed_stream_fixity": "no",
-        "output_fixity": "no",
-        "overwrite_stream_fixity": "no"
-    }
-}
-
-profile_allOff = {
-    "tools": {
-        "exiftool": {
-            "check_tool": "no",
-            "run_tool": "no"
-        },
-        "ffprobe": {
-            "check_tool": "no",
-            "run_tool": "no"
-        },
-        "mediaconch": {
-            "mediaconch_policy": "JPC_AV_NTSC_MKV_2024-09-20.xml",
-            "run_mediaconch": "no"
-        },
-        "mediainfo": {
-            "check_tool": "no",
-            "run_tool": "no"
-        },
-        "mediatrace": {
-            "check_tool": "no",
-            "run_tool": "no"
-        },
-        "qctools": {
-            "run_tool": "no"
-        },
-        "qct_parse": {
-            "run_tool": "no",
+            "run_tool": False,
             "barsDetection": False,
             "evaluateBars": False,
             "contentFilter": [],
@@ -636,19 +570,118 @@ profile_allOff = {
         }
     },
     "outputs": {
-        "access_file": "no",
-        "report": "no",
+        "access_file": False,
+        "report": False,
         "qctools_ext": "qctools.xml.gz"
     },
     "fixity": {
-        "check_fixity": "no",
-        "validate_stream_fixity": "no",
-        "embed_stream_fixity": "no",
-        "output_fixity": "no",
-        "overwrite_stream_fixity": "no"
+        "check_fixity": False,
+        "validate_stream_fixity": False,
+        "embed_stream_fixity": True,
+        "output_fixity": True,
+        "overwrite_stream_fixity": False
     }
 }
 
+profile_step2 = {
+    "tools": {
+        "exiftool": {
+            "check_tool": True,
+            "run_tool": False
+        },
+        "ffprobe": {
+            "check_tool": True,
+            "run_tool": False
+        },
+        "mediaconch": {
+            "mediaconch_policy": "JPC_AV_NTSC_MKV_2024-09-20.xml",
+            "run_mediaconch": True
+        },
+        "mediainfo": {
+            "check_tool": True,
+            "run_tool": False
+        },
+        "mediatrace": {
+            "check_tool": True,
+            "run_tool": False
+        },
+        "qctools": {
+            "run_tool": True
+        },
+        "qct_parse": {
+            "run_tool": True,
+            "barsDetection": True,
+            "evaluateBars": True,
+            "contentFilter": [],
+            "profile": [],
+            "tagname": None,
+            "thumbExport": True
+        }
+    },
+    "outputs": {
+        "access_file": False,
+        "report": True,
+        "qctools_ext": "qctools.xml.gz"
+    },
+    "fixity": {
+        "check_fixity": True,
+        "validate_stream_fixity": True,
+        "embed_stream_fixity": False,
+        "output_fixity": False,
+        "overwrite_stream_fixity": False
+    }
+}
+
+profile_allOff = {
+    "tools": {
+        "exiftool": {
+            "check_tool": False,
+            "run_tool": False
+        },
+        "ffprobe": {
+            "check_tool": False,
+            "run_tool": False
+        },
+        "mediaconch": {
+            "mediaconch_policy": "JPC_AV_NTSC_MKV_2024-09-20.xml",
+            "run_mediaconch": False
+        },
+        "mediainfo": {
+            "check_tool": False,
+            "run_tool": False
+        },
+        "mediatrace": {
+            "check_tool": False,
+            "run_tool": False
+        },
+        "qctools": {
+            "run_tool": False
+        },
+        "qct_parse": {
+            "run_tool": False,
+            "barsDetection": False,
+            "evaluateBars": False,
+            "contentFilter": [],
+            "profile": [],
+            "tagname": None,
+            "thumbExport": False
+        }
+    },
+    "outputs": {
+        "access_file": False,
+        "report": False,
+        "qctools_ext": "qctools.xml.gz"
+    },
+    "fixity": {
+        "check_fixity": False,
+        "validate_stream_fixity": False,
+        "embed_stream_fixity": False,
+        "output_fixity": False,
+        "overwrite_stream_fixity": False
+    }
+}
+
+# Signal flow profiles remain unchanged as they don't use boolean values
 JPC_AV_SVHS = {
     "Source_VTR": ["SVO5800", "SN 122345", "composite", "analog balanced"], 
     "TBC_Framesync": ["DPS575 with flash firmware h2.16", "SN 15230", "SDI", "audio embedded"], 
