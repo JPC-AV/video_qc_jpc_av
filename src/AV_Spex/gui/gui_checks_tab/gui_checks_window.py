@@ -125,7 +125,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         self.validate_stream_cb = QCheckBox("Validate Stream fixity")
         self.validate_stream_cb.setStyleSheet("font-weight: bold;")
-        validate_stream_desc = QLabel("Validates any embedded stream fixity, will embedded steam fixity if none is found")
+        validate_stream_desc = QLabel("Validates any embedded stream fixity, will embedded stream fixity if none is found")
         validate_stream_desc.setIndent(20)
         
         # Add to layout
