@@ -1,4 +1,3 @@
-
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, 
     QScrollArea, QPushButton, QComboBox, QCheckBox, QGroupBox,
@@ -109,19 +108,17 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         outputs_group = QGroupBox("Output Settings")
         outputs_layout = QGridLayout()
         
-        # Access file
+        # Access file (now using checkbox for boolean)
         outputs_layout.addWidget(QLabel("Access File:"), 0, 0)
-        self.access_file_combo = QComboBox()
-        self.access_file_combo.addItems(["no", "yes"])
-        outputs_layout.addWidget(self.access_file_combo, 0, 1)
+        self.access_file_check = QCheckBox()
+        outputs_layout.addWidget(self.access_file_check, 0, 1)
         
-        # Report
+        # Report (now using checkbox for boolean)
         outputs_layout.addWidget(QLabel("Report:"), 1, 0)
-        self.report_combo = QComboBox()
-        self.report_combo.addItems(["no", "yes"])
-        outputs_layout.addWidget(self.report_combo, 1, 1)
+        self.report_check = QCheckBox()
+        outputs_layout.addWidget(self.report_check, 1, 1)
         
-        # QCTools extension
+        # QCTools extension (remains as text input)
         outputs_layout.addWidget(QLabel("QCTools Extension:"), 2, 0)
         self.qctools_ext_input = QLineEdit()
         self.qctools_ext_input.setText("qctools.xml.gz")
@@ -135,8 +132,8 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         fixity_group = QGroupBox("Fixity Settings")
         fixity_layout = QGridLayout()
         
-        # Create combo boxes for each fixity setting
-        self.fixity_combos = {}
+        # Create checkboxes for each fixity setting (now using checkboxes for booleans)
+        self.fixity_checks = {}
         fixity_options = [
             ("check_fixity", "Check Fixity:", 0),
             ("validate_stream_fixity", "Validate Stream Fixity:", 1),
@@ -147,10 +144,9 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         
         for setting, label, row in fixity_options:
             fixity_layout.addWidget(QLabel(label), row, 0)
-            combo = QComboBox()
-            combo.addItems(["no", "yes"])
-            self.fixity_combos[setting] = combo
-            fixity_layout.addWidget(combo, row, 1)
+            checkbox = QCheckBox()
+            self.fixity_checks[setting] = checkbox
+            fixity_layout.addWidget(checkbox, row, 1)
         
         fixity_group.setLayout(fixity_layout)
         self.config_layout.addWidget(fixity_group)
@@ -162,27 +158,25 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         
         # Basic tools (exiftool, ffprobe, mediainfo, mediatrace)
         basic_tools = ["exiftool", "ffprobe", "mediainfo", "mediatrace"]
-        self.basic_tool_combos = {}
+        self.basic_tool_checks = {}
         
         for tool in basic_tools:
             tool_group = QGroupBox(tool.title())
             tool_layout = QGridLayout()
             
-            # Check tool
+            # Check tool (now using checkbox for boolean)
             tool_layout.addWidget(QLabel("Check Tool:"), 0, 0)
-            check_combo = QComboBox()
-            check_combo.addItems(["no", "yes"])
-            tool_layout.addWidget(check_combo, 0, 1)
+            check_checkbox = QCheckBox()
+            tool_layout.addWidget(check_checkbox, 0, 1)
             
-            # Run tool
+            # Run tool (now using checkbox for boolean)
             tool_layout.addWidget(QLabel("Run Tool:"), 1, 0)
-            run_combo = QComboBox()
-            run_combo.addItems(["no", "yes"])
-            tool_layout.addWidget(run_combo, 1, 1)
+            run_checkbox = QCheckBox()
+            tool_layout.addWidget(run_checkbox, 1, 1)
             
-            self.basic_tool_combos[tool] = {
-                'check_tool': check_combo,
-                'run_tool': run_combo
+            self.basic_tool_checks[tool] = {
+                'check_tool': check_checkbox,
+                'run_tool': run_checkbox
             }
             
             tool_group.setLayout(tool_layout)
@@ -205,7 +199,7 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         mediaconch_group = QGroupBox("MediaConch")
         mediaconch_layout = QGridLayout()
         
-        # Policy dropdown
+        # Policy dropdown (remains as combo box for string value)
         mediaconch_layout.addWidget(QLabel("Policy:"), 0, 0)
         self.mediaconch_policy_combo = QComboBox()
         
@@ -222,11 +216,10 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.import_policy_btn.clicked.connect(self.open_policy_file_dialog)
         mediaconch_layout.addWidget(self.import_policy_btn, 1, 0, 1, 2)  # Span both columns
         
-        # Run MediaConch
+        # Run MediaConch (now using checkbox for boolean)
         mediaconch_layout.addWidget(QLabel("Run MediaConch:"), 2, 0)
-        self.mediaconch_run_combo = QComboBox()
-        self.mediaconch_run_combo.addItems(["no", "yes"])
-        mediaconch_layout.addWidget(self.mediaconch_run_combo, 2, 1)
+        self.mediaconch_run_check = QCheckBox()
+        mediaconch_layout.addWidget(self.mediaconch_run_check, 2, 1)
         
         mediaconch_group.setLayout(mediaconch_layout)
         parent_layout.addWidget(mediaconch_group)
@@ -289,11 +282,10 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         qctools_group = QGroupBox("QCTools")
         qctools_layout = QGridLayout()
         
-        # Run tool
+        # Run tool (now using checkbox for boolean)
         qctools_layout.addWidget(QLabel("Run Tool:"), 0, 0)
-        self.qctools_run_combo = QComboBox()
-        self.qctools_run_combo.addItems(["no", "yes"])
-        qctools_layout.addWidget(self.qctools_run_combo, 0, 1)
+        self.qctools_run_check = QCheckBox()
+        qctools_layout.addWidget(self.qctools_run_check, 0, 1)
         
         qctools_group.setLayout(qctools_layout)
         parent_layout.addWidget(qctools_group)
@@ -303,32 +295,25 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         qct_parse_group = QGroupBox("QCT Parse")
         qct_parse_layout = QGridLayout()
         
-        # Run tool
+        # Run tool (now using checkbox for boolean)
         qct_parse_layout.addWidget(QLabel("Run Tool:"), 0, 0)
-        self.qct_parse_run_combo = QComboBox()
-        self.qct_parse_run_combo.addItems(["no", "yes"])
-        qct_parse_layout.addWidget(self.qct_parse_run_combo, 0, 1)
+        self.qct_parse_run_check = QCheckBox()
+        qct_parse_layout.addWidget(self.qct_parse_run_check, 0, 1)
         
-        # Bars Detection
+        # Bars Detection (already boolean)
         qct_parse_layout.addWidget(QLabel("Bars Detection:"), 1, 0)
         self.bars_detection_check = QCheckBox()
         qct_parse_layout.addWidget(self.bars_detection_check, 1, 1)
         
-        # Evaluate Bars
+        # Evaluate Bars (already boolean)
         qct_parse_layout.addWidget(QLabel("Evaluate Bars:"), 2, 0)
         self.evaluate_bars_check = QCheckBox()
         qct_parse_layout.addWidget(self.evaluate_bars_check, 2, 1)
         
-        # Thumb Export
+        # Thumb Export (already boolean)
         qct_parse_layout.addWidget(QLabel("Thumb Export:"), 3, 0)
         self.thumb_export_check = QCheckBox()
         qct_parse_layout.addWidget(self.thumb_export_check, 3, 1)
-        
-        # Tag name
-        qct_parse_layout.addWidget(QLabel("Tag Name:"), 4, 0)
-        self.tagname_input = QLineEdit()
-        self.tagname_input.setPlaceholderText("Optional tag name...")
-        qct_parse_layout.addWidget(self.tagname_input, 4, 1)
         
         qct_parse_group.setLayout(qct_parse_layout)
         parent_layout.addWidget(qct_parse_group)
@@ -360,25 +345,25 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         try:
             current_config = config_edit.config_mgr.get_config('checks', config_edit.ChecksConfig)
             
-            # Load outputs
-            self.access_file_combo.setCurrentText(current_config.outputs.access_file)
-            self.report_combo.setCurrentText(current_config.outputs.report)
+            # Load outputs (now booleans)
+            self.access_file_check.setChecked(current_config.outputs.access_file)
+            self.report_check.setChecked(current_config.outputs.report)
             self.qctools_ext_input.setText(current_config.outputs.qctools_ext)
             
-            # Load fixity
-            self.fixity_combos['check_fixity'].setCurrentText(current_config.fixity.check_fixity)
-            self.fixity_combos['validate_stream_fixity'].setCurrentText(current_config.fixity.validate_stream_fixity)
-            self.fixity_combos['embed_stream_fixity'].setCurrentText(current_config.fixity.embed_stream_fixity)
-            self.fixity_combos['output_fixity'].setCurrentText(current_config.fixity.output_fixity)
-            self.fixity_combos['overwrite_stream_fixity'].setCurrentText(current_config.fixity.overwrite_stream_fixity)
+            # Load fixity (now booleans)
+            self.fixity_checks['check_fixity'].setChecked(current_config.fixity.check_fixity)
+            self.fixity_checks['validate_stream_fixity'].setChecked(current_config.fixity.validate_stream_fixity)
+            self.fixity_checks['embed_stream_fixity'].setChecked(current_config.fixity.embed_stream_fixity)
+            self.fixity_checks['output_fixity'].setChecked(current_config.fixity.output_fixity)
+            self.fixity_checks['overwrite_stream_fixity'].setChecked(current_config.fixity.overwrite_stream_fixity)
             
-            # Load basic tools
-            for tool_name in self.basic_tool_combos:
+            # Load basic tools (now booleans)
+            for tool_name in self.basic_tool_checks:
                 tool_config = getattr(current_config.tools, tool_name)
-                self.basic_tool_combos[tool_name]['check_tool'].setCurrentText(tool_config.check_tool)
-                self.basic_tool_combos[tool_name]['run_tool'].setCurrentText(tool_config.run_tool)
+                self.basic_tool_checks[tool_name]['check_tool'].setChecked(tool_config.check_tool)
+                self.basic_tool_checks[tool_name]['run_tool'].setChecked(tool_config.run_tool)
             
-            # Load MediaConch - updated to use combo box
+            # Load MediaConch
             if current_config.tools.mediaconch.mediaconch_policy:
                 # Check if the policy exists in the dropdown, if so select it
                 index = self.mediaconch_policy_combo.findText(current_config.tools.mediaconch.mediaconch_policy)
@@ -389,19 +374,17 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
                     self.mediaconch_policy_combo.addItem(current_config.tools.mediaconch.mediaconch_policy)
                     self.mediaconch_policy_combo.setCurrentText(current_config.tools.mediaconch.mediaconch_policy)
             
-            self.mediaconch_run_combo.setCurrentText(current_config.tools.mediaconch.run_mediaconch)
+            self.mediaconch_run_check.setChecked(current_config.tools.mediaconch.run_mediaconch)
             
-            # Load QCTools
-            self.qctools_run_combo.setCurrentText(current_config.tools.qctools.run_tool)
+            # Load QCTools (now boolean)
+            self.qctools_run_check.setChecked(current_config.tools.qctools.run_tool)
             
-            # Load QCT Parse
+            # Load QCT Parse (now boolean for run_tool)
             qct_config = current_config.tools.qct_parse
-            self.qct_parse_run_combo.setCurrentText("yes" if qct_config.run_tool == "yes" else "no")
+            self.qct_parse_run_check.setChecked(qct_config.run_tool)
             self.bars_detection_check.setChecked(qct_config.barsDetection)
             self.evaluate_bars_check.setChecked(qct_config.evaluateBars)
             self.thumb_export_check.setChecked(qct_config.thumbExport)
-            if qct_config.tagname:
-                self.tagname_input.setText(qct_config.tagname)
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load current config: {str(e)}")
@@ -412,25 +395,25 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.name_input.setText(profile.name)
         self.description_input.setPlainText(profile.description)
         
-        # Load outputs
-        self.access_file_combo.setCurrentText(profile.outputs.access_file)
-        self.report_combo.setCurrentText(profile.outputs.report)
+        # Load outputs (now booleans)
+        self.access_file_check.setChecked(profile.outputs.access_file)
+        self.report_check.setChecked(profile.outputs.report)
         self.qctools_ext_input.setText(profile.outputs.qctools_ext)
         
-        # Load fixity
-        self.fixity_combos['check_fixity'].setCurrentText(profile.fixity.check_fixity)
-        self.fixity_combos['validate_stream_fixity'].setCurrentText(profile.fixity.validate_stream_fixity)
-        self.fixity_combos['embed_stream_fixity'].setCurrentText(profile.fixity.embed_stream_fixity)
-        self.fixity_combos['output_fixity'].setCurrentText(profile.fixity.output_fixity)
-        self.fixity_combos['overwrite_stream_fixity'].setCurrentText(profile.fixity.overwrite_stream_fixity)
+        # Load fixity (now booleans)
+        self.fixity_checks['check_fixity'].setChecked(profile.fixity.check_fixity)
+        self.fixity_checks['validate_stream_fixity'].setChecked(profile.fixity.validate_stream_fixity)
+        self.fixity_checks['embed_stream_fixity'].setChecked(profile.fixity.embed_stream_fixity)
+        self.fixity_checks['output_fixity'].setChecked(profile.fixity.output_fixity)
+        self.fixity_checks['overwrite_stream_fixity'].setChecked(profile.fixity.overwrite_stream_fixity)
         
-        # Load basic tools
-        for tool_name in self.basic_tool_combos:
+        # Load basic tools (now booleans)
+        for tool_name in self.basic_tool_checks:
             tool_config = getattr(profile.tools, tool_name)
-            self.basic_tool_combos[tool_name]['check_tool'].setCurrentText(tool_config.check_tool)
-            self.basic_tool_combos[tool_name]['run_tool'].setCurrentText(tool_config.run_tool)
+            self.basic_tool_checks[tool_name]['check_tool'].setChecked(tool_config.check_tool)
+            self.basic_tool_checks[tool_name]['run_tool'].setChecked(tool_config.run_tool)
         
-        # Load MediaConch - updated to use combo box
+        # Load MediaConch
         if profile.tools.mediaconch.mediaconch_policy:
             # Check if the policy exists in the dropdown, if so select it
             index = self.mediaconch_policy_combo.findText(profile.tools.mediaconch.mediaconch_policy)
@@ -441,19 +424,17 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
                 self.mediaconch_policy_combo.addItem(profile.tools.mediaconch.mediaconch_policy)
                 self.mediaconch_policy_combo.setCurrentText(profile.tools.mediaconch.mediaconch_policy)
         
-        self.mediaconch_run_combo.setCurrentText(profile.tools.mediaconch.run_mediaconch)
+        self.mediaconch_run_check.setChecked(profile.tools.mediaconch.run_mediaconch)
         
-        # Load QCTools
-        self.qctools_run_combo.setCurrentText(profile.tools.qctools.run_tool)
+        # Load QCTools (now boolean)
+        self.qctools_run_check.setChecked(profile.tools.qctools.run_tool)
         
-        # Load QCT Parse
+        # Load QCT Parse (now boolean for run_tool)
         qct_config = profile.tools.qct_parse
-        self.qct_parse_run_combo.setCurrentText("yes" if qct_config.run_tool == "yes" else "no")
+        self.qct_parse_run_check.setChecked(qct_config.run_tool)
         self.bars_detection_check.setChecked(qct_config.barsDetection)
         self.evaluate_bars_check.setChecked(qct_config.evaluateBars)
         self.thumb_export_check.setChecked(qct_config.thumbExport)
-        if qct_config.tagname:
-            self.tagname_input.setText(qct_config.tagname)
     
     def get_profile_from_form(self):
         """Create a ChecksProfile from the form data."""
@@ -463,53 +444,51 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             QMessageBox.warning(self, "Validation Error", "Profile name is required.")
             return None
         
-        # Create outputs config
+        # Create outputs config (now with booleans)
         outputs = OutputsConfig(
-            access_file=self.access_file_combo.currentText(),
-            report=self.report_combo.currentText(),
+            access_file=self.access_file_check.isChecked(),
+            report=self.report_check.isChecked(),
             qctools_ext=self.qctools_ext_input.text()
         )
         
-        # Create fixity config
+        # Create fixity config (now with booleans)
         fixity = FixityConfig(
-            check_fixity=self.fixity_combos['check_fixity'].currentText(),
-            validate_stream_fixity=self.fixity_combos['validate_stream_fixity'].currentText(),
-            embed_stream_fixity=self.fixity_combos['embed_stream_fixity'].currentText(),
-            output_fixity=self.fixity_combos['output_fixity'].currentText(),
-            overwrite_stream_fixity=self.fixity_combos['overwrite_stream_fixity'].currentText()
+            check_fixity=self.fixity_checks['check_fixity'].isChecked(),
+            validate_stream_fixity=self.fixity_checks['validate_stream_fixity'].isChecked(),
+            embed_stream_fixity=self.fixity_checks['embed_stream_fixity'].isChecked(),
+            output_fixity=self.fixity_checks['output_fixity'].isChecked(),
+            overwrite_stream_fixity=self.fixity_checks['overwrite_stream_fixity'].isChecked()
         )
         
-        # Create tools config
+        # Create tools config (now with booleans)
         tools = ToolsConfig(
             exiftool=BasicToolConfig(
-                check_tool=self.basic_tool_combos['exiftool']['check_tool'].currentText(),
-                run_tool=self.basic_tool_combos['exiftool']['run_tool'].currentText()
+                check_tool=self.basic_tool_checks['exiftool']['check_tool'].isChecked(),
+                run_tool=self.basic_tool_checks['exiftool']['run_tool'].isChecked()
             ),
             ffprobe=BasicToolConfig(
-                check_tool=self.basic_tool_combos['ffprobe']['check_tool'].currentText(),
-                run_tool=self.basic_tool_combos['ffprobe']['run_tool'].currentText()
+                check_tool=self.basic_tool_checks['ffprobe']['check_tool'].isChecked(),
+                run_tool=self.basic_tool_checks['ffprobe']['run_tool'].isChecked()
             ),
             mediaconch=MediaConchConfig(
                 mediaconch_policy=self.mediaconch_policy_combo.currentText(),
-                run_mediaconch=self.mediaconch_run_combo.currentText()
+                run_mediaconch=self.mediaconch_run_check.isChecked()
             ),
             mediainfo=BasicToolConfig(
-                check_tool=self.basic_tool_combos['mediainfo']['check_tool'].currentText(),
-                run_tool=self.basic_tool_combos['mediainfo']['run_tool'].currentText()
+                check_tool=self.basic_tool_checks['mediainfo']['check_tool'].isChecked(),
+                run_tool=self.basic_tool_checks['mediainfo']['run_tool'].isChecked()
             ),
             mediatrace=BasicToolConfig(
-                check_tool=self.basic_tool_combos['mediatrace']['check_tool'].currentText(),
-                run_tool=self.basic_tool_combos['mediatrace']['run_tool'].currentText()
+                check_tool=self.basic_tool_checks['mediatrace']['check_tool'].isChecked(),
+                run_tool=self.basic_tool_checks['mediatrace']['run_tool'].isChecked()
             ),
             qctools=QCToolsConfig(
-                run_tool=self.qctools_run_combo.currentText()
+                run_tool=self.qctools_run_check.isChecked()
             ),
             qct_parse=QCTParseToolConfig(
-                run_tool=self.qct_parse_run_combo.currentText(),
+                run_tool=self.qct_parse_run_check.isChecked(),
                 barsDetection=self.bars_detection_check.isChecked(),
                 evaluateBars=self.evaluate_bars_check.isChecked(),
-                contentFilter=[],  # Empty for now, could be extended
-                tagname=self.tagname_input.text() if self.tagname_input.text() else None,
                 thumbExport=self.thumb_export_check.isChecked()
             )
         )

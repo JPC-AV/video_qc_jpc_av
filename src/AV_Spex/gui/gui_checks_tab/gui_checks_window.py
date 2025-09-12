@@ -125,7 +125,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         self.validate_stream_cb = QCheckBox("Validate Stream fixity")
         self.validate_stream_cb.setStyleSheet("font-weight: bold;")
-        validate_stream_desc = QLabel("Validates any embedded stream fixity, will embedded steam fixity if none is found")
+        validate_stream_desc = QLabel("Validates any embedded stream fixity, will embedded stream fixity if none is found")
         validate_stream_desc.setIndent(20)
         
         # Add to layout
@@ -147,7 +147,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
     def setup_tools_section(self, main_layout):
         """Set up the tools section with palette-aware styling"""
         theme_manager = ThemeManager.instance()
-    
+
         # Main Tools group box with centered title
         self.tools_group = QGroupBox("Tools")
         theme_manager.style_groupbox(self.tools_group, "top center")
@@ -254,7 +254,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.mediaconch_group.setLayout(mediaconch_layout)
         tools_layout.addWidget(self.mediaconch_group)
 
-        # QCT Parse section
+        # QCT Parse section - SIMPLIFIED WITHOUT CONTENT DETECTION AND TAG NAME
         self.qct_group = QGroupBox("qct-parse")
         theme_manager.style_groupbox(self.qct_group, "top left")
         self.themed_group_boxes['qct'] = self.qct_group
@@ -282,24 +282,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
         thumb_export_desc.setIndent(20)
 
-        # Content Filter
-        content_filter_label = QLabel("Content Detection")
-        content_filter_label.setStyleSheet("font-weight: bold;")
-        content_filter_desc = QLabel("Select type of content to detect in the video")
-        self.content_filter_combo = QComboBox()
-        self.content_filter_combo.addItem("Select options...", None)  # Store None as data
-
-        # Create a mapping of display text to actual values
-        content_filter_options = {
-            "All Black Detection": "allBlack",
-            "Static Content Detection": "static"
-        }
-
-        # Add items with display text and corresponding data value
-        for display_text, value in content_filter_options.items():
-            self.content_filter_combo.addItem(display_text, value)
-
-        # Add all widgets to the qct layout
+        # Add all widgets to the qct layout 
         qct_layout.addWidget(self.run_qctparse_cb)
         qct_layout.addWidget(run_qctparse_desc)
         qct_layout.addWidget(self.bars_detection_cb)
@@ -308,22 +291,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
         qct_layout.addWidget(evaluate_bars_desc)
         qct_layout.addWidget(self.thumb_export_cb)
         qct_layout.addWidget(thumb_export_desc)
-        qct_layout.addWidget(content_filter_label)
-        qct_layout.addWidget(content_filter_desc)
-        qct_layout.addWidget(self.content_filter_combo)
 
         self.qct_group.setLayout(qct_layout)
         tools_layout.addWidget(self.qct_group)
-        
-        # Tagname
-        tagname_label = QLabel("Tag Name")
-        tagname_label.setStyleSheet("font-weight: bold;")
-        tagname_desc = QLabel("Input ad hoc tags using this format: YMIN, lt, 100 (tag name, lt or gt, number value)")
-        self.tagname_input = QLineEdit()
-        self.tagname_input.setPlaceholderText("None")
-        qct_layout.addWidget(tagname_label)
-        qct_layout.addWidget(tagname_desc)
-        qct_layout.addWidget(self.tagname_input)
         
         self.tools_group.setLayout(tools_layout)
         main_layout.addWidget(self.tools_group)
@@ -415,12 +385,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.thumb_export_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'thumbExport'])
         )
-        self.content_filter_combo.currentIndexChanged.connect(
-            lambda index: self.on_qct_combo_changed(self.content_filter_combo.itemData(index), 'contentFilter')
-        )
-        self.tagname_input.textChanged.connect(
-            lambda text: self.on_tagname_changed(text)
-        )
 
     def load_config_values(self):
         """Load current config values into UI elements"""
@@ -429,30 +393,30 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
         checks_config = config_mgr.get_config('checks', ChecksConfig)
 
-        # Outputs
-        self.access_file_cb.setChecked(checks_config.outputs.access_file.lower() == 'yes')
-        self.report_cb.setChecked(checks_config.outputs.report.lower() == 'yes')
+        # Outputs - now using booleans directly
+        self.access_file_cb.setChecked(checks_config.outputs.access_file)
+        self.report_cb.setChecked(checks_config.outputs.report)
         self.qctools_ext_input.setText(checks_config.outputs.qctools_ext)
         
-        # Fixity
-        self.check_fixity_cb.setChecked(checks_config.fixity.check_fixity.lower() == 'yes')
-        self.validate_stream_cb.setChecked(checks_config.fixity.validate_stream_fixity.lower() == 'yes')
-        self.embed_stream_cb.setChecked(checks_config.fixity.embed_stream_fixity.lower() == 'yes')
-        self.output_fixity_cb.setChecked(checks_config.fixity.output_fixity.lower() == 'yes')
-        self.overwrite_stream_cb.setChecked(checks_config.fixity.overwrite_stream_fixity.lower() == 'yes')
+        # Fixity - now using booleans directly
+        self.check_fixity_cb.setChecked(checks_config.fixity.check_fixity)
+        self.validate_stream_cb.setChecked(checks_config.fixity.validate_stream_fixity)
+        self.embed_stream_cb.setChecked(checks_config.fixity.embed_stream_fixity)
+        self.output_fixity_cb.setChecked(checks_config.fixity.output_fixity)
+        self.overwrite_stream_cb.setChecked(checks_config.fixity.overwrite_stream_fixity)
         
-        # Tools
+        # Tools - now using booleans directly
         for tool, widgets in self.tool_widgets.items():
             tool_config = getattr(checks_config.tools, tool)
             if tool == 'qctools':
-                widgets['run'].setChecked(tool_config.run_tool.lower() == 'yes')
+                widgets['run'].setChecked(tool_config.run_tool)
             else:
-                widgets['check'].setChecked(tool_config.check_tool.lower() == 'yes')
-                widgets['run'].setChecked(tool_config.run_tool.lower() == 'yes')
+                widgets['check'].setChecked(tool_config.check_tool)
+                widgets['run'].setChecked(tool_config.run_tool)
         
-        # MediaConch
+        # MediaConch - now using boolean directly
         mediaconch = checks_config.tools.mediaconch
-        self.run_mediaconch_cb.setChecked(mediaconch.run_mediaconch.lower() == 'yes')
+        self.run_mediaconch_cb.setChecked(mediaconch.run_mediaconch)
         
         # Update current policy display
         self.update_current_policy_display(mediaconch.mediaconch_policy)
@@ -468,28 +432,25 @@ class ChecksWindow(QWidget, ThemeableMixin):
             self.policy_combo.setCurrentText(mediaconch.mediaconch_policy)
         self.policy_combo.blockSignals(False)
         
-        # QCT Parse
+        # QCT Parse - now using boolean directly for run_tool
         qct = checks_config.tools.qct_parse
-        self.run_qctparse_cb.setChecked(qct.run_tool.lower() == 'yes')
+        self.run_qctparse_cb.setChecked(qct.run_tool)
+        # These are already booleans in the original config
         self.bars_detection_cb.setChecked(qct.barsDetection)
         self.evaluate_bars_cb.setChecked(qct.evaluateBars)
         self.thumb_export_cb.setChecked(qct.thumbExport)
         
-        if qct.contentFilter:
-            self.content_filter_combo.setCurrentText(qct.contentFilter[0])
-        if qct.tagname is not None:
-            self.tagname_input.setText(qct.tagname)
-
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
 
     def on_checkbox_changed(self, state, path):
-        """Handle changes in yes/no checkboxes"""
+        """Handle changes in boolean checkboxes (now saves booleans instead of yes/no)"""
         # Skip updates while loading
         if self.is_loading:
             return
 
-        new_value = 'yes' if Qt.CheckState(state) == Qt.CheckState.Checked else 'no'
+        # Now using boolean values instead of 'yes'/'no'
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
         
         if path[0] == "tools" and len(path) > 2:
             tool_name = path[1]
@@ -503,7 +464,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         config_mgr.update_config('checks', updates)
 
     def on_boolean_changed(self, state, path):
-        """Handle changes in boolean checkboxes"""
+        """Handle changes in boolean checkboxes (for qct_parse fields that were already boolean)"""
         # Skip updates while loading
         if self.is_loading:
             return
@@ -529,8 +490,8 @@ class ChecksWindow(QWidget, ThemeableMixin):
         if self.is_loading:
             return
         
-        # Handle the normal config update for overwrite stream fixity
-        new_value = 'yes' if Qt.CheckState(state) == Qt.CheckState.Checked else 'no'
+        # Handle the normal config update for overwrite stream fixity (now using boolean)
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
         updates = {'fixity': {'overwrite_stream_fixity': new_value}}
         config_mgr.update_config('checks', updates)
         
@@ -541,8 +502,8 @@ class ChecksWindow(QWidget, ThemeableMixin):
             self.embed_stream_cb.setChecked(True)
             self.embed_stream_cb.blockSignals(False)
             
-            # Update the config for embed stream fixity as well
-            embed_updates = {'fixity': {'embed_stream_fixity': 'yes'}}
+            # Update the config for embed stream fixity as well (now using boolean)
+            embed_updates = {'fixity': {'embed_stream_fixity': True}}
             config_mgr.update_config('checks', embed_updates)
 
     def on_qct_combo_changed(self, value, field):

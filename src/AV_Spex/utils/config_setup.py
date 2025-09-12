@@ -234,44 +234,42 @@ class SpexConfig:
     qct_parse_values: QCTParseValues
     signalflow_profiles: Dict[str, Dict] = field(default_factory=dict)
 
-# Output configuration
+# Output configuration - Now using booleans
 @dataclass
 class OutputsConfig:
-    access_file: str
-    report: str
-    qctools_ext: str
+    access_file: bool
+    report: bool
+    qctools_ext: str  # This stays as string since it's a file extension
 
-# Fixity configuration
+# Fixity configuration - Now using booleans
 @dataclass
 class FixityConfig:
-    check_fixity: str
-    validate_stream_fixity: str
-    embed_stream_fixity: str
-    output_fixity: str
-    overwrite_stream_fixity: str
+    check_fixity: bool
+    validate_stream_fixity: bool
+    embed_stream_fixity: bool
+    output_fixity: bool
+    overwrite_stream_fixity: bool
 
-# Tool-specific configurations
+# Tool-specific configurations - Now using booleans
 @dataclass
 class BasicToolConfig:
-    check_tool: str
-    run_tool: str
+    check_tool: bool
+    run_tool: bool
 
 @dataclass
 class QCToolsConfig:
-    run_tool: str
+    run_tool: bool
 
 @dataclass
 class MediaConchConfig:
-    mediaconch_policy: str
-    run_mediaconch: str
+    mediaconch_policy: str  # This stays as string since it's a filename
+    run_mediaconch: bool
 
 @dataclass
 class QCTParseToolConfig:
-    run_tool: str
+    run_tool: bool
     barsDetection: bool
     evaluateBars: bool
-    contentFilter: List[str]
-    tagname: Optional[str]
     thumbExport: bool
 
 @dataclass
@@ -320,26 +318,26 @@ class ChecksProfile:
     name: str
     description: str = ""
     outputs: OutputsConfig = field(default_factory=lambda: OutputsConfig(
-        access_file="no",
-        report="no", 
+        access_file=False,
+        report=False, 
         qctools_ext="qctools.xml.gz"
     ))
     fixity: FixityConfig = field(default_factory=lambda: FixityConfig(
-        check_fixity="no",
-        validate_stream_fixity="no",
-        embed_stream_fixity="no", 
-        output_fixity="no",
-        overwrite_stream_fixity="no"
+        check_fixity=False,
+        validate_stream_fixity=False,
+        embed_stream_fixity=False, 
+        output_fixity=False,
+        overwrite_stream_fixity=False
     ))
     tools: ToolsConfig = field(default_factory=lambda: ToolsConfig(
-        exiftool=BasicToolConfig(check_tool="no", run_tool="no"),
-        ffprobe=BasicToolConfig(check_tool="no", run_tool="no"),
-        mediaconch=MediaConchConfig(mediaconch_policy="", run_mediaconch="no"),
-        mediainfo=BasicToolConfig(check_tool="no", run_tool="no"),
-        mediatrace=BasicToolConfig(check_tool="no", run_tool="no"),
-        qctools=QCToolsConfig(run_tool="no"),
+        exiftool=BasicToolConfig(check_tool=False, run_tool=False),
+        ffprobe=BasicToolConfig(check_tool=False, run_tool=False),
+        mediaconch=MediaConchConfig(mediaconch_policy="", run_mediaconch=False),
+        mediainfo=BasicToolConfig(check_tool=False, run_tool=False),
+        mediatrace=BasicToolConfig(check_tool=False, run_tool=False),
+        qctools=QCToolsConfig(run_tool=False),
         qct_parse=QCTParseToolConfig(
-            run_tool="no",
+            run_tool=False,
             barsDetection=False,
             evaluateBars=False,
             contentFilter=[],

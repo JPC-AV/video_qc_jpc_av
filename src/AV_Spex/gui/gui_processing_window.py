@@ -173,40 +173,40 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
                 self.update_status("Warning: Could not load checks configuration")
                 return
 
-            # Fixity Steps
-            if checks_config.fixity.validate_stream_fixity == "yes":
+            # Fixity Steps - now using boolean checks
+            if checks_config.fixity.validate_stream_fixity:
                 self._add_step_item("Validate Stream Fixity")
-            if checks_config.fixity.check_fixity == "yes":
+            if checks_config.fixity.check_fixity:
                 self._add_step_item("Validate Fixity")
-            if checks_config.fixity.embed_stream_fixity == "yes":
+            if checks_config.fixity.embed_stream_fixity:
                 self._add_step_item("Embed Stream Fixity")
-            if checks_config.fixity.output_fixity == "yes":
+            if checks_config.fixity.output_fixity:
                 self._add_step_item("Output Fixity")
             
-            # MediaConch
-            if checks_config.tools.mediaconch.run_mediaconch == "yes":
+            # MediaConch - now using boolean check
+            if checks_config.tools.mediaconch.run_mediaconch:
                 self._add_step_item("MediaConch Validation")
             
-            # Metadata tools - note consistent naming
-            if checks_config.tools.exiftool.run_tool == "yes" or checks_config.tools.exiftool.check_tool == "yes":
+            # Metadata tools - note consistent naming - now using boolean checks
+            if checks_config.tools.exiftool.run_tool or checks_config.tools.exiftool.check_tool:
                 self._add_step_item("Exiftool")
-            if checks_config.tools.ffprobe.run_tool == "yes" or checks_config.tools.ffprobe.check_tool == "yes":
+            if checks_config.tools.ffprobe.run_tool or checks_config.tools.ffprobe.check_tool:
                 self._add_step_item("FFprobe")
-            if checks_config.tools.mediainfo.run_tool == "yes" or checks_config.tools.mediainfo.check_tool == "yes":
+            if checks_config.tools.mediainfo.run_tool or checks_config.tools.mediainfo.check_tool:
                 self._add_step_item("Mediainfo")
-            if checks_config.tools.mediatrace.run_tool == "yes" or checks_config.tools.mediatrace.check_tool == "yes":
+            if checks_config.tools.mediatrace.run_tool or checks_config.tools.mediatrace.check_tool:
                 self._add_step_item("Mediatrace")
             
-            # Output tools
-            if checks_config.tools.qctools.run_tool == "yes":
+            # Output tools - now using boolean checks
+            if checks_config.tools.qctools.run_tool:
                 self._add_step_item("QCTools")
-            if checks_config.tools.qct_parse.run_tool == "yes":
+            if checks_config.tools.qct_parse.run_tool:
                 self._add_step_item("QCT Parse")
             
-            # Output files
-            if checks_config.outputs.access_file == "yes":
+            # Output files - now using boolean checks
+            if checks_config.outputs.access_file:
                 self._add_step_item("Generate Access File")
-            if checks_config.outputs.report == "yes":
+            if checks_config.outputs.report:
                 self._add_step_item("Generate Report")
             
             # Final steps

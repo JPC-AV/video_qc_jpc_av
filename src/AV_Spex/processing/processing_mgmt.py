@@ -47,7 +47,7 @@ class ProcessingManager:
             return None
         
         # Embed stream fixity if required  
-        if self.checks_config.fixity.embed_stream_fixity == 'yes':
+        if self.checks_config.fixity.embed_stream_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Embedding fixity...")
             if self.check_cancelled():
@@ -60,10 +60,10 @@ class ProcessingManager:
                 self.signals.step_completed.emit("Embed Stream Fixity")
 
         # Validate stream hashes if required
-        if self.checks_config.fixity.validate_stream_fixity == 'yes':
+        if self.checks_config.fixity.validate_stream_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Validating embedded fixity...")
-            if self.checks_config.fixity.embed_stream_fixity == 'yes':
+            if self.checks_config.fixity.embed_stream_fixity:
                 logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
             else:
                 validate_embedded_md5(video_path, check_cancelled=self.check_cancelled, signals=self.signals)
@@ -75,7 +75,7 @@ class ProcessingManager:
         md5_checksum = None
 
         # Create checksum for video file and output results
-        if self.checks_config.fixity.output_fixity == 'yes':
+        if self.checks_config.fixity.output_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Outputting fixity...")
             md5_checksum = output_fixity(source_directory, video_path, check_cancelled=self.check_cancelled, signals=self.signals)
@@ -83,7 +83,7 @@ class ProcessingManager:
                 self.signals.step_completed.emit("Output Fixity")
 
         # Verify stored checksum and write results  
-        if self.checks_config.fixity.check_fixity == 'yes':
+        if self.checks_config.fixity.check_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Validating fixity...")
             check_fixity(source_directory, video_id, actual_checksum=md5_checksum, check_cancelled=self.check_cancelled, signals=self.signals)
@@ -220,7 +220,7 @@ class ProcessingManager:
        
         # Create report directory if report is enabled
         report_directory = None
-        if self.checks_config.outputs.report == 'yes':
+        if self.checks_config.outputs.report:
             report_directory = dir_setup.make_report_dir(source_directory, video_id)
             # Process metadata differences report
             processing_results['metadata_diff_report'] = create_metadata_difference_report(
@@ -343,7 +343,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         results['qctools_output_path'] = existing_qctools_path
     
     # Handle QCTools generation (only if configured and no existing report)
-    if qct_run_tool == 'yes':
+    if qct_run_tool:
         if existing_qctools_path:
             # Mark step as completed since we found an existing report
             if signals:
@@ -368,7 +368,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                 signals.step_completed.emit("QCTools")
 
     # Handle QCTools parsing (independent of whether QCTools was run)
-    if qct_parse_run_tool == 'yes':
+    if qct_parse_run_tool:
         # Ensure we have a QCTools report to parse
         if not results['qctools_output_path'] or not os.path.isfile(results['qctools_output_path']):
             logger.critical(f"Unable to check qctools report. No file found at: {results['qctools_output_path']}")
@@ -511,7 +511,7 @@ def check_tool_metadata(tool_name, output_path):
 
     # Check if tool metadata checking is enabled
     tool = getattr(checks_config.tools, tool_name)
-    if output_path and tool.check_tool == 'yes':
+    if output_path and tool.check_tool:
         parse_function = parse_functions.get(tool_name)
         if parse_function:
             return parse_function(output_path)

@@ -1,42 +1,42 @@
 {
   "outputs": {
-    "access_file": "no",
-    "report": "no",
+    "access_file": false,
+    "report": false,
     "qctools_ext": "qctools.xml.gz"
   },
   "fixity": {
-    "check_fixity": "no",
-    "validate_stream_fixity": "no",
-    "embed_stream_fixity": "yes",
-    "output_fixity": "yes",
-    "overwrite_stream_fixity": "no"
+    "check_fixity": false,
+    "validate_stream_fixity": false,
+    "embed_stream_fixity": true,
+    "output_fixity": true,
+    "overwrite_stream_fixity": false
   },
   "tools": {
     "exiftool": {
-      "check_tool": "yes",
-      "run_tool": "yes"
+      "check_tool": true,
+      "run_tool": true
     },
     "ffprobe": {
-      "check_tool": "yes",
-      "run_tool": "yes"
+      "check_tool": true,
+      "run_tool": true
     },
     "mediaconch": {
       "mediaconch_policy": "JPC_AV_NTSC_MKV_2025_03_26.xml",
-      "run_mediaconch": "yes"
+      "run_mediaconch": true
     },
     "mediainfo": {
-      "check_tool": "yes",
-      "run_tool": "yes"
+      "check_tool": true,
+      "run_tool": true
     },
     "mediatrace": {
-      "check_tool": "yes",
-      "run_tool": "yes"
+      "check_tool": true,
+      "run_tool": true
     },
     "qctools": {
-      "run_tool": "no"
+      "run_tool": false
     },
     "qct_parse": {
-      "run_tool": "no",
+      "run_tool": false,
       "barsDetection": true,
       "evaluateBars": true,
       "contentFilter": [],

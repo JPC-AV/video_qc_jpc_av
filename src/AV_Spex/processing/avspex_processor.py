@@ -126,16 +126,16 @@ class AVSpexProcessor:
         if self.check_cancelled():
             return False
 
-        # Check if fixity is enabled in config
-        fixity_enabled = False
+        # Check if fixity is enabled in config (now using booleans)
         fixity_config = self.checks_config.fixity
-
-        # Check each relevant attribute directly
-        if (fixity_config.check_fixity == "yes" or 
-            fixity_config.validate_stream_fixity == "yes" or 
-            fixity_config.embed_stream_fixity == "yes" or 
-            fixity_config.output_fixity == "yes"):
-            fixity_enabled = True
+        
+        # Check each relevant attribute directly with boolean logic
+        fixity_enabled = (
+            fixity_config.check_fixity or 
+            fixity_config.validate_stream_fixity or 
+            fixity_config.embed_stream_fixity or 
+            fixity_config.output_fixity
+        )
             
         if fixity_enabled:
             if self.signals:
@@ -148,9 +148,8 @@ class AVSpexProcessor:
         if self.check_cancelled():
             return False
 
-        # Check if mediaconch is enabled
-        mediaconch_enabled = self.checks_config.tools.mediaconch.run_mediaconch == "yes"
-        if mediaconch_enabled:
+        # Check if mediaconch is enabled (now using boolean)
+        if self.checks_config.tools.mediaconch.run_mediaconch:
             if self.signals:
                 self.signals.tool_started.emit("MediaConch")
                 
@@ -165,19 +164,18 @@ class AVSpexProcessor:
         if self.check_cancelled():
             return False
 
-         # Process metadata tools (mediainfo, ffprobe, exiftool, etc.)
-        metadata_tools_enabled = False
+        # Process metadata tools (mediainfo, ffprobe, exiftool, etc.)
         tools_config = self.checks_config.tools
-
-        # Check if any metadata tools are enabled
+        
+        # Check if any metadata tools are enabled (now using booleans)
         tools_to_check = ['mediainfo', 'mediatrace', 'exiftool', 'ffprobe']
         metadata_tools_enabled = False
 
         for tool_name in tools_to_check:
             tool = getattr(tools_config, tool_name, None)
-            if tool and (getattr(tool, 'check_tool', 'no') == 'yes' or 
-                        getattr(tool, 'run_tool', 'no') == 'yes'):
+            if tool and (tool.check_tool or tool.run_tool):
                 metadata_tools_enabled = True
+                break
                     
         # Initialize metadata_differences
         # Needed for process_video_outputs, if not created in process_video_metadata
@@ -203,7 +201,7 @@ class AVSpexProcessor:
                 
                 for tool_name, display_name in tools_to_signal:
                     tool = getattr(tools_config, tool_name)
-                    if tool.check_tool == "yes" or tool.run_tool == "yes":
+                    if tool.check_tool or tool.run_tool:
                         self.signals.step_completed.emit(display_name)
 
             if self.signals:
@@ -213,11 +211,12 @@ class AVSpexProcessor:
             return False
 
         # Process output tools (QCTools, report generation, etc.)
+        # Now using boolean checks
         outputs_enabled = (
-            self.checks_config.outputs.access_file == "yes" or
-            self.checks_config.outputs.report == "yes" or
-            self.checks_config.tools.qctools.run_tool == "yes" or
-            self.checks_config.tools.qct_parse.run_tool == "yes"
+            self.checks_config.outputs.access_file or
+            self.checks_config.outputs.report or
+            self.checks_config.tools.qctools.run_tool or
+            self.checks_config.tools.qct_parse.run_tool
         )
         
         if outputs_enabled:
