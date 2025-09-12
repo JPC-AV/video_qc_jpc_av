@@ -223,8 +223,11 @@ jobs:
         echo "Testing bottle installation..."
         brew uninstall JPC-AV/AV-Spex/av-spex
         
-        # Install from the bottle file using the full path
-        brew install --force-bottle ./${{ steps.build.outputs.bottle_file }}
+        # Copy the bottle to Homebrew's cache directory
+        cp ${{ steps.build.outputs.bottle_file }} $(brew --cache)/
+        
+        # Now install the formula - it will use the cached bottle
+        HOMEBREW_NO_AUTO_UPDATE=1 brew install JPC-AV/AV-Spex/av-spex
         
         echo "Testing av-spex commands..."
         av-spex --version
