@@ -39,9 +39,6 @@
       "run_tool": false,
       "barsDetection": true,
       "evaluateBars": true,
-      "contentFilter": [],
-      "profile": [],
-      "tagname": null,
       "thumbExport": true
     }
   }
