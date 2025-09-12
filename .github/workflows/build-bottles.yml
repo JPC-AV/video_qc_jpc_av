@@ -222,7 +222,9 @@ jobs:
       run: |
         echo "Testing bottle installation..."
         brew uninstall JPC-AV/AV-Spex/av-spex
-        brew install ${{ steps.build.outputs.bottle_file }}
+        
+        # Install from the bottle file using the full path
+        brew install --force-bottle ./${{ steps.build.outputs.bottle_file }}
         
         echo "Testing av-spex commands..."
         av-spex --version
