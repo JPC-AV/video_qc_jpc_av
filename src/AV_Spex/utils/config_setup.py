@@ -220,7 +220,6 @@ class SmpteColorBars:
 
 @dataclass
 class QCTParseValues:
-    content: Content
     fullTagList: FullTagList
     smpte_color_bars: SmpteColorBars
 
@@ -340,8 +339,6 @@ class ChecksProfile:
             run_tool=False,
             barsDetection=False,
             evaluateBars=False,
-            contentFilter=[],
-            tagname=None,
             thumbExport=False
         )
     ))
