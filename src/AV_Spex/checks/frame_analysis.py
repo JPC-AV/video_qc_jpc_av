@@ -112,6 +112,12 @@ class QCToolsParser:
         violations = []
         chunk_size = 1000
         color_bars_end_frame = 0
+
+        # Counters
+        total_frames_checked = 0
+        frames_with_violations = 0
+        max_brng_low = 0
+        max_brng_high = 0
         
         try:
             if self.report_path.endswith('.gz'):
@@ -128,6 +134,7 @@ class QCToolsParser:
             for event, elem in parser:
                 if event == 'end' and elem.tag == 'frame':
                     frame_num = int(elem.get('n', 0))
+                    total_frames_checked += 1
                     
                     # Skip color bars if requested
                     if skip_color_bars and frame_num < color_bars_end_frame:
@@ -138,6 +145,9 @@ class QCToolsParser:
                     # Extract frame data
                     frame_data = self._extract_frame_violations(elem, frame_num)
                     if frame_data:
+                        frames_with_violations += 1
+                        max_brng_low = max(max_brng_low, frame_data.brng_low)
+                        max_brng_high = max(max_brng_high, frame_data.brng_high)
                         frame_buffer.append(frame_data)
                     
                     elem.clear()
@@ -158,6 +168,12 @@ class QCToolsParser:
                 violations.extend(self._process_violation_buffer(frame_buffer))
             
             file_handle.close()
+            
+            # Log summary after parsing
+            logger.info(f"  Checked {total_frames_checked:,} frames from QCTools report")
+            logger.info(f"  Found {frames_with_violations:,} frames with BRNG violations ({frames_with_violations/total_frames_checked*100:.1f}%)")
+            if frames_with_violations > 0:
+                logger.info(f"  Max BRNG values - Low: {max_brng_low:.4f}%, High: {max_brng_high:.4f}%")
             
         except Exception as e:
             logger.error(f"Error parsing QCTools report: {e}")
@@ -280,6 +296,11 @@ class SophisticatedBorderDetector:
         active_y = borders['top']
         active_width = self.width - borders['left'] - borders['right']
         active_height = self.height - borders['top'] - borders['bottom']
+
+        # Log the detection results
+        logger.info(f"  Detected borders - L:{borders['left']}px R:{borders['right']}px T:{borders['top']}px B:{borders['bottom']}px")
+        logger.info(f"  Active picture area: {active_width}x{active_height} (from {self.width}x{self.height})")
+        logger.info(f"  Using {len(quality_frames)} quality frames for detection")
         
         # Add padding for safety
         padding = 5
@@ -586,6 +607,10 @@ class DifferentialBRNGAnalyzer:
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True)
+
+        # Add logging
+        logger.info(f"  Creating temporary comparison videos (duration: {duration_limit}s)")
+        logger.info(f"  Output directory: {output_dir}")
         
         # Create temporary directory for processing
         temp_dir = output_dir / "temp_brng"
@@ -604,6 +629,8 @@ class DifferentialBRNGAnalyzer:
         violations = self._analyze_differential_violations(
             highlighted_path, original_path, skip_start_seconds
         )
+
+        logger.info(f"  Analyzed {len(violations)} frames with potential violations")
         
         # Analyze patterns and generate report
         aggregate_patterns = self._analyze_aggregate_patterns(violations)
@@ -614,9 +641,9 @@ class DifferentialBRNGAnalyzer:
         if violations and len(violations) > 0:
             thumb_dir = output_dir / "brng_thumbnails"
             thumb_dir.mkdir(exist_ok=True)
-            thumbnails = self._create_diagnostic_thumbnails(
-                violations[:5], highlighted_path, original_path, thumb_dir
-            )
+            logger.info(f"  Creating diagnostic thumbnails for top {min(5, len(violations))} violations")
+            thumbnails = self._create_diagnostic_thumbnails(violations[:5], highlighted_path, original_path, thumb_dir)
+            logger.info(f"  Saved {len(thumbnails)} thumbnails to {thumb_dir}")
         
         # Clean up temp files
         try:
@@ -1339,7 +1366,12 @@ class EnhancedFrameAnalysis:
                 skip_color_bars=skip_color_bars
             )
             frames_with_qctools_violations = len(violations)
-            results['qctools_violations_found'] = frames_with_qctools_violations
+            
+            # Fix the confusing "0 violations" issue
+            if frames_with_qctools_violations == 0:
+                results['qctools_violations_found'] = "No BRNG violations detected"
+            else:
+                results['qctools_violations_found'] = frames_with_qctools_violations
             
             # Detect color bars duration if needed
             if skip_color_bars:
@@ -1370,25 +1402,34 @@ class EnhancedFrameAnalysis:
         # Step 4: Iterative border refinement (if needed and using sophisticated method)
         refinement_iterations = 0
         if method == 'sophisticated' and brng_results and brng_results.requires_border_adjustment:
-            logger.info("Starting iterative border refinement...")
-            logger.info("  Edge artifacts indicate borders may have missed blanking areas")
+            logger.info("Border refinement needed - detected BRNG violations at frame edges")
+            logger.info("  This suggests the initial border detection may have missed blanking/inactive areas")
+            
+            edge_pct = brng_results.aggregate_patterns.get('edge_violation_percentage', 0)
+            continuous_pct = brng_results.aggregate_patterns.get('continuous_edge_percentage', 0)
+            logger.info(f"  Edge violations: {edge_pct:.1f}% of analyzed frames")
+            logger.info(f"  Continuous edge patterns: {continuous_pct:.1f}% of analyzed frames")
             
             while (refinement_iterations < max_refinement_iterations and 
                    brng_results.requires_border_adjustment):
                 
                 refinement_iterations += 1
-                logger.info(f"Refinement iteration {refinement_iterations}...")
-                
+                logger.info(f"Refinement iteration {refinement_iterations}/{max_refinement_iterations}:")
+
                 # Log what we're adjusting
                 if brng_results.refinement_recommendations:
+                    adjustments = []
                     for edge, pixels in brng_results.refinement_recommendations.items():
-                        logger.info(f"  Expanding {edge} border by {pixels}px")
-                
-                # Refine borders
+                        adjustments.append(f"{edge}:{pixels}px")
+                    logger.info(f"  Expanding borders: {', '.join(adjustments)}")
+
+                # After refinement
                 previous_area = border_results.active_area
-                border_results = self.border_detector.refine_borders(
-                    border_results, brng_results
-                )
+                border_results = self.border_detector.refine_borders(border_results, brng_results)
+                new_area = border_results.active_area
+
+                logger.info(f"  Active area: {previous_area[2]}x{previous_area[3]} → {new_area[2]}x{new_area[3]}")
+                logger.info(f"  Border change: {abs(new_area[2]-previous_area[2])}x{abs(new_area[3]-previous_area[3])} pixels")
                 
                 # Log the change
                 new_area = border_results.active_area
@@ -1407,13 +1448,21 @@ class EnhancedFrameAnalysis:
                 # Check for improvement
                 improved = self._is_meaningful_improvement(previous_brng, brng_results)
                 if not improved:
-                    if len(previous_brng.violations) > 0 and len(brng_results.violations) > 0:
+                    prev_violations = len(previous_brng.violations)
+                    curr_violations = len(brng_results.violations)
+                    
+                    if prev_violations > 0 and curr_violations > 0:
                         prev_worst = previous_brng.violations[0].violation_percentage
                         curr_worst = brng_results.violations[0].violation_percentage
-                        logger.info(f"  No meaningful improvement (worst violation: {prev_worst:.4f}% → {curr_worst:.4f}%)")
+                        
+                        logger.info(f"  Refinement complete - minimal improvement detected")
+                        logger.info(f"    Violations: {prev_violations} → {curr_violations} frames")
+                        logger.info(f"    Worst violation: {prev_worst:.4f}% → {curr_worst:.4f}%")
+                        logger.info(f"    (Need 20% reduction for meaningful improvement)")
                     else:
-                        logger.info(f"  No meaningful improvement in violations")
-                    logger.info("  Stopping refinement - further adjustments unlikely to help")
+                        logger.info(f"  Refinement complete - violations remain in content area, not edges")
+                    
+                    logger.info("  Stopping refinement - further border adjustments unlikely to help")
                     break
                 else:
                     logger.info(f"  Refinement improved results, continuing...")
@@ -1479,9 +1528,11 @@ class EnhancedFrameAnalysis:
         if results['qctools_report_available']:
             lines.append(f"✓ QCTools report found")
             if 'qctools_violations_found' in results:
-                lines.append(f"  Violations detected: {results['qctools_violations_found']}")
-        else:
-            lines.append("✗ No QCTools report (using direct analysis)")
+                violations = results['qctools_violations_found']
+                if isinstance(violations, str):
+                    lines.append(f"  {violations}")
+                else:
+                    lines.append(f"  Frames with BRNG violations: {violations}")
         
         # Border detection
         if 'initial_borders' in results:
