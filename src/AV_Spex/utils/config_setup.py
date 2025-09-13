@@ -220,7 +220,6 @@ class SmpteColorBars:
 
 @dataclass
 class QCTParseValues:
-    content: Content
     fullTagList: FullTagList
     smpte_color_bars: SmpteColorBars
 
