@@ -1477,6 +1477,12 @@ class EnhancedFrameAnalysis:
         violations = []
         frames_with_qctools_violations = 0
         color_bars_end_time = 0
+
+        # Use config dataclass directly
+        if frame_config is None:
+            # Use defaults if no config provided
+            from AV_Spex.utils.config_setup import FrameAnalysisConfig
+            frame_config = FrameAnalysisConfig()
         
         if self.qctools_parser:
             logger.info("Parsing QCTools report for violations...")
@@ -1598,8 +1604,8 @@ class EnhancedFrameAnalysis:
             border_data=border_results,
             content_start_time=0,
             color_bars_end_time=color_bars_end_time,
-            analysis_duration=60,
-            num_periods=3
+            analysis_duration=frame_config.signalstats_duration,
+            num_periods=frame_config.signalstats_periods
         )
         results['signalstats'] = asdict(signalstats_results)
         

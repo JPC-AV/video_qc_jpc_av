@@ -183,46 +183,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         sophisticated_params_layout = QVBoxLayout(self.sophisticated_params_widget)
         sophisticated_params_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Frame Selection Parameters Group
-        frame_selection_group = QGroupBox("Select Representative Frames")
-        theme_manager.style_groupbox(frame_selection_group, "top center")
-        self.themed_group_boxes['frame_selection'] = frame_selection_group
-        
-        frame_selection_layout = QVBoxLayout()
-        
-        # Median Search Time
-        median_time_layout = QHBoxLayout()
-        median_time_label = QLabel("Median Search Time (s):")
-        median_time_label.setStyleSheet("font-weight: bold;")
-        self.soph_viz_time_input = QLineEdit("150")
-        self.soph_viz_time_input.setMaximumWidth(60)
-        median_time_layout.addWidget(median_time_label)
-        median_time_layout.addWidget(self.soph_viz_time_input)
-        median_time_layout.addStretch()
-        
-        median_time_desc = QLabel("Time to find representative frame for border detection")
-        median_time_desc.setIndent(20)
-        
-        # Search Window
-        search_window_layout = QHBoxLayout()
-        search_window_label = QLabel("Search Window (s):")
-        search_window_label.setStyleSheet("font-weight: bold;")
-        self.soph_search_window_input = QLineEdit("120")
-        self.soph_search_window_input.setMaximumWidth(60)
-        search_window_layout.addWidget(search_window_label)
-        search_window_layout.addWidget(self.soph_search_window_input)
-        search_window_layout.addStretch()
-        
-        search_window_desc = QLabel("Window size for frame quality analysis")
-        search_window_desc.setIndent(20)
-        
-        frame_selection_layout.addLayout(median_time_layout)
-        frame_selection_layout.addWidget(median_time_desc)
-        frame_selection_layout.addLayout(search_window_layout)
-        frame_selection_layout.addWidget(search_window_desc)
-        
-        frame_selection_group.setLayout(frame_selection_layout)
-        
         # Detection Parameters Group
         detection_params_group = QGroupBox("Detection Parameters")
         theme_manager.style_groupbox(detection_params_group, "top center")
@@ -313,7 +273,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         max_retries_desc.setIndent(20)
         
         # Add sophisticated mode components
-        sophisticated_params_layout.addWidget(frame_selection_group)
         sophisticated_params_layout.addWidget(detection_params_group)
         sophisticated_params_layout.addWidget(self.auto_retry_borders_cb)
         sophisticated_params_layout.addWidget(auto_retry_desc)
@@ -399,22 +358,12 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Enable Signalstats checkbox (moved from substeps)
         self.enable_signalstats_cb = QCheckBox("Enable Signalstats Analysis")
         self.enable_signalstats_cb.setStyleSheet("font-weight: bold;")
-        signalstats_desc = QLabel("Enhanced FFprobe signalstats (requires sophisticated borders)")
+        signalstats_desc = QLabel("Enhanced FFprobe signalstats")
         signalstats_desc.setIndent(20)
         
         signalstats_layout.addWidget(self.enable_signalstats_cb)
         signalstats_layout.addWidget(signalstats_desc)
         signalstats_layout.addSpacing(10)
-        
-        # Start Time
-        start_time_layout = QHBoxLayout()
-        start_time_label = QLabel("Start Time (s):")
-        start_time_label.setStyleSheet("font-weight: bold;")
-        self.signalstats_start_input = QLineEdit("120")
-        self.signalstats_start_input.setMaximumWidth(60)
-        start_time_layout.addWidget(start_time_label)
-        start_time_layout.addWidget(self.signalstats_start_input)
-        start_time_layout.addStretch()
         
         start_time_desc = QLabel("When to begin signalstats analysis")
         start_time_desc.setIndent(20)
@@ -445,7 +394,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         periods_desc = QLabel("Number of analysis periods to spread across video")
         periods_desc.setIndent(20)
         
-        signalstats_layout.addLayout(start_time_layout)
         signalstats_layout.addWidget(start_time_desc)
         signalstats_layout.addLayout(stats_duration_layout)
         signalstats_layout.addWidget(stats_duration_desc)
@@ -482,15 +430,12 @@ class ComplexWindow(QWidget, ThemeableMixin):
     def update_signalstats_dependency(self):
         """Update signalstats checkbox tooltip based on dependencies"""
         border_enabled = self.enable_border_detection_cb.isChecked()
-        is_sophisticated = self.border_mode_combo.currentData() == "sophisticated"
         
         if not border_enabled:
             self.enable_signalstats_cb.setToolTip("Requires border detection to be enabled")
             self.enable_signalstats_cb.setEnabled(False)
-        elif not is_sophisticated:
-            self.enable_signalstats_cb.setToolTip("Requires sophisticated border detection mode")
-            self.enable_signalstats_cb.setEnabled(False)
         else:
+            # Signalstats now works with both simple and sophisticated modes
             self.enable_signalstats_cb.setToolTip("")
             self.enable_signalstats_cb.setEnabled(True)
 
@@ -548,12 +493,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.soph_padding_input.textChanged.connect(
             lambda text: self.on_frame_analysis_param_changed('sophisticated_padding', text)
         )
-        self.soph_viz_time_input.textChanged.connect(
-            lambda text: self.on_frame_analysis_param_changed('sophisticated_viz_time', text)
-        )
-        self.soph_search_window_input.textChanged.connect(
-            lambda text: self.on_frame_analysis_param_changed('sophisticated_search_window', text)
-        )
         self.auto_retry_borders_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'auto_retry_borders'])
         )
@@ -565,11 +504,11 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.brng_skip_colorbars_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'brng_skip_color_bars'])
         )
+        self.max_border_retries_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('max_border_retries', text)
+        )
 
         # Signalstats parameters
-        self.signalstats_start_input.textChanged.connect(
-            lambda text: self.on_frame_analysis_param_changed('signalstats_start_time', text)
-        )
         self.signalstats_duration_input.textChanged.connect(
             lambda text: self.on_frame_analysis_param_changed('signalstats_duration', text)
         )
@@ -624,12 +563,10 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.soph_edge_width_input.setText(str(frame_config.sophisticated_edge_sample_width))
             self.soph_sample_frames_input.setText(str(frame_config.sophisticated_sample_frames))
             self.soph_padding_input.setText(str(frame_config.sophisticated_padding))
-            self.soph_viz_time_input.setText(str(frame_config.sophisticated_viz_time))
-            self.soph_search_window_input.setText(str(frame_config.sophisticated_search_window))
             self.auto_retry_borders_cb.setChecked(frame_config.auto_retry_borders.lower() == 'yes')
             self.brng_duration_input.setText(str(frame_config.brng_duration_limit))
             self.brng_skip_colorbars_cb.setChecked(frame_config.brng_skip_color_bars.lower() == 'yes')
-            self.signalstats_start_input.setText(str(frame_config.signalstats_start_time))
+            self.max_border_retries_input.setText(str(getattr(frame_config, 'max_border_retries', 3)))
             self.signalstats_duration_input.setText(str(frame_config.signalstats_duration))
             self.signalstats_periods_input.setText(str(getattr(frame_config, 'signalstats_periods', 3)))
             

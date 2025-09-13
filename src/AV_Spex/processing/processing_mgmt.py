@@ -336,7 +336,7 @@ class ProcessingManager:
             if frame_config.enable_brng_analysis == 'yes' and self.signals:
                 self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
             
-            if frame_config.enable_signalstats and self.signals:
+            if frame_config.enable_signalstats == 'yes' and self.signals:
                 self.signals.step_completed.emit("Frame Analysis - Signalstats")
             
             # Log summary
