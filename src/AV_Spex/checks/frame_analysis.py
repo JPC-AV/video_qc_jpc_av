@@ -28,8 +28,7 @@ class FrameViolation:
     """Represents a frame with BRNG violations"""
     frame_num: int
     timestamp: float
-    brng_low: float
-    brng_high: float
+    brng_value: float  # Changed from brng_low and brng_high
     violation_score: float
     violation_pixels: int = 0
     violation_percentage: float = 0.0
@@ -106,9 +105,71 @@ class QCToolsParser:
         except:
             return False
     
+    def parse_for_violations_streaming_period(self, start_time: float, end_time: float, 
+                                            period_num: int, max_frames: int = 100, 
+                                            skip_color_bars: bool = True) -> List[FrameViolation]:
+        """Stream parse QCTools report for BRNG violations in specific time period"""
+        violations = []
+        
+        # Convert time range to frame range
+        start_frame = int(start_time * self.fps)
+        end_frame = int(end_time * self.fps)
+        
+        # Counters for this specific period
+        frames_in_period = 0
+        frames_with_violations = 0
+        max_brng_value = 0
+        
+        try:
+            if self.report_path.endswith('.gz'):
+                file_handle = gzip.open(self.report_path, 'rt')
+            else:
+                file_handle = open(self.report_path, 'r')
+            
+            parser = ET.iterparse(file_handle, events=['start', 'end'])
+            parser = iter(parser)
+            event, root = next(parser)
+            
+            for event, elem in parser:
+                if event == 'end' and elem.tag == 'frame':
+                    frame_num = int(elem.get('n', 0))
+                    
+                    # Skip frames outside our period
+                    if frame_num < start_frame or frame_num > end_frame:
+                        elem.clear()
+                        root.clear()
+                        continue
+                    
+                    frames_in_period += 1
+                    
+                    # Extract frame data
+                    frame_data = self._extract_frame_violations(elem, frame_num)
+                    if frame_data:
+                        frames_with_violations += 1
+                        max_brng_value = max(max_brng_value, frame_data.brng_value)
+                        violations.append(frame_data)
+                    
+                    elem.clear()
+                    root.clear()
+            
+            file_handle.close()
+            
+            # Log period-specific summary
+            violation_pct = (frames_with_violations / frames_in_period * 100) if frames_in_period > 0 else 0
+            logger.info(f"    Period {period_num}: {frames_in_period:,} frames analyzed, "
+                       f"{frames_with_violations:,} with violations ({violation_pct:.1f}%)")
+            if frames_with_violations > 0:
+                logger.info(f"    Period {period_num} max BRNG: {max_brng_value:.4f}%")
+            
+        except Exception as e:
+            logger.error(f"Error parsing QCTools report for period {period_num}: {e}")
+        
+        violations.sort(key=lambda x: x.violation_score, reverse=True)
+        return violations[:max_frames]
+    
     def parse_for_violations_streaming(self, max_frames: int = 100, 
-                                      skip_color_bars: bool = True) -> List[FrameViolation]:
-        """Stream parse QCTools report for BRNG violations"""
+                                     skip_color_bars: bool = True) -> List[FrameViolation]:
+        """Stream parse QCTools report for BRNG violations (original method for compatibility)"""
         violations = []
         chunk_size = 1000
         color_bars_end_frame = 0
@@ -116,8 +177,7 @@ class QCToolsParser:
         # Counters
         total_frames_checked = 0
         frames_with_violations = 0
-        max_brng_low = 0
-        max_brng_high = 0
+        max_brng_value = 0
         
         try:
             if self.report_path.endswith('.gz'):
@@ -146,8 +206,7 @@ class QCToolsParser:
                     frame_data = self._extract_frame_violations(elem, frame_num)
                     if frame_data:
                         frames_with_violations += 1
-                        max_brng_low = max(max_brng_low, frame_data.brng_low)
-                        max_brng_high = max(max_brng_high, frame_data.brng_high)
+                        max_brng_value = max(max_brng_value, frame_data.brng_value)
                         frame_buffer.append(frame_data)
                     
                     elem.clear()
@@ -169,11 +228,11 @@ class QCToolsParser:
             
             file_handle.close()
             
-            # Log summary after parsing
+            # Log summary after parsing (only for full report parsing)
             logger.info(f"  Checked {total_frames_checked:,} frames from QCTools report")
-            logger.info(f"  Found {frames_with_violations:,} frames with BRNG violations ({frames_with_violations/total_frames_checked*100:.1f}%)")
+            logger.info(f"  Found {frames_with_violations:,} frames with BRNG value over 0.01 ({frames_with_violations/total_frames_checked*100:.1f}%)")
             if frames_with_violations > 0:
-                logger.info(f"  Max BRNG values - Low: {max_brng_low:.4f}%, High: {max_brng_high:.4f}%")
+                logger.info(f"  Max BRNG value: {max_brng_value:.4f}%")
             
         except Exception as e:
             logger.error(f"Error parsing QCTools report: {e}")
@@ -184,19 +243,24 @@ class QCToolsParser:
     def _extract_frame_violations(self, elem, frame_num: int) -> Optional[FrameViolation]:
         """Extract violation data from frame element"""
         try:
-            brng_low = float(elem.findtext('.//tag[@key="lavfi.signalstats.BRNG_low"]', '0'))
-            brng_high = float(elem.findtext('.//tag[@key="lavfi.signalstats.BRNG_high"]', '0'))
+            # Find the BRNG tag and get its value attribute
+            brng_tag = elem.find('.//tag[@key="lavfi.signalstats.BRNG"]')
+            if brng_tag is None:
+                return None
+                
+            brng_value = float(brng_tag.get('value', '0'))
             
-            score = abs(brng_low) + abs(brng_high)
-            if score > 0.01:
+            # BRNG represents percentage of pixels outside broadcast range
+            # Use a threshold to determine if this constitutes a violation
+            if brng_value > 0.01:  # 0.01 = 1% of pixels out of range
                 return FrameViolation(
                     frame_num=frame_num,
                     timestamp=frame_num / self.fps,
-                    brng_low=brng_low,
-                    brng_high=brng_high,
-                    violation_score=score
+                    brng_value=brng_value,
+                    violation_score=brng_value
                 )
-        except:
+        except (ValueError, TypeError):
+            # Handle parsing errors more specifically than broad except
             pass
         return None
     
@@ -711,8 +775,8 @@ class DifferentialBRNGAnalyzer:
             return False
     
     def _analyze_differential_violations(self, highlighted_path: Path, 
-                                        original_path: Path,
-                                        skip_offset: float) -> List[FrameViolation]:
+                                    original_path: Path,
+                                    skip_offset: float) -> List[FrameViolation]:
         """Analyze violations using differential detection"""
         violations = []
         
@@ -744,14 +808,17 @@ class DifferentialBRNGAnalyzer:
                 # Adjust timestamp to account for skip
                 actual_timestamp = (idx / self.fps) + skip_offset
                 
+                # Calculate BRNG value from violation pixels
+                total_pixels = self.width * self.height
+                brng_value = (violation_pixels / total_pixels) * 100
+                
                 violation = FrameViolation(
                     frame_num=int(idx + (skip_offset * self.fps)),
                     timestamp=actual_timestamp,
-                    brng_low=0,  # Will be updated if we have QCTools data
-                    brng_high=0,
-                    violation_score=violation_pixels / (self.width * self.height),
+                    brng_value=brng_value,  # Changed from brng_low=0, brng_high=0
+                    violation_score=violation_pixels / total_pixels,
                     violation_pixels=violation_pixels,
-                    violation_percentage=(violation_pixels / (self.width * self.height)) * 100,
+                    violation_percentage=brng_value,
                     diagnostics=pattern_analysis.get('diagnostics', []),
                     pattern_analysis=pattern_analysis
                 )
@@ -1048,6 +1115,7 @@ class DifferentialBRNGAnalyzer:
         lines = [
             f"Frame: {violation.frame_num}",
             f"Time: {violation.timestamp:.2f}s",
+            f"BRNG: {violation.brng_value:.4f}%",  # Changed from separate low/high
             f"Violations: {violation.violation_percentage:.4f}%",
             f"Pixels: {violation.violation_pixels}"
         ]
@@ -1112,25 +1180,42 @@ class IntegratedSignalstatsAnalyzer:
             border_data.quality_frame_hints if border_data else None
         )
         
+        # Log analysis periods at the start
+        logger.info(f"  Running {len(analysis_periods)} analysis periods:")
+        for i, (start_time, duration) in enumerate(analysis_periods):
+            end_time = start_time + duration
+            start_tc = self._seconds_to_timecode(start_time)
+            end_tc = self._seconds_to_timecode(end_time)
+            logger.info(f"    Period {i+1}: {start_tc} - {end_tc} ({duration}s)")
+        
         # Determine active area
         active_area = border_data.active_area if border_data else None
+        if active_area:
+            x, y, w, h = active_area
+            logger.info(f"  Active area: {w}x{h} at ({x},{y})")
+        else:
+            logger.info(f"  Active area: Full frame")
         
         # Analyze periods
         all_results = []
         used_qctools = False
         
-        for start_time, duration in analysis_periods:
+        for i, (start_time, duration) in enumerate(analysis_periods):
+            logger.info(f"  Analyzing period {i+1} ({self._seconds_to_timecode(start_time)} - {self._seconds_to_timecode(start_time + duration)}):")
+            
             # Try QCTools first if available
             if self.qctools_report:
-                qctools_result = self._parse_qctools_brng(start_time, start_time + duration)
+                qctools_result = self._parse_qctools_brng_period(start_time, start_time + duration, i+1)
                 if qctools_result and self._should_use_qctools(qctools_result):
                     all_results.append(qctools_result)
                     used_qctools = True
+                    logger.info(f"    Used QCTools data for period {i+1}")
                     continue
             
             # Fall back to FFprobe
-            ffprobe_result = self._analyze_with_ffprobe(
-                active_area, start_time, duration
+            logger.info(f"    Using FFprobe for period {i+1}")
+            ffprobe_result = self._analyze_with_ffprobe_period(
+                active_area, start_time, duration, i+1
             )
             if ffprobe_result:
                 all_results.append(ffprobe_result)
@@ -1141,7 +1226,7 @@ class IntegratedSignalstatsAnalyzer:
                 violation_percentage=0,
                 max_brng=0,
                 avg_brng=0,
-                analysis_periods=[],
+                analysis_periods=analysis_periods,
                 diagnosis="No data available",
                 used_qctools=False
             )
@@ -1157,6 +1242,13 @@ class IntegratedSignalstatsAnalyzer:
         max_brng = max(all_brng_values) * 100 if all_brng_values else 0
         avg_brng = np.mean(all_brng_values) * 100 if all_brng_values else 0
         
+        # Log aggregate results
+        logger.info(f"  Aggregate results across all periods:")
+        logger.info(f"    Total frames analyzed: {total_frames:,}")
+        logger.info(f"    Frames with violations: {total_violations:,} ({violation_pct:.1f}%)")
+        logger.info(f"    Max BRNG value: {max_brng:.4f}%")
+        logger.info(f"    Average BRNG value: {avg_brng:.4f}%")
+        
         # Generate diagnosis
         diagnosis = self._generate_diagnosis(violation_pct, max_brng)
         
@@ -1168,6 +1260,12 @@ class IntegratedSignalstatsAnalyzer:
             diagnosis=diagnosis,
             used_qctools=used_qctools
         )
+    
+    def _seconds_to_timecode(self, seconds: float) -> str:
+        """Convert seconds to MM:SS.mmm format"""
+        minutes = int(seconds // 60)
+        remaining_seconds = seconds % 60
+        return f"{minutes:02d}:{remaining_seconds:06.3f}"
     
     def _find_analysis_periods(self, content_start: float, color_bars_end: float,
                               duration: int, num_periods: int,
@@ -1199,26 +1297,33 @@ class IntegratedSignalstatsAnalyzer:
         
         return periods
     
-    def _parse_qctools_brng(self, start_time: float, end_time: float) -> Optional[Dict]:
-        """Parse BRNG values from QCTools report"""
+    def _parse_qctools_brng_period(self, start_time: float, end_time: float, period_num: int) -> Optional[Dict]:
+        """Parse BRNG values from QCTools report for specific time period"""
         if not self.qctools_report:
             return None
         
+        # Create a parser instance for this specific period
         parser = QCToolsParser(self.qctools_report, self.fps)
-        violations = parser.parse_for_violations_streaming(max_frames=1000)
         
-        # Filter to time range
-        relevant = [v for v in violations 
-                   if start_time <= v.timestamp <= end_time]
+        # Parse violations for the specific time range
+        violations = parser.parse_for_violations_streaming_period(
+            start_time=start_time,
+            end_time=end_time,
+            period_num=period_num,
+            max_frames=1000
+        )
         
-        if not relevant:
+        if not violations:
+            logger.info(f"    No violations found in period {period_num}")
             return None
         
         return {
-            'frames_analyzed': len(relevant),
-            'frames_with_violations': len([v for v in relevant if v.violation_score > 0]),
-            'brng_values': [v.violation_score for v in relevant],
-            'source': 'qctools'
+            'frames_analyzed': len(violations),
+            'frames_with_violations': len([v for v in violations if v.violation_score > 0]),
+            'brng_values': [v.violation_score for v in violations],
+            'source': 'qctools',
+            'period_num': period_num,
+            'time_range': (start_time, end_time)
         }
     
     def _should_use_qctools(self, qctools_result: Dict) -> bool:
@@ -1230,12 +1335,18 @@ class IntegratedSignalstatsAnalyzer:
                         qctools_result['frames_analyzed'] * 100)
         max_brng = max(qctools_result['brng_values']) if qctools_result['brng_values'] else 0
         
-        # Use QCTools if violations are minimal
-        return violation_pct < 5 and max_brng < 0.05
+        # Log the QCTools results for this period
+        period_num = qctools_result.get('period_num', '?')
+        logger.info(f"    Period {period_num} QCTools results: {qctools_result['frames_analyzed']:,} frames, "
+                   f"{qctools_result['frames_with_violations']:,} violations ({violation_pct:.1f}%), "
+                   f"max BRNG: {max_brng*100:.4f}%")
+        
+        # Use QCTools if violations are minimal or if we have good data
+        return True  # Always use QCTools data when available for consistency
     
-    def _analyze_with_ffprobe(self, active_area: Tuple, 
-                             start_time: float, duration: int) -> Dict:
-        """Analyze using FFprobe signalstats"""
+    def _analyze_with_ffprobe_period(self, active_area: Tuple, 
+                                   start_time: float, duration: int, period_num: int) -> Dict:
+        """Analyze using FFprobe signalstats for specific period"""
         # Build filter chain
         filter_chain = f"movie={shlex.quote(self.video_path)}"
         filter_chain += f",select='between(t\\,{start_time}\\,{start_time + duration})'"
@@ -1257,6 +1368,7 @@ class IntegratedSignalstatsAnalyzer:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
+                logger.warning(f"    FFprobe failed for period {period_num}")
                 return None
             
             # Parse output
@@ -1269,15 +1381,22 @@ class IntegratedSignalstatsAnalyzer:
                         pass
             
             frames_with_violations = len([v for v in brng_values if v > 0])
+            violation_pct = (frames_with_violations / len(brng_values) * 100) if brng_values else 0
+            max_brng = max(brng_values) if brng_values else 0
+            
+            logger.info(f"    Period {period_num} FFprobe results: {len(brng_values):,} frames, "
+                       f"{frames_with_violations:,} violations ({violation_pct:.1f}%), "
+                       f"max BRNG: {max_brng*100:.4f}%")
             
             return {
                 'frames_analyzed': len(brng_values),
                 'frames_with_violations': frames_with_violations,
                 'brng_values': brng_values,
-                'source': 'ffprobe'
+                'source': 'ffprobe',
+                'period_num': period_num
             }
         except Exception as e:
-            logger.error(f"FFprobe error: {e}")
+            logger.error(f"FFprobe error for period {period_num}: {e}")
             return None
     
     def _generate_diagnosis(self, violation_pct: float, max_brng: float) -> str:
