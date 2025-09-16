@@ -855,7 +855,7 @@ class DifferentialBRNGAnalyzer:
             "-ss", str(start_time),
             "-i", str(self.video_path),
             "-t", str(duration),
-            "-vf", f"{crop_filter}signalstats=out=brng:color=cyan",
+            "-vf", f"{crop_filter}signalstats=out=brng:color=magenta",
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "23",
@@ -988,32 +988,116 @@ class DifferentialBRNGAnalyzer:
     
     def _detect_differential_violations_frame(self, highlighted: np.ndarray, 
                                          original: np.ndarray) -> np.ndarray:
-        """Detect violations by comparing highlighted vs original frame"""
-        # Calculate difference
-        diff = cv2.absdiff(highlighted, original)
+        """Detect violations by comparing highlighted vs original frame - balanced magenta detection"""
         
-        # Convert to HSV to isolate cyan changes
-        diff_hsv = cv2.cvtColor(diff, cv2.COLOR_BGR2HSV)
+        # Split channels for analysis
+        h_b, h_g, h_r = cv2.split(highlighted)
+        o_b, o_g, o_r = cv2.split(original)
         
-        # Wider range for cyan detection to catch more violations
-        # Cyan in HSV is around 90 degrees (hue), but ffmpeg's cyan might vary
-        cyan_mask = cv2.inRange(diff_hsv,
-                            np.array([75, 15, 15]),   # Even more permissive lower threshold
-                            np.array([115, 255, 255])) # Wider upper threshold
+        # Calculate channel differences
+        blue_diff = h_b.astype(np.float32) - o_b.astype(np.float32)
+        red_diff = h_r.astype(np.float32) - o_r.astype(np.float32)
+        green_diff = h_g.astype(np.float32) - o_g.astype(np.float32)
         
-        # Less aggressive noise removal to preserve small violations
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))  # Smaller kernel
-        cyan_mask = cv2.morphologyEx(cyan_mask, cv2.MORPH_OPEN, kernel)
+        # Method 1: Strict magenta detection
+        # Magenta = high red + high blue, low/negative green
+        magenta_threshold = 10  # Higher threshold to reduce false positives
         
-        # Lower minimum component size threshold
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cyan_mask, connectivity=8)
-        min_component_size = 3  # Was 10, now 3
+        # Both red AND blue must increase significantly
+        # Green should decrease or stay relatively stable
+        strict_magenta = (
+            (blue_diff > magenta_threshold) & 
+            (red_diff > magenta_threshold) & 
+            (green_diff < magenta_threshold/2)  # Green shouldn't increase much
+        )
         
+        # Method 2: Ratio-based detection
+        # Look for pixels where red and blue increased similarly (characteristic of magenta)
+        # and more than green increased
+        min_change = 8  # Minimum change to consider
+        ratio_tolerance = 0.4  # How similar red and blue changes need to be
+        
+        # Calculate ratios only where there's meaningful change
+        significant_change = (np.abs(blue_diff) > min_change) | (np.abs(red_diff) > min_change)
+        
+        # Avoid division by zero
+        safe_blue = np.where(np.abs(blue_diff) > 0.1, blue_diff, 1)
+        safe_red = np.where(np.abs(red_diff) > 0.1, red_diff, 1)
+        
+        # Check if red and blue changed similarly (both positive and similar magnitude)
+        rb_ratio = np.minimum(blue_diff/safe_red, red_diff/safe_blue)
+        
+        ratio_based = significant_change & (rb_ratio > (1 - ratio_tolerance)) & (rb_ratio < (1 + ratio_tolerance))
+        ratio_based = ratio_based & (blue_diff > 0) & (red_diff > 0)  # Both must be positive
+        
+        # Method 3: HSV-based magenta detection with tighter constraints
+        highlighted_hsv = cv2.cvtColor(highlighted, cv2.COLOR_BGR2HSV)
+        original_hsv = cv2.cvtColor(original, cv2.COLOR_BGR2HSV)
+        
+        h_h, h_s, h_v = cv2.split(highlighted_hsv)
+        o_h, o_s, o_v = cv2.split(original_hsv)
+        
+        # Magenta hue in OpenCV HSV: around 150 (range 140-160 for 300-320 degrees)
+        # But also check near 0/180 due to hue wrapping
+        
+        # Check if hue moved toward magenta ranges
+        magenta_hue_low = 140
+        magenta_hue_high = 160
+        near_zero_threshold = 10
+        near_180_threshold = 170
+        
+        is_magenta_hue = (
+            ((h_h >= magenta_hue_low) & (h_h <= magenta_hue_high)) |
+            (h_h < near_zero_threshold) |
+            (h_h > near_180_threshold)
+        )
+        
+        # Saturation should increase (color becomes more vivid)
+        sat_increase = (h_s.astype(np.float32) - o_s.astype(np.float32)) > 15
+        
+        # Value (brightness) shouldn't decrease too much
+        value_stable = (h_v.astype(np.float32) - o_v.astype(np.float32)) > -10
+        
+        hsv_magenta = is_magenta_hue & sat_increase & value_stable
+        
+        # Combine methods with AND logic for higher confidence
+        # Use at least 2 out of 3 methods agreeing
+        method1 = strict_magenta.astype(np.uint8)
+        method2 = ratio_based.astype(np.uint8)
+        method3 = hsv_magenta.astype(np.uint8)
+        
+        # Voting: at least 2 methods must agree
+        vote_sum = method1 + method2 + method3
+        combined_mask = (vote_sum >= 2).astype(np.uint8) * 255
+        
+        # More aggressive noise removal
+        # Use morphological operations to clean up
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        
+        # Opening to remove small noise
+        cleaned_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+        
+        # Optional: Close small gaps
+        cleaned_mask = cv2.morphologyEx(cleaned_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+        
+        # Remove small components more aggressively
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned_mask, connectivity=8)
+        min_component_size = 10  # Increased from 2 to reduce noise
+        
+        final_mask = np.zeros_like(cleaned_mask)
         for i in range(1, num_labels):
-            if stats[i, cv2.CC_STAT_AREA] < min_component_size:
-                cyan_mask[labels == i] = 0
+            area = stats[i, cv2.CC_STAT_AREA]
+            if area >= min_component_size:
+                # Optional: Additional check for aspect ratio to filter out thin lines
+                width = stats[i, cv2.CC_STAT_WIDTH]
+                height = stats[i, cv2.CC_STAT_HEIGHT]
+                aspect_ratio = min(width, height) / max(width, height) if max(width, height) > 0 else 0
+                
+                # Filter out very thin components (likely compression artifacts)
+                if aspect_ratio > 0.1 or area > 50:  # Keep if reasonably shaped or large enough
+                    final_mask[labels == i] = 255
         
-        return cyan_mask
+        return final_mask
 
     def _analyze_violation_patterns(self, violation_mask: np.ndarray,
                                frame: np.ndarray) -> Dict:
@@ -2214,16 +2298,40 @@ class EnhancedFrameAnalysis:
     
     def _save_results(self, results: Dict):
         """Save analysis results to JSON"""
+        import copy
         output_file = self.output_dir / f"{self.video_id}_enhanced_frame_analysis.json"
         
+        # Deep copy to avoid modifying the original
+        results_copy = copy.deepcopy(results)
+        
         # Convert any remaining non-serializable objects
-        def serialize(obj):
-            if hasattr(obj, '__dict__'):
-                return obj.__dict__
-            return obj
+        def clean_for_json(obj, seen=None):
+            if seen is None:
+                seen = set()
+            
+            # Check for circular reference
+            obj_id = id(obj)
+            if obj_id in seen:
+                return None  # or return a placeholder like "<circular reference>"
+            
+            if isinstance(obj, (str, int, float, bool, type(None))):
+                return obj
+            
+            seen.add(obj_id)
+            
+            if isinstance(obj, dict):
+                return {k: clean_for_json(v, seen.copy()) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [clean_for_json(item, seen.copy()) for item in obj]
+            elif hasattr(obj, '__dict__'):
+                return clean_for_json(obj.__dict__, seen.copy())
+            else:
+                return str(obj)
+        
+        cleaned_results = clean_for_json(results_copy)
         
         with open(output_file, 'w') as f:
-            json.dump(results, f, indent=2, default=serialize)
+            json.dump(cleaned_results, f, indent=2)
         
         logger.info(f"Results saved to: {output_file}")
         print(results['summary'])
