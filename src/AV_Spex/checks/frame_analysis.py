@@ -1226,15 +1226,14 @@ class DifferentialBRNGAnalyzer:
             # Detect linear patterns (even if not perfectly continuous)
             linear_score = 0
             if orientation == 'vertical':
-                # For left/right edges, check for horizontal lines of violations
                 for row in range(edge_region.shape[0]):
                     row_violations = edge_region[row, :]
                     if np.any(row_violations > 0):
                         violation_positions = np.where(row_violations > 0)[0]
-                        if len(violation_positions) >= 2:
-                            if edge_name == 'left' and np.max(violation_positions) <= 3:
+                        if len(violation_positions) >= 4:  
+                            if edge_name == 'left' and np.max(violation_positions) <= 2:
                                 linear_score += 1
-                            elif edge_name == 'right' and np.min(violation_positions) >= edge_width - 4:
+                            elif edge_name == 'right' and np.min(violation_positions) >= edge_width - 3:
                                 linear_score += 1
                 
                 linear_percentage = (linear_score / edge_region.shape[0]) * 100
@@ -1256,7 +1255,7 @@ class DifferentialBRNGAnalyzer:
             edge_info['linear_patterns'][edge_name] = linear_percentage
             
             # Determine how far blanking extends from the edge
-            if violation_percentage > 5:
+            if violation_percentage > 15:
                 max_depth = 0
                 if orientation == 'vertical':
                     for row in range(edge_region.shape[0]):
@@ -1280,25 +1279,27 @@ class DifferentialBRNGAnalyzer:
                 edge_info['blanking_depth'][edge_name] = max_depth
             
             # Determine if this edge has significant violations
-            if violation_percentage > 5 or linear_percentage > 30:
+            if violation_percentage > 15 or linear_percentage > 50:  # Was 5% and 30%
                 edge_info['edges_affected'].append(edge_name)
                 edge_info['has_edge_violations'] = True
                 
-                if linear_percentage > 50:
+                # CHANGE 6: Higher threshold for continuous edges
+                if linear_percentage > 70:  # Was 50%
                     edge_info['continuous_edges'].append(edge_name)
                 
+                # CHANGE 7: Less aggressive expansion
                 if edge_name in edge_info['blanking_depth']:
-                    recommended_expansion = edge_info['blanking_depth'][edge_name] + 5
+                    recommended_expansion = edge_info['blanking_depth'][edge_name] + 2
                     edge_info['expansion_recommendations'][edge_name] = recommended_expansion
         
         # Refine severity assessment
-        if len(edge_info['continuous_edges']) >= 2:
+        if len(edge_info['continuous_edges']) >= 3:  # Was 2
             edge_info['severity'] = 'high'
-        elif len(edge_info['continuous_edges']) >= 1:
+        elif len(edge_info['continuous_edges']) >= 2:  # Was 1
             edge_info['severity'] = 'medium'
-        elif len(edge_info['edges_affected']) >= 2:
+        elif len(edge_info['edges_affected']) >= 3:  # Was 2
             edge_info['severity'] = 'low'
-        elif len(edge_info['edges_affected']) >= 1 and max(edge_info['linear_patterns'].values(), default=0) > 30:
+        elif len(edge_info['edges_affected']) >= 2 and max(edge_info['linear_patterns'].values(), default=0) > 60:  # Was 1 edge and 30%
             edge_info['severity'] = 'low'
         
         return edge_info
