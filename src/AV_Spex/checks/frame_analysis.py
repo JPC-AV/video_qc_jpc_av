@@ -21,6 +21,7 @@ import logging
 
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.config_setup import ChecksConfig
 
 # Data classes for structured results
 @dataclass
@@ -106,19 +107,16 @@ class QCToolsParser:
             return False
     
     def parse_for_violations_streaming_period(self, start_time: float, end_time: float, 
-                                            period_num: int, max_frames: int = 100, 
-                                            skip_color_bars: bool = True) -> List[FrameViolation]:
+                                        period_num: int, max_frames: int = 100, 
+                                        skip_color_bars: bool = True) -> List[FrameViolation]:
         """Stream parse QCTools report for BRNG violations in specific time period"""
         violations = []
-        
-        # Convert time range to frame range
-        start_frame = int(start_time * self.fps)
-        end_frame = int(end_time * self.fps)
         
         # Counters for this specific period
         frames_in_period = 0
         frames_with_violations = 0
         max_brng_value = 0
+        frames_checked = 0
         
         try:
             if self.report_path.endswith('.gz'):
@@ -132,18 +130,32 @@ class QCToolsParser:
             
             for event, elem in parser:
                 if event == 'end' and elem.tag == 'frame':
-                    frame_num = int(elem.get('n', 0))
+                    frames_checked += 1
                     
-                    # Skip frames outside our period
-                    if frame_num < start_frame or frame_num > end_frame:
+                    # Get timestamp from the frame element
+                    timestamp_str = elem.get('pkt_pts_time')
+                    if not timestamp_str:
                         elem.clear()
                         root.clear()
                         continue
                     
+                    timestamp = float(timestamp_str)
+                    
+                    # Skip frames outside our period
+                    if timestamp < start_time:
+                        elem.clear()
+                        root.clear()
+                        continue
+                        
+                    if timestamp > end_time:
+                        elem.clear()
+                        root.clear()
+                        break  # We've passed our period, stop parsing
+                    
                     frames_in_period += 1
                     
                     # Extract frame data
-                    frame_data = self._extract_frame_violations(elem, frame_num)
+                    frame_data = self._extract_frame_violations(elem, frame_num=None)
                     if frame_data:
                         frames_with_violations += 1
                         max_brng_value = max(max_brng_value, frame_data.brng_value)
@@ -151,32 +163,43 @@ class QCToolsParser:
                     
                     elem.clear()
                     root.clear()
+                    
+                    # Stop if we have enough violations
+                    if len(violations) >= max_frames:
+                        break
             
             file_handle.close()
             
             # Log period-specific summary
-            violation_pct = (frames_with_violations / frames_in_period * 100) if frames_in_period > 0 else 0
-            logger.info(f"    Period {period_num}: {frames_in_period:,} frames analyzed, "
-                       f"{frames_with_violations:,} with violations ({violation_pct:.1f}%)")
-            if frames_with_violations > 0:
-                logger.info(f"    Period {period_num} max BRNG: {max_brng_value:.4f}%")
+            if frames_in_period > 0:
+                violation_pct = (frames_with_violations / frames_in_period * 100)
+                logger.info(f"    Period {period_num}: {frames_in_period:,} frames analyzed, "
+                        f"{frames_with_violations:,} with violations ({violation_pct:.1f}%)")
+                if frames_with_violations > 0:
+                    logger.info(f"    Period {period_num} max BRNG: {max_brng_value:.4f}%")
+            else:
+                logger.info(f"    Period {period_num}: No frames found in time range {start_time:.1f}s - {end_time:.1f}s")
             
         except Exception as e:
             logger.error(f"Error parsing QCTools report for period {period_num}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         violations.sort(key=lambda x: x.violation_score, reverse=True)
         return violations[:max_frames]
     
     def parse_for_violations_streaming(self, max_frames: int = 100, 
-                                     skip_color_bars: bool = True) -> List[FrameViolation]:
-        """Stream parse QCTools report for BRNG violations (original method for compatibility)"""
+                                 skip_color_bars: bool = True,
+                                 color_bars_end_time: float = 0) -> List[FrameViolation]:
+        """Stream parse QCTools report for BRNG violations"""
         violations = []
         chunk_size = 1000
-        color_bars_end_frame = 0
-
+        
         # Counters
         total_frames_checked = 0
+        frames_after_color_bars = 0
         frames_with_violations = 0
+        frames_skipped = 0
         max_brng_value = 0
         
         try:
@@ -193,17 +216,28 @@ class QCToolsParser:
             
             for event, elem in parser:
                 if event == 'end' and elem.tag == 'frame':
-                    frame_num = int(elem.get('n', 0))
                     total_frames_checked += 1
                     
-                    # Skip color bars if requested
-                    if skip_color_bars and frame_num < color_bars_end_frame:
+                    # Get timestamp from the frame element
+                    timestamp_str = elem.get('pkt_pts_time')
+                    if not timestamp_str:
+                        elem.clear()
+                        root.clear()
+                        continue
+                        
+                    timestamp = float(timestamp_str)
+                    
+                    # Skip color bars based on timestamp
+                    if skip_color_bars and color_bars_end_time > 0 and timestamp < color_bars_end_time:
+                        frames_skipped += 1
                         elem.clear()
                         root.clear()
                         continue
                     
-                    # Extract frame data
-                    frame_data = self._extract_frame_violations(elem, frame_num)
+                    frames_after_color_bars += 1
+                    
+                    # Extract frame data - pass None for frame_num to let it extract from element
+                    frame_data = self._extract_frame_violations(elem, frame_num=None)
                     if frame_data:
                         frames_with_violations += 1
                         max_brng_value = max(max_brng_value, frame_data.brng_value)
@@ -217,7 +251,6 @@ class QCToolsParser:
                         violations.extend(self._process_violation_buffer(frame_buffer))
                         frame_buffer = []
                         
-                        # Keep only top violations to manage memory
                         if len(violations) > max_frames * 2:
                             violations.sort(key=lambda x: x.violation_score, reverse=True)
                             violations = violations[:max_frames]
@@ -228,40 +261,69 @@ class QCToolsParser:
             
             file_handle.close()
             
-            # Log summary after parsing (only for full report parsing)
+            # Log summary
             logger.info(f"  Checked {total_frames_checked:,} frames from QCTools report")
-            logger.info(f"  Found {frames_with_violations:,} frames with BRNG value over 0.01 ({frames_with_violations/total_frames_checked*100:.1f}%)")
-            if frames_with_violations > 0:
-                logger.info(f"  Max BRNG value: {max_brng_value:.4f}%")
+            if frames_skipped > 0:
+                logger.info(f"  Skipped {frames_skipped:,} color bar frames (first {color_bars_end_time:.1f}s)")
+            
+            if frames_after_color_bars > 0:
+                violation_pct = (frames_with_violations / frames_after_color_bars * 100) if frames_after_color_bars > 0 else 0
+                logger.info(f"  Analyzed {frames_after_color_bars:,} content frames")
+                logger.info(f"  Found {frames_with_violations:,} frames with BRNG violations ({violation_pct:.1f}% of content)")
+                if frames_with_violations > 0:
+                    logger.info(f"  Max BRNG value: {max_brng_value:.4f}%")
+            else:
+                logger.warning("  No frames analyzed after color bars - check color bars duration")
             
         except Exception as e:
             logger.error(f"Error parsing QCTools report: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         violations.sort(key=lambda x: x.violation_score, reverse=True)
         return violations[:max_frames]
     
-    def _extract_frame_violations(self, elem, frame_num: int) -> Optional[FrameViolation]:
+    def _extract_frame_violations(self, elem, frame_num: int = None) -> Optional[FrameViolation]:
         """Extract violation data from frame element"""
         try:
-            # Find the BRNG tag and get its value attribute
-            brng_tag = elem.find('.//tag[@key="lavfi.signalstats.BRNG"]')
-            if brng_tag is None:
-                return None
-                
-            brng_value = float(brng_tag.get('value', '0'))
+            # Get frame number from element if not provided
+            if frame_num is None:
+                # Try different attributes for frame number
+                frame_num_str = elem.get('n') or elem.get('pkt_pts')
+                if frame_num_str:
+                    frame_num = int(frame_num_str)
+                else:
+                    return None
             
-            # BRNG represents percentage of pixels outside broadcast range
-            # Use a threshold to determine if this constitutes a violation
-            if brng_value > 0.01:  # 0.01 = 1% of pixels out of range
+            # Get timestamp - try pkt_pts_time first, then calculate from frame number
+            timestamp_str = elem.get('pkt_pts_time')
+            if timestamp_str:
+                timestamp = float(timestamp_str)
+            else:
+                timestamp = frame_num / self.fps if frame_num else 0
+            
+            # Find BRNG value
+            brng_value = None
+            brng_tag = elem.find('.//tag[@key="lavfi.signalstats.BRNG"]')
+            if brng_tag is not None:
+                brng_str = brng_tag.get('value')
+                if brng_str:
+                    brng_value = float(brng_str)
+            
+            # Check if this is a violation (BRNG > 0.01 means > 1% of pixels out of range)
+            if brng_value is not None and brng_value > 0.01:
                 return FrameViolation(
                     frame_num=frame_num,
-                    timestamp=frame_num / self.fps,
-                    brng_value=brng_value,
+                    timestamp=timestamp,
+                    brng_value=brng_value * 100,  # Convert to percentage
                     violation_score=brng_value
                 )
-        except (ValueError, TypeError):
-            # Handle parsing errors more specifically than broad except
-            pass
+                
+        except Exception as e:
+            if not hasattr(self, '_logged_extraction_error'):
+                logger.debug(f"Error extracting frame violations: {e}")
+                self._logged_extraction_error = True
+        
         return None
     
     def _process_violation_buffer(self, buffer: List[FrameViolation]) -> List[FrameViolation]:
@@ -662,60 +724,112 @@ class DifferentialBRNGAnalyzer:
         self.duration = self.total_frames / self.fps if self.fps > 0 else 0
         cap.release()
     
+
     def analyze_with_differential_detection(self, 
-                                           output_dir: Path,
-                                           duration_limit: int = 300,
-                                           skip_start_seconds: float = 0) -> BRNGAnalysisResult:
+                                       output_dir: Path,
+                                       duration_limit: int = 300,
+                                       skip_start_seconds: float = 0,
+                                       qctools_violations: List[FrameViolation] = None,
+                                       analysis_periods: List[Tuple[float, int]] = None) -> BRNGAnalysisResult:
         """
         Perform differential BRNG detection by creating highlighted and original versions.
+        Now supports analyzing specific periods from signalstats.
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True)
+        
+        # Store paths to temporary videos for thumbnail creation
+        temp_video_paths = []
 
-        # Add logging
-        logger.info(f"  Creating temporary comparison videos (duration: {duration_limit}s)")
-        logger.info(f"  Output directory: {output_dir}")
+        # Use analysis periods if provided, otherwise fall back to original behavior
+        if analysis_periods:
+            logger.info(f"  Using {len(analysis_periods)} analysis periods from signalstats")
+            all_violations = []
+            
+            for i, (start_time, duration) in enumerate(analysis_periods):
+                logger.info(f"  Analyzing period {i+1}: {start_time:.1f}s - {start_time+duration:.1f}s")
+                
+                # Create temporary directory for this period
+                temp_dir = output_dir / f"temp_brng_period_{i+1}"
+                temp_dir.mkdir(exist_ok=True)
+                
+                # Generate comparison videos for this period
+                highlighted_path = temp_dir / f"{self.video_path.stem}_highlighted_p{i+1}.mp4"
+                original_path = temp_dir / f"{self.video_path.stem}_original_p{i+1}.mp4"
+                
+                if not self._create_comparison_videos_for_period(
+                    highlighted_path, original_path, start_time, duration):
+                    logger.error(f"Failed to create comparison videos for period {i+1}")
+                    continue
+                
+                # Store paths for later thumbnail creation
+                temp_video_paths.append({
+                    'highlighted': highlighted_path,
+                    'original': original_path,
+                    'start_time': start_time,
+                    'duration': duration,
+                    'temp_dir': temp_dir
+                })
+                
+                # Analyze violations for this period
+                period_violations = self._analyze_differential_violations(
+                    highlighted_path, original_path, start_time,
+                    qctools_violations=qctools_violations
+                )
+                
+                all_violations.extend(period_violations)
+            
+            violations = all_violations
+            logger.info(f"  Analyzed {len(violations)} frames with potential violations across all periods")
+        else:
+            # Original single-period analysis (similar handling)
+            logger.info(f"  Creating temporary comparison videos (duration: {duration_limit}s)")
+            
+            temp_dir = output_dir / "temp_brng"
+            temp_dir.mkdir(exist_ok=True)
+            
+            highlighted_path = temp_dir / f"{self.video_path.stem}_highlighted.mp4"
+            original_path = temp_dir / f"{self.video_path.stem}_original.mp4"
+            
+            if not self._create_comparison_videos(highlighted_path, original_path, 
+                                                duration_limit, skip_start_seconds):
+                logger.error("Failed to create comparison videos")
+                return None
+            
+            temp_video_paths.append({
+                'highlighted': highlighted_path,
+                'original': original_path,
+                'start_time': skip_start_seconds,
+                'duration': duration_limit,
+                'temp_dir': temp_dir
+            })
+            
+            violations = self._analyze_differential_violations(
+                highlighted_path, original_path, skip_start_seconds,
+                qctools_violations=qctools_violations
+            )
         
-        # Create temporary directory for processing
-        temp_dir = output_dir / "temp_brng"
-        temp_dir.mkdir(exist_ok=True)
-        
-        # Generate highlighted and original videos
-        highlighted_path = temp_dir / f"{self.video_path.stem}_highlighted.mp4"
-        original_path = temp_dir / f"{self.video_path.stem}_original.mp4"
-        
-        if not self._create_comparison_videos(highlighted_path, original_path, 
-                                             duration_limit, skip_start_seconds):
-            logger.error("Failed to create comparison videos")
-            return None
-        
-        # Analyze violations
-        violations = self._analyze_differential_violations(
-            highlighted_path, original_path, skip_start_seconds
-        )
-
-        logger.info(f"  Analyzed {len(violations)} frames with potential violations")
-        
-        # Analyze patterns and generate report
+        # Generate patterns and reports
         aggregate_patterns = self._analyze_aggregate_patterns(violations)
         actionable_report = self._generate_actionable_report(violations, aggregate_patterns)
         
-        # Create diagnostic thumbnails for worst violations
+        # Create thumbnails using the stored video paths
         thumbnails = []
         if violations and len(violations) > 0:
             thumb_dir = output_dir / "brng_thumbnails"
             thumb_dir.mkdir(exist_ok=True)
             logger.info(f"  Creating diagnostic thumbnails for top {min(5, len(violations))} violations")
-            thumbnails = self._create_diagnostic_thumbnails(violations[:5], highlighted_path, original_path, thumb_dir)
+            thumbnails = self._create_diagnostic_thumbnails(violations[:5], temp_video_paths, thumb_dir)
             logger.info(f"  Saved {len(thumbnails)} thumbnails to {thumb_dir}")
         
-        # Clean up temp files
-        try:
-            highlighted_path.unlink()
-            original_path.unlink()
-            temp_dir.rmdir()
-        except:
-            pass
+        # NOW clean up all temporary files
+        for video_info in temp_video_paths:
+            try:
+                video_info['highlighted'].unlink()
+                video_info['original'].unlink()
+                video_info['temp_dir'].rmdir()
+            except:
+                pass
         
         return BRNGAnalysisResult(
             violations=violations,
@@ -726,24 +840,21 @@ class DifferentialBRNGAnalyzer:
             refinement_recommendations=aggregate_patterns.get('expansion_recommendations')
         )
     
-    def _create_comparison_videos(self, highlighted_path: Path, original_path: Path,
-                                 duration_limit: int, skip_start: float) -> bool:
-        """Create highlighted and original versions for differential analysis"""
+    def _create_comparison_videos_for_period(self, highlighted_path: Path, original_path: Path,
+                                            start_time: float, duration: int) -> bool:
+        """Create highlighted and original versions for a specific time period"""
         # Build crop filter if active area exists
         crop_filter = ""
         if self.active_area:
             x, y, w, h = self.active_area
             crop_filter = f"crop={w}:{h}:{x}:{y},"
         
-        # Seek arguments
-        seek_args = ["-ss", str(skip_start)] if skip_start > 0 else []
-        
-        # Create highlighted version
+        # Create highlighted version for this period
         highlighted_cmd = [
             "ffmpeg",
-            *seek_args,
+            "-ss", str(start_time),
             "-i", str(self.video_path),
-            "-t", str(duration_limit),
+            "-t", str(duration),
             "-vf", f"{crop_filter}signalstats=out=brng:color=cyan",
             "-c:v", "libx264",
             "-preset", "fast",
@@ -752,12 +863,12 @@ class DifferentialBRNGAnalyzer:
             str(highlighted_path)
         ]
         
-        # Create original version
+        # Create original version for this period
         original_cmd = [
             "ffmpeg",
-            *seek_args,
+            "-ss", str(start_time),
             "-i", str(self.video_path),
-            "-t", str(duration_limit),
+            "-t", str(duration),
             "-vf", crop_filter.rstrip(',') if crop_filter else "null",
             "-c:v", "libx264",
             "-preset", "fast",
@@ -775,18 +886,56 @@ class DifferentialBRNGAnalyzer:
             return False
     
     def _analyze_differential_violations(self, highlighted_path: Path, 
-                                    original_path: Path,
-                                    skip_offset: float) -> List[FrameViolation]:
+                        original_path: Path,
+                        period_start_time: float,  # Renamed for clarity
+                        qctools_violations: List[FrameViolation] = None) -> List[FrameViolation]:
         """Analyze violations using differential detection"""
         violations = []
         
         cap_h = cv2.VideoCapture(str(highlighted_path))
         cap_o = cv2.VideoCapture(str(original_path))
         
-        # Sample frames adaptively
+        # Get video properties
         total_frames = int(cap_h.get(cv2.CAP_PROP_FRAME_COUNT))
-        sample_indices = np.linspace(0, total_frames - 1, min(100, total_frames), dtype=int)
+        fps = cap_h.get(cv2.CAP_PROP_FPS)
+        duration = total_frames / fps if fps > 0 else 0
         
+        # Calculate the time range this video segment represents
+        period_end_time = period_start_time + duration
+        
+        # Use QCTools violations to target specific frames
+        if qctools_violations and len(qctools_violations) > 0:
+            logger.info(f"  Targeting {len(qctools_violations)} frames identified by QCTools")
+            
+            sample_indices = []
+            for v in qctools_violations[:500]:  # Increased limit
+                # Check if this violation is within our period
+                if period_start_time <= v.timestamp < period_end_time:
+                    # Convert to frame position in the extracted video segment
+                    relative_time = v.timestamp - period_start_time
+                    frame_in_segment = int(relative_time * fps)
+                    if 0 <= frame_in_segment < total_frames:
+                        sample_indices.append(frame_in_segment)
+            
+            logger.info(f"  Mapped {len(sample_indices)} violation frames to processed video positions")
+            
+            # If we didn't get enough samples from QCTools, add some distributed samples
+            if len(sample_indices) < 50:
+                logger.info(f"  Adding distributed samples to reach minimum coverage")
+                additional_samples = np.linspace(0, total_frames - 1, 100, dtype=int)
+                for sample in additional_samples:
+                    if sample not in sample_indices:
+                        sample_indices.append(sample)
+                sample_indices = sorted(sample_indices)[:200]
+        else:
+            # Fallback to distributed sampling
+            logger.info(f"  No QCTools violations provided, using distributed sampling")
+            num_samples = min(500, total_frames)
+            sample_indices = np.linspace(0, total_frames - 1, num_samples, dtype=int).tolist()
+        
+        logger.info(f"  Analyzing {len(sample_indices)} frame samples...")
+        
+        frames_checked = 0
         for idx in sample_indices:
             cap_h.set(cv2.CAP_PROP_POS_FRAMES, idx)
             cap_o.set(cv2.CAP_PROP_POS_FRAMES, idx)
@@ -797,25 +946,28 @@ class DifferentialBRNGAnalyzer:
             if not ret_h or not ret_o:
                 continue
             
-            # Detect violations differentially
+            frames_checked += 1
+            
+            # Detect violations differentially with lower threshold
             violation_mask = self._detect_differential_violations_frame(frame_h, frame_o)
             violation_pixels = int(np.sum(violation_mask > 0))
             
-            if violation_pixels > 0:
+            # Lower threshold for detection (was 5, now 2)
+            if violation_pixels > 2:
                 # Analyze patterns
                 pattern_analysis = self._analyze_violation_patterns(violation_mask, frame_o)
                 
-                # Adjust timestamp to account for skip
-                actual_timestamp = (idx / self.fps) + skip_offset
+                # Calculate actual timestamp in original video
+                actual_timestamp = (idx / fps) + period_start_time
                 
                 # Calculate BRNG value from violation pixels
-                total_pixels = self.width * self.height
+                total_pixels = frame_h.shape[0] * frame_h.shape[1]
                 brng_value = (violation_pixels / total_pixels) * 100
                 
                 violation = FrameViolation(
-                    frame_num=int(idx + (skip_offset * self.fps)),
+                    frame_num=int(actual_timestamp * fps),  # Frame number in original video
                     timestamp=actual_timestamp,
-                    brng_value=brng_value,  # Changed from brng_low=0, brng_high=0
+                    brng_value=brng_value,
                     violation_score=violation_pixels / total_pixels,
                     violation_pixels=violation_pixels,
                     violation_percentage=brng_value,
@@ -829,10 +981,13 @@ class DifferentialBRNGAnalyzer:
         
         # Sort by violation score
         violations.sort(key=lambda x: x.violation_score, reverse=True)
+        
+        logger.info(f"  Checked {frames_checked} frames, found {len(violations)} with violations above threshold")
+        
         return violations
     
     def _detect_differential_violations_frame(self, highlighted: np.ndarray, 
-                                             original: np.ndarray) -> np.ndarray:
+                                         original: np.ndarray) -> np.ndarray:
         """Detect violations by comparing highlighted vs original frame"""
         # Calculate difference
         diff = cv2.absdiff(highlighted, original)
@@ -840,62 +995,132 @@ class DifferentialBRNGAnalyzer:
         # Convert to HSV to isolate cyan changes
         diff_hsv = cv2.cvtColor(diff, cv2.COLOR_BGR2HSV)
         
-        # Detect cyan (BRNG highlight color)
+        # Wider range for cyan detection to catch more violations
+        # Cyan in HSV is around 90 degrees (hue), but ffmpeg's cyan might vary
         cyan_mask = cv2.inRange(diff_hsv,
-                               np.array([80, 30, 30]),
-                               np.array([110, 255, 255]))
+                            np.array([75, 15, 15]),   # Even more permissive lower threshold
+                            np.array([115, 255, 255])) # Wider upper threshold
         
-        # Clean up noise
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        # Less aggressive noise removal to preserve small violations
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))  # Smaller kernel
         cyan_mask = cv2.morphologyEx(cyan_mask, cv2.MORPH_OPEN, kernel)
         
+        # Lower minimum component size threshold
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cyan_mask, connectivity=8)
+        min_component_size = 3  # Was 10, now 3
+        
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] < min_component_size:
+                cyan_mask[labels == i] = 0
+        
         return cyan_mask
-    
-    def _analyze_violation_patterns(self, violation_mask: np.ndarray, 
-                                   frame: np.ndarray) -> Dict:
-        """Analyze patterns in violations for diagnostics"""
+
+    def _analyze_violation_patterns(self, violation_mask: np.ndarray,
+                               frame: np.ndarray) -> Dict:
+        """
+        Enhanced pattern analysis adapted from ActiveAreaBrngAnalyzer.
+        Provides edge blanking, linear patterns, and luma zone diagnostics.
+        """
         h, w = violation_mask.shape
-        
-        # Detect edge violations
-        edge_info = self._detect_edge_violations(violation_mask)
-        
-        # Generate diagnostics
-        diagnostics = []
-        
-        if edge_info['has_edge_violations']:
-            if edge_info.get('linear_patterns'):
-                diagnostics.append("Linear blanking patterns detected")
-            elif edge_info.get('continuous_edges'):
-                edges_str = ', '.join(edge_info['edges_affected'])
-                diagnostics.append(f"Continuous edge artifacts ({edges_str})")
-            else:
-                edges_str = ', '.join(edge_info['edges_affected'])
-                diagnostics.append(f"Edge artifacts ({edges_str})")
-        
-        # Check for general violations
-        if not edge_info['has_edge_violations']:
-            diagnostics.append("General broadcast range violations")
-        
+
+        # Edge analysis with linear pattern detection
+        edge_violations = self._detect_edge_violations_enhanced(violation_mask, edge_width=15)
+
+        # Edge-based spatial analysis
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+
+        edge_violations_mask = cv2.bitwise_and(violation_mask, edges)
+        edge_violation_ratio = np.sum(edge_violations_mask > 0) / max(1, np.sum(violation_mask > 0))
+
+        spatial_patterns = {
+            'edge_concentrated': bool(edge_violation_ratio > 0.6),
+            'has_boundary_artifacts': edge_violations['has_edge_violations'],
+            'boundary_edges': edge_violations['edges_affected'],
+            'boundary_severity': edge_violations['severity'],
+            'linear_patterns_detected': any(v > 30 for v in edge_violations.get('linear_patterns', {}).values())
+        }
+
+        # Luma zone distribution (unless strong edge issues dominate)
+        luma_distribution = {}
+        if not (edge_violations['has_edge_violations'] and edge_violations['severity'] in ['medium', 'high']):
+            luma_distribution = self._analyze_luma_zone_violations(violation_mask, gray)
+
+        # Diagnostics
+        diagnostics = self._generate_enhanced_diagnostic(spatial_patterns,
+                                                        edge_violations,
+                                                        luma_distribution)
+
+        # Violation percentage
+        violation_pixels = int(np.sum(violation_mask > 0))
+        violation_percentage = (violation_pixels / (w * h)) * 100 if w * h > 0 else 0
+
         return {
-            'edge_violations': edge_info,
+            'spatial_patterns': spatial_patterns,
+            'edge_violations': edge_violations,
+            'luma_distribution': luma_distribution,
+            'edge_violation_ratio': float(edge_violation_ratio),
             'diagnostics': diagnostics,
-            'has_boundary_artifacts': edge_info['has_edge_violations'],
-            'severity': edge_info.get('severity', 'low')
+            'boundary_artifacts': edge_violations,
+            'linear_pattern_info': edge_violations.get('linear_patterns', {}),
+            'expansion_recommendations': edge_violations.get('expansion_recommendations', {}),
+            'violation_percentage': violation_percentage
         }
     
-    def _detect_edge_violations(self, violation_mask: np.ndarray, 
-                               edge_width: int = 15) -> Dict:
-        """Enhanced edge violation detection"""
+    def _generate_enhanced_diagnostic(self, spatial_patterns: Dict,
+                                      edge_violations: Dict,
+                                      luma_distribution: Dict) -> List[str]:
+        """Human-readable diagnostics with linear pattern info."""
+        diagnostics = []
+
+        if edge_violations.get('has_edge_violations'):
+            edges_str = ', '.join(edge_violations.get('edges_affected', []))
+            linear_patterns = edge_violations.get('linear_patterns', {})
+
+            high_linear = [e for e, v in linear_patterns.items() if v > 50]
+            if high_linear:
+                diagnostics.append(f"Linear blanking patterns on: {', '.join(high_linear)}")
+            elif edge_violations.get('continuous_edges'):
+                diagnostics.append(f"Continuous edge artifacts ({edges_str})")
+            else:
+                diagnostics.append(f"Edge artifacts ({edges_str})")
+
+            if edge_violations.get('expansion_recommendations'):
+                diagnostics.append("Border adjustment recommended")
+
+            if edge_violations.get('severity') == 'high':
+                diagnostics.append("Border detection likely missed blanking")
+            elif edge_violations.get('severity') == 'medium':
+                diagnostics.append("Moderate blanking detected")
+
+        if not edge_violations.get('has_edge_violations') or edge_violations.get('severity') == 'low':
+            if luma_distribution:
+                primary_zone = luma_distribution.get('primary_zone')
+                if primary_zone == 'highlights' and luma_distribution.get('highlight_ratio', 0) > 0.7:
+                    diagnostics.append("Highlight clipping")
+                elif primary_zone == 'subblack' and luma_distribution.get('subblack_ratio', 0) > 0.7:
+                    diagnostics.append("Sub-black detected")
+
+        return diagnostics if diagnostics else ["General broadcast range violations"]
+
+    def _detect_edge_violations_enhanced(self, violation_mask, edge_width=15):
+        """
+        Enhanced edge violation detection that better identifies blanking patterns.
+        Detects linear patterns even when pixels aren't directly adjacent.
+        """
         h, w = violation_mask.shape
         edge_info = {
             'has_edge_violations': False,
             'edges_affected': [],
-            'linear_patterns': {},
+            'edge_percentages': {},
             'continuous_edges': [],
+            'linear_patterns': {},
+            'blanking_depth': {},
             'severity': 'none',
             'expansion_recommendations': {}
         }
         
+        # Define edges with increased scan depth
         edges_to_check = [
             ('left', violation_mask[:, :edge_width], 'vertical'),
             ('right', violation_mask[:, -edge_width:], 'vertical'),
@@ -907,55 +1132,139 @@ class DifferentialBRNGAnalyzer:
             if edge_region.size == 0:
                 continue
             
-            violation_pct = (np.sum(edge_region > 0) / edge_region.size) * 100
+            # Basic violation percentage
+            violation_pixels = np.sum(edge_region > 0)
+            total_pixels = edge_region.size
+            violation_percentage = (violation_pixels / total_pixels) * 100 if total_pixels > 0 else 0
             
-            # Detect linear patterns
+            edge_info['edge_percentages'][edge_name] = violation_percentage
+            
+            # Detect linear patterns (even if not perfectly continuous)
             linear_score = 0
             if orientation == 'vertical':
+                # For left/right edges, check for horizontal lines of violations
                 for row in range(edge_region.shape[0]):
-                    if np.any(edge_region[row, :] > 0):
-                        linear_score += 1
-                linear_pct = (linear_score / edge_region.shape[0]) * 100
-            else:
+                    row_violations = edge_region[row, :]
+                    if np.any(row_violations > 0):
+                        violation_positions = np.where(row_violations > 0)[0]
+                        if len(violation_positions) >= 2:
+                            if edge_name == 'left' and np.max(violation_positions) <= 3:
+                                linear_score += 1
+                            elif edge_name == 'right' and np.min(violation_positions) >= edge_width - 4:
+                                linear_score += 1
+                
+                linear_percentage = (linear_score / edge_region.shape[0]) * 100
+                
+            else:  # horizontal orientation
+                # For top/bottom edges, check for vertical lines of violations
                 for col in range(edge_region.shape[1]):
-                    if np.any(edge_region[:, col] > 0):
-                        linear_score += 1
-                linear_pct = (linear_score / edge_region.shape[1]) * 100
+                    col_violations = edge_region[:, col]
+                    if np.any(col_violations > 0):
+                        violation_positions = np.where(col_violations > 0)[0]
+                        if len(violation_positions) >= 2:
+                            if edge_name == 'top' and np.max(violation_positions) <= 3:
+                                linear_score += 1
+                            elif edge_name == 'bottom' and np.min(violation_positions) >= edge_width - 4:
+                                linear_score += 1
+                
+                linear_percentage = (linear_score / edge_region.shape[1]) * 100
             
-            edge_info['linear_patterns'][edge_name] = linear_pct
+            edge_info['linear_patterns'][edge_name] = linear_percentage
             
-            # Determine if this edge has violations
-            if violation_pct > 5 or linear_pct > 30:
+            # Determine how far blanking extends from the edge
+            if violation_percentage > 5:
+                max_depth = 0
+                if orientation == 'vertical':
+                    for row in range(edge_region.shape[0]):
+                        row_violations = np.where(edge_region[row, :] > 0)[0]
+                        if len(row_violations) > 0:
+                            if edge_name == 'left':
+                                depth = np.max(row_violations)
+                            else:  # right
+                                depth = edge_width - np.min(row_violations)
+                            max_depth = max(max_depth, depth)
+                else:  # horizontal
+                    for col in range(edge_region.shape[1]):
+                        col_violations = np.where(edge_region[:, col] > 0)[0]
+                        if len(col_violations) > 0:
+                            if edge_name == 'top':
+                                depth = np.max(col_violations)
+                            else:  # bottom
+                                depth = edge_width - np.min(col_violations)
+                            max_depth = max(max_depth, depth)
+                
+                edge_info['blanking_depth'][edge_name] = max_depth
+            
+            # Determine if this edge has significant violations
+            if violation_percentage > 5 or linear_percentage > 30:
                 edge_info['edges_affected'].append(edge_name)
                 edge_info['has_edge_violations'] = True
                 
-                if linear_pct > 50:
+                if linear_percentage > 50:
                     edge_info['continuous_edges'].append(edge_name)
-                    edge_info['expansion_recommendations'][edge_name] = 10
+                
+                if edge_name in edge_info['blanking_depth']:
+                    recommended_expansion = edge_info['blanking_depth'][edge_name] + 5
+                    edge_info['expansion_recommendations'][edge_name] = recommended_expansion
         
-        # Determine severity
+        # Refine severity assessment
         if len(edge_info['continuous_edges']) >= 2:
             edge_info['severity'] = 'high'
         elif len(edge_info['continuous_edges']) >= 1:
             edge_info['severity'] = 'medium'
-        elif len(edge_info['edges_affected']) >= 1:
+        elif len(edge_info['edges_affected']) >= 2:
+            edge_info['severity'] = 'low'
+        elif len(edge_info['edges_affected']) >= 1 and max(edge_info['linear_patterns'].values(), default=0) > 30:
             edge_info['severity'] = 'low'
         
         return edge_info
-    
+
+    def _analyze_luma_zone_violations(self, mask, gray_frame):
+        """
+        Analyze where violations occur in terms of brightness zones.
+        """
+        # Define luma zones
+        subblack = (gray_frame < 64)
+        midtones = (gray_frame >= 64) & (gray_frame < 192)
+        highlights = (gray_frame >= 192)
+        
+        violations = mask > 0
+        
+        subblack_violations = np.sum(violations & subblack)
+        midtone_violations = np.sum(violations & midtones)
+        highlight_violations = np.sum(violations & highlights)
+        
+        total_violations = max(1, subblack_violations + midtone_violations + highlight_violations)
+        
+        return {
+            'subblack_ratio': float(subblack_violations / total_violations),
+            'midtone_ratio': float(midtone_violations / total_violations),
+            'highlight_ratio': float(highlight_violations / total_violations),
+            'primary_zone': self._get_primary_zone(subblack_violations, midtone_violations, highlight_violations)
+        }
+
+    def _get_primary_zone(self, subblack, midtone, highlight):
+        """Determine primary brightness zone for violations"""
+        zones = {'subblack': subblack, 'midtones': midtone, 'highlights': highlight}
+        return max(zones, key=zones.get) if zones else 'none'
+
+
     def _analyze_aggregate_patterns(self, violations: List[FrameViolation]) -> Dict:
-        """Analyze aggregate patterns across all violations"""
+        """Analyze aggregate patterns across all violations with linear pattern detection"""
         if not violations:
             return {
                 'requires_border_adjustment': False,
                 'edge_violation_percentage': 0,
-                'continuous_edge_percentage': 0
+                'continuous_edge_percentage': 0,
+                'linear_pattern_percentage': 0
             }
         
-        # Count edge violations
+        # Count different types of violations
         edge_violations = 0
         continuous_edges = 0
+        linear_patterns = 0
         all_affected_edges = []
+        all_linear_scores = defaultdict(list)
         
         for v in violations:
             if v.pattern_analysis:
@@ -965,39 +1274,55 @@ class DifferentialBRNGAnalyzer:
                     all_affected_edges.extend(edge_info.get('edges_affected', []))
                 if edge_info.get('continuous_edges'):
                     continuous_edges += 1
+                
+                # Check for linear patterns
+                if v.pattern_analysis.get('spatial_patterns', {}).get('linear_patterns_detected'):
+                    linear_patterns += 1
+                
+                # Collect linear pattern scores
+                for edge, score in edge_info.get('linear_patterns', {}).items():
+                    all_linear_scores[edge].append(score)
         
         edge_violation_pct = (edge_violations / len(violations)) * 100
         continuous_edge_pct = (continuous_edges / len(violations)) * 100
+        linear_pattern_pct = (linear_patterns / len(violations)) * 100
         
-        # Determine if border adjustment is needed
-        requires_adjustment = (
-            continuous_edge_pct > 15 or
-            edge_violation_pct > 30 or
-            (continuous_edge_pct > 10 and len(set(all_affected_edges)) >= 2)
-        )
+        # Calculate average linear pattern scores
+        avg_linear_patterns = {}
+        for edge, scores in all_linear_scores.items():
+            if scores:
+                avg_linear_patterns[edge] = np.mean(scores)
         
         # Calculate expansion recommendations
         expansion_recs = {}
-        if requires_adjustment:
-            edge_counts = defaultdict(int)
-            for edge in all_affected_edges:
-                edge_counts[edge] += 1
-            
-            for edge, count in edge_counts.items():
-                if count > len(violations) * 0.2:
-                    expansion_recs[edge] = 10 if count > len(violations) * 0.5 else 5
+        unique_edges = list(set(all_affected_edges))
+        for edge in unique_edges:
+            edge_count = all_affected_edges.count(edge)
+            if edge_count > len(violations) * 0.2:
+                expansion_recs[edge] = 10 if edge_count > len(violations) * 0.5 else 5
+        
+        # Determine if border adjustment is needed with more nuanced logic
+        requires_adjustment = (
+            linear_pattern_pct > 20 or  # Strong linear patterns
+            continuous_edge_pct > 15 or  # Many continuous edges
+            edge_violation_pct > 30 or  # Many edge violations
+            (continuous_edge_pct > 10 and len(unique_edges) >= 2) or  # Multiple edges affected
+            any(score > 40 for score in avg_linear_patterns.values())  # High linear scores
+        )
         
         return {
             'requires_border_adjustment': requires_adjustment,
             'edge_violation_percentage': edge_violation_pct,
             'continuous_edge_percentage': continuous_edge_pct,
-            'boundary_edges_detected': list(set(all_affected_edges)),
+            'linear_pattern_percentage': linear_pattern_pct,
+            'linear_pattern_scores': avg_linear_patterns,
+            'boundary_edges_detected': unique_edges,
             'expansion_recommendations': expansion_recs
         }
     
     def _generate_actionable_report(self, violations: List[FrameViolation],
-                                   aggregate_patterns: Dict) -> Dict:
-        """Generate actionable recommendations"""
+                               aggregate_patterns: Dict) -> Dict:
+        """Generate actionable recommendations based on violation patterns"""
         if not violations:
             return {
                 'overall_assessment': 'No BRNG violations detected',
@@ -1007,61 +1332,133 @@ class DifferentialBRNGAnalyzer:
         
         recommendations = []
         
+        # Check for border adjustment needs with more detailed analysis
         if aggregate_patterns['requires_border_adjustment']:
+            edges = aggregate_patterns.get('boundary_edges_detected', [])
+            linear_pct = aggregate_patterns.get('linear_pattern_percentage', 0)
+            continuous_pct = aggregate_patterns.get('continuous_edge_percentage', 0)
+            linear_scores = aggregate_patterns.get('linear_pattern_scores', {})
+            
+            # Determine severity based on linear patterns
+            max_linear_score = max(linear_scores.values()) if linear_scores else 0
+            
+            if max_linear_score > 50 or linear_pct > 40:
+                severity = 'high'
+                description = f'Strong linear blanking patterns detected ({linear_pct:.1f}% of frames). Border detection likely missed blanking lines.'
+            elif linear_pct > 20 or continuous_pct > 25:
+                severity = 'medium'
+                description = f'Moderate blanking patterns detected. {linear_pct:.1f}% frames show linear patterns, {continuous_pct:.1f}% have continuous edges.'
+            else:
+                severity = 'low'
+                description = f'Edge violations detected on {", ".join(edges)}. May indicate minor border detection issues.'
+            
             recommendations.append({
                 'issue': 'Border Detection Needs Adjustment',
-                'severity': 'high',
-                'action': 'Re-run border detection with adjusted parameters'
+                'severity': severity,
+                'action': f'Re-run border detection with adjusted parameters',
+                'affected_edges': edges,
+                'linear_pattern_scores': linear_scores,
+                'description': description
             })
-            action_priority = 'high'
+            action_priority = 'high' if severity == 'high' else 'medium'
         else:
+            # Check for content violations
             avg_violation_pct = np.mean([v.violation_percentage for v in violations])
-            if avg_violation_pct > 1.0:
+            max_violation_pct = max([v.violation_percentage for v in violations])
+            
+            if avg_violation_pct > 1.0 or max_violation_pct > 5.0:
                 recommendations.append({
                     'issue': 'Content BRNG Violations',
                     'severity': 'medium',
-                    'action': 'Review source material or encoding parameters'
+                    'action': 'Review source material or encoding parameters',
+                    'description': f'Average violation: {avg_violation_pct:.2f}%, Maximum: {max_violation_pct:.2f}%'
                 })
                 action_priority = 'medium'
-            else:
+            elif avg_violation_pct > 0.1:
+                recommendations.append({
+                    'issue': 'Minor BRNG Violations',
+                    'severity': 'low',
+                    'action': 'Review may be needed for broadcast compliance',
+                    'description': f'Low-level violations detected: {avg_violation_pct:.2f}% average'
+                })
                 action_priority = 'low'
+            else:
+                action_priority = 'none'
         
         return {
             'overall_assessment': self._get_overall_assessment(violations, aggregate_patterns),
             'action_priority': action_priority,
-            'recommendations': recommendations
+            'recommendations': recommendations,
+            'summary_statistics': {
+                'total_violations': len(violations),
+                'average_violation_percentage': np.mean([v.violation_percentage for v in violations]) if violations else 0,
+                'max_violation_percentage': max([v.violation_percentage for v in violations]) if violations else 0,
+                'edge_violation_percentage': aggregate_patterns.get('edge_violation_percentage', 0),
+                'linear_pattern_percentage': aggregate_patterns.get('linear_pattern_percentage', 0)
+            }
         }
-    
+
     def _get_overall_assessment(self, violations: List[FrameViolation],
-                               aggregate_patterns: Dict) -> str:
-        """Generate overall assessment text"""
+                            aggregate_patterns: Dict) -> str:
+        """Generate overall assessment text with enhanced pattern recognition"""
         if not violations:
             return "Video is broadcast-safe with no BRNG violations"
         
         if aggregate_patterns['requires_border_adjustment']:
-            return "Border detection adjustment required - edges contain violations"
+            linear_pct = aggregate_patterns.get('linear_pattern_percentage', 0)
+            linear_scores = aggregate_patterns.get('linear_pattern_scores', {})
+            max_linear = max(linear_scores.values()) if linear_scores else 0
+            
+            if max_linear > 50 or linear_pct > 40:
+                return "Border detection missed blanking lines - strong linear patterns at frame edges"
+            elif linear_pct > 20:
+                return "Border adjustment recommended - moderate blanking patterns detected"
+            else:
+                return "Border detection adjustment required - edges contain violations"
         
         avg_violation_pct = np.mean([v.violation_percentage for v in violations])
-        if avg_violation_pct < 0.1:
+        if avg_violation_pct < 0.01:
             return "Video appears broadcast-compliant with minimal violations"
+        elif avg_violation_pct < 0.1:
+            return "Minor broadcast range issues detected - likely acceptable"
         elif avg_violation_pct < 1.0:
-            return "Minor broadcast range issues detected"
+            return "Moderate broadcast range issues detected"
         else:
-            return "Broadcast range issues requiring attention"
+            return "Significant broadcast range issues requiring attention"
     
     def _create_diagnostic_thumbnails(self, violations: List[FrameViolation],
-                                     highlighted_path: Path,
-                                     original_path: Path,
-                                     output_dir: Path) -> List[str]:
-        """Create 4-quadrant diagnostic thumbnails"""
+                                 temp_video_paths: List[Dict],
+                                 output_dir: Path) -> List[str]:
+        """Create 4-quadrant diagnostic thumbnails using existing temp videos"""
         thumbnails = []
         
-        cap_h = cv2.VideoCapture(str(highlighted_path))
-        cap_o = cv2.VideoCapture(str(original_path))
-        
         for i, violation in enumerate(violations[:5]):
-            # Adjust for the fact we're using the processed video
-            frame_idx = int((violation.timestamp - (violation.timestamp // self.duration) * self.duration) * self.fps)
+            # Find which video contains this violation
+            video_info = None
+            for vinfo in temp_video_paths:
+                if vinfo['start_time'] <= violation.timestamp < vinfo['start_time'] + vinfo['duration']:
+                    video_info = vinfo
+                    break
+            
+            if not video_info:
+                logger.warning(f"Could not find video segment for violation at {violation.timestamp}s")
+                continue
+            
+            # Open the videos
+            cap_h = cv2.VideoCapture(str(video_info['highlighted']))
+            cap_o = cv2.VideoCapture(str(video_info['original']))
+            
+            if not cap_h.isOpened() or not cap_o.isOpened():
+                logger.warning(f"Failed to open videos for thumbnail")
+                cap_h.release()
+                cap_o.release()
+                continue
+            
+            fps = cap_h.get(cv2.CAP_PROP_FPS)
+            
+            # Calculate frame position relative to this video segment
+            relative_time = violation.timestamp - video_info['start_time']
+            frame_idx = int(relative_time * fps)
             
             cap_h.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             cap_o.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -1070,9 +1467,11 @@ class DifferentialBRNGAnalyzer:
             ret_o, frame_o = cap_o.read()
             
             if not ret_h or not ret_o:
+                cap_h.release()
+                cap_o.release()
                 continue
             
-            # Create 4-quadrant visualization
+            # Create 4-quadrant visualization (rest of the code remains the same)
             h, w = frame_h.shape[:2]
             padding = 10
             viz_height = h * 2 + padding
@@ -1088,7 +1487,7 @@ class DifferentialBRNGAnalyzer:
             # Bottom-left: Violations only
             violation_mask = self._detect_differential_violations_frame(frame_h, frame_o)
             violations_only = np.zeros_like(frame_o)
-            violations_only[violation_mask > 0] = [255, 255, 0]  # Cyan
+            violations_only[violation_mask > 0] = [0, 255, 255]  # Cyan
             viz[h+padding:h*2+padding, 0:w] = violations_only
             
             # Bottom-right: Analysis info
@@ -1096,14 +1495,28 @@ class DifferentialBRNGAnalyzer:
             self._add_info_text(info_panel, violation)
             viz[h+padding:h*2+padding, w+padding:w*2+padding] = info_panel
             
+            # Add labels
+            label_font = cv2.FONT_HERSHEY_SIMPLEX
+            label_scale = 0.7
+            label_color = (255, 255, 255)
+            label_thickness = 2
+            
+            cv2.rectangle(viz, (5, 5), (150, 35), (0, 0, 0), -1)
+            cv2.rectangle(viz, (w+padding+5, 5), (w+padding+250, 35), (0, 0, 0), -1)
+            cv2.rectangle(viz, (5, h+padding+5), (200, h+padding+35), (0, 0, 0), -1)
+            
+            cv2.putText(viz, "Original", (10, 25), label_font, label_scale, label_color, label_thickness)
+            cv2.putText(viz, "BRNG Highlighted", (w+padding+10, 25), label_font, label_scale, label_color, label_thickness)
+            cv2.putText(viz, "Violations Only", (10, h+padding+25), label_font, label_scale, label_color, label_thickness)
+            
             # Save thumbnail
-            thumb_filename = f"{self.video_path.stem}_brng_{i:03d}.jpg"
+            thumb_filename = f"{self.video_path.stem}_brng_{i:03d}_{violation.timestamp:.1f}s.jpg"
             thumb_path = output_dir / thumb_filename
             cv2.imwrite(str(thumb_path), viz)
             thumbnails.append(str(thumb_path))
-        
-        cap_h.release()
-        cap_o.release()
+            
+            cap_h.release()
+            cap_o.release()
         
         return thumbnails
     
@@ -1140,6 +1553,8 @@ class IntegratedSignalstatsAnalyzer:
     def _init_video_properties(self):
         """Initialize video properties"""
         cap = cv2.VideoCapture(self.video_path)
+        self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.fps = cap.get(cv2.CAP_PROP_FPS)
         self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.duration = self.total_frames / self.fps if self.fps > 0 else 0
@@ -1163,13 +1578,13 @@ class IntegratedSignalstatsAnalyzer:
         return None
     
     def analyze_with_signalstats(self,
-                                border_data: BorderDetectionResult = None,
-                                content_start_time: float = 0,
-                                color_bars_end_time: float = None,
-                                analysis_duration: int = 60,
-                                num_periods: int = 3) -> SignalstatsResult:
+                            border_data: BorderDetectionResult = None,
+                            content_start_time: float = 0,
+                            color_bars_end_time: float = None,
+                            analysis_duration: int = 60,
+                            num_periods: int = 3) -> SignalstatsResult:
         """
-        Analyze using signalstats, with QCTools data when available.
+        Analyze using signalstats, comparing full frame (QCTools) vs active area (FFprobe).
         """
         # Determine analysis periods
         analysis_periods = self._find_analysis_periods(
@@ -1180,7 +1595,7 @@ class IntegratedSignalstatsAnalyzer:
             border_data.quality_frame_hints if border_data else None
         )
         
-        # Log analysis periods at the start
+        # Log analysis configuration
         logger.info(f"  Running {len(analysis_periods)} analysis periods:")
         for i, (start_time, duration) in enumerate(analysis_periods):
             end_time = start_time + duration
@@ -1188,37 +1603,93 @@ class IntegratedSignalstatsAnalyzer:
             end_tc = self._seconds_to_timecode(end_time)
             logger.info(f"    Period {i+1}: {start_tc} - {end_tc} ({duration}s)")
         
-        # Determine active area
+        # Log active area vs full frame comparison
         active_area = border_data.active_area if border_data else None
         if active_area:
             x, y, w, h = active_area
-            logger.info(f"  Active area: {w}x{h} at ({x},{y})")
+            full_w, full_h = self.width, self.height
+            crop_pct = (w * h) / (full_w * full_h) * 100
+            logger.info(f"  Comparison mode: Full frame ({full_w}x{full_h}) vs Active area ({w}x{h} at {x},{y})")
+            logger.info(f"  Active area is {crop_pct:.1f}% of full frame")
         else:
-            logger.info(f"  Active area: Full frame")
+            logger.info(f"  Comparison mode: Full frame analysis only (no border detection)")
         
         # Analyze periods
         all_results = []
         used_qctools = False
+        comparison_results = []
         
         for i, (start_time, duration) in enumerate(analysis_periods):
             logger.info(f"  Analyzing period {i+1} ({self._seconds_to_timecode(start_time)} - {self._seconds_to_timecode(start_time + duration)}):")
             
-            # Try QCTools first if available
+            period_comparison = {
+                'period': i+1,
+                'time_range': (start_time, start_time + duration)
+            }
+            
+            # Get QCTools data (full frame)
+            qctools_result = None
             if self.qctools_report:
                 qctools_result = self._parse_qctools_brng_period(start_time, start_time + duration, i+1)
-                if qctools_result and self._should_use_qctools(qctools_result):
-                    all_results.append(qctools_result)
+                if qctools_result:
                     used_qctools = True
-                    logger.info(f"    Used QCTools data for period {i+1}")
-                    continue
+                    period_comparison['qctools_full_frame'] = {
+                        'violations_pct': (qctools_result['frames_with_violations'] / 
+                                        qctools_result['frames_analyzed'] * 100) if qctools_result['frames_analyzed'] > 0 else 0,
+                        'max_brng': max(qctools_result['brng_values']) * 100 if qctools_result['brng_values'] else 0
+                    }
+                    logger.info(f"    QCTools (full frame): {period_comparison['qctools_full_frame']['violations_pct']:.1f}% violations, "
+                            f"max BRNG: {period_comparison['qctools_full_frame']['max_brng']:.4f}%")
             
-            # Fall back to FFprobe
-            logger.info(f"    Using FFprobe for period {i+1}")
-            ffprobe_result = self._analyze_with_ffprobe_period(
-                active_area, start_time, duration, i+1
-            )
-            if ffprobe_result:
-                all_results.append(ffprobe_result)
+            # Get FFprobe data (active area only)
+            if active_area:
+                logger.info(f"    Running FFprobe on active area only...")
+                ffprobe_result = self._analyze_with_ffprobe_period(
+                    active_area, start_time, duration, i+1
+                )
+                if ffprobe_result:
+                    period_comparison['ffprobe_active_area'] = {
+                        'violations_pct': (ffprobe_result['frames_with_violations'] / 
+                                        ffprobe_result['frames_analyzed'] * 100) if ffprobe_result['frames_analyzed'] > 0 else 0,
+                        'max_brng': max(ffprobe_result['brng_values']) * 100 if ffprobe_result['brng_values'] else 0
+                    }
+                    logger.info(f"    FFprobe (active area): {period_comparison['ffprobe_active_area']['violations_pct']:.1f}% violations, "
+                            f"max BRNG: {period_comparison['ffprobe_active_area']['max_brng']:.4f}%")
+                    
+                    # Compare results
+                    if qctools_result and period_comparison.get('qctools_full_frame'):
+                        full_violations = period_comparison['qctools_full_frame']['violations_pct']
+                        active_violations = period_comparison['ffprobe_active_area']['violations_pct']
+                        
+                        if full_violations > active_violations + 5:
+                            logger.info(f"    → Border violations detected: Full frame has {full_violations - active_violations:.1f}% more violations")
+                            period_comparison['diagnosis'] = 'border_violations'
+                        elif active_violations > 10:
+                            logger.info(f"    → Content violations: Active area itself has {active_violations:.1f}% violations")
+                            period_comparison['diagnosis'] = 'content_violations'
+                        else:
+                            logger.info(f"    → Minimal violations in both full frame and active area")
+                            period_comparison['diagnosis'] = 'minimal_violations'
+                    
+                    # Use FFprobe result for aggregate
+                    all_results.append(ffprobe_result)
+                else:
+                    # Fall back to QCTools if FFprobe fails
+                    if qctools_result:
+                        all_results.append(qctools_result)
+            else:
+                # No active area defined, use QCTools or FFprobe on full frame
+                if qctools_result:
+                    all_results.append(qctools_result)
+                else:
+                    logger.info(f"    Using FFprobe on full frame (no border detection)")
+                    ffprobe_result = self._analyze_with_ffprobe_period(
+                        None, start_time, duration, i+1
+                    )
+                    if ffprobe_result:
+                        all_results.append(ffprobe_result)
+            
+            comparison_results.append(period_comparison)
         
         # Aggregate results
         if not all_results:
@@ -1242,15 +1713,18 @@ class IntegratedSignalstatsAnalyzer:
         max_brng = max(all_brng_values) * 100 if all_brng_values else 0
         avg_brng = np.mean(all_brng_values) * 100 if all_brng_values else 0
         
-        # Log aggregate results
-        logger.info(f"  Aggregate results across all periods:")
-        logger.info(f"    Total frames analyzed: {total_frames:,}")
-        logger.info(f"    Frames with violations: {total_violations:,} ({violation_pct:.1f}%)")
+        # Generate comprehensive diagnosis
+        diagnosis = self._generate_comprehensive_diagnosis(
+            violation_pct, max_brng, comparison_results, active_area is not None
+        )
+        
+        # Log final comparison summary
+        logger.info(f"\n  === Signalstats Analysis Summary ===")
+        logger.info(f"  Active area results (what matters for QC):")
+        logger.info(f"    Frames with violations: {total_violations:,} / {total_frames:,} ({violation_pct:.1f}%)")
         logger.info(f"    Max BRNG value: {max_brng:.4f}%")
         logger.info(f"    Average BRNG value: {avg_brng:.4f}%")
-        
-        # Generate diagnosis
-        diagnosis = self._generate_diagnosis(violation_pct, max_brng)
+        logger.info(f"  Diagnosis: {diagnosis}")
         
         return SignalstatsResult(
             violation_percentage=violation_pct,
@@ -1260,6 +1734,35 @@ class IntegratedSignalstatsAnalyzer:
             diagnosis=diagnosis,
             used_qctools=used_qctools
         )
+
+    def _generate_comprehensive_diagnosis(self, violation_pct: float, max_brng: float, 
+                                        comparison_results: List[Dict], has_active_area: bool) -> str:
+        """Generate diagnosis based on full frame vs active area comparison"""
+        
+        if not has_active_area:
+            # No border detection, standard diagnosis
+            if violation_pct < 10 and max_brng < 0.1:
+                return "Video appears broadcast-compliant"
+            elif violation_pct < 50 and max_brng < 1.0:
+                return "Minor BRNG violations - likely acceptable"
+            elif max_brng > 2.0:
+                return "Significant BRNG violations requiring correction"
+            else:
+                return "Moderate BRNG violations detected"
+        
+        # Analyze comparison results
+        border_violation_periods = sum(1 for r in comparison_results if r.get('diagnosis') == 'border_violations')
+        content_violation_periods = sum(1 for r in comparison_results if r.get('diagnosis') == 'content_violations')
+        
+        if border_violation_periods > content_violation_periods:
+            return "BRNG violations primarily in border areas - active content appears broadcast-safe"
+        elif content_violation_periods > 0:
+            if violation_pct > 50:
+                return "Significant BRNG violations in active picture area - requires correction"
+            else:
+                return "BRNG violations detected in active picture area - review recommended"
+        else:
+            return "Video appears broadcast-compliant with properly detected borders"
     
     def _seconds_to_timecode(self, seconds: float) -> str:
         """Convert seconds to MM:SS.mmm format"""
@@ -1268,26 +1771,43 @@ class IntegratedSignalstatsAnalyzer:
         return f"{minutes:02d}:{remaining_seconds:06.3f}"
     
     def _find_analysis_periods(self, content_start: float, color_bars_end: float,
-                              duration: int, num_periods: int,
-                              quality_hints: List[Tuple[float, float]] = None) -> List[Tuple[float, int]]:
+                          duration: int, num_periods: int,
+                          quality_hints: List[Tuple[float, float]] = None) -> List[Tuple[float, int]]:
         """Find good analysis periods, using quality hints if available"""
+        # Start after color bars with a safety margin
         effective_start = max(content_start, color_bars_end or 0) + 10
         
-        # Use quality hints if available
-        if quality_hints and len(quality_hints) >= num_periods:
-            periods = []
-            for time_hint, _ in quality_hints[:num_periods]:
-                if time_hint >= effective_start:
+        # Log what we're doing
+        logger.info(f"  Content starts at {effective_start:.1f}s (after color bars at {color_bars_end:.1f}s)")
+        
+        # Use quality hints if available (but ensure they're after color bars)
+        if quality_hints:
+            valid_hints = [(t, q) for t, q in quality_hints if t >= effective_start]
+            if len(valid_hints) >= num_periods:
+                periods = []
+                for time_hint, _ in valid_hints[:num_periods]:
                     period_start = max(effective_start, time_hint - duration/2)
                     if period_start + duration <= self.duration - 30:
                         periods.append((period_start, duration))
-            if len(periods) >= num_periods:
-                return periods
+                if len(periods) >= num_periods:
+                    return periods
         
         # Fall back to even distribution
         available_duration = self.duration - effective_start - 30
-        if available_duration < duration:
-            return [(effective_start, min(duration, available_duration))]
+        if available_duration < duration * num_periods:
+            # If not enough space for all periods, reduce number or duration
+            if available_duration >= duration:
+                # At least one full period possible
+                periods = []
+                actual_periods = min(num_periods, int(available_duration / duration))
+                spacing = (available_duration - duration) / max(1, actual_periods - 1)
+                for i in range(actual_periods):
+                    start = effective_start + i * spacing
+                    periods.append((start, duration))
+                return periods
+            else:
+                # Reduce duration
+                return [(effective_start, min(duration, available_duration))]
         
         periods = []
         spacing = (available_duration - duration) / max(1, num_periods - 1)
@@ -1398,17 +1918,6 @@ class IntegratedSignalstatsAnalyzer:
         except Exception as e:
             logger.error(f"FFprobe error for period {period_num}: {e}")
             return None
-    
-    def _generate_diagnosis(self, violation_pct: float, max_brng: float) -> str:
-        """Generate diagnosis based on results"""
-        if violation_pct < 10 and max_brng < 0.01:
-            return "Video appears broadcast-compliant"
-        elif violation_pct < 50 and max_brng < 0.1:
-            return "Minor BRNG violations - likely acceptable"
-        elif max_brng > 2.0:
-            return "Significant BRNG violations requiring correction"
-        else:
-            return "Moderate BRNG violations detected"
 
 
 class EnhancedFrameAnalysis:
@@ -1422,11 +1931,18 @@ class EnhancedFrameAnalysis:
         self.video_id = self.video_path.stem
         self.output_dir = Path(output_dir) if output_dir else self.video_path.parent
         self.output_dir.mkdir(exist_ok=True)
+
+        # Store config manager as an instance attribute
+        self.config_mgr = ConfigManager()
+        self.config_mgr.refresh_configs()
+        self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
         
         # Initialize components
         self.border_detector = SophisticatedBorderDetector(video_path)
         self.brng_analyzer = None  # Will be initialized with border data
         self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path)
+        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path)
+
         
         # Find QCTools report
         self.qctools_report = self._find_qctools_report()
@@ -1472,40 +1988,36 @@ class EnhancedFrameAnalysis:
             'analysis_method': 'enhanced',
             'qctools_report_available': self.qctools_report is not None
         }
-        
-        # Step 1: Parse QCTools for initial violations (if available)
-        violations = []
-        frames_with_qctools_violations = 0
-        color_bars_end_time = 0
 
-        # Use config dataclass directly
-        if frame_config is None:
-            # Use defaults if no config provided
-            from AV_Spex.utils.config_setup import FrameAnalysisConfig
-            frame_config = FrameAnalysisConfig()
+        frame_config = self.checks_config.outputs.frame_analysis
         
+        # Step 1: Detect color bars
+        color_bars_end_time = 0
+        if skip_color_bars:
+            color_bars_end_time = self._detect_color_bars_duration()
+            if color_bars_end_time > 0:
+                logger.info(f"Color bars detected, ending at {color_bars_end_time:.1f}s")
+                results['color_bars_end_time'] = color_bars_end_time
+
+        # Step 2: Parse QCTools for initial violations
+        violations = []
         if self.qctools_parser:
             logger.info("Parsing QCTools report for violations...")
             violations = self.qctools_parser.parse_for_violations_streaming(
                 max_frames=100,
-                skip_color_bars=skip_color_bars
+                skip_color_bars=skip_color_bars,
+                color_bars_end_time=color_bars_end_time
             )
             frames_with_qctools_violations = len(violations)
             
-            # Fix the confusing "0 violations" issue
             if frames_with_qctools_violations == 0:
-                results['qctools_violations_found'] = "No BRNG violations detected"
+                results['qctools_violations_found'] = "No BRNG violations detected in content"
             else:
                 results['qctools_violations_found'] = frames_with_qctools_violations
-            
-            # Detect color bars duration if needed
-            if skip_color_bars:
-                color_bars_end_time = self._detect_color_bars_duration()
-                results['color_bars_end_time'] = color_bars_end_time
         else:
             logger.info("No QCTools report found, proceeding with direct analysis")
         
-        # Step 2: Initial border detection
+        # Step 3: Initial border detection
         logger.info(f"Detecting borders using {method} method...")
         border_results = self.border_detector.detect_borders_with_quality_assessment(
             violations=violations,
@@ -1513,93 +2025,8 @@ class EnhancedFrameAnalysis:
         )
         results['initial_borders'] = asdict(border_results)
         
-        # Step 3: BRNG analysis with differential detection
-        logger.info("Analyzing BRNG violations...")
-        self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
-        
-        brng_results = self.brng_analyzer.analyze_with_differential_detection(
-            output_dir=self.output_dir,
-            duration_limit=duration_limit,
-            skip_start_seconds=color_bars_end_time
-        )
-        results['brng_analysis'] = asdict(brng_results) if brng_results else None
-        
-        # Step 4: Iterative border refinement (if needed and using sophisticated method)
-        refinement_iterations = 0
-        if method == 'sophisticated' and brng_results and brng_results.requires_border_adjustment:
-            logger.info("Border refinement needed - detected BRNG violations at frame edges")
-            logger.info("  This suggests the initial border detection may have missed blanking/inactive areas")
-            
-            edge_pct = brng_results.aggregate_patterns.get('edge_violation_percentage', 0)
-            continuous_pct = brng_results.aggregate_patterns.get('continuous_edge_percentage', 0)
-            logger.info(f"  Edge violations: {edge_pct:.1f}% of analyzed frames")
-            logger.info(f"  Continuous edge patterns: {continuous_pct:.1f}% of analyzed frames")
-            
-            while (refinement_iterations < max_refinement_iterations and 
-                   brng_results.requires_border_adjustment):
-                
-                refinement_iterations += 1
-                logger.info(f"Refinement iteration {refinement_iterations}/{max_refinement_iterations}:")
-
-                # Log what we're adjusting
-                if brng_results.refinement_recommendations:
-                    adjustments = []
-                    for edge, pixels in brng_results.refinement_recommendations.items():
-                        adjustments.append(f"{edge}:{pixels}px")
-                    logger.info(f"  Expanding borders: {', '.join(adjustments)}")
-
-                # After refinement
-                previous_area = border_results.active_area
-                border_results = self.border_detector.refine_borders(border_results, brng_results)
-                new_area = border_results.active_area
-
-                logger.info(f"  Active area: {previous_area[2]}x{previous_area[3]} → {new_area[2]}x{new_area[3]}")
-                logger.info(f"  Border change: {abs(new_area[2]-previous_area[2])}x{abs(new_area[3]-previous_area[3])} pixels")
-                
-                # Log the change
-                new_area = border_results.active_area
-                logger.info(f"  Active area adjusted from {previous_area[2]}x{previous_area[3]} to {new_area[2]}x{new_area[3]}")
-                
-                # Re-analyze with new borders
-                self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
-                previous_brng = brng_results
-                
-                brng_results = self.brng_analyzer.analyze_with_differential_detection(
-                    output_dir=self.output_dir,
-                    duration_limit=duration_limit,
-                    skip_start_seconds=color_bars_end_time
-                )
-                
-                # Check for improvement
-                improved = self._is_meaningful_improvement(previous_brng, brng_results)
-                if not improved:
-                    prev_violations = len(previous_brng.violations)
-                    curr_violations = len(brng_results.violations)
-                    
-                    if prev_violations > 0 and curr_violations > 0:
-                        prev_worst = previous_brng.violations[0].violation_percentage
-                        curr_worst = brng_results.violations[0].violation_percentage
-                        
-                        logger.info(f"  Refinement complete - minimal improvement detected")
-                        logger.info(f"    Violations: {prev_violations} → {curr_violations} frames")
-                        logger.info(f"    Worst violation: {prev_worst:.4f}% → {curr_worst:.4f}%")
-                        logger.info(f"    (Need 20% reduction for meaningful improvement)")
-                    else:
-                        logger.info(f"  Refinement complete - violations remain in content area, not edges")
-                    
-                    logger.info("  Stopping refinement - further border adjustments unlikely to help")
-                    break
-                else:
-                    logger.info(f"  Refinement improved results, continuing...")
-            
-            results['refinement_iterations'] = refinement_iterations
-            results['final_borders'] = asdict(border_results)
-            results['final_brng_analysis'] = asdict(brng_results) if brng_results else None
-        elif method == 'sophisticated' and brng_results and not brng_results.requires_border_adjustment:
-            logger.info("  No border refinement needed - violations are in content, not edges")
-        
-        # Step 5: Signalstats analysis
-        logger.info("Running signalstats analysis...")
+        # Step 4: Signalstats analysis (MOVED UP from Step 5)
+        logger.info("Running signalstats analysis to identify key analysis periods...")
         signalstats_results = self.signalstats_analyzer.analyze_with_signalstats(
             border_data=border_results,
             content_start_time=0,
@@ -1609,7 +2036,81 @@ class EnhancedFrameAnalysis:
         )
         results['signalstats'] = asdict(signalstats_results)
         
-        # Step 6: Generate comprehensive summary
+        # Extract the analysis periods from signalstats results
+        analysis_periods = signalstats_results.analysis_periods
+        logger.info(f"Identified {len(analysis_periods)} key periods for BRNG analysis")
+        
+        # Step 5: BRNG analysis using signalstats periods
+        logger.info("Analyzing BRNG violations in identified periods...")
+        self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
+        
+        brng_results = self.brng_analyzer.analyze_with_differential_detection(
+            output_dir=self.output_dir,
+            duration_limit=duration_limit,
+            skip_start_seconds=color_bars_end_time,
+            qctools_violations=violations,
+            analysis_periods=analysis_periods  # Pass the periods from signalstats
+        )
+        results['brng_analysis'] = asdict(brng_results) if brng_results else None
+        
+        # Step 6: Iterative border refinement (if needed)
+        refinement_iterations = 0
+        if method == 'sophisticated' and brng_results and brng_results.requires_border_adjustment:
+            logger.info("Border refinement needed - detected BRNG violations at frame edges")
+            
+            edge_pct = brng_results.aggregate_patterns.get('edge_violation_percentage', 0)
+            continuous_pct = brng_results.aggregate_patterns.get('continuous_edge_percentage', 0)
+            logger.info(f"  Edge violations: {edge_pct:.1f}% of analyzed frames")
+            logger.info(f"  Continuous edge patterns: {continuous_pct:.1f}% of analyzed frames")
+            
+            while (refinement_iterations < max_refinement_iterations and 
+                brng_results.requires_border_adjustment):
+                
+                refinement_iterations += 1
+                logger.info(f"Refinement iteration {refinement_iterations}/{max_refinement_iterations}:")
+                
+                # Refine borders
+                previous_area = border_results.active_area
+                border_results = self.border_detector.refine_borders(border_results, brng_results)
+                new_area = border_results.active_area
+                
+                logger.info(f"  Active area: {previous_area[2]}x{previous_area[3]} → {new_area[2]}x{new_area[3]}")
+                
+                # Re-run signalstats with new borders to get updated periods
+                logger.info("  Re-running signalstats with refined borders...")
+                signalstats_results = self.signalstats_analyzer.analyze_with_signalstats(
+                    border_data=border_results,
+                    content_start_time=0,
+                    color_bars_end_time=color_bars_end_time,
+                    analysis_duration=frame_config.signalstats_duration,
+                    num_periods=frame_config.signalstats_periods
+                )
+                analysis_periods = signalstats_results.analysis_periods
+                
+                # Re-analyze BRNG with new borders and periods
+                self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
+                previous_brng = brng_results
+                
+                brng_results = self.brng_analyzer.analyze_with_differential_detection(
+                    output_dir=self.output_dir,
+                    duration_limit=duration_limit,
+                    skip_start_seconds=color_bars_end_time,
+                    qctools_violations=violations,
+                    analysis_periods=analysis_periods  # Use updated periods
+                )
+                
+                # Check for improvement
+                improved = self._is_meaningful_improvement(previous_brng, brng_results)
+                if not improved:
+                    logger.info("  Stopping refinement - further adjustments unlikely to help")
+                    break
+            
+            results['refinement_iterations'] = refinement_iterations
+            results['final_borders'] = asdict(border_results)
+            results['final_brng_analysis'] = asdict(brng_results) if brng_results else None
+            results['final_signalstats'] = asdict(signalstats_results)
+        
+        # Step 7: Generate comprehensive summary
         results['summary'] = self._generate_summary(results)
         
         # Save results
@@ -1619,9 +2120,33 @@ class EnhancedFrameAnalysis:
     
     def _detect_color_bars_duration(self) -> float:
         """Detect color bars duration from video or QCTools report"""
-        # Simplified color bars detection
-        # In production, would use the full detectBars logic from qct_parse
-        return 0  # Placeholder
+        # First check if qct-parse already detected color bars
+        report_dir = self.video_path.parent / f"{self.video_id}_report_csvs"
+        colorbars_csv = report_dir / "qct-parse_colorbars_durations.csv"
+        
+        if colorbars_csv.exists():
+            import csv
+            try:
+                with open(colorbars_csv, 'r') as f:
+                    reader = csv.reader(f)
+                    rows = list(reader)
+                    if len(rows) >= 2 and "color bars found" in rows[0][0]:
+                        # Parse end timestamp
+                        end_str = rows[1][1] if len(rows[1]) > 1 else None
+                        if end_str:
+                            # Convert timestamp to seconds
+                            parts = end_str.split(':')
+                            if len(parts) == 3:
+                                hours = int(parts[0])
+                                minutes = int(parts[1])
+                                seconds = float(parts[2])
+                                return hours * 3600 + minutes * 60 + seconds
+            except Exception as e:
+                logger.warning(f"Could not parse color bars CSV: {e}")
+        
+        # If no qct-parse data, could implement direct detection here
+        # For now, return 0 to indicate no color bars detected
+        return 0
     
     def _is_meaningful_improvement(self, previous: BRNGAnalysisResult, 
                                   current: BRNGAnalysisResult) -> bool:
