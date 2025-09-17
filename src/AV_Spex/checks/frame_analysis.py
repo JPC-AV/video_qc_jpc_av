@@ -987,8 +987,37 @@ class DifferentialBRNGAnalyzer:
         return violations
     
     def _detect_differential_violations_frame(self, highlighted: np.ndarray, 
-                                         original: np.ndarray) -> np.ndarray:
-        """Detect violations by comparing highlighted vs original frame - balanced magenta detection"""
+                                     original: np.ndarray, 
+                                     sensitivity: str = 'normal') -> np.ndarray:
+        """
+        Detect violations by comparing highlighted vs original frame
+        
+        Args:
+            sensitivity: 'strict', 'normal', or 'visualization' 
+                    - 'strict': Conservative detection for analysis
+                    - 'normal': Balanced detection 
+                    - 'visualization': More sensitive for thumbnail display
+        """
+        
+        # Adjust parameters based on sensitivity
+        if sensitivity == 'strict':
+            magenta_threshold = 12
+            min_change = 10
+            voting_threshold = 2  # Require 2/3 methods
+            min_component_size = 15
+            morph_iterations = 2
+        elif sensitivity == 'visualization':
+            magenta_threshold = 6
+            min_change = 5
+            voting_threshold = 1  # Require only 1/3 methods
+            min_component_size = 3
+            morph_iterations = 1
+        else:  # normal
+            magenta_threshold = 10
+            min_change = 8
+            voting_threshold = 2
+            min_component_size = 10
+            morph_iterations = 2
         
         # Split channels for analysis
         h_b, h_g, h_r = cv2.split(highlighted)
@@ -1000,47 +1029,30 @@ class DifferentialBRNGAnalyzer:
         green_diff = h_g.astype(np.float32) - o_g.astype(np.float32)
         
         # Method 1: Strict magenta detection
-        # Magenta = high red + high blue, low/negative green
-        magenta_threshold = 10  # Higher threshold to reduce false positives
-        
-        # Both red AND blue must increase significantly
-        # Green should decrease or stay relatively stable
         strict_magenta = (
             (blue_diff > magenta_threshold) & 
             (red_diff > magenta_threshold) & 
-            (green_diff < magenta_threshold/2)  # Green shouldn't increase much
+            (green_diff < magenta_threshold/2)
         )
         
         # Method 2: Ratio-based detection
-        # Look for pixels where red and blue increased similarly (characteristic of magenta)
-        # and more than green increased
-        min_change = 8  # Minimum change to consider
-        ratio_tolerance = 0.4  # How similar red and blue changes need to be
-        
-        # Calculate ratios only where there's meaningful change
         significant_change = (np.abs(blue_diff) > min_change) | (np.abs(red_diff) > min_change)
-        
-        # Avoid division by zero
         safe_blue = np.where(np.abs(blue_diff) > 0.1, blue_diff, 1)
         safe_red = np.where(np.abs(red_diff) > 0.1, red_diff, 1)
         
-        # Check if red and blue changed similarly (both positive and similar magnitude)
         rb_ratio = np.minimum(blue_diff/safe_red, red_diff/safe_blue)
+        ratio_tolerance = 0.4
         
         ratio_based = significant_change & (rb_ratio > (1 - ratio_tolerance)) & (rb_ratio < (1 + ratio_tolerance))
-        ratio_based = ratio_based & (blue_diff > 0) & (red_diff > 0)  # Both must be positive
+        ratio_based = ratio_based & (blue_diff > 0) & (red_diff > 0)
         
-        # Method 3: HSV-based magenta detection with tighter constraints
+        # Method 3: HSV-based magenta detection
         highlighted_hsv = cv2.cvtColor(highlighted, cv2.COLOR_BGR2HSV)
         original_hsv = cv2.cvtColor(original, cv2.COLOR_BGR2HSV)
         
         h_h, h_s, h_v = cv2.split(highlighted_hsv)
         o_h, o_s, o_v = cv2.split(original_hsv)
         
-        # Magenta hue in OpenCV HSV: around 150 (range 140-160 for 300-320 degrees)
-        # But also check near 0/180 due to hue wrapping
-        
-        # Check if hue moved toward magenta ranges
         magenta_hue_low = 140
         magenta_hue_high = 160
         near_zero_threshold = 10
@@ -1052,49 +1064,42 @@ class DifferentialBRNGAnalyzer:
             (h_h > near_180_threshold)
         )
         
-        # Saturation should increase (color becomes more vivid)
         sat_increase = (h_s.astype(np.float32) - o_s.astype(np.float32)) > 15
-        
-        # Value (brightness) shouldn't decrease too much
         value_stable = (h_v.astype(np.float32) - o_v.astype(np.float32)) > -10
-        
         hsv_magenta = is_magenta_hue & sat_increase & value_stable
         
-        # Combine methods with AND logic for higher confidence
-        # Use at least 2 out of 3 methods agreeing
+        # Combine methods with voting
         method1 = strict_magenta.astype(np.uint8)
         method2 = ratio_based.astype(np.uint8)
         method3 = hsv_magenta.astype(np.uint8)
         
-        # Voting: at least 2 methods must agree
         vote_sum = method1 + method2 + method3
-        combined_mask = (vote_sum >= 2).astype(np.uint8) * 255
+        combined_mask = (vote_sum >= voting_threshold).astype(np.uint8) * 255
         
-        # More aggressive noise removal
-        # Use morphological operations to clean up
+        # Morphological operations (less aggressive for visualization)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        cleaned_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel, iterations=morph_iterations)
         
-        # Opening to remove small noise
-        cleaned_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+        if sensitivity != 'strict':
+            # Skip closing for more sensitive detection
+            cleaned_mask = cv2.morphologyEx(cleaned_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
         
-        # Optional: Close small gaps
-        cleaned_mask = cv2.morphologyEx(cleaned_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-        
-        # Remove small components more aggressively
+        # Component filtering
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned_mask, connectivity=8)
-        min_component_size = 10  # Increased from 2 to reduce noise
-        
         final_mask = np.zeros_like(cleaned_mask)
+        
         for i in range(1, num_labels):
             area = stats[i, cv2.CC_STAT_AREA]
             if area >= min_component_size:
-                # Optional: Additional check for aspect ratio to filter out thin lines
                 width = stats[i, cv2.CC_STAT_WIDTH]
                 height = stats[i, cv2.CC_STAT_HEIGHT]
                 aspect_ratio = min(width, height) / max(width, height) if max(width, height) > 0 else 0
                 
-                # Filter out very thin components (likely compression artifacts)
-                if aspect_ratio > 0.1 or area > 50:  # Keep if reasonably shaped or large enough
+                # More lenient aspect ratio check for visualization
+                min_aspect = 0.05 if sensitivity == 'visualization' else 0.1
+                min_area_override = 25 if sensitivity == 'visualization' else 50
+                
+                if aspect_ratio > min_aspect or area > min_area_override:
                     final_mask[labels == i] = 255
         
         return final_mask
@@ -1512,9 +1517,9 @@ class DifferentialBRNGAnalyzer:
             return "Significant broadcast range issues requiring attention"
     
     def _create_diagnostic_thumbnails(self, violations: List[FrameViolation],
-                                 temp_video_paths: List[Dict],
-                                 output_dir: Path) -> List[str]:
-        """Create 4-quadrant diagnostic thumbnails using existing temp videos"""
+                             temp_video_paths: List[Dict],
+                             output_dir: Path) -> List[str]:
+        """Create 4-quadrant diagnostic thumbnails with enhanced violation visibility"""
         thumbnails = []
         
         for i, violation in enumerate(violations[:5]):
@@ -1556,7 +1561,7 @@ class DifferentialBRNGAnalyzer:
                 cap_o.release()
                 continue
             
-            # Create 4-quadrant visualization (rest of the code remains the same)
+            # Create 4-quadrant visualization
             h, w = frame_h.shape[:2]
             padding = 10
             viz_height = h * 2 + padding
@@ -1569,10 +1574,8 @@ class DifferentialBRNGAnalyzer:
             # Top-right: Highlighted
             viz[0:h, w+padding:w*2+padding] = frame_h
             
-            # Bottom-left: Violations only
-            violation_mask = self._detect_differential_violations_frame(frame_h, frame_o)
-            violations_only = np.zeros_like(frame_o)
-            violations_only[violation_mask > 0] = [0, 255, 255]  # Cyan
+            # Bottom-left: Enhanced violations visualization
+            violations_only = self._create_enhanced_violations_display(frame_h, frame_o)
             viz[h+padding:h*2+padding, 0:w] = violations_only
             
             # Bottom-right: Analysis info
@@ -1580,19 +1583,8 @@ class DifferentialBRNGAnalyzer:
             self._add_info_text(info_panel, violation)
             viz[h+padding:h*2+padding, w+padding:w*2+padding] = info_panel
             
-            # Add labels
-            label_font = cv2.FONT_HERSHEY_SIMPLEX
-            label_scale = 0.7
-            label_color = (255, 255, 255)
-            label_thickness = 2
-            
-            cv2.rectangle(viz, (5, 5), (150, 35), (0, 0, 0), -1)
-            cv2.rectangle(viz, (w+padding+5, 5), (w+padding+250, 35), (0, 0, 0), -1)
-            cv2.rectangle(viz, (5, h+padding+5), (200, h+padding+35), (0, 0, 0), -1)
-            
-            cv2.putText(viz, "Original", (10, 25), label_font, label_scale, label_color, label_thickness)
-            cv2.putText(viz, "BRNG Highlighted", (w+padding+10, 25), label_font, label_scale, label_color, label_thickness)
-            cv2.putText(viz, "Violations Only", (10, h+padding+25), label_font, label_scale, label_color, label_thickness)
+            # Add labels with better visibility
+            self._add_quadrant_labels(viz, w, h, padding)
             
             # Save thumbnail
             thumb_filename = f"{self.video_path.stem}_brng_{i:03d}_{violation.timestamp:.1f}s.jpg"
@@ -1604,7 +1596,99 @@ class DifferentialBRNGAnalyzer:
             cap_o.release()
         
         return thumbnails
-    
+
+    def _create_enhanced_violations_display(self, frame_h: np.ndarray, frame_o: np.ndarray) -> np.ndarray:
+        """Create enhanced violations display with multiple visualization techniques"""
+        
+        # Method 1: Use sensitive detection for more pixels
+        violation_mask_sensitive = self._detect_differential_violations_frame(
+            frame_h, frame_o, sensitivity='visualization'
+        )
+        
+        # Method 2: Create a simple difference mask as backup
+        diff_mask = self._create_simple_difference_mask(frame_h, frame_o)
+        
+        # Method 3: Combine both masks
+        combined_mask = cv2.bitwise_or(violation_mask_sensitive, diff_mask)
+        
+        # Create the visualization
+        violations_only = np.zeros_like(frame_o)
+        
+        # Use bright cyan for primary violations
+        violations_only[violation_mask_sensitive > 0] = [0, 255, 255]  # Cyan
+        
+        # Use yellow for additional differences (less confident but visible)
+        additional_violations = cv2.bitwise_and(diff_mask, cv2.bitwise_not(violation_mask_sensitive))
+        violations_only[additional_violations > 0] = [0, 255, 255]  # Keep cyan but with lower intensity
+        
+        # Enhance visibility by adding slight transparency overlay where violations occur
+        violation_overlay = np.zeros_like(frame_o)
+        all_violations = combined_mask > 0
+        
+        if np.any(all_violations):
+            # Add the original frame content at low opacity where violations occur
+            violation_overlay[all_violations] = frame_o[all_violations] * 0.3
+            violations_only = cv2.addWeighted(violations_only, 0.8, violation_overlay, 0.2, 0)
+        
+        return violations_only
+
+    def _create_simple_difference_mask(self, frame_h: np.ndarray, frame_o: np.ndarray) -> np.ndarray:
+        """Create a simple difference mask as backup for visualization"""
+        
+        # Convert to grayscale for difference calculation
+        gray_h = cv2.cvtColor(frame_h, cv2.COLOR_BGR2GRAY)
+        gray_o = cv2.cvtColor(frame_o, cv2.COLOR_BGR2GRAY)
+        
+        # Calculate absolute difference
+        diff = cv2.absdiff(gray_h, gray_o)
+        
+        # Threshold for any noticeable change
+        _, diff_mask = cv2.threshold(diff, 5, 255, cv2.THRESH_BINARY)
+        
+        # Remove very small differences (noise)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        diff_mask = cv2.morphologyEx(diff_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        
+        # Additional filtering for magenta-like colors
+        h_b, h_g, h_r = cv2.split(frame_h)
+        o_b, o_g, o_r = cv2.split(frame_o)
+        
+        # Look for any increase in red or blue channels
+        red_increase = (h_r.astype(np.float32) - o_r.astype(np.float32)) > 3
+        blue_increase = (h_b.astype(np.float32) - o_b.astype(np.float32)) > 3
+        
+        # Combine with difference mask
+        color_change = (red_increase | blue_increase).astype(np.uint8) * 255
+        final_mask = cv2.bitwise_and(diff_mask, color_change)
+        
+        return final_mask
+
+    def _add_quadrant_labels(self, viz: np.ndarray, w: int, h: int, padding: int):
+        """Add clear labels to each quadrant"""
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.7
+        text_color = (255, 255, 255)
+        bg_color = (0, 0, 0)
+        thickness = 2
+        
+        labels = [
+            ("Original", (10, 25)),
+            ("BRNG Highlighted", (w + padding + 10, 25)),
+            ("Violations Only", (10, h + padding + 25)),
+            ("Analysis Data", (w + padding + 10, h + padding + 25))
+        ]
+        
+        for text, (x, y) in labels:
+            # Get text size for background rectangle
+            (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+            
+            # Draw background rectangle
+            cv2.rectangle(viz, (x - 5, y - text_h - 10), 
+                        (x + text_w + 5, y + baseline), bg_color, -1)
+            
+            # Draw text
+            cv2.putText(viz, text, (x, y - 5), font, font_scale, text_color, thickness)
+
     def _add_info_text(self, panel: np.ndarray, violation: FrameViolation):
         """Add analysis info text to panel"""
         h, w = panel.shape[:2]
@@ -1613,7 +1697,7 @@ class DifferentialBRNGAnalyzer:
         lines = [
             f"Frame: {violation.frame_num}",
             f"Time: {violation.timestamp:.2f}s",
-            f"BRNG: {violation.brng_value:.4f}%",  # Changed from separate low/high
+            f"BRNG: {violation.brng_value:.4f}%",
             f"Violations: {violation.violation_percentage:.4f}%",
             f"Pixels: {violation.violation_pixels}"
         ]
