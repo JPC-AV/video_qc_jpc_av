@@ -813,16 +813,24 @@ class DifferentialBRNGAnalyzer:
         aggregate_patterns = self._analyze_aggregate_patterns(violations)
         actionable_report = self._generate_actionable_report(violations, aggregate_patterns)
         
-        # Create thumbnails using the stored video paths
+        # Create thumbnails using temporal diversity selection
         thumbnails = []
         if violations and len(violations) > 0:
             thumb_dir = output_dir / "brng_thumbnails"
             thumb_dir.mkdir(exist_ok=True)
-            logger.info(f"  Creating diagnostic thumbnails for top {min(5, len(violations))} violations")
-            thumbnails = self._create_diagnostic_thumbnails(violations[:5], temp_video_paths, thumb_dir)
+            
+            # Select violations with temporal spacing
+            selected_violations = self._select_diverse_violations_for_thumbnails(
+                violations, 
+                max_thumbnails=5, 
+                min_time_separation=5.0
+            )
+            
+            logger.info(f"  Creating diagnostic thumbnails for {len(selected_violations)} temporally diverse violations")
+            thumbnails = self._create_diagnostic_thumbnails(selected_violations, temp_video_paths, thumb_dir)
             logger.info(f"  Saved {len(thumbnails)} thumbnails to {thumb_dir}")
         
-        # NOW clean up all temporary files
+        # Clean up all temporary files
         for video_info in temp_video_paths:
             try:
                 video_info['highlighted'].unlink()
@@ -1155,6 +1163,65 @@ class DifferentialBRNGAnalyzer:
             'expansion_recommendations': edge_violations.get('expansion_recommendations', {}),
             'violation_percentage': violation_percentage
         }
+    
+    def _select_diverse_violations_for_thumbnails(self, violations: List[FrameViolation], 
+                                                max_thumbnails: int = 5, 
+                                                min_time_separation: float = 10.0) -> List[FrameViolation]:
+        """
+        Select violations for thumbnails ensuring temporal diversity.
+        
+        Args:
+            violations: List of violations sorted by violation_score (highest first)
+            max_thumbnails: Maximum number of thumbnails to create
+            min_time_separation: Minimum time separation between selected frames (seconds)
+        
+        Returns:
+            List of violations for thumbnail creation
+        """
+        if not violations:
+            return []
+        
+        selected_violations = []
+        
+        # Always include the highest scoring violation
+        selected_violations.append(violations[0])
+        logger.info(f"  Selected thumbnail 1: Frame {violations[0].frame_num} at {violations[0].timestamp:.1f}s (score: {violations[0].violation_score:.4f})")
+        
+        # Select additional violations with time separation constraint
+        for violation in violations[1:]:
+            if len(selected_violations) >= max_thumbnails:
+                break
+                
+            # Check if this violation is far enough from all previously selected ones
+            is_far_enough = True
+            for selected in selected_violations:
+                time_diff = abs(violation.timestamp - selected.timestamp)
+                if time_diff < min_time_separation:
+                    is_far_enough = False
+                    break
+            
+            if is_far_enough:
+                selected_violations.append(violation)
+                logger.info(f"  Selected thumbnail {len(selected_violations)}: Frame {violation.frame_num} at {violation.timestamp:.1f}s (score: {violation.violation_score:.4f})")
+        
+        # If we couldn't find enough diverse violations, fill in with the best remaining ones
+        # (but log this situation)
+        if len(selected_violations) < max_thumbnails and len(violations) > len(selected_violations):
+            remaining_needed = max_thumbnails - len(selected_violations)
+            logger.info(f"  Only found {len(selected_violations)} violations with {min_time_separation}s separation")
+            
+            # Add the best remaining violations regardless of time separation
+            for violation in violations:
+                if violation not in selected_violations:
+                    selected_violations.append(violation)
+                    logger.info(f"  Added thumbnail {len(selected_violations)} (relaxed spacing): Frame {violation.frame_num} at {violation.timestamp:.1f}s")
+                    remaining_needed -= 1
+                    if remaining_needed <= 0:
+                        break
+        
+        logger.info(f"  Final selection: {len(selected_violations)} thumbnails spanning {selected_violations[-1].timestamp - selected_violations[0].timestamp:.1f} seconds")
+        
+        return selected_violations
     
     def _generate_enhanced_diagnostic(self, spatial_patterns: Dict,
                                       edge_violations: Dict,
