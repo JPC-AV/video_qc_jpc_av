@@ -189,8 +189,8 @@ class QCToolsParser:
         return violations[:max_frames]
     
     def parse_for_violations_streaming(self, max_frames: int = 100, 
-                                 skip_color_bars: bool = True,
-                                 color_bars_end_time: float = 0) -> List[FrameViolation]:
+                             skip_color_bars: bool = True,
+                             color_bars_end_time: float = 0) -> List[FrameViolation]:
         """Stream parse QCTools report for BRNG violations"""
         violations = []
         chunk_size = 1000
@@ -200,6 +200,7 @@ class QCToolsParser:
         frames_after_color_bars = 0
         frames_with_violations = 0
         frames_skipped = 0
+        black_frames_skipped = 0  # NEW COUNTER
         max_brng_value = 0
         
         try:
@@ -236,8 +237,21 @@ class QCToolsParser:
                     
                     frames_after_color_bars += 1
                     
-                    # Extract frame data - pass None for frame_num to let it extract from element
+                    # Extract frame data - this now includes black frame detection
+                    frame_data_before = frames_with_violations
                     frame_data = self._extract_frame_violations(elem, frame_num=None)
+                    
+                    # Check if this might have been a black frame
+                    # (we can detect this by checking if no violation was returned despite BRNG being present)
+                    brng_tag = elem.find('.//tag[@key="lavfi.signalstats.BRNG"]')
+                    if brng_tag is not None and frame_data is None:
+                        # Check if it was filtered due to being black
+                        ymax_tag = elem.find('.//tag[@key="lavfi.signalstats.YMAX"]')
+                        if ymax_tag:
+                            ymax = float(ymax_tag.get('value', '1000'))
+                            if ymax < 300.0:
+                                black_frames_skipped += 1
+                    
                     if frame_data:
                         frames_with_violations += 1
                         max_brng_value = max(max_brng_value, frame_data.brng_value)
@@ -265,6 +279,8 @@ class QCToolsParser:
             logger.info(f"  Checked {total_frames_checked:,} frames from QCTools report")
             if frames_skipped > 0:
                 logger.info(f"  Skipped {frames_skipped:,} color bar frames (first {color_bars_end_time:.1f}s)")
+            if black_frames_skipped > 0:
+                logger.info(f"  Skipped {black_frames_skipped:,} all-black frames")
             
             if frames_after_color_bars > 0:
                 violation_pct = (frames_with_violations / frames_after_color_bars * 100) if frames_after_color_bars > 0 else 0
@@ -282,27 +298,45 @@ class QCToolsParser:
         
         violations.sort(key=lambda x: x.violation_score, reverse=True)
         return violations[:max_frames]
-    
+        
     def _extract_frame_violations(self, elem, frame_num: int = None) -> Optional[FrameViolation]:
         """Extract violation data from frame element"""
         try:
             # Get frame number from element if not provided
             if frame_num is None:
-                # Try different attributes for frame number
                 frame_num_str = elem.get('n') or elem.get('pkt_pts')
                 if frame_num_str:
                     frame_num = int(frame_num_str)
                 else:
                     return None
             
-            # Get timestamp - try pkt_pts_time first, then calculate from frame number
+            # Get timestamp
             timestamp_str = elem.get('pkt_pts_time')
             if timestamp_str:
                 timestamp = float(timestamp_str)
             else:
                 timestamp = frame_num / self.fps if frame_num else 0
             
-            # Find BRNG value
+            # Check for all-black frame BEFORE checking BRNG violations
+            # Extract luma values to detect black frames
+            ymax_tag = elem.find('.//tag[@key="lavfi.signalstats.YMAX"]')
+            yhigh_tag = elem.find('.//tag[@key="lavfi.signalstats.YHIGH"]')
+            ylow_tag = elem.find('.//tag[@key="lavfi.signalstats.YLOW"]')
+            ymin_tag = elem.find('.//tag[@key="lavfi.signalstats.YMIN"]')
+            
+            # Check if this is an all-black frame
+            if ymax_tag is not None and yhigh_tag is not None and ylow_tag is not None and ymin_tag is not None:
+                ymax = float(ymax_tag.get('value', '1000'))
+                yhigh = float(yhigh_tag.get('value', '1000'))
+                ylow = float(ylow_tag.get('value', '1000'))
+                ymin = float(ymin_tag.get('value', '1000'))
+                
+                # Skip all-black frames based on luma thresholds
+                if ymax < 300.0 and yhigh < 115.0 and ylow < 97.0 and ymin < 6.5:
+                    # This is a black frame, skip it
+                    return None
+            
+            # Now check for BRNG violations (only for non-black frames)
             brng_value = None
             brng_tag = elem.find('.//tag[@key="lavfi.signalstats.BRNG"]')
             if brng_tag is not None:
@@ -2261,7 +2295,7 @@ class EnhancedFrameAnalysis:
         )
         results['initial_borders'] = asdict(border_results)
         
-        # Step 4: Signalstats analysis (MOVED UP from Step 5)
+        # Step 4: Signalstats analysis
         logger.info("Running signalstats analysis to identify key analysis periods...")
         signalstats_results = self.signalstats_analyzer.analyze_with_signalstats(
             border_data=border_results,
@@ -2271,10 +2305,54 @@ class EnhancedFrameAnalysis:
             num_periods=frame_config.signalstats_periods
         )
         results['signalstats'] = asdict(signalstats_results)
-        
+
         # Extract the analysis periods from signalstats results
         analysis_periods = signalstats_results.analysis_periods
         logger.info(f"Identified {len(analysis_periods)} key periods for BRNG analysis")
+
+        # NEW: Compare with QCTools violation distribution if we have violations
+        if violations:
+            logger.info("\n  === Comparing Period Selection Methods ===")
+            
+            # Get QCTools-based period suggestions
+            qctools_suggested_periods = self._analyze_qctools_violation_distribution(violations)
+            
+            # Log the signalstats periods for comparison
+            logger.info(f"\n  Signalstats-selected analysis periods:")
+            for i, (start, duration) in enumerate(analysis_periods):
+                logger.info(f"    Period {i+1}: {start:.1f}s - {start+duration:.1f}s")
+            
+            # Check for overlaps
+            logger.info(f"\n  Checking for overlaps between methods:")
+            for i, (ss_start, ss_duration) in enumerate(analysis_periods):
+                ss_end = ss_start + ss_duration
+                overlaps = []
+                
+                for j, (qct_start, qct_duration) in enumerate(qctools_suggested_periods):
+                    qct_end = qct_start + qct_duration
+                    # Check if periods overlap
+                    if not (ss_end < qct_start or ss_start > qct_end):
+                        overlap_start = max(ss_start, qct_start)
+                        overlap_end = min(ss_end, qct_end)
+                        overlap_duration = overlap_end - overlap_start
+                        overlaps.append((j+1, overlap_duration))
+                
+                if overlaps:
+                    overlap_str = ", ".join([f"QCT Period {j} ({dur:.1f}s)" for j, dur in overlaps])
+                    logger.info(f"    Signalstats Period {i+1} overlaps with: {overlap_str}")
+                else:
+                    logger.info(f"    Signalstats Period {i+1}: NO OVERLAP with QCTools violations")
+            
+            # Count violations in each signalstats period
+            logger.info(f"\n  Actual QCTools violations in signalstats periods:")
+            for i, (start, duration) in enumerate(analysis_periods):
+                end = start + duration
+                period_violations = [v for v in violations if start <= v.timestamp < end]
+                logger.info(f"    Period {i+1} ({start:.1f}s - {end:.1f}s): {len(period_violations)} violations")
+                if period_violations and len(period_violations) <= 5:
+                    # Show the actual timestamps if there are only a few
+                    for v in period_violations:
+                        logger.info(f"      - Violation at {v.timestamp:.1f}s")
         
         # Step 5: BRNG analysis using signalstats periods
         logger.info("Analyzing BRNG violations in identified periods...")
@@ -2487,6 +2565,87 @@ class EnhancedFrameAnalysis:
         
         logger.info(f"Results saved to: {output_file}")
         print(results['summary'])
+
+    def _analyze_qctools_violation_distribution(self, violations: List[FrameViolation]) -> List[Tuple[float, int]]:
+        """
+        Analyze the temporal distribution of QCTools violations and suggest analysis periods.
+        
+        Returns:
+            List of (start_time, duration) tuples for suggested periods
+        """
+        if not violations:
+            logger.info("  No QCTools violations to analyze distribution")
+            return []
+        
+        # Get all violation timestamps
+        timestamps = [v.timestamp for v in violations]
+        timestamps.sort()
+        
+        # Log the overall distribution
+        logger.info(f"\n  === QCTools Violation Distribution ===")
+        logger.info(f"  Total violations found: {len(violations)}")
+        logger.info(f"  Time range: {timestamps[0]:.1f}s - {timestamps[-1]:.1f}s")
+        
+        # Create a histogram of violations over time (10-second bins)
+        bin_size = 10.0
+        num_bins = int((timestamps[-1] - timestamps[0]) / bin_size) + 1
+        bins = [0] * num_bins
+        
+        for ts in timestamps:
+            bin_idx = int((ts - timestamps[0]) / bin_size)
+            if 0 <= bin_idx < num_bins:
+                bins[bin_idx] += 1
+        
+        # Find the top periods with most violations
+        bin_scores = []
+        for i, count in enumerate(bins):
+            if count > 0:
+                start_time = timestamps[0] + i * bin_size
+                bin_scores.append((start_time, count))
+        
+        # Sort by violation count
+        bin_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Log the top bins
+        logger.info(f"  Top 10-second bins with violations:")
+        for i, (start_time, count) in enumerate(bin_scores[:10]):
+            logger.info(f"    {i+1}. {start_time:.1f}s - {start_time+bin_size:.1f}s: {count} violations")
+        
+        # Select 3 periods based on violation density
+        suggested_periods = []
+        used_ranges = []
+        
+        for start_time, count in bin_scores:
+            # Check if this period overlaps with any already selected
+            overlaps = False
+            for used_start, used_end in used_ranges:
+                if not (start_time + 60 < used_start or start_time > used_end):
+                    overlaps = True
+                    break
+            
+            if not overlaps:
+                suggested_periods.append((start_time, 60))  # 60-second periods
+                used_ranges.append((start_time, start_time + 60))
+                
+                if len(suggested_periods) >= 3:
+                    break
+        
+        # If we couldn't find 3 non-overlapping dense regions, fall back to even distribution
+        if len(suggested_periods) < 3:
+            logger.info(f"  Only found {len(suggested_periods)} dense violation regions")
+            # Add evenly distributed periods from the violation range
+            violation_duration = timestamps[-1] - timestamps[0]
+            if violation_duration > 180:  # If violations span > 3 minutes
+                spacing = violation_duration / 3
+                for i in range(3 - len(suggested_periods)):
+                    start = timestamps[0] + (i + len(suggested_periods)) * spacing
+                    suggested_periods.append((start, 60))
+        
+        logger.info(f"\n  QCTools-based suggested analysis periods:")
+        for i, (start, duration) in enumerate(suggested_periods):
+            logger.info(f"    Period {i+1}: {start:.1f}s - {start+duration:.1f}s")
+        
+        return suggested_periods
 
 
 # Public API function for processing_mgmt to call
