@@ -324,6 +324,10 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         # Update the progress bar
         self.progress_bar.setMaximum(total_files)  # Set maximum to total files
         self.progress_bar.setValue(current_index - 1)  # Set value to index - 1
+
+        # Reset the detail progress bar for the new file
+        self.reset_progress_bars()
+
         # Scroll to bottom
         scrollbar = self.details_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
@@ -369,6 +373,16 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         
         # Force repaint
         self.update()
+
+    def reset_progress_bars(self):
+        """Reset all progress bars when starting a new file."""
+        # Reset the detail progress bar
+        self.detail_progress_bar.setValue(0)
+        self.detail_progress_bar.setMaximum(100)
+        self.overlay_label.setText("0%")
+        
+        # Optionally reset the main progress bar's text
+        self.progress_bar.setFormat("%p%")
 
 
 class DirectoryListWidget(QListWidget):
