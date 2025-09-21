@@ -3,12 +3,13 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QPushButton, QAbstractItemView, QTextEdit, 
     QProgressBar, QSplitter
 )
-from PyQt6.QtCore import Qt, QEvent, QSize
+from PyQt6.QtCore import Qt, QEvent, QSize, QSettings
 from PyQt6.QtGui import QPalette, QFont
 
 import os
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from AV_Spex.gui.gui_processing_window_console import ConsoleTextEdit, MessageType
+from AV_Spex.gui.gui_theme_manager import ThemeManager
 
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import ChecksConfig
@@ -26,6 +27,8 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         self.resize(700, 500)  # Set initial size
         self.setMinimumSize(500, 300)  # Set minimum size
         self.setWindowFlags(Qt.WindowType.Window)
+        # Initialize settings for this window
+        self.settings = QSettings('NMAAHC', 'AVSpex')
         
         # Central widget and main_layout
         central_widget = QWidget()
@@ -58,9 +61,58 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         self.steps_list.setMinimumWidth(150)  # Ensure minimum width
         splitter.addWidget(self.steps_list)
 
+        # Create a container for the console and zoom controls
+        console_container = QWidget()
+        console_layout = QVBoxLayout(console_container)
+        console_layout.setContentsMargins(0, 0, 0, 0)
+        console_layout.setSpacing(2)
+
+        # Create zoom controls toolbar
+        zoom_toolbar = QWidget()
+        zoom_layout = QHBoxLayout(zoom_toolbar)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(2)
+
+        # Add zoom label
+        zoom_label = QLabel("Text Size:")
+        zoom_layout.addWidget(zoom_label)
+
+        # Zoom out button
+        self.zoom_out_button = QPushButton("-")
+        self.zoom_out_button.setMaximumWidth(30)
+        self.zoom_out_button.setToolTip("Decrease text size (Ctrl+-)")
+        self.zoom_out_button.clicked.connect(self.zoom_out_console)
+        zoom_layout.addWidget(self.zoom_out_button)
+
+        # Zoom reset button
+        self.zoom_reset_button = QPushButton("Reset")
+        self.zoom_reset_button.setMaximumWidth(50)
+        self.zoom_reset_button.setToolTip("Reset text size to default")
+        self.zoom_reset_button.clicked.connect(self.reset_console_zoom)
+        zoom_layout.addWidget(self.zoom_reset_button)
+
+        # Zoom in button
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setMaximumWidth(30)
+        self.zoom_in_button.setToolTip("Increase text size (Ctrl++)")
+        self.zoom_in_button.clicked.connect(self.zoom_in_console)
+        zoom_layout.addWidget(self.zoom_in_button)
+
+        # Current size label
+        self.font_size_label = QLabel("14pt")
+        self.font_size_label.setMinimumWidth(40)
+        zoom_layout.addWidget(self.font_size_label)
+
+        # Add stretch to push controls to the left
+        zoom_layout.addStretch()
+
+        # Add toolbar to console container
+        console_layout.addWidget(zoom_toolbar)
+
         # Details text - use custom ConsoleTextEdit instead of QTextEdit
         self.details_text = ConsoleTextEdit()
-        splitter.addWidget(self.details_text)
+        console_layout.addWidget(self.details_text)
+        splitter.addWidget(console_container)
 
         # Set initial splitter sizes
         splitter.setSizes([200, 500])  # Allocate more space to the details text
@@ -90,6 +142,10 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         # Connect theme changes to progress bar styling
         self.theme_manager = ThemeManager.instance()
         self.theme_manager.themeChanged.connect(self.apply_progress_bar_style)
+        # After theme handling setup, style the zoom buttons
+        self.style_zoom_buttons()
+        # Load saved zoom preference if it exists
+        self.load_zoom_preference()
 
         # Initial welcome message
         self.details_text.append_message("Processing window initialized", MessageType.INFO)
@@ -383,6 +439,139 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         
         # Optionally reset the main progress bar's text
         self.progress_bar.setFormat("%p%")
+
+    def zoom_in_console(self):
+        """Increase console text size."""
+        if self.details_text.zoom_in():
+            self.update_font_size_label()
+            self.update_zoom_button_states()
+            self.save_zoom_preference()
+
+    def zoom_out_console(self):
+        """Decrease console text size."""
+        if self.details_text.zoom_out():
+            self.update_font_size_label()
+            self.update_zoom_button_states()
+            self.save_zoom_preference()
+
+    def reset_console_zoom(self):
+        """Reset console text size to default."""
+        self.details_text.reset_zoom()
+        self.update_font_size_label()
+        self.update_zoom_button_states()
+        self.save_zoom_preference()
+
+    def update_font_size_label(self):
+        """Update the font size label with current size."""
+        size = self.details_text.get_current_font_size()
+        self.font_size_label.setText(f"{size}pt")
+
+    def update_zoom_button_states(self):
+        """Enable/disable zoom buttons based on current size limits."""
+        current_size = self.details_text.get_current_font_size()
+        self.zoom_in_button.setEnabled(current_size < self.details_text._max_font_size)
+        self.zoom_out_button.setEnabled(current_size > self.details_text._min_font_size)
+
+    def save_zoom_preference(self):
+        """Save the current zoom level to settings."""
+        self.settings.setValue('console_font_size', self.details_text.get_current_font_size())
+
+    def load_zoom_preference(self):
+        """Load saved zoom level from settings."""
+        saved_size = self.settings.value('console_font_size', 14, type=int)
+        if saved_size != 14:  # Only apply if different from default
+            self.details_text._current_font_size = saved_size
+            self.details_text._apply_font_size_change()
+            self.update_font_size_label()
+            self.update_zoom_button_states()
+
+    def style_zoom_buttons(self):
+        """Apply theme-aware styling to zoom buttons."""
+        theme_manager = ThemeManager.instance()
+        
+        # Style the zoom buttons with standard button styling
+        theme_manager.style_button(self.zoom_in_button)
+        theme_manager.style_button(self.zoom_out_button)
+        theme_manager.style_button(self.zoom_reset_button)
+
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts for zooming."""
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key.Key_Plus or event.key() == Qt.Key.Key_Equal:
+                self.zoom_in_console()
+            elif event.key() == Qt.Key.Key_Minus:
+                self.zoom_out_console()
+            elif event.key() == Qt.Key.Key_0:
+                self.reset_console_zoom()
+        super().keyPressEvent(event)
+
+    def on_theme_changed(self, palette):
+        """Handle theme changes - update zoom button styling."""
+        # Call parent implementation
+        super().on_theme_changed(palette)
+        
+        # Re-style the zoom buttons with the new theme
+        self.style_zoom_buttons()
+        
+        # Force update of the console text styling
+        theme_manager = ThemeManager.instance()
+        theme_manager.style_console_text(self.details_text)
+
+    def style_zoom_buttons(self):
+        """Apply custom theme-aware styling to zoom buttons."""
+        theme_manager = ThemeManager.instance()
+        palette = self.palette()
+        
+        # Get theme colors
+        button_color = palette.color(palette.ColorRole.Button).name()
+        text_color = palette.color(palette.ColorRole.ButtonText).name()
+        highlight_color = palette.color(palette.ColorRole.Highlight).name()
+        
+        # Custom style for zoom buttons with a distinctive look
+        zoom_button_style = f"""
+            QPushButton {{
+                font-weight: bold;
+                font-size: 16px;
+                padding: 4px;
+                border: 1px solid gray;
+                border-radius: 4px;
+                background-color: {button_color};
+                color: {text_color};
+            }}
+            QPushButton:hover {{
+                background-color: {highlight_color};
+                color: white;
+            }}
+            QPushButton:pressed {{
+                background-color: #3a7bc8;
+            }}
+            QPushButton:disabled {{
+                background-color: {button_color};
+                color: gray;
+                opacity: 0.5;
+            }}
+        """
+        
+        # Apply the style to zoom buttons
+        self.zoom_in_button.setStyleSheet(zoom_button_style)
+        self.zoom_out_button.setStyleSheet(zoom_button_style)
+        
+        # Slightly different style for reset button
+        reset_button_style = f"""
+            QPushButton {{
+                font-weight: bold;
+                padding: 4px 8px;
+                border: 1px solid gray;
+                border-radius: 4px;
+                background-color: {button_color};
+                color: {text_color};
+            }}
+            QPushButton:hover {{
+                background-color: {highlight_color};
+                color: white;
+            }}
+        """
+        self.zoom_reset_button.setStyleSheet(reset_button_style)
 
 
 class DirectoryListWidget(QListWidget):
