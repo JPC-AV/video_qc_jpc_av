@@ -26,7 +26,7 @@ def display_processing_banner(video_id=None):
 
     if video_id:
         ascii_video_id = text2art(video_id, font='small')
-        logger.warning(f'Processing complete:{ascii_video_id}\n')
+        logger.warning(f'Processing complete:\n{ascii_video_id}\n')
         # Get current time as a time structure
         local_time = time.localtime()
         # Format the time into a custom string (Year-Month-Day Hour:Minute:Second)
