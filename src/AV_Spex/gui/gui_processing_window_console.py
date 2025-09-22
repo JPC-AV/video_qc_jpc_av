@@ -99,6 +99,12 @@ class ConsoleTextEdit(QTextEdit):
         """Reset font size to default."""
         self._current_font_size = 14
         self._apply_font_size_change()
+
+    def clear_console(self):
+        """Clear all text from the console."""
+        self.clear()
+        # Optionally reset format cache
+        self._format_cache.clear()
     
     def _apply_font_size_change(self):
         """Apply the font size change to existing text and clear format cache."""

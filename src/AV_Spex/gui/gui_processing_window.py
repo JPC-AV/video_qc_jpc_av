@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QListWidget, QListWidgetItem, QPushButton, QAbstractItemView, QTextEdit, 
-    QProgressBar, QSplitter
+    QProgressBar, QSplitter, QMessageBox
 )
 from PyQt6.QtCore import Qt, QEvent, QSize, QSettings
 from PyQt6.QtGui import QPalette, QFont
@@ -103,6 +103,19 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         self.font_size_label.setMinimumWidth(40)
         zoom_layout.addWidget(self.font_size_label)
 
+        # After the font_size_label, before the stretch
+        zoom_layout.addWidget(self.font_size_label)
+
+        # Add separator space
+        zoom_layout.addSpacing(20)
+
+        # Clear console button
+        self.clear_console_button = QPushButton("Clear")
+        self.clear_console_button.setMaximumWidth(60)
+        self.clear_console_button.setToolTip("Clear all console output")
+        self.clear_console_button.clicked.connect(self.clear_console_with_confirmation)
+        zoom_layout.addWidget(self.clear_console_button)
+
         # Add stretch to push controls to the left
         zoom_layout.addStretch()
 
@@ -152,6 +165,60 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         self.details_text.append_message("Ready to process files", MessageType.SUCCESS)
 
         self.logger = connect_logger_to_ui(self)
+
+    def clear_console_with_confirmation(self):
+        """Clear console after user confirmation."""
+        
+        # Create confirmation dialog
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Clear Console")
+        msg_box.setText("Are you sure you want to clear all console output?")
+        msg_box.setInformativeText("This action cannot be undone.")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        
+        # Style the message box buttons if theme manager is available
+        theme_manager = ThemeManager.instance()
+        if theme_manager:
+            # Apply theme-aware styling to message box
+            msg_box.setStyleSheet(self.get_message_box_style())
+        
+        # Show dialog and get response
+        response = msg_box.exec()
+        
+        if response == QMessageBox.StandardButton.Yes:
+            # Clear the console
+            self.details_text.clear_console()
+            
+            # Add a message indicating console was cleared
+            self.details_text.append_message("Console cleared", MessageType.INFO)
+            
+    def get_message_box_style(self):
+        """Get theme-aware styling for message boxes."""
+        palette = self.palette()
+        bg_color = palette.color(palette.ColorRole.Window).name()
+        text_color = palette.color(palette.ColorRole.WindowText).name()
+        button_color = palette.color(palette.ColorRole.Button).name()
+        button_text = palette.color(palette.ColorRole.ButtonText).name()
+        
+        return f"""
+            QMessageBox {{
+                background-color: {bg_color};
+                color: {text_color};
+            }}
+            QMessageBox QPushButton {{
+                min-width: 60px;
+                padding: 5px 15px;
+                background-color: {button_color};
+                color: {button_text};
+                border: 1px solid gray;
+                border-radius: 3px;
+            }}
+            QMessageBox QPushButton:hover {{
+                background-color: #4CAF50;
+                color: white;
+            }}
+        """
 
     def sizeHint(self):
         """Override size hint to provide default window size"""
@@ -493,13 +560,34 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             self.update_zoom_button_states()
 
     def style_zoom_buttons(self):
-        """Apply theme-aware styling to zoom buttons."""
+        """Apply theme-aware styling to zoom buttons and clear button."""
         theme_manager = ThemeManager.instance()
         
         # Style the zoom buttons with standard button styling
         theme_manager.style_button(self.zoom_in_button)
         theme_manager.style_button(self.zoom_out_button)
         theme_manager.style_button(self.zoom_reset_button)
+        
+        # Style clear button with a slightly different look
+        palette = self.palette()
+        button_color = palette.color(palette.ColorRole.Button).name()
+        text_color = palette.color(palette.ColorRole.ButtonText).name()
+        
+        clear_button_style = f"""
+            QPushButton {{
+                font-weight: bold;
+                padding: 4px 8px;
+                border: 1px solid gray;
+                border-radius: 4px;
+                background-color: {button_color};
+                color: {text_color};
+            }}
+            QPushButton:hover {{
+                background-color: #ff9999;
+                color: #4d2b12;
+            }}
+        """
+        self.clear_console_button.setStyleSheet(clear_button_style)
 
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts for zooming."""
