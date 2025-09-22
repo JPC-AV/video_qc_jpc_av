@@ -417,15 +417,22 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             parent.on_processing_window_hidden()
 
     def on_theme_changed(self, palette):
-        """Handle theme changes"""
+        """Handle theme changes - update all styling."""
         # Apply palette to all components
         self.setPalette(palette)
         self.file_status_label.setPalette(palette)
         
-        # Style the cancel button
+        # Get theme manager
         theme_manager = ThemeManager.instance()
-        theme_manager.style_buttons(self)
+        
+        # Style console text
         theme_manager.style_console_text(self.details_text)
+        
+        # Style the cancel button with special styling
+        theme_manager.style_button(self.cancel_button)
+        
+        # Style the zoom buttons
+        self.style_zoom_buttons()
         
         # Force repaint
         self.update()
@@ -504,74 +511,6 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             elif event.key() == Qt.Key.Key_0:
                 self.reset_console_zoom()
         super().keyPressEvent(event)
-
-    def on_theme_changed(self, palette):
-        """Handle theme changes - update zoom button styling."""
-        # Call parent implementation
-        super().on_theme_changed(palette)
-        
-        # Re-style the zoom buttons with the new theme
-        self.style_zoom_buttons()
-        
-        # Force update of the console text styling
-        theme_manager = ThemeManager.instance()
-        theme_manager.style_console_text(self.details_text)
-
-    def style_zoom_buttons(self):
-        """Apply custom theme-aware styling to zoom buttons."""
-        theme_manager = ThemeManager.instance()
-        palette = self.palette()
-        
-        # Get theme colors
-        button_color = palette.color(palette.ColorRole.Button).name()
-        text_color = palette.color(palette.ColorRole.ButtonText).name()
-        highlight_color = palette.color(palette.ColorRole.Highlight).name()
-        
-        # Custom style for zoom buttons with a distinctive look
-        zoom_button_style = f"""
-            QPushButton {{
-                font-weight: bold;
-                font-size: 16px;
-                padding: 4px;
-                border: 1px solid gray;
-                border-radius: 4px;
-                background-color: {button_color};
-                color: {text_color};
-            }}
-            QPushButton:hover {{
-                background-color: {highlight_color};
-                color: white;
-            }}
-            QPushButton:pressed {{
-                background-color: #3a7bc8;
-            }}
-            QPushButton:disabled {{
-                background-color: {button_color};
-                color: gray;
-                opacity: 0.5;
-            }}
-        """
-        
-        # Apply the style to zoom buttons
-        self.zoom_in_button.setStyleSheet(zoom_button_style)
-        self.zoom_out_button.setStyleSheet(zoom_button_style)
-        
-        # Slightly different style for reset button
-        reset_button_style = f"""
-            QPushButton {{
-                font-weight: bold;
-                padding: 4px 8px;
-                border: 1px solid gray;
-                border-radius: 4px;
-                background-color: {button_color};
-                color: {text_color};
-            }}
-            QPushButton:hover {{
-                background-color: {highlight_color};
-                color: white;
-            }}
-        """
-        self.zoom_reset_button.setStyleSheet(reset_button_style)
 
 
 class DirectoryListWidget(QListWidget):
