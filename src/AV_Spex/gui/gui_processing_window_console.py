@@ -111,22 +111,32 @@ class ConsoleTextEdit(QTextEdit):
         # Clear the format cache so new formats will use the new size
         self._format_cache.clear()
         
-        # Get all text
-        cursor = self.textCursor()
-        cursor.select(QTextCursor.SelectionType.Document)
-        
-        # Create a new font with the updated size
+        # Update the widget's default font for new text
         font = QFont("Courier New, monospace")
         font.setPointSize(self._current_font_size)
-        
-        # Apply to existing text
-        char_format = QTextCharFormat()
-        char_format.setFont(font)
-        cursor.mergeCharFormat(char_format)
-        
-        # Update the widget's default font
         self.setFont(font)
-    
+        
+        # Iterate through the document and update only font size, preserving other formatting
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        
+        while not cursor.atEnd():
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+            
+            # Get current format
+            current_format = cursor.charFormat()
+            
+            # Update only the font size, keeping bold and color
+            current_font = current_format.font()
+            current_font.setPointSize(self._current_font_size)
+            current_format.setFont(current_font)
+            
+            # Apply the updated format
+            cursor.mergeCharFormat(current_format)
+            
+            # Move to next block
+            cursor.movePosition(QTextCursor.MoveOperation.NextBlock)
+        
     def _get_format_for_type(self, msg_type):
         """
         Get the text format for a specific message type.
