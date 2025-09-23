@@ -255,16 +255,17 @@ def read_xml_file(xml_file_path):
 
 def find_qc_metadata(destination_directory):
     """
-    Find QC metadata files including MediaConch policy name.
+    Find QC metadata files including MediaConch policy.
     
     Returns:
-        tuple: Paths to various metadata files and policy name
+        tuple: Paths to various metadata files and policy content
     """
     exiftool_output_path = None 
     ffprobe_output_path = None
     mediainfo_output_path = None
     mediaconch_csv = None
     fixity_sidecar = None
+    mediaconch_policy_content = None
     mediaconch_policy_name = None
 
     if os.path.isdir(destination_directory):
@@ -287,20 +288,23 @@ def find_qc_metadata(destination_directory):
             if file.endswith('fixity.txt'):
                 fixity_sidecar = file_path
 
-    # Get MediaConch policy name if MediaConch was run
+    # Get MediaConch policy file if MediaConch was run
     if mediaconch_csv:
         try:
-            # Get policy name from config manager
+            # Get policy file path from config manager
             policy_name = config_mgr.get_config('checks', ChecksConfig).tools.mediaconch.mediaconch_policy
             if policy_name:
-                mediaconch_policy_name = policy_name
-            else:
-                logger.warning("No MediaConch policy configured")
+                policy_path = config_mgr.get_policy_path(policy_name)
+                if policy_path and os.path.isfile(policy_path):
+                    mediaconch_policy_content = read_xml_file(policy_path)
+                    mediaconch_policy_name = policy_name
+                else:
+                    logger.warning(f"MediaConch policy file not found: {policy_name}")
         except Exception as e:
-            logger.error(f"Error retrieving MediaConch policy name: {e}")
+            logger.error(f"Error retrieving MediaConch policy: {e}")
 
     return (exiftool_output_path, ffprobe_output_path, mediainfo_output_path, 
-            mediaconch_csv, fixity_sidecar, mediaconch_policy_name)
+            mediaconch_csv, fixity_sidecar, mediaconch_policy_content, mediaconch_policy_name)
 
 
 def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile_name, thumbPath):
@@ -929,9 +933,7 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
 
 
 def write_html_report(video_id, report_directory, destination_directory, html_report_path, video_path=None, check_cancelled=None):
-    """
-    Modified to include MediaConch policy file in the HTML report.
-    """
+    
     qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
@@ -1014,9 +1016,10 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if check_cancelled():
         return
     
-    # Modified to get MediaConch policy name only
+    # Modified to get MediaConch policy content
     (exiftool_output_path, mediainfo_output_path, ffprobe_output_path, 
-     mediaconch_csv, fixity_sidecar, mediaconch_policy_name) = find_qc_metadata(destination_directory)
+     mediaconch_csv, fixity_sidecar, mediaconch_policy_content, 
+     mediaconch_policy_name) = find_qc_metadata(destination_directory)
 
     if check_cancelled():
         return
@@ -1108,7 +1111,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     logo_image_path = config_mgr.get_logo_path('av_spex_the_logo.png')
     eq_image_path = config_mgr.get_logo_path('germfree_eq.png')
 
-    # HTML template
+    # HTML template with JavaScript functions
     html_template = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1163,7 +1166,51 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
                 white-space: pre-wrap;
                 word-wrap: break-word;
             }}
+            .xml-content {{
+                background-color: #f8f9fa;
+                border: 1px solid #6c757d;
+                padding: 15px;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                max-height: 400px;
+                overflow-y: auto;
+            }}
         </style>
+        <script>
+        function openImage(imgData, caption) {{
+            var newWindow = window.open('', '_blank');
+            newWindow.document.write('<html><head><title>' + caption + '</title></head><body style="margin:0; background:#000; display:flex; align-items:center; justify-content:center; height:100vh;">');
+            newWindow.document.write('<img src="' + imgData + '" style="max-width:100%; max-height:100%; object-fit:contain;">');
+            newWindow.document.write('</body></html>');
+            newWindow.document.close();
+        }}
+
+        function toggleTable(tagId) {{
+            var table = document.getElementById('table_' + tagId);
+            var link = document.getElementById('link_' + tagId);
+            if (table.style.display === 'none') {{
+                table.style.display = 'block';
+                link.textContent = 'Hide all failures ▲';
+            }} else {{
+                table.style.display = 'none';
+                link.textContent = 'Show all failures ▼';
+            }}
+        }}
+
+        function toggleXmlContent(contentId) {{
+            var content = document.getElementById(contentId);
+            var link = document.getElementById('link_' + contentId);
+            if (content.style.display === 'none') {{
+                content.style.display = 'block';
+                link.textContent = 'Hide policy content ▲';
+            }} else {{
+                content.style.display = 'none';
+                link.textContent = 'Show policy content ▼';
+            }}
+        }}
+        </script>
         <img src="{logo_image_path}" alt="AV Spex Logo" style="display: block; margin-left: auto; margin-right: auto; width: 25%; margin-top: 20px;">
     </head>
     <body>
@@ -1186,10 +1233,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         {mc_csv_html}
         """
 
-    # Add MediaConch policy section if available
-    if mediaconch_policy_name and mediaconch_csv:
+    # Add MediaConch policy section if available - NOW WITH COLLAPSIBLE FUNCTIONALITY
+    if mediaconch_policy_content and mediaconch_policy_name:
         html_template += f"""
-        <h3>MediaConch Policy Used: {mediaconch_policy_name}</h3>
+        <h3>MediaConch Policy File: {mediaconch_policy_name}</h3>
+        <a id="link_mediaconch_policy" href="javascript:void(0);" onclick="toggleXmlContent('mediaconch_policy')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show policy content ▼</a>
+        <div id="mediaconch_policy" class="xml-content" style="display: none;">{mediaconch_policy_content}</div>
         """
 
     if difference_csv:
