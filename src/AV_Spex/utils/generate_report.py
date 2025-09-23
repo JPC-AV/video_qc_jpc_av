@@ -228,13 +228,45 @@ def find_report_csvs(report_directory):
     return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv
 
 
-def find_qc_metadata(destination_directory):
+def read_xml_file(xml_file_path):
+    """
+    Read XML file content with proper encoding handling.
+    
+    Args:
+        xml_file_path (str): Path to the XML file
+        
+    Returns:
+        str: XML content or error message
+    """
+    try:
+        # First try UTF-8
+        with open(xml_file_path, 'r', encoding='utf-8') as file:
+            return file.read()
+    except UnicodeDecodeError:
+        try:
+            # If UTF-8 fails, try latin-1 which can handle any byte
+            with open(xml_file_path, 'r', encoding='latin-1') as file:
+                logger.warning(f"Used latin-1 encoding as fallback for {xml_file_path}")
+                return file.read()
+        except Exception as e:
+            logger.error(f"Failed to decode {xml_file_path} with fallback encoding: {e}")
+            return f"[Error reading XML file: {e}]"
 
+
+def find_qc_metadata(destination_directory):
+    """
+    Find QC metadata files including MediaConch policy.
+    
+    Returns:
+        tuple: Paths to various metadata files and policy content
+    """
     exiftool_output_path = None 
     ffprobe_output_path = None
     mediainfo_output_path = None
     mediaconch_csv = None
     fixity_sidecar = None
+    mediaconch_policy_content = None
+    mediaconch_policy_name = None
 
     if os.path.isdir(destination_directory):
         for file in os.listdir(destination_directory):
@@ -256,7 +288,23 @@ def find_qc_metadata(destination_directory):
             if file.endswith('fixity.txt'):
                 fixity_sidecar = file_path
 
-    return exiftool_output_path, ffprobe_output_path, mediainfo_output_path, mediaconch_csv, fixity_sidecar
+    # Get MediaConch policy file if MediaConch was run
+    if mediaconch_csv:
+        try:
+            # Get policy file path from config manager
+            policy_name = config_mgr.get_config('checks', ChecksConfig).tools.mediaconch.mediaconch_policy
+            if policy_name:
+                policy_path = config_mgr.get_policy_path(policy_name)
+                if policy_path and os.path.isfile(policy_path):
+                    mediaconch_policy_content = read_xml_file(policy_path)
+                    mediaconch_policy_name = policy_name
+                else:
+                    logger.warning(f"MediaConch policy file not found: {policy_name}")
+        except Exception as e:
+            logger.error(f"Error retrieving MediaConch policy: {e}")
+
+    return (exiftool_output_path, ffprobe_output_path, mediainfo_output_path, 
+            mediaconch_csv, fixity_sidecar, mediaconch_policy_content, mediaconch_policy_name)
 
 
 def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile_name, thumbPath):
@@ -885,7 +933,9 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
 
 
 def write_html_report(video_id, report_directory, destination_directory, html_report_path, video_path=None, check_cancelled=None):
-
+    """
+    Modified to include MediaConch policy file in the HTML report.
+    """
     qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
@@ -896,7 +946,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if not os.path.exists(thumbPath):
         os.makedirs(thumbPath)
     
-    # Generate thumbnails for peak failures
+    # Generate thumbnails for peak failures (existing code...)
     generated_thumbs = {}
     
     if profile_fails_csv and video_path:
@@ -968,7 +1018,10 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if check_cancelled():
         return
     
-    exiftool_output_path, mediainfo_output_path, ffprobe_output_path, mediaconch_csv, fixity_sidecar = find_qc_metadata(destination_directory)
+    # Modified to get MediaConch policy content
+    (exiftool_output_path, mediainfo_output_path, ffprobe_output_path, 
+     mediaconch_csv, fixity_sidecar, mediaconch_policy_content, 
+     mediaconch_policy_name) = find_qc_metadata(destination_directory)
 
     if check_cancelled():
         return
@@ -1005,7 +1058,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if check_cancelled():
         return
 
-    # Create graphs for all existing csv files
+    # Create graphs for all existing csv files (existing code...)
     if qctools_bars_eval_check_output and failureInfoSummary_colorbars:
         colorbars_eval_html = make_profile_piecharts(qctools_bars_eval_check_output, thumbs_dict, failureInfoSummary_colorbars, video_id, failure_csv_path=colorbars_eval_fails_csv_path, check_cancelled=check_cancelled)
     elif qctools_bars_eval_check_output and failureInfoSummary_colorbars is None:
@@ -1115,6 +1168,17 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
                 white-space: pre-wrap;
                 word-wrap: break-word;
             }}
+            .xml-content {{
+                background-color: #f8f9fa;
+                border: 1px solid #6c757d;
+                padding: 15px;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                max-height: 400px;
+                overflow-y: auto;
+            }}
         </style>
         <img src="{logo_image_path}" alt="AV Spex Logo" style="display: block; margin-left: auto; margin-right: auto; width: 25%; margin-top: 20px;">
     </head>
@@ -1138,12 +1202,20 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         {mc_csv_html}
         """
 
+    # Add MediaConch policy section if available
+    if mediaconch_policy_content and mediaconch_policy_name:
+        html_template += f"""
+        <h3>MediaConch Policy File: {mediaconch_policy_name}</h3>
+        <div class="xml-content">{mediaconch_policy_content}</div>
+        """
+
     if difference_csv:
         html_template += f"""
         <h3>{difference_csv_filename}</h3>
         {diff_csv_html}
         """
 
+    # Rest of the HTML template remains the same...
     if no_qct_parse_files:
         html_template += """
         <h3>QCT-Parse Analysis</h3>
