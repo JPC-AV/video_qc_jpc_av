@@ -255,17 +255,16 @@ def read_xml_file(xml_file_path):
 
 def find_qc_metadata(destination_directory):
     """
-    Find QC metadata files including MediaConch policy.
+    Find QC metadata files including MediaConch policy name.
     
     Returns:
-        tuple: Paths to various metadata files and policy content
+        tuple: Paths to various metadata files and policy name
     """
     exiftool_output_path = None 
     ffprobe_output_path = None
     mediainfo_output_path = None
     mediaconch_csv = None
     fixity_sidecar = None
-    mediaconch_policy_content = None
     mediaconch_policy_name = None
 
     if os.path.isdir(destination_directory):
@@ -288,23 +287,20 @@ def find_qc_metadata(destination_directory):
             if file.endswith('fixity.txt'):
                 fixity_sidecar = file_path
 
-    # Get MediaConch policy file if MediaConch was run
+    # Get MediaConch policy name if MediaConch was run
     if mediaconch_csv:
         try:
-            # Get policy file path from config manager
+            # Get policy name from config manager
             policy_name = config_mgr.get_config('checks', ChecksConfig).tools.mediaconch.mediaconch_policy
             if policy_name:
-                policy_path = config_mgr.get_policy_path(policy_name)
-                if policy_path and os.path.isfile(policy_path):
-                    mediaconch_policy_content = read_xml_file(policy_path)
-                    mediaconch_policy_name = policy_name
-                else:
-                    logger.warning(f"MediaConch policy file not found: {policy_name}")
+                mediaconch_policy_name = policy_name
+            else:
+                logger.warning("No MediaConch policy configured")
         except Exception as e:
-            logger.error(f"Error retrieving MediaConch policy: {e}")
+            logger.error(f"Error retrieving MediaConch policy name: {e}")
 
     return (exiftool_output_path, ffprobe_output_path, mediainfo_output_path, 
-            mediaconch_csv, fixity_sidecar, mediaconch_policy_content, mediaconch_policy_name)
+            mediaconch_csv, fixity_sidecar, mediaconch_policy_name)
 
 
 def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile_name, thumbPath):
@@ -1018,10 +1014,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if check_cancelled():
         return
     
-    # Modified to get MediaConch policy content
+    # Modified to get MediaConch policy name only
     (exiftool_output_path, mediainfo_output_path, ffprobe_output_path, 
-     mediaconch_csv, fixity_sidecar, mediaconch_policy_content, 
-     mediaconch_policy_name) = find_qc_metadata(destination_directory)
+     mediaconch_csv, fixity_sidecar, mediaconch_policy_name) = find_qc_metadata(destination_directory)
 
     if check_cancelled():
         return
@@ -1168,17 +1163,6 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
                 white-space: pre-wrap;
                 word-wrap: break-word;
             }}
-            .xml-content {{
-                background-color: #f8f9fa;
-                border: 1px solid #6c757d;
-                padding: 15px;
-                white-space: pre-wrap;
-                word-wrap: break-word;
-                font-family: 'Courier New', monospace;
-                font-size: 12px;
-                max-height: 400px;
-                overflow-y: auto;
-            }}
         </style>
         <img src="{logo_image_path}" alt="AV Spex Logo" style="display: block; margin-left: auto; margin-right: auto; width: 25%; margin-top: 20px;">
     </head>
@@ -1203,10 +1187,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         """
 
     # Add MediaConch policy section if available
-    if mediaconch_policy_content and mediaconch_policy_name:
+    if mediaconch_policy_name and mediaconch_csv:
         html_template += f"""
-        <h3>MediaConch Policy File: {mediaconch_policy_name}</h3>
-        <div class="xml-content">{mediaconch_policy_content}</div>
+        <h3>MediaConch Policy Used: {mediaconch_policy_name}</h3>
         """
 
     if difference_csv:
