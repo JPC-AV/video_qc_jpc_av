@@ -33,6 +33,11 @@ class ConsoleTextEdit(QTextEdit):
         
         # Initialize format cache
         self._format_cache = {}
+        
+        # Store current font size for zoom functionality
+        self._current_font_size = 14  # Default size
+        self._min_font_size = 8
+        self._max_font_size = 32
 
         # Disable word wrapping for horizontal scrolling
         self.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
@@ -70,6 +75,68 @@ class ConsoleTextEdit(QTextEdit):
         # Scroll to bottom
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
     
+    def get_current_font_size(self):
+        """Get the current font size."""
+        return self._current_font_size
+    
+    def zoom_in(self):
+        """Increase font size by 2 points."""
+        if self._current_font_size < self._max_font_size:
+            self._current_font_size += 2
+            self._apply_font_size_change()
+            return True
+        return False
+    
+    def zoom_out(self):
+        """Decrease font size by 2 points."""
+        if self._current_font_size > self._min_font_size:
+            self._current_font_size -= 2
+            self._apply_font_size_change()
+            return True
+        return False
+    
+    def reset_zoom(self):
+        """Reset font size to default."""
+        self._current_font_size = 14
+        self._apply_font_size_change()
+
+    def clear_console(self):
+        """Clear all text from the console."""
+        self.clear()
+        # Optionally reset format cache
+        self._format_cache.clear()
+    
+    def _apply_font_size_change(self):
+        """Apply the font size change to existing text and clear format cache."""
+        # Clear the format cache so new formats will use the new size
+        self._format_cache.clear()
+        
+        # Update the widget's default font for new text
+        font = QFont("Courier New, monospace")
+        font.setPointSize(self._current_font_size)
+        self.setFont(font)
+        
+        # Iterate through the document and update only font size, preserving other formatting
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        
+        while not cursor.atEnd():
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+            
+            # Get current format
+            current_format = cursor.charFormat()
+            
+            # Update only the font size, keeping bold and color
+            current_font = current_format.font()
+            current_font.setPointSize(self._current_font_size)
+            current_format.setFont(current_font)
+            
+            # Apply the updated format
+            cursor.mergeCharFormat(current_format)
+            
+            # Move to next block
+            cursor.movePosition(QTextCursor.MoveOperation.NextBlock)
+        
     def _get_format_for_type(self, msg_type):
         """
         Get the text format for a specific message type.
@@ -88,9 +155,9 @@ class ConsoleTextEdit(QTextEdit):
         # Create a new format
         fmt = QTextCharFormat()
         
-        # Base font (monospace)
+        # Base font (monospace) - now using current font size
         font = QFont("Courier New, monospace")
-        font.setPointSize(14)
+        font.setPointSize(self._current_font_size)  # Use current font size
         
         # Apply styling based on message type
         if msg_type == MessageType.NORMAL:
@@ -122,10 +189,6 @@ class ConsoleTextEdit(QTextEdit):
         self._format_cache[msg_type] = fmt
         return fmt
     
-    def clear_formats(self):
-        """Clear the format cache when theme changes"""
-        self._format_cache.clear()
-
     def add_processing_divider(self, text="New Processing Run"):
         """
         Add a visible divider line to indicate a new processing run.
@@ -141,10 +204,10 @@ class ConsoleTextEdit(QTextEdit):
         if not self.toPlainText().isspace() and self.toPlainText():
             cursor.insertText("\n\n")
         
-        # Create a divider format
+        # Create a divider format - now using current font size
         divider_format = QTextCharFormat()
         font = QFont("Courier New, monospace")
-        font.setPointSize(14)
+        font.setPointSize(self._current_font_size)  # Use current font size
         font.setBold(True)
         divider_format.setFont(font)
         divider_format.setForeground(QColor(100, 100, 255))  # Blue color for the divider

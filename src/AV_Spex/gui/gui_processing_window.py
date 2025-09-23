@@ -1,14 +1,15 @@
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QListWidget, QListWidgetItem, QPushButton, QAbstractItemView, QTextEdit, 
-    QProgressBar, QSplitter
+    QProgressBar, QSplitter, QMessageBox
 )
-from PyQt6.QtCore import Qt, QEvent, QSize
+from PyQt6.QtCore import Qt, QEvent, QSize, QSettings
 from PyQt6.QtGui import QPalette, QFont
 
 import os
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from AV_Spex.gui.gui_processing_window_console import ConsoleTextEdit, MessageType
+from AV_Spex.gui.gui_theme_manager import ThemeManager
 
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import ChecksConfig
@@ -26,6 +27,8 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         self.resize(700, 500)  # Set initial size
         self.setMinimumSize(500, 300)  # Set minimum size
         self.setWindowFlags(Qt.WindowType.Window)
+        # Initialize settings for this window
+        self.settings = QSettings('NMAAHC', 'AVSpex')
         
         # Central widget and main_layout
         central_widget = QWidget()
@@ -58,9 +61,71 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         self.steps_list.setMinimumWidth(150)  # Ensure minimum width
         splitter.addWidget(self.steps_list)
 
+        # Create a container for the console and zoom controls
+        console_container = QWidget()
+        console_layout = QVBoxLayout(console_container)
+        console_layout.setContentsMargins(0, 0, 0, 0)
+        console_layout.setSpacing(2)
+
+        # Create zoom controls toolbar
+        zoom_toolbar = QWidget()
+        zoom_layout = QHBoxLayout(zoom_toolbar)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(2)
+
+        # Add zoom label
+        zoom_label = QLabel("Text Size:")
+        zoom_layout.addWidget(zoom_label)
+
+        # Zoom out button
+        self.zoom_out_button = QPushButton("-")
+        self.zoom_out_button.setMaximumWidth(30)
+        self.zoom_out_button.setToolTip("Decrease text size (Ctrl+-)")
+        self.zoom_out_button.clicked.connect(self.zoom_out_console)
+        zoom_layout.addWidget(self.zoom_out_button)
+
+        # Zoom reset button
+        self.zoom_reset_button = QPushButton("Reset")
+        self.zoom_reset_button.setMaximumWidth(50)
+        self.zoom_reset_button.setToolTip("Reset text size to default")
+        self.zoom_reset_button.clicked.connect(self.reset_console_zoom)
+        zoom_layout.addWidget(self.zoom_reset_button)
+
+        # Zoom in button
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setMaximumWidth(30)
+        self.zoom_in_button.setToolTip("Increase text size (Ctrl++)")
+        self.zoom_in_button.clicked.connect(self.zoom_in_console)
+        zoom_layout.addWidget(self.zoom_in_button)
+
+        # Current size label
+        self.font_size_label = QLabel("14pt")
+        self.font_size_label.setMinimumWidth(40)
+        zoom_layout.addWidget(self.font_size_label)
+
+        # After the font_size_label, before the stretch
+        zoom_layout.addWidget(self.font_size_label)
+
+        # Add separator space
+        zoom_layout.addSpacing(20)
+
+        # Clear console button
+        self.clear_console_button = QPushButton("Clear")
+        self.clear_console_button.setMaximumWidth(60)
+        self.clear_console_button.setToolTip("Clear all console output")
+        self.clear_console_button.clicked.connect(self.clear_console_with_confirmation)
+        zoom_layout.addWidget(self.clear_console_button)
+
+        # Add stretch to push controls to the left
+        zoom_layout.addStretch()
+
+        # Add toolbar to console container
+        console_layout.addWidget(zoom_toolbar)
+
         # Details text - use custom ConsoleTextEdit instead of QTextEdit
         self.details_text = ConsoleTextEdit()
-        splitter.addWidget(self.details_text)
+        console_layout.addWidget(self.details_text)
+        splitter.addWidget(console_container)
 
         # Set initial splitter sizes
         splitter.setSizes([200, 500])  # Allocate more space to the details text
@@ -90,12 +155,70 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         # Connect theme changes to progress bar styling
         self.theme_manager = ThemeManager.instance()
         self.theme_manager.themeChanged.connect(self.apply_progress_bar_style)
+        # After theme handling setup, style the zoom buttons
+        self.style_zoom_buttons()
+        # Load saved zoom preference if it exists
+        self.load_zoom_preference()
 
         # Initial welcome message
         self.details_text.append_message("Processing window initialized", MessageType.INFO)
         self.details_text.append_message("Ready to process files", MessageType.SUCCESS)
 
         self.logger = connect_logger_to_ui(self)
+
+    def clear_console_with_confirmation(self):
+        """Clear console after user confirmation."""
+        
+        # Create confirmation dialog
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Clear Console")
+        msg_box.setText("Are you sure you want to clear all console output?")
+        msg_box.setInformativeText("This action cannot be undone.")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        
+        # Style the message box buttons if theme manager is available
+        theme_manager = ThemeManager.instance()
+        if theme_manager:
+            # Apply theme-aware styling to message box
+            msg_box.setStyleSheet(self.get_message_box_style())
+        
+        # Show dialog and get response
+        response = msg_box.exec()
+        
+        if response == QMessageBox.StandardButton.Yes:
+            # Clear the console
+            self.details_text.clear_console()
+            
+            # Add a message indicating console was cleared
+            self.details_text.append_message("Console cleared", MessageType.INFO)
+            
+    def get_message_box_style(self):
+        """Get theme-aware styling for message boxes."""
+        palette = self.palette()
+        bg_color = palette.color(palette.ColorRole.Window).name()
+        text_color = palette.color(palette.ColorRole.WindowText).name()
+        button_color = palette.color(palette.ColorRole.Button).name()
+        button_text = palette.color(palette.ColorRole.ButtonText).name()
+        
+        return f"""
+            QMessageBox {{
+                background-color: {bg_color};
+                color: {text_color};
+            }}
+            QMessageBox QPushButton {{
+                min-width: 60px;
+                padding: 5px 15px;
+                background-color: {button_color};
+                color: {button_text};
+                border: 1px solid gray;
+                border-radius: 3px;
+            }}
+            QMessageBox QPushButton:hover {{
+                background-color: #4CAF50;
+                color: white;
+            }}
+        """
 
     def sizeHint(self):
         """Override size hint to provide default window size"""
@@ -324,6 +447,10 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         # Update the progress bar
         self.progress_bar.setMaximum(total_files)  # Set maximum to total files
         self.progress_bar.setValue(current_index - 1)  # Set value to index - 1
+
+        # Reset the detail progress bar for the new file
+        self.reset_progress_bars()
+
         # Scroll to bottom
         scrollbar = self.details_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
@@ -357,18 +484,121 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             parent.on_processing_window_hidden()
 
     def on_theme_changed(self, palette):
-        """Handle theme changes"""
+        """Handle theme changes - update all styling."""
         # Apply palette to all components
         self.setPalette(palette)
         self.file_status_label.setPalette(palette)
         
-        # Style the cancel button
+        # Get theme manager
         theme_manager = ThemeManager.instance()
-        theme_manager.style_buttons(self)
+        
+        # Style console text
         theme_manager.style_console_text(self.details_text)
+        
+        # Style the cancel button with special styling
+        theme_manager.style_button(self.cancel_button)
+        
+        # Style the zoom buttons
+        self.style_zoom_buttons()
         
         # Force repaint
         self.update()
+
+    def reset_progress_bars(self):
+        """Reset all progress bars when starting a new file."""
+        # Reset the detail progress bar
+        self.detail_progress_bar.setValue(0)
+        self.detail_progress_bar.setMaximum(100)
+        self.overlay_label.setText("0%")
+        
+        # Optionally reset the main progress bar's text
+        self.progress_bar.setFormat("%p%")
+
+    def zoom_in_console(self):
+        """Increase console text size."""
+        if self.details_text.zoom_in():
+            self.update_font_size_label()
+            self.update_zoom_button_states()
+            self.save_zoom_preference()
+
+    def zoom_out_console(self):
+        """Decrease console text size."""
+        if self.details_text.zoom_out():
+            self.update_font_size_label()
+            self.update_zoom_button_states()
+            self.save_zoom_preference()
+
+    def reset_console_zoom(self):
+        """Reset console text size to default."""
+        self.details_text.reset_zoom()
+        self.update_font_size_label()
+        self.update_zoom_button_states()
+        self.save_zoom_preference()
+
+    def update_font_size_label(self):
+        """Update the font size label with current size."""
+        size = self.details_text.get_current_font_size()
+        self.font_size_label.setText(f"{size}pt")
+
+    def update_zoom_button_states(self):
+        """Enable/disable zoom buttons based on current size limits."""
+        current_size = self.details_text.get_current_font_size()
+        self.zoom_in_button.setEnabled(current_size < self.details_text._max_font_size)
+        self.zoom_out_button.setEnabled(current_size > self.details_text._min_font_size)
+
+    def save_zoom_preference(self):
+        """Save the current zoom level to settings."""
+        self.settings.setValue('console_font_size', self.details_text.get_current_font_size())
+
+    def load_zoom_preference(self):
+        """Load saved zoom level from settings."""
+        saved_size = self.settings.value('console_font_size', 14, type=int)
+        if saved_size != 14:  # Only apply if different from default
+            self.details_text._current_font_size = saved_size
+            self.details_text._apply_font_size_change()
+            self.update_font_size_label()
+            self.update_zoom_button_states()
+
+    def style_zoom_buttons(self):
+        """Apply theme-aware styling to zoom buttons and clear button."""
+        theme_manager = ThemeManager.instance()
+        
+        # Style the zoom buttons with standard button styling
+        theme_manager.style_button(self.zoom_in_button)
+        theme_manager.style_button(self.zoom_out_button)
+        theme_manager.style_button(self.zoom_reset_button)
+        
+        # Style clear button with a slightly different look
+        palette = self.palette()
+        button_color = palette.color(palette.ColorRole.Button).name()
+        text_color = palette.color(palette.ColorRole.ButtonText).name()
+        
+        clear_button_style = f"""
+            QPushButton {{
+                font-weight: bold;
+                padding: 4px 8px;
+                border: 1px solid gray;
+                border-radius: 4px;
+                background-color: {button_color};
+                color: {text_color};
+            }}
+            QPushButton:hover {{
+                background-color: #ff9999;
+                color: #4d2b12;
+            }}
+        """
+        self.clear_console_button.setStyleSheet(clear_button_style)
+
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts for zooming."""
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key.Key_Plus or event.key() == Qt.Key.Key_Equal:
+                self.zoom_in_console()
+            elif event.key() == Qt.Key.Key_Minus:
+                self.zoom_out_console()
+            elif event.key() == Qt.Key.Key_0:
+                self.reset_console_zoom()
+        super().keyPressEvent(event)
 
 
 class DirectoryListWidget(QListWidget):

@@ -3,6 +3,7 @@ import sys
 import shutil
 import re
 from dataclasses import asdict
+import time
 
 from AV_Spex.utils.filename_validate import is_valid_filename
 
@@ -163,6 +164,12 @@ def initialize_directory(source_directory):
         tuple: (video_path, video_id, destination_directory) if successful
         None if preparation fails
     """
+    # Get current time as a time structure
+    local_time = time.localtime()
+    # Format the time into a custom string (Year-Month-Day Hour:Minute:Second)
+    formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
+    logger.warning(f'Current local time: {formatted_time}\n')
+    
     video_path = find_mkv(source_directory)
 
     if video_path is None:

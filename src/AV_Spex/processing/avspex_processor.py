@@ -25,8 +25,13 @@ def display_processing_banner(video_id=None):
     print(banner)
 
     if video_id:
-        ascii_video_id = text2art(video_id, font='tarty2')
-        logger.warning(f'Processing complete:{ascii_video_id}\n')
+        ascii_video_id = text2art(video_id, font='small')
+        logger.warning(f'Processing complete:\n{ascii_video_id}\n')
+        # Get current time as a time structure
+        local_time = time.localtime()
+        # Format the time into a custom string (Year-Month-Day Hour:Minute:Second)
+        formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
+        logger.info(f'Current local time: {formatted_time}\n')
 
 
 def print_av_spex_logo():
