@@ -108,7 +108,7 @@ class ProcessingManager:
             dict: Validation results from MediaConch policy check
         """
         # Check if MediaConch should be run
-        if self.checks_config.tools.mediaconch.run_mediaconch != 'yes':
+        if not self.checks_config.tools.mediaconch.run_mediaconch:
             logger.info(f"MediaConch validation skipped\n")
             return {}
         
