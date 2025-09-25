@@ -1183,7 +1183,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
                 padding: 10px;
                 white-space: pre-wrap;
                 word-wrap: break-word;
-                font-family: 'Courier New', monospace;
+                font-family: monospace;
                 max-height: 400px;
                 overflow-y: auto;
             }}
