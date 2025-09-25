@@ -108,7 +108,7 @@ class ProcessingManager:
             dict: Validation results from MediaConch policy check
         """
         # Check if MediaConch should be run
-        if self.checks_config.tools.mediaconch.run_mediaconch != 'yes':
+        if not self.checks_config.tools.mediaconch.run_mediaconch:
             logger.info(f"MediaConch validation skipped\n")
             return {}
         
@@ -371,7 +371,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     if qct_parse_run_tool:
         # Ensure we have a QCTools report to parse
         if not results['qctools_output_path'] or not os.path.isfile(results['qctools_output_path']):
-            logger.critical(f"Unable to check qctools report. No file found at: {results['qctools_output_path']}")
+            logger.critical(f"Unable to check qctools report. No QCTools report file found in input directory.")
         else:
             # Ensure report directory exists
             if not report_directory:
