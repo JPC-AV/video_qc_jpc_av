@@ -1177,6 +1177,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
                 max-height: 400px;
                 overflow-y: auto;
             }}
+            .metadata-content {{
+                background-color: #f5e9e3;
+                border: 1px solid #4d2b12;
+                padding: 10px;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                font-family: monospace;
+                max-height: 400px;
+                overflow-y: auto;
+            }}
         </style>
         <script>
         function openImage(imgData, caption) {{
@@ -1199,15 +1209,15 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
             }}
         }}
 
-        function toggleXmlContent(contentId) {{
+        function toggleContent(contentId, showText, hideText) {{
             var content = document.getElementById(contentId);
             var link = document.getElementById('link_' + contentId);
             if (content.style.display === 'none') {{
                 content.style.display = 'block';
-                link.textContent = 'Hide policy content ▲';
+                link.textContent = hideText;
             }} else {{
                 content.style.display = 'none';
-                link.textContent = 'Show policy content ▼';
+                link.textContent = showText;
             }}
         }}
         </script>
@@ -1237,7 +1247,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if mediaconch_policy_content and mediaconch_policy_name:
         html_template += f"""
         <h3>MediaConch Policy File: {mediaconch_policy_name}</h3>
-        <a id="link_mediaconch_policy" href="javascript:void(0);" onclick="toggleXmlContent('mediaconch_policy')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show policy content ▼</a>
+        <a id="link_mediaconch_policy" href="javascript:void(0);" onclick="toggleContent('mediaconch_policy', 'Show policy content ▼', 'Hide policy content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show policy content ▼</a>
         <div id="mediaconch_policy" class="xml-content" style="display: none;">{mediaconch_policy_content}</div>
         """
 
@@ -1293,22 +1303,26 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
             </div>
             """
 
+    # Modified sections with collapsible functionality
     if exiftool_output_path:
         html_template += f"""
         <h3>{exif_file_filename}</h3>
-        <pre>{exif_file_content}</pre>
+        <a id="link_exiftool" href="javascript:void(0);" onclick="toggleContent('exiftool', 'Show content ▼', 'Hide content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show content ▼</a>
+        <div id="exiftool" class="metadata-content" style="display: none;">{exif_file_content}</div>
         """
 
     if mediainfo_output_path:
         html_template += f"""
         <h3>{mi_file_filename}</h3>
-        <pre>{mi_file_content}</pre>
+        <a id="link_mediainfo" href="javascript:void(0);" onclick="toggleContent('mediainfo', 'Show content ▼', 'Hide content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show content ▼</a>
+        <div id="mediainfo" class="metadata-content" style="display: none;">{mi_file_content}</div>
         """
 
     if ffprobe_output_path:
         html_template += f"""
         <h3>{ffprobe_file_filename}</h3>
-        <pre>{ffprobe_file_content}</pre>
+        <a id="link_ffprobe" href="javascript:void(0);" onclick="toggleContent('ffprobe', 'Show content ▼', 'Hide content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show content ▼</a>
+        <div id="ffprobe" class="metadata-content" style="display: none;">{ffprobe_file_content}</div>
         """
 
     if check_cancelled():
