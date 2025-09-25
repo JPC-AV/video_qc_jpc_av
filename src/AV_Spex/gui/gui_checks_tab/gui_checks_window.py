@@ -372,10 +372,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.policy_combo.currentTextChanged.connect(self.on_mediaconch_policy_changed)
         self.import_policy_btn.clicked.connect(self.open_policy_file_dialog)
                     
-        # QCT Parse
-        self.run_qctparse_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['tools', 'qct_parse', 'run_tool'])
-        )
+        #  Run QCT-Parse turns all the checks on:
+        self.run_qctparse_cb.stateChanged.connect(self.on_run_qctparse_changed)
+
         self.bars_detection_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'barsDetection'])
         )
@@ -439,6 +438,19 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.bars_detection_cb.setChecked(qct.barsDetection)
         self.evaluate_bars_cb.setChecked(qct.evaluateBars)
         self.thumb_export_cb.setChecked(qct.thumbExport)
+
+        # Set initial enabled state for QCT Parse dependent checkboxes
+        qct = checks_config.tools.qct_parse
+        dependent_checkboxes = [
+            self.bars_detection_cb,
+            self.evaluate_bars_cb, 
+            self.thumb_export_cb
+        ]
+
+        # Enable/disable dependent checkboxes based on run_tool state
+        for checkbox in dependent_checkboxes:
+            checkbox.setEnabled(qct.run_tool)
+
         
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
@@ -515,6 +527,50 @@ class ChecksWindow(QWidget, ThemeableMixin):
         values = [value] if value is not None else []
         updates = {'tools': {'qct_parse': {field: values}}}
         config_mgr.update_config('checks', updates)
+
+    def on_run_qctparse_changed(self, state):
+        """Handle changes in run qct-parse checkbox with dependency logic"""
+        # Skip updates while loading to avoid issues during initialization
+        if self.is_loading:
+            return
+        
+        # Handle the normal config update for run_tool (using boolean)
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        updates = {'tools': {'qct_parse': {'run_tool': new_value}}}
+        config_mgr.update_config('checks', updates)
+        
+        # Get list of dependent checkboxes
+        dependent_checkboxes = [
+            self.bars_detection_cb,
+            self.evaluate_bars_cb, 
+            self.thumb_export_cb
+        ]
+        
+        if Qt.CheckState(state) == Qt.CheckState.Checked:
+            # If run_tool is checked, enable all dependent checkboxes and check them
+            for checkbox in dependent_checkboxes:
+                checkbox.setEnabled(True)
+                # Temporarily block signals to prevent recursive calls
+                checkbox.blockSignals(True)
+                checkbox.setChecked(True)
+                checkbox.blockSignals(False)
+            
+            # Update the config for all dependent options
+            dependent_updates = {
+                'tools': {
+                    'qct_parse': {
+                        'barsDetection': True,
+                        'evaluateBars': True,
+                        'thumbExport': True
+                    }
+                }
+            }
+            config_mgr.update_config('checks', dependent_updates)
+        else:
+            # If run_tool is unchecked, disable (grey out) all dependent checkboxes
+            for checkbox in dependent_checkboxes:
+                checkbox.setEnabled(False)
+
 
     def on_tagname_changed(self, text):
         """Handle changes in tagname field"""
