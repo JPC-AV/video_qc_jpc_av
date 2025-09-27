@@ -1,0 +1,20 @@
+{
+    "exiftool_profiles": {
+        "Standard MKV Profile": {
+            "FileType": "MKV",
+            "FileTypeExtension": "mkv",
+            "MIMEType": "video/x-matroska",
+            "VideoFrameRate": "29.97",
+            "ImageWidth": "720",
+            "ImageHeight": "486",
+            "VideoScanType": "Interlaced",
+            "DisplayWidth": "400",
+            "DisplayHeight": "297",
+            "DisplayUnit": "Display Aspect Ratio",
+            "CodecID": ["A_FLAC", "A_PCM/INT/LIT"],
+            "AudioChannels": "2",
+            "AudioSampleRate": "48000",
+            "AudioBitsPerSample": "24"
+        }
+    }
+}

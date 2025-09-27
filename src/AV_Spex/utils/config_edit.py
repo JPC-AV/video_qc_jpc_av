@@ -5,7 +5,11 @@ import json
 import os
 
 from AV_Spex.utils.log_setup import logger
-from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, FilenameSection, SignalflowConfig, ChecksProfile, ChecksProfilesConfig
+from AV_Spex.utils.config_setup import (
+    ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, 
+    FilenameSection, SignalflowConfig, ChecksProfile, ChecksProfilesConfig,
+    ExiftoolConfig, ExiftoolProfile 
+)
 from AV_Spex.utils.config_manager import ConfigManager
 
 
@@ -531,6 +535,162 @@ def get_all_profiles() -> Dict[str, Union[dict, ChecksProfile]]:
     all_profiles.update(custom_profiles)
     
     return all_profiles
+
+# Add these helper functions to config_edit.py after apply_exiftool_profile
+
+def get_exiftool_profile(profile_name: str):
+    """
+    Get an exiftool profile by name from the configuration.
+    
+    Args:
+        profile_name (str): The name of the profile to retrieve
+        
+    Returns:
+        ExiftoolProfile or None: The requested profile or None if not found
+    """
+    from AV_Spex.utils.config_setup import ExiftoolConfig
+    
+    try:
+        config_mgr = ConfigManager()
+        exiftool_config = config_mgr.get_config('exiftool', ExiftoolConfig)
+        
+        if profile_name in exiftool_config.exiftool_profiles:
+            return exiftool_config.exiftool_profiles[profile_name]
+    except Exception as e:
+        logger.warning(f"Could not retrieve exiftool profile '{profile_name}': {str(e)}")
+    
+    return None
+
+
+def get_available_exiftool_profiles() -> List[str]:
+    """
+    Get a list of all available exiftool profile names.
+    
+    Returns:
+        List[str]: List of profile names
+    """
+    from AV_Spex.utils.config_setup import ExiftoolConfig
+    
+    try:
+        config_mgr = ConfigManager()
+        exiftool_config = config_mgr.get_config('exiftool', ExiftoolConfig)
+        
+        if hasattr(exiftool_config, 'exiftool_profiles'):
+            return list(exiftool_config.exiftool_profiles.keys())
+    except Exception as e:
+        logger.warning(f"Could not retrieve exiftool profiles: {str(e)}")
+    
+    return []
+
+
+def save_exiftool_profile(profile_name: str, profile_data):
+    """
+    Save an exiftool profile to the configuration.
+    
+    Args:
+        profile_name (str): Name for the profile
+        profile_data: ExiftoolProfile dataclass or dict with profile data
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    from AV_Spex.utils.config_setup import ExiftoolConfig, ExiftoolProfile
+    from dataclasses import asdict
+    
+    logger.debug(f"=== SAVING EXIFTOOL PROFILE ===")
+    logger.debug(f"Profile name: {profile_name}")
+    
+    try:
+        # Get current exiftool config or create new one
+        try:
+            exiftool_config = config_mgr.get_config('exiftool', ExiftoolConfig)
+            logger.debug(f"Current profiles before save: {list(exiftool_config.exiftool_profiles.keys())}")
+        except:
+            # Config doesn't exist yet, create it
+            exiftool_config = ExiftoolConfig()
+            logger.debug("Creating new exiftool config")
+        
+        # Ensure exiftool_profiles dict exists
+        if not hasattr(exiftool_config, 'exiftool_profiles'):
+            exiftool_config.exiftool_profiles = {}
+        
+        # Create updated profiles dict
+        updated_profiles = {}
+        
+        # Add existing profiles
+        for name, existing_profile in exiftool_config.exiftool_profiles.items():
+            if hasattr(existing_profile, '__dataclass_fields__'):
+                updated_profiles[name] = asdict(existing_profile)
+            else:
+                updated_profiles[name] = existing_profile
+        
+        # Add the new profile
+        if hasattr(profile_data, '__dataclass_fields__'):
+            updated_profiles[profile_name] = asdict(profile_data)
+        else:
+            updated_profiles[profile_name] = profile_data
+        
+        logger.debug(f"Updated profiles dict will have: {list(updated_profiles.keys())}")
+        
+        # Use replace_config_section to replace the entire exiftool_profiles dict
+        config_mgr.replace_config_section('exiftool', 'exiftool_profiles', updated_profiles)
+        
+        logger.info(f"Successfully saved exiftool profile: {profile_name}")
+        
+        # Verify the save worked
+        verification_config = config_mgr.get_config('exiftool', ExiftoolConfig)
+        if profile_name in verification_config.exiftool_profiles:
+            logger.debug(f"Verification: Profile '{profile_name}' confirmed saved")
+            return True
+        else:
+            logger.error(f"Verification failed: Profile '{profile_name}' not found after save")
+            return False
+        
+    except Exception as e:
+        logger.error(f"Error saving exiftool profile '{profile_name}': {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def delete_exiftool_profile(profile_name: str) -> bool:
+    """
+    Delete an exiftool profile from the configuration.
+    
+    Args:
+        profile_name (str): Name of the profile to delete
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    from AV_Spex.utils.config_setup import ExiftoolConfig
+    from dataclasses import asdict
+    
+    try:
+        exiftool_config = config_mgr.get_config('exiftool', ExiftoolConfig)
+        
+        if profile_name not in exiftool_config.exiftool_profiles:
+            logger.warning(f"Profile '{profile_name}' not found, cannot delete")
+            return False
+        
+        # Create updated profiles dict without the deleted profile
+        updated_profiles = {}
+        for k, v in exiftool_config.exiftool_profiles.items():
+            if k != profile_name:
+                if hasattr(v, '__dataclass_fields__'):
+                    updated_profiles[k] = asdict(v)
+                else:
+                    updated_profiles[k] = v
+        
+        # Use replace_config_section to replace the entire exiftool_profiles dict
+        config_mgr.replace_config_section('exiftool', 'exiftool_profiles', updated_profiles)
+        
+        logger.info(f"Deleted exiftool profile: {profile_name}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error deleting exiftool profile '{profile_name}': {str(e)}")
+        return False
 
 
 # Profile definitions with boolean values

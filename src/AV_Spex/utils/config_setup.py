@@ -347,3 +347,28 @@ class ChecksProfile:
 class ChecksProfilesConfig:
     """Container for custom checks profiles"""
     custom_profiles: Dict[str, ChecksProfile] = field(default_factory=dict)
+
+# Add these dataclasses to your config_setup.py file
+
+@dataclass
+class ExiftoolProfile:
+    """Profile for exiftool expected values configuration"""
+    FileType: str
+    FileTypeExtension: str
+    MIMEType: str
+    VideoFrameRate: str
+    ImageWidth: str
+    ImageHeight: str
+    VideoScanType: str
+    DisplayWidth: str
+    DisplayHeight: str
+    DisplayUnit: str
+    CodecID: List[str]
+    AudioChannels: str
+    AudioSampleRate: str
+    AudioBitsPerSample: str
+
+@dataclass
+class ExiftoolConfig:
+    """Container for exiftool profiles"""
+    exiftool_profiles: Dict[str, ExiftoolProfile] = field(default_factory=dict)
