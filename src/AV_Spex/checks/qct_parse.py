@@ -286,14 +286,19 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
     if bit_depth_10:
         YMAX_thresh = 800
         YMIN_thresh = 10
-        YDIF_thresh = 10
+        YDIF_thresh = 8
+        SATMAX_thresh = 300  
     else:
-        YMAX_thresh = 210
-        YMIN_thresh = 10
-        YDIF_thresh = 3.0
+        YMAX_thresh = 200
+        YMIN_thresh = 3
+        YDIF_thresh = 2
+        SATMAX_thresh = 75 
 
     barsStartString = None
     barsEndString = None
+
+    # Add time limit for searching (5 minutes = 300 seconds)
+    search_time_limit = 300.0
 
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
@@ -305,6 +310,12 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
         for event, elem in parser_iter: #iterparse the xml doc
             if elem.attrib['media_type'] == "video": #get just the video frames
                 frame_pkt_dts_time = elem.attrib[pkt] #get the timestamps for the current frame we're looking at
+                
+                # Stop searching after 5 minutes if no bars found yet
+                if durationStart == "" and float(frame_pkt_dts_time) > search_time_limit:
+                    logger.debug(f"Stopped searching for color bars after {search_time_limit} seconds\n")
+                    break
+                
                 frameDict = {}  #start an empty dict for the new frame
                 frameDict[pkt] = frame_pkt_dts_time  #give the dict the timestamp, which we have now
                 for t in list(elem):    #iterating through each attribute for each element
@@ -312,13 +323,14 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
                     keyName = str(keySplit[-1])             #get just the last word for the key name
                     frameDict[keyName] = t.attrib['value']	#add each attribute to the frame dictionary
                 framesList.append(frameDict)
-                middleFrame = int(round(float(len(framesList))/2))	# i hate this calculation, but it gets us the middle index of the list as an integer
+                middleFrame = int(round(float(len(framesList))/2))	# get the middle index of the list
                 if len(framesList) == buffSize:	# wait till the buffer is full to start detecting bars
                 ## This is where the bars detection magic actually happens
-                    # Check conditions
+                    # Check conditions - including saturation check
                     if (float(framesList[middleFrame]['YMAX']) > YMAX_thresh and 
                         float(framesList[middleFrame]['YMIN']) < YMIN_thresh and 
-                        float(framesList[middleFrame]['YDIF']) < YDIF_thresh):
+                        float(framesList[middleFrame]['YDIF']) < YDIF_thresh and
+                        float(framesList[middleFrame].get('SATMAX', 0)) > SATMAX_thresh):  # Add saturation check
                         if durationStart == "":
                             durationStart = float(framesList[middleFrame][pkt])
                             barsStartString = dts2ts(framesList[middleFrame][pkt])
