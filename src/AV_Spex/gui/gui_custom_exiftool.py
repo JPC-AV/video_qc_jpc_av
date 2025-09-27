@@ -1,13 +1,15 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, 
     QScrollArea, QPushButton, QComboBox, 
-    QMessageBox, QDialog, QGridLayout, QListWidget
+    QMessageBox, QDialog, QGridLayout, QListWidget,
+    QFileDialog, QInputDialog, QTextEdit
 )
 from PyQt6.QtCore import Qt
 
 from AV_Spex.utils import config_edit
 from AV_Spex.utils.config_setup import ExiftoolProfile
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
+from AV_Spex.utils import exiftool_import
 
 
 class CustomExiftoolDialog(QDialog, ThemeableMixin):
@@ -39,6 +41,16 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         self.profile_name_input.setPlaceholderText("e.g., Custom HD Profile")
         name_layout.addWidget(self.profile_name_input)
         layout.addLayout(name_layout)
+        
+        # Import section
+        import_layout = QHBoxLayout()
+        import_button = QPushButton("Import from File...")
+        import_button.clicked.connect(self.import_from_file)
+        compare_button = QPushButton("Compare with File...")
+        compare_button.clicked.connect(self.compare_with_file)
+        import_layout.addWidget(import_button)
+        import_layout.addWidget(compare_button)
+        layout.addLayout(import_layout)
         
         # Scrollable area for fields
         scroll = QScrollArea()
@@ -111,35 +123,11 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
             self.fields_layout.addWidget(label, row, 0)
             
             # Input
-            if field_name == "CodecID":
-                # Special handling for CodecID (list field)
-                list_widget = QListWidget()
-                list_widget.setMaximumHeight(80)
-                list_widget.addItems(["A_FLAC", "A_PCM/INT/LIT"])
-                
-                # Add/remove buttons for list
-                list_button_layout = QVBoxLayout()
-                add_codec_btn = QPushButton("+")
-                add_codec_btn.setMaximumWidth(30)
-                add_codec_btn.clicked.connect(lambda: self.add_codec_item(list_widget))
-                remove_codec_btn = QPushButton("-")
-                remove_codec_btn.setMaximumWidth(30)
-                remove_codec_btn.clicked.connect(lambda: self.remove_codec_item(list_widget))
-                list_button_layout.addWidget(add_codec_btn)
-                list_button_layout.addWidget(remove_codec_btn)
-                
-                codec_layout = QHBoxLayout()
-                codec_layout.addWidget(list_widget)
-                codec_layout.addLayout(list_button_layout)
-                
-                self.fields_layout.addLayout(codec_layout, row, 1)
-                self.field_inputs[field_name] = list_widget
-            else:
-                input_field = QLineEdit()
-                input_field.setPlaceholderText(placeholder)
-                input_field.textChanged.connect(self.update_preview)
-                self.fields_layout.addWidget(input_field, row, 1)
-                self.field_inputs[field_name] = input_field
+            input_field = QLineEdit()
+            input_field.setPlaceholderText(placeholder)
+            input_field.textChanged.connect(self.update_preview)
+            self.fields_layout.addWidget(input_field, row, 1)
+            self.field_inputs[field_name] = input_field
             
             row += 1
         
@@ -172,8 +160,168 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         self.fields_layout.addWidget(codec_widget, row, 1)
         self.field_inputs["CodecID"] = codec_list
         
+    def import_from_file(self):
+        """Import exiftool data from a JSON or text file"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Exiftool Output File",
+            "",
+            "Exiftool Files (*.json *.txt *.log);;All Files (*.*)"
+        )
+        
+        if file_path:
+            try:
+                # Import the file
+                profile = exiftool_import.import_exiftool_file_to_profile(file_path)
+                
+                if profile:
+                    # Load the imported data into the form
+                    self.load_profile_data(profile)
+                    
+                    # Suggest a profile name based on the file
+                    import os
+                    base_name = os.path.splitext(os.path.basename(file_path))[0]
+                    self.profile_name_input.setText(f"Imported from {base_name}")
+                    
+                    QMessageBox.information(
+                        self,
+                        "Import Successful",
+                        f"Successfully imported exiftool data from:\n{file_path}"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Import Failed",
+                        f"Could not import exiftool data from:\n{file_path}\n\n"
+                        "Please check the file format and content."
+                    )
+                    
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Import Error",
+                    f"Error importing file:\n{str(e)}"
+                )
+    
+    def compare_with_file(self):
+        """Compare current profile with an exiftool output file"""
+        # First check if we have valid profile data
+        profile = self.get_exiftool_profile()
+        if not profile:
+            return
+            
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Exiftool Output File to Compare",
+            "",
+            "Exiftool Files (*.json *.txt *.log);;All Files (*.*)"
+        )
+        
+        if file_path:
+            try:
+                # Validate the file against current profile
+                validation = exiftool_import.validate_file_against_profile(file_path, profile)
+                
+                # Show results in a dialog
+                self.show_comparison_results(file_path, validation)
+                
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Comparison Error",
+                    f"Error comparing file:\n{str(e)}"
+                )
+    
+    def show_comparison_results(self, file_path, validation):
+        """Show the comparison results in a dialog"""
+        result_dialog = QDialog(self)
+        result_dialog.setWindowTitle("Comparison Results")
+        result_dialog.setModal(True)
+        result_dialog.setMinimumSize(600, 500)
+        
+        layout = QVBoxLayout()
+        
+        # Summary
+        import os
+        summary_label = QLabel(f"<b>File:</b> {os.path.basename(file_path)}<br>"
+                               f"<b>Status:</b> {'✅ VALID' if validation['valid'] else '❌ INVALID'}<br>"
+                               f"<b>Matching Fields:</b> {validation['matching_fields']}/{validation['total_fields']}")
+        summary_label.setWordWrap(True)
+        layout.addWidget(summary_label)
+        
+        # Detailed results in text area
+        details_text = QTextEdit()
+        details_text.setReadOnly(True)
+        
+        details = []
+        
+        if validation['matches']:
+            details.append("✅ MATCHING FIELDS:")
+            for field, values in validation['matches'].items():
+                details.append(f"  {field}: {values['actual']}")
+            details.append("")
+        
+        if validation['mismatches']:
+            details.append("❌ MISMATCHED FIELDS:")
+            for field, values in validation['mismatches'].items():
+                details.append(f"  {field}:")
+                details.append(f"    Expected: {values['expected']}")
+                details.append(f"    Actual: {values['actual']}")
+            details.append("")
+        
+        if validation['missing']:
+            details.append("⚠️ MISSING FIELDS:")
+            for field, values in validation['missing'].items():
+                details.append(f"  {field}: Expected {values['expected']}")
+            
+        details_text.setPlainText("\n".join(details))
+        layout.addWidget(details_text)
+        
+        # Import button if there are differences
+        if validation['mismatches'] or validation['missing']:
+            import_btn = QPushButton("Import These Values")
+            import_btn.clicked.connect(lambda: self.import_from_validation(file_path, result_dialog))
+            layout.addWidget(import_btn)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(result_dialog.accept)
+        layout.addWidget(close_btn)
+        
+        result_dialog.setLayout(layout)
+        result_dialog.exec()
+    
+    def import_from_validation(self, file_path, dialog):
+        """Import values from a file after comparison"""
+        try:
+            profile = exiftool_import.import_exiftool_file_to_profile(file_path)
+            if profile:
+                self.load_profile_data(profile)
+                dialog.accept()
+                QMessageBox.information(self, "Import Successful", "Values imported from file")
+        except Exception as e:
+            QMessageBox.critical(self, "Import Error", f"Error importing: {str(e)}")
+    
+    def load_profile_data(self, profile_data):
+        """Load profile data into the form fields"""
+        # Load field values
+        for field_name, input_widget in self.field_inputs.items():
+            if hasattr(profile_data, field_name):
+                value = getattr(profile_data, field_name)
+                if field_name == "CodecID":
+                    # Handle list widget
+                    input_widget.clear()
+                    if isinstance(value, list):
+                        input_widget.addItems(value)
+                else:
+                    # Handle text input
+                    input_widget.setText(str(value) if value else "")
+                    
+        self.update_preview()
+    
     def add_codec_item(self, list_widget):
         """Add a new codec ID to the list"""
+        from PyQt6.QtWidgets import QInputDialog
         text, ok = QInputDialog.getText(self, "Add Codec ID", "Enter codec ID:")
         if ok and text:
             list_widget.addItem(text)
