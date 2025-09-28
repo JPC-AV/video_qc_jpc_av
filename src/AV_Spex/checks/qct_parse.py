@@ -287,18 +287,22 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
         YMAX_thresh = 800
         YMIN_thresh = 10
         YDIF_thresh = 8
-        SATMAX_thresh = 300  
+        SATMAX_thresh = 300
     else:
-        YMAX_thresh = 200
+        YMAX_thresh = 199
         YMIN_thresh = 3
         YDIF_thresh = 2
-        SATMAX_thresh = 75 
+        SATMAX_thresh = 75
 
     barsStartString = None
     barsEndString = None
-
+    
     # Add time limit for searching (5 minutes = 300 seconds)
     search_time_limit = 300.0
+    
+    # Add tolerance for occasional frames that don't meet criteria
+    consecutive_failures = 0
+    failure_tolerance = 15  # Allow up to 15 consecutive frames to fail before ending
 
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
@@ -313,7 +317,7 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
                 
                 # Stop searching after 5 minutes if no bars found yet
                 if durationStart == "" and float(frame_pkt_dts_time) > search_time_limit:
-                    logger.debug(f"Stopped searching for color bars after {search_time_limit} seconds\n")
+                    logger.debug(f"Stopped searching for color bars after {search_time_limit} seconds")
                     break
                 
                 frameDict = {}  #start an empty dict for the new frame
@@ -325,22 +329,31 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
                 framesList.append(frameDict)
                 middleFrame = int(round(float(len(framesList))/2))	# get the middle index of the list
                 if len(framesList) == buffSize:	# wait till the buffer is full to start detecting bars
-                ## This is where the bars detection magic actually happens
+                ## This is where the bars detection actually happens
                     # Check conditions - including saturation check
                     if (float(framesList[middleFrame]['YMAX']) > YMAX_thresh and 
                         float(framesList[middleFrame]['YMIN']) < YMIN_thresh and 
                         float(framesList[middleFrame]['YDIF']) < YDIF_thresh and
                         float(framesList[middleFrame].get('SATMAX', 0)) > SATMAX_thresh):  # Add saturation check
+                        
+                        consecutive_failures = 0  # Reset failure counter when bars are detected
+                        
                         if durationStart == "":
                             durationStart = float(framesList[middleFrame][pkt])
                             barsStartString = dts2ts(framesList[middleFrame][pkt])
                             logger.debug("Bars start at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")")							
                         durationEnd = float(framesList[middleFrame][pkt])
                     else:
-                        if durationStart != "" and durationEnd != "" and durationEnd - durationStart > 2:
-                            logger.debug("Bars ended at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")\n")
-                            barsEndString = dts2ts(framesList[middleFrame][pkt])
-                            break
+                        # Only count as failure if we've already started detecting bars
+                        if durationStart != "":
+                            consecutive_failures += 1
+                            
+                            # Only end if we've had enough consecutive failures AND minimum duration
+                            if (consecutive_failures >= failure_tolerance and 
+                                durationEnd - durationStart > 2):
+                                logger.debug("Bars ended at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")\n")
+                                barsEndString = dts2ts(framesList[middleFrame][pkt])
+                                break
                 elem.clear() # we're done with that element so let's get it outta memory
     except Exception as e:
         logger.error(f"Error during bars detection parsing: {e}")
