@@ -57,7 +57,7 @@ jobs:
         
         echo "✅ Building bottles for version: $VERSION_CLEAN"
     
-    - name: Clean environment and fix Python conflicts
+    - name: Clean environment
       run: |
         # Disable auto-updates to prevent conflicts
         export HOMEBREW_NO_AUTO_UPDATE=1
@@ -67,27 +67,10 @@ jobs:
         echo "=== Initial Python State ==="
         which python3 || echo "No python3 found"
         python3 --version || echo "python3 not working"
-        ls -la /usr/local/bin/python* || echo "No python in /usr/local/bin"
         echo "==========================="
         
-        # Clean up any existing conflicting symlinks
-        echo "Removing conflicting Python symlinks..."
-        sudo rm -f /usr/local/bin/python3*
-        sudo rm -f /usr/local/bin/pip3*
-        sudo rm -f /usr/local/bin/idle3*
-        sudo rm -f /usr/local/bin/pydoc3*
-        
-        # Clean up any existing Python installations
-        echo "Cleaning up existing Python installations..."
+        # Clean up any brew issues
         brew cleanup || true
-        
-        # Uninstall any existing Python versions that might conflict
-        for python_ver in python@3.13 python@3.12 python@3.11; do
-          if brew list $python_ver &>/dev/null; then
-            echo "Uninstalling $python_ver..."
-            brew uninstall --ignore-dependencies $python_ver || echo "Could not uninstall $python_ver"
-          fi
-        done
     
     - name: Install clean Python environment
       run: |
@@ -95,17 +78,14 @@ jobs:
         export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
         export HOMEBREW_NO_INSTALL_UPGRADE=1
         
-        # Install python@3.10 first
-        echo "Installing python@3.10..."
-        brew install python@3.10
+        # Install python@3.13
+        echo "Installing python@3.13..."
+        brew install python@3.13
         
-        # Force unlink any existing python and link python@3.10
-        echo "Unlinking existing python installations..."
-        brew unlink python@3.13 python@3.12 python@3.11 || true
-        
-        echo "Force linking python@3.10..."
-        brew unlink python@3.10 || true
-        brew link --force --overwrite python@3.10
+        # Force link python@3.13
+        echo "Force linking python@3.13..."
+        brew unlink python@3.13 || true
+        brew link --force --overwrite python@3.13
         
         # Set up paths based on architecture
         if [[ "${{ matrix.os }}" == "macos-14" ]]; then
@@ -114,45 +94,30 @@ jobs:
           HOMEBREW_PREFIX="/usr/local"
         fi
         
-        # Create a temporary directory for our Python symlinks
-        mkdir -p ~/temp-python-bin
-        
-        # Create symlinks that will override system Python
-        ln -sf "${HOMEBREW_PREFIX}/opt/python@3.10/bin/python3.10" ~/temp-python-bin/python3
-        ln -sf "${HOMEBREW_PREFIX}/opt/python@3.10/bin/pip3.10" ~/temp-python-bin/pip3
-        
-        # Put our temp directory at the front of PATH
-        export PATH="$HOME/temp-python-bin:$PATH"
-        echo "$HOME/temp-python-bin" >> $GITHUB_PATH
-        
-        # Also add the Homebrew Python bin directory
-        export PATH="${HOMEBREW_PREFIX}/opt/python@3.10/bin:$PATH"
-        echo "${HOMEBREW_PREFIX}/opt/python@3.10/bin" >> $GITHUB_PATH
+        # Add Python 3.13 to PATH
+        export PATH="${HOMEBREW_PREFIX}/opt/python@3.13/bin:$PATH"
+        echo "${HOMEBREW_PREFIX}/opt/python@3.13/bin" >> $GITHUB_PATH
         
         # Verify Python installation
         echo "=== Python Verification ==="
         echo "PATH: $PATH"
-        which python3
-        python3 --version
-        which pip3
-        pip3 --version
-        echo "Real python3 path: $(readlink -f $(which python3))"
+        which python3.13
+        python3.13 --version
+        which pip3.13
+        pip3.13 --version
         echo "=========================="
         
-        # Verify we're actually using 3.10
-        PYTHON_VERSION=$(python3 --version | grep -o "3\.10\.")
+        # Verify we're actually using 3.13
+        PYTHON_VERSION=$(python3.13 --version | grep -o "3\.13\.")
         if [[ -z "$PYTHON_VERSION" ]]; then
-          echo "❌ ERROR: Still not using Python 3.10!"
-          echo "Current python3 path: $(which python3)"
-          echo "Current python3 version: $(python3 --version)"
-          echo "Available Python versions:"
-          ls -la "${HOMEBREW_PREFIX}/opt/python@3.10/bin/"
+          echo "❌ ERROR: Not using Python 3.13!"
+          echo "Current python3.13 version: $(python3.13 --version)"
           exit 1
         fi
         
-        echo "✅ Successfully using Python 3.10"
+        echo "✅ Successfully using Python 3.13"
         
-        # Install other dependencies
+        # Install PyQt and Qt (PyQt will use the already-installed Python 3.13)
         echo "Installing PyQt and Qt..."
         brew install pyqt qt@6
     
@@ -170,29 +135,28 @@ jobs:
           HOMEBREW_PREFIX="/usr/local"
         fi
         
-        # Ensure our custom Python path is still at the front
-        export PATH="$HOME/temp-python-bin:${HOMEBREW_PREFIX}/opt/python@3.10/bin:$PATH"
+        # Ensure Python 3.13 is in PATH
+        export PATH="${HOMEBREW_PREFIX}/opt/python@3.13/bin:$PATH"
         
         # Tap the repository
         brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
-
+    
         # Update tap to get the latest formula
         brew tap --repair
         brew update
         
         echo "=== Final Python Check ==="
         echo "PATH: $PATH"
-        python3 --version
-        pip3 --version
+        python3.13 --version
+        pip3.13 --version
         brew list | grep python
         echo "=========================="
         
-        # Verify we're using Python 3.10 before building
-        PYTHON_VERSION=$(python3 --version | grep -o "3\.10\.")
+        # Verify we're using Python 3.13 before building
+        PYTHON_VERSION=$(python3.13 --version | grep -o "3\.13\.")
         if [[ -z "$PYTHON_VERSION" ]]; then
-          echo "❌ ERROR: Not using Python 3.10 for bottle build!"
-          echo "Current python3: $(which python3)"
-          echo "Current version: $(python3 --version)"
+          echo "❌ ERROR: Not using Python 3.13 for bottle build!"
+          echo "Current python3.13 version: $(python3.13 --version)"
           exit 1
         fi
         
@@ -421,7 +385,7 @@ jobs:
         cat >> Formula/AV-Spex.rb << 'EOF'
           end
 
-          depends_on "python@3.10"
+          depends_on "python@3.13"
           depends_on "pyqt"
           depends_on "qt@6"
           
@@ -461,7 +425,7 @@ jobs:
           end
 
           def install
-            venv = virtualenv_create(libexec, "python3")
+            venv = virtualenv_create(libexec, "python3.13")
             
             venv.pip_install resources.reject { |r| r.name == "plotly" || r.name == "lxml" }
 
