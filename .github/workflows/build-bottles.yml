@@ -117,22 +117,22 @@ jobs:
         
         echo "✅ Successfully using Python 3.13"
         
-        # Pre-install problematic z3 dependency
-        echo "Pre-installing z3..."
-        if ! brew list z3 &>/dev/null; then
-          # Try to fetch and install z3 explicitly
-          brew fetch z3 || true
-          # If bottle fails, build from source
-          brew install z3 --build-from-source || brew install z3 || echo "z3 installation failed, continuing..."
+        # For macOS-13, pre-install problematic dependencies
+        if [[ "${{ matrix.os }}" == "macos-13" ]]; then
+          echo "Pre-installing problematic dependencies for macOS-13..."
+          
+          # Try to install swig
+          brew fetch swig || true
+          brew install swig --build-from-source || brew install swig || echo "swig failed"
+          
+          # Try to install llvm  
+          brew fetch llvm || true
+          brew install llvm --build-from-source || brew install llvm || echo "llvm failed"
         fi
-        
-        # Install node separately (which depends on z3)
-        echo "Installing node..."
-        brew install node || echo "Node installation failed, continuing..."
         
         # Now install PyQt and Qt
         echo "Installing PyQt and Qt..."
-        brew install pyqt qt@6
+        brew install pyqt qt@6 || echo "PyQt/Qt installation failed"
     
     - name: Tap repository and build bottle
       id: build
