@@ -78,6 +78,9 @@ jobs:
         export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
         export HOMEBREW_NO_INSTALL_UPGRADE=1
         
+        # Clear Homebrew cache to avoid corrupted downloads
+        rm -rf $(brew --cache)
+        
         # Install python@3.13
         echo "Installing python@3.13..."
         brew install python@3.13
@@ -117,9 +120,23 @@ jobs:
         
         echo "✅ Successfully using Python 3.13"
         
-        # Install PyQt and Qt (PyQt will use the already-installed Python 3.13)
+        # Install PyQt and Qt with retry logic
         echo "Installing PyQt and Qt..."
-        brew install pyqt qt@6
+        for i in {1..3}; do
+          if brew install pyqt qt@6; then
+            echo "✅ Successfully installed PyQt and Qt"
+            break
+          else
+            echo "⚠️ Attempt $i failed, retrying..."
+            # Clear cache and retry
+            rm -rf $(brew --cache)/*
+            if [ $i -eq 3 ]; then
+              echo "❌ Failed to install after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          fi
+        done
     
     - name: Tap repository and build bottle
       id: build
