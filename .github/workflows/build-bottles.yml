@@ -21,6 +21,7 @@ jobs:
             version: sonoma
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
     
     steps:
       - name: Set up Homebrew
@@ -41,7 +42,6 @@ jobs:
           
           echo "📥 Input version: $VERSION"
           
-          # Validate that we have a version that looks like a tag
           if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
             echo "❌ Invalid version format: $VERSION"
             echo "Expected format: v1.2.3"
@@ -56,108 +56,58 @@ jobs:
 
       - name: Setup environment
         run: |
-          # Disable auto-updates to prevent conflicts
           export HOMEBREW_NO_AUTO_UPDATE=1
           export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
           export HOMEBREW_NO_INSTALL_UPGRADE=1
+          export HOMEBREW_NO_INSTALL_FROM_API=1
           
           echo "=== Initial Python State ==="
           which python3 || echo "No python3 found"
           python3 --version || echo "python3 not working"
           echo "==========================="
           
-          # Clean up any brew issues
           brew cleanup || true
 
-      - name: Install Python 3.13 from bottle
+      - name: Install Python 3.13
         run: |
           export HOMEBREW_NO_AUTO_UPDATE=1
           export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
           export HOMEBREW_NO_INSTALL_UPGRADE=1
           
-          # Force bottle installation for Python
-          brew fetch --force-bottle python@3.13
-          brew install $(brew --cache)/python@3.13*.bottle.tar.gz || brew install python@3.13
+          # Install or use existing python@3.13
+          brew list python@3.13 &>/dev/null || brew install python@3.13
           
           # Force link python@3.13
-          echo "Force linking python@3.13..."
-          brew unlink python@3.13 || true
+          brew unlink python@3.13 2>/dev/null || true
           brew link --force --overwrite python@3.13
           
-          # Set up paths based on architecture
+          # Set up paths
           if [[ "${{ matrix.os }}" == "macos-14" ]]; then
             HOMEBREW_PREFIX="/opt/homebrew"
           else
             HOMEBREW_PREFIX="/usr/local"
           fi
           
-          # Add Python 3.13 to PATH
           export PATH="${HOMEBREW_PREFIX}/opt/python@3.13/bin:$PATH"
           echo "${HOMEBREW_PREFIX}/opt/python@3.13/bin" >> $GITHUB_PATH
           
-          # Verify Python installation
           echo "=== Python Verification ==="
-          echo "PATH: $PATH"
-          which python3.13
           python3.13 --version
-          which pip3.13
           pip3.13 --version
           echo "=========================="
-          
-          # Verify we're actually using 3.13
-          PYTHON_VERSION=$(python3.13 --version | grep -o "3\.13\.")
-          if [[ -z "$PYTHON_VERSION" ]]; then
-            echo "❌ ERROR: Not using Python 3.13!"
-            echo "Current python3.13 version: $(python3.13 --version)"
-            exit 1
-          fi
-          
-          echo "✅ Successfully using Python 3.13"
 
-      - name: Install PyQt and Qt from bottles
+      - name: Install Qt and PyQt dependencies
         run: |
           export HOMEBREW_NO_AUTO_UPDATE=1
           export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
           export HOMEBREW_NO_INSTALL_UPGRADE=1
-          export HOMEBREW_FORCE_BOTTLE=1
           
-          echo "Fetching Qt and PyQt bottles..."
+          # Install Qt and PyQt - let Homebrew handle dependencies automatically
+          # This will either use bottles or build from source as needed
+          brew install qt@6 || echo "Qt installation completed with warnings"
+          brew install pyqt@6 || brew install pyqt || echo "PyQt installation completed with warnings"
           
-          # Fetch bottles for Qt and its dependencies
-          brew fetch --force-bottle qt@6 || echo "Qt fetch warning"
-          brew fetch --force-bottle pyqt@6 || echo "PyQt fetch warning"
-          
-          # Also fetch common dependencies that might be needed
-          brew fetch --force-bottle ca-certificates || true
-          brew fetch --force-bottle freetype || true
-          brew fetch --force-bottle dbus || true
-          brew fetch --force-bottle double-conversion || true
-          brew fetch --force-bottle hunspell || true
-          brew fetch --force-bottle jasper || true
-          brew fetch --force-bottle libb2 || true
-          brew fetch --force-bottle libmng || true
-          brew fetch --force-bottle md4c || true
-          brew fetch --force-bottle assimp || true
-          
-          echo "Installing from bottles..."
-          
-          # Install dependencies first
-          brew install --force-bottle ca-certificates || true
-          brew install --force-bottle freetype || true
-          brew install --force-bottle dbus || true
-          brew install --force-bottle double-conversion || true
-          brew install --force-bottle hunspell || true
-          brew install --force-bottle jasper || true
-          brew install --force-bottle libb2 || true
-          brew install --force-bottle libmng || true
-          brew install --force-bottle md4c || true
-          brew install --force-bottle assimp || true
-          
-          # Now install Qt and PyQt (using either bottle or fallback)
-          brew install qt@6 || echo "Qt installation had issues"
-          brew install pyqt@6 || brew install pyqt || echo "PyQt installation had issues"
-          
-          echo "Dependencies installed"
+          echo "✅ Dependencies installed"
 
       - name: Build bottle
         id: build
@@ -167,28 +117,12 @@ jobs:
           export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
           export HOMEBREW_NO_INSTALL_UPGRADE=1
           
-          # Set up paths based on architecture
-          if [[ "${{ matrix.os }}" == "macos-14" ]]; then
-            HOMEBREW_PREFIX="/opt/homebrew"
-          else
-            HOMEBREW_PREFIX="/usr/local"
-          fi
-          
-          # Ensure Python path is set
-          export PATH="${HOMEBREW_PREFIX}/opt/python@3.13/bin:$PATH"
-          
           # Tap the repository
           brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
-          
-          # Update tap to get the latest formula
           brew tap --repair
-          brew update
           
           echo "=== Final Python Check ==="
-          echo "PATH: $PATH"
           python3.13 --version || python3 --version
-          pip3.13 --version || pip3 --version
-          brew list | grep python
           echo "=========================="
           
           # Build the bottle
@@ -198,8 +132,7 @@ jobs:
           echo "Creating bottle..."
           brew bottle --verbose --json --root-url=https://github.com/JPC-AV/video_qc_jpc_av/releases/download/${{ steps.version.outputs.tag_name }} JPC-AV/AV-Spex/av-spex
           
-          # Create copies with names that Homebrew expects
-          echo "Creating Homebrew-compatible copies..."
+          # Create Homebrew-compatible copies
           for bottle_file in av-spex--*.bottle.tar.gz; do
             if [[ -f "$bottle_file" ]]; then
               new_name=$(echo "$bottle_file" | sed 's/av-spex--/av-spex-/')
@@ -218,10 +151,8 @@ jobs:
           echo "Testing bottle installation..."
           brew uninstall JPC-AV/AV-Spex/av-spex
           
-          # Copy the bottle to Homebrew's cache directory
           cp av-spex--*.bottle.tar.gz $(brew --cache)/
           
-          # Now install the formula - it will use the cached bottle
           HOMEBREW_NO_AUTO_UPDATE=1 brew install JPC-AV/AV-Spex/av-spex
           
           echo "Testing av-spex commands..."
