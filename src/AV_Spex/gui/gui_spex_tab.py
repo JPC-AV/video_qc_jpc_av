@@ -274,6 +274,10 @@ class SpexTab(ThemeableMixin):
         from AV_Spex.gui.gui_custom_exiftool import CustomExiftoolDialog
         
         dialog = CustomExiftoolDialog(self.main_window)
+        
+        # Load current exiftool values as defaults
+        dialog.load_profile_data(spex_config.exiftool_values)
+        
         result = dialog.exec()
         
         if result == QDialog.DialogCode.Accepted:

@@ -318,6 +318,62 @@ def apply_profile(selected_profile):
         config_mgr.update_config('checks', updates)
 
 
+def apply_exiftool_profile(profile_data):
+    """
+    Apply an exiftool profile to the current spex configuration.
+    
+    Completely replaces the existing exiftool configuration with the selected profile,
+    ensuring all fields are properly saved and persisted.
+    
+    Args:
+        profile_data: Either an ExiftoolProfile dataclass instance or a dictionary
+                     containing exiftool field values
+    """
+    from dataclasses import asdict
+    
+    # Debug information about the provided profile
+    logger.debug(f"==== APPLYING EXIFTOOL PROFILE ====")
+
+    # Ensure spex config is loaded into cache
+    config_mgr.get_config('spex', SpexConfig)
+    
+    # Convert profile data to dictionary if it's a dataclass
+    if hasattr(profile_data, '__dataclass_fields__'):
+        # It's a dataclass, convert to dict
+        profile_dict = asdict(profile_data)
+        logger.debug(f"Converting ExiftoolProfile dataclass to dict")
+    else:
+        # Already a dict
+        profile_dict = profile_data
+        logger.debug(f"Using profile data as dict directly")
+    
+    # Log the fields being applied
+    logger.debug(f"Profile has {len(profile_dict)} fields")
+    for field, value in profile_dict.items():
+        if isinstance(value, list):
+            logger.debug(f"  {field}: {value} (list with {len(value)} items)")
+        else:
+            logger.debug(f"  {field}: {value}")
+    
+    # Replace the entire exiftool_values section
+    config_mgr.replace_config_section('spex', 'exiftool_values', profile_dict)
+    
+    # Force a refresh to ensure changes are persisted
+    config_mgr.refresh_configs()
+    
+    # Verify changes persisted
+    final_config = config_mgr.get_config('spex', SpexConfig)
+    logger.debug(f"Final verification after refresh: Exiftool values updated")
+    
+    # Verify specific fields
+    if hasattr(final_config.exiftool_values, 'FileType'):
+        logger.debug(f"Verified FileType: {final_config.exiftool_values.FileType}")
+    if hasattr(final_config.exiftool_values, 'ImageWidth'):
+        logger.debug(f"Verified ImageWidth: {final_config.exiftool_values.ImageWidth}")
+    
+    return True
+
+
 def update_tool_setting(tool_names: List[str], value: bool):
     """
     Update specific tool settings using config_mgr.update_config
@@ -536,7 +592,6 @@ def get_all_profiles() -> Dict[str, Union[dict, ChecksProfile]]:
     
     return all_profiles
 
-# Add these helper functions to config_edit.py after apply_exiftool_profile
 
 def get_exiftool_profile(profile_name: str):
     """
