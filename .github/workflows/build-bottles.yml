@@ -13,9 +13,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-13
-            arch: x86_64
-            version: ventura
           - os: macos-14
             arch: arm64
             version: sonoma
