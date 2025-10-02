@@ -231,10 +231,10 @@ class SpexTab(ThemeableMixin):
             for profile_name in self.exiftool_config.exiftool_profiles.keys():
                 self.exiftool_profile_dropdown.addItem(profile_name)
         
-        # Set initial state based on current config
-        current_file_type = spex_config.exiftool_values.FileType
-        if current_file_type == "MKV":
-            self.exiftool_profile_dropdown.setCurrentText("Standard MKV Profile")
+        # Set initial state based on current config - UPDATED LOGIC
+        matched_profile = self._find_matching_exiftool_profile()
+        if matched_profile:
+            self.exiftool_profile_dropdown.setCurrentText(matched_profile)
         else:
             self.exiftool_profile_dropdown.setCurrentText("Select a profile...")
         
@@ -263,6 +263,36 @@ class SpexTab(ThemeableMixin):
         theme_manager.style_buttons(exiftool_layout)
         
         return exiftool_group
+
+    def _find_matching_exiftool_profile(self):
+        """Find which profile matches the current exiftool values"""
+        if not hasattr(self.exiftool_config, 'exiftool_profiles') or not self.exiftool_config.exiftool_profiles:
+            return None
+        
+        current_values = spex_config.exiftool_values
+        
+        # Compare current values with each profile
+        for profile_name, profile in self.exiftool_config.exiftool_profiles.items():
+            if self._compare_exiftool_values(current_values, profile):
+                return profile_name
+        
+        return None
+
+    def _compare_exiftool_values(self, current, profile):
+        """Compare two exiftool value sets to see if they match"""
+        from dataclasses import asdict
+        
+        # Convert both to dictionaries for comparison
+        current_dict = asdict(current) if hasattr(current, '__dataclass_fields__') else current.__dict__
+        profile_dict = asdict(profile) if hasattr(profile, '__dataclass_fields__') else profile.__dict__
+        
+        # Compare all fields
+        for key in current_dict.keys():
+            if key in profile_dict:
+                if current_dict[key] != profile_dict[key]:
+                    return False
+        
+        return True
 
     def add_custom_exiftool_button(self):
         """Add a button to create custom exiftool profiles"""
