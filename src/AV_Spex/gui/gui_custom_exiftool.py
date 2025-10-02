@@ -30,17 +30,17 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         self.setup_theme_handling()
         
         # Set minimum size for the dialog
-        self.setMinimumSize(600, 700)
+        self.setMinimumSize(700, 800)
         
         # Initialize layout
         layout = QVBoxLayout()
         layout.setSpacing(10)
         
-         # Add description
+        # Add description
         if edit_mode:
             description = QLabel(f"Edit the exiftool profile: {profile_name}")
         else:
-            description = QLabel("Define expected Exiftool values for file validation.")
+            description = QLabel("Define expected Exiftool values for file validation. Each field can have multiple values.")
         description.setWordWrap(True)
         layout.addWidget(description)
         
@@ -72,7 +72,7 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         self.fields_layout = QGridLayout(scroll_widget)
         self.fields_layout.setSpacing(10)
         scroll.setWidget(scroll_widget)
-        scroll.setMinimumHeight(400)
+        scroll.setMinimumHeight(500)
         
         # Create input fields
         self.field_inputs = {}
@@ -103,76 +103,93 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         self.update_preview()
         
     def create_field_inputs(self):
-        """Create input fields for all Exiftool properties"""
+        """Create input fields for all Exiftool properties - all support multiple values"""
         # Define field configurations
         fields = [
             # File Information
-            ("FileType", "File Type", "MKV", "File format (e.g., MKV, MOV, MP4)"),
-            ("FileTypeExtension", "File Extension", "mkv", "File extension without dot"),
-            ("MIMEType", "MIME Type", "video/x-matroska", "MIME type of the file"),
+            ("FileType", "File Type", ["MKV"], "File format (e.g., MKV, MOV, MP4)"),
+            ("FileTypeExtension", "File Extension", ["mkv"], "File extension without dot"),
+            ("MIMEType", "MIME Type", ["video/x-matroska"], "MIME type of the file"),
             
             # Video Properties
-            ("VideoFrameRate", "Frame Rate", "29.97", "Video frame rate in fps"),
-            ("ImageWidth", "Width", "720", "Video width in pixels"),
-            ("ImageHeight", "Height", "486", "Video height in pixels"),
-            ("VideoScanType", "Scan Type", "Interlaced", "Progressive or Interlaced"),
+            ("VideoFrameRate", "Frame Rate", ["29.97"], "Video frame rate in fps"),
+            ("ImageWidth", "Width", ["720"], "Video width in pixels"),
+            ("ImageHeight", "Height", ["486"], "Video height in pixels"),
+            ("VideoScanType", "Scan Type", ["Interlaced"], "Progressive or Interlaced"),
             
             # Display Properties
-            ("DisplayWidth", "Display Width", "400", "Display width"),
-            ("DisplayHeight", "Display Height", "297", "Display height"),
-            ("DisplayUnit", "Display Unit", "Display Aspect Ratio", "Unit for display dimensions"),
+            ("DisplayWidth", "Display Width", ["400"], "Display width"),
+            ("DisplayHeight", "Display Height", ["297"], "Display height"),
+            ("DisplayUnit", "Display Unit", ["Display Aspect Ratio"], "Unit for display dimensions"),
             
             # Audio Properties
-            ("AudioChannels", "Audio Channels", "2", "Number of audio channels"),
-            ("AudioSampleRate", "Sample Rate", "48000", "Audio sample rate in Hz"),
-            ("AudioBitsPerSample", "Bits per Sample", "24", "Audio bit depth"),
+            ("AudioChannels", "Audio Channels", ["2"], "Number of audio channels"),
+            ("AudioSampleRate", "Sample Rate", ["48000"], "Audio sample rate in Hz"),
+            ("AudioBitsPerSample", "Bits per Sample", ["24"], "Audio bit depth"),
+            
+            # Codec IDs
+            ("CodecID", "Codec IDs", ["A_FLAC", "A_PCM/INT/LIT"], "List of accepted audio codec IDs"),
         ]
         
         row = 0
-        for field_name, label_text, placeholder, tooltip in fields:
+        for field_name, label_text, default_values, tooltip in fields:
             # Label
             label = QLabel(f"{label_text}:")
             label.setToolTip(tooltip)
-            self.fields_layout.addWidget(label, row, 0)
+            self.fields_layout.addWidget(label, row, 0, Qt.AlignmentFlag.AlignVCenter)
             
-            # Input
-            input_field = QLineEdit()
-            input_field.setPlaceholderText(placeholder)
-            input_field.textChanged.connect(self.update_preview)
-            self.fields_layout.addWidget(input_field, row, 1)
-            self.field_inputs[field_name] = input_field
+            # Create list widget for multiple values
+            list_widget = QListWidget()
+            list_widget.setMaximumHeight(40)
+            list_widget.addItems(default_values)
+            list_widget.itemChanged.connect(self.update_preview)
+            
+            # Buttons for adding/removing items
+            button_layout = QVBoxLayout()
+            add_btn = QPushButton("+")
+            add_btn.setMaximumWidth(30)
+            add_btn.setToolTip(f"Add {label_text}")
+            add_btn.clicked.connect(lambda checked, lw=list_widget, fn=field_name: self.add_list_item(lw, fn))
+            
+            remove_btn = QPushButton("-")
+            remove_btn.setMaximumWidth(30)
+            remove_btn.setToolTip(f"Remove selected {label_text}")
+            remove_btn.clicked.connect(lambda checked, lw=list_widget: self.remove_list_item(lw))
+            
+            button_layout.addWidget(add_btn)
+            button_layout.addWidget(remove_btn)
+            button_layout.addStretch()
+            
+            # Combine list widget and buttons
+            field_layout = QHBoxLayout()
+            field_layout.addWidget(list_widget)
+            field_layout.addLayout(button_layout)
+            
+            field_widget = QWidget()
+            field_widget.setLayout(field_layout)
+            self.fields_layout.addWidget(field_widget, row, 1)
+            self.field_inputs[field_name] = list_widget
             
             row += 1
-        
-        # Add CodecID section separately since it needs special handling
-        codec_label = QLabel("Codec IDs:")
-        codec_label.setToolTip("List of accepted audio codec IDs")
-        self.fields_layout.addWidget(codec_label, row, 0)
-        
-        codec_list = QListWidget()
-        codec_list.setMaximumHeight(80)
-        codec_list.addItems(["A_FLAC", "A_PCM/INT/LIT"])
-        
-        # Buttons for adding/removing codec items
-        codec_button_layout = QVBoxLayout()
-        add_codec_btn = QPushButton("+")
-        add_codec_btn.setMaximumWidth(30)
-        add_codec_btn.clicked.connect(lambda: self.add_codec_item(codec_list))
-        remove_codec_btn = QPushButton("-")
-        remove_codec_btn.setMaximumWidth(30)
-        remove_codec_btn.clicked.connect(lambda: self.remove_codec_item(codec_list))
-        codec_button_layout.addWidget(add_codec_btn)
-        codec_button_layout.addWidget(remove_codec_btn)
-        
-        codec_layout = QHBoxLayout()
-        codec_layout.addWidget(codec_list)
-        codec_layout.addLayout(codec_button_layout)
-        
-        codec_widget = QWidget()
-        codec_widget.setLayout(codec_layout)
-        self.fields_layout.addWidget(codec_widget, row, 1)
-        self.field_inputs["CodecID"] = codec_list
-        
+    
+    def add_list_item(self, list_widget, field_name):
+        """Add a new item to any list widget"""
+        text, ok = QInputDialog.getText(
+            self, 
+            "Add Value", 
+            f"Enter value for {field_name}:"
+        )
+        if ok and text:
+            list_widget.addItem(text)
+            self.update_preview()
+    
+    def remove_list_item(self, list_widget):
+        """Remove selected item from any list widget"""
+        current_item = list_widget.currentItem()
+        if current_item:
+            list_widget.takeItem(list_widget.row(current_item))
+            self.update_preview()
+    
     def import_from_file(self):
         """Import exiftool data from a JSON or text file"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -317,58 +334,39 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
     
     def load_profile_data(self, profile_data):
         """Load profile data into the form fields"""
-        # Load field values
-        for field_name, input_widget in self.field_inputs.items():
+        # Load field values - all fields now use list widgets
+        for field_name, list_widget in self.field_inputs.items():
             if hasattr(profile_data, field_name):
                 value = getattr(profile_data, field_name)
-                if field_name == "CodecID":
-                    # Handle list widget
-                    input_widget.clear()
-                    if isinstance(value, list):
-                        input_widget.addItems(value)
-                else:
-                    # Handle text input
-                    input_widget.setText(str(value) if value else "")
+                list_widget.clear()
+                
+                # Convert single values to list
+                if isinstance(value, list):
+                    list_widget.addItems([str(v) for v in value])
+                elif value:
+                    list_widget.addItem(str(value))
                     
         self.update_preview()
     
-    def add_codec_item(self, list_widget):
-        """Add a new codec ID to the list"""
-        from PyQt6.QtWidgets import QInputDialog
-        text, ok = QInputDialog.getText(self, "Add Codec ID", "Enter codec ID:")
-        if ok and text:
-            list_widget.addItem(text)
-            self.update_preview()
-            
-    def remove_codec_item(self, list_widget):
-        """Remove selected codec ID from the list"""
-        current_item = list_widget.currentItem()
-        if current_item:
-            list_widget.takeItem(list_widget.row(current_item))
-            self.update_preview()
-            
     def update_preview(self):
         """Update the profile preview"""
         profile_name = self.profile_name_input.text() or "Unnamed Profile"
         
         # Get first few field values for preview
-        file_type = self.field_inputs.get("FileType")
-        if file_type and isinstance(file_type, QLineEdit):
-            file_type_val = file_type.text() or "N/A"
-        else:
-            file_type_val = "N/A"
+        file_type_widget = self.field_inputs.get("FileType")
+        file_type_val = "N/A"
+        if file_type_widget and file_type_widget.count() > 0:
+            file_type_val = file_type_widget.item(0).text()
             
-        width = self.field_inputs.get("ImageWidth")
-        if width and isinstance(width, QLineEdit):
-            width_val = width.text() or "N/A"
-        else:
-            width_val = "N/A"
+        width_widget = self.field_inputs.get("ImageWidth")
+        width_val = "N/A"
+        if width_widget and width_widget.count() > 0:
+            width_val = width_widget.item(0).text()
             
-        height = self.field_inputs.get("ImageHeight")
-        if height and isinstance(height, QLineEdit):
-            height_val = height.text() or "N/A"
-        else:
-            height_val = "N/A"
+        height_widget = self.field_inputs.get("ImageHeight")
+        height_val = "N/A"
+        if height_widget and height_widget.count() > 0:
+            height_val = height_widget.item(0).text()
             
         preview = f"{profile_name}: {file_type_val} {width_val}x{height_val}"
         self.preview_text.setText(preview)
@@ -379,24 +377,22 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
             QMessageBox.warning(self, "Validation Error", "Profile name is required.")
             return None
             
-        # Collect values from inputs
+        # Collect values from inputs - all fields now return lists
         profile_data = {}
         
-        for field_name, input_widget in self.field_inputs.items():
-            if field_name == "CodecID":
-                # Handle list widget
-                items = []
-                for i in range(input_widget.count()):
-                    items.append(input_widget.item(i).text())
-                profile_data[field_name] = items
-            else:
-                # Handle text input
-                profile_data[field_name] = input_widget.text()
+        for field_name, list_widget in self.field_inputs.items():
+            items = []
+            for i in range(list_widget.count()):
+                items.append(list_widget.item(i).text())
+            
+            # Store as list (ExiftoolProfile will handle conversion if needed)
+            profile_data[field_name] = items if len(items) > 1 else (items[0] if items else "")
                 
         # Validate required fields
         required_fields = ["FileType", "FileTypeExtension", "MIMEType"]
         for field in required_fields:
-            if not profile_data.get(field):
+            value = profile_data.get(field)
+            if not value or (isinstance(value, list) and not value):
                 QMessageBox.warning(self, "Validation Error", f"{field} is required.")
                 return None
                 
@@ -408,7 +404,7 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         profile = self.get_exiftool_profile()
         if profile:
             try:
-                    # Store the profile with the name
+                # Store the profile with the name
                 profile_name = self.original_profile_name if self.edit_mode else self.profile_name_input.text()
                 self.profile = {
                     'name': profile_name,
@@ -426,21 +422,7 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
     def load_existing_profile(self, profile_name, profile_data):
         """Load an existing profile into the dialog"""
         self.profile_name_input.setText(profile_name)
-        
-        # Load field values
-        for field_name, input_widget in self.field_inputs.items():
-            if hasattr(profile_data, field_name):
-                value = getattr(profile_data, field_name)
-                if field_name == "CodecID":
-                    # Handle list widget
-                    input_widget.clear()
-                    if isinstance(value, list):
-                        input_widget.addItems(value)
-                else:
-                    # Handle text input
-                    input_widget.setText(str(value) if value else "")
-                    
-        self.update_preview()
+        self.load_profile_data(profile_data)
         
     def on_theme_changed(self, palette):
         """Apply theme changes to this dialog"""
