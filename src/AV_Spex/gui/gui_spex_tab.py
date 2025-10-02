@@ -246,6 +246,7 @@ class SpexTab(ThemeableMixin):
         
         # Add custom exiftool button
         self.add_custom_exiftool_button()
+        self.add_edit_exiftool_button()
         
         # Open section button
         exiftool_button = QPushButton("Open Section")
@@ -256,7 +257,7 @@ class SpexTab(ThemeableMixin):
         
         # Set the layout for the group
         exiftool_group.setLayout(exiftool_layout)
-        exiftool_group.setMinimumHeight(200)
+        exiftool_group.setMinimumHeight(225)
         
         # Style the buttons
         theme_manager.style_buttons(exiftool_layout)
@@ -269,14 +270,32 @@ class SpexTab(ThemeableMixin):
         custom_button.clicked.connect(self.show_custom_exiftool_dialog)
         self.exiftool_section_layout.addWidget(custom_button)
 
-    def show_custom_exiftool_dialog(self):
+    def add_edit_exiftool_button(self):
+        """Add a button to edit existing exiftool profiles"""
+        edit_button = QPushButton("Edit Selected Profile...")
+        edit_button.clicked.connect(self.show_edit_exiftool_dialog)
+        self.exiftool_section_layout.addWidget(edit_button)
+
+    def show_custom_exiftool_dialog(self, edit_mode=False, profile_name=None):
         """Show the custom exiftool dialog"""
         from AV_Spex.gui.gui_custom_exiftool import CustomExiftoolDialog
         
-        dialog = CustomExiftoolDialog(self.main_window)
+        dialog = CustomExiftoolDialog(self.main_window, edit_mode=edit_mode, profile_name=profile_name)
         
-        # Load current exiftool values as defaults
-        dialog.load_profile_data(spex_config.exiftool_values)
+        if edit_mode and profile_name:
+            # Load the existing profile data
+            try:
+                exiftool_config = config_mgr.get_config("exiftool", ExiftoolConfig)
+                if profile_name in exiftool_config.exiftool_profiles:
+                    profile_data = exiftool_config.exiftool_profiles[profile_name]
+                    dialog.load_profile_data(profile_data)
+            except Exception as e:
+                QMessageBox.warning(self.main_window, "Error", 
+                                f"Error loading profile: {str(e)}")
+                return
+        else:
+            # Load current exiftool values as defaults for new profile
+            dialog.load_profile_data(spex_config.exiftool_values)
         
         result = dialog.exec()
         
@@ -286,55 +305,72 @@ class SpexTab(ThemeableMixin):
                 try:
                     profile_name = profile_info['name']
                     profile_data = profile_info['data']
+                    is_edit = profile_info.get('is_edit', False)
                     
-                    # Check if this profile already exists in the dropdown
-                    found = False
-                    for i in range(self.exiftool_profile_dropdown.count()):
-                        if self.exiftool_profile_dropdown.itemText(i) == profile_name:
-                            found = True
-                            break
+                    # Get the ConfigManager instance
+                    config_manager = ConfigManager()
+                    config_manager.refresh_configs()
                     
-                    # Only add if it's not already in the dropdown
-                    if not found:
-                        # Add to dropdown UI
-                        self.exiftool_profile_dropdown.addItem(profile_name)
-                        self.exiftool_profile_dropdown.setCurrentText(profile_name)
+                    # Get the exiftool configuration
+                    try:
+                        exiftool_config = config_manager.get_config('exiftool', ExiftoolConfig)
+                    except:
+                        exiftool_config = ExiftoolConfig()
+                    
+                    # Update the profiles
+                    if not hasattr(exiftool_config, 'exiftool_profiles'):
+                        exiftool_config.exiftool_profiles = {}
+                    
+                    # Add or update the profile
+                    exiftool_config.exiftool_profiles[profile_name] = profile_data
+                    
+                    # Update the cached config
+                    config_manager._configs['exiftool'] = exiftool_config
+                    
+                    # Save the updated config
+                    config_manager.save_config('exiftool', is_last_used=True)
+                    
+                    # Update dropdown if it's a new profile
+                    if not is_edit:
+                        # Check if profile already exists in dropdown
+                        found = False
+                        for i in range(self.exiftool_profile_dropdown.count()):
+                            if self.exiftool_profile_dropdown.itemText(i) == profile_name:
+                                found = True
+                                break
                         
-                        # Get the ConfigManager instance
-                        config_manager = ConfigManager()
-                        config_manager.refresh_configs()
-                        
-                        # Get the exiftool configuration
-                        try:
-                            exiftool_config = config_manager.get_config('exiftool', ExiftoolConfig)
-                        except:
-                            # If config doesn't exist, create it
-                            exiftool_config = ExiftoolConfig()
-                        
-                        # Update the profiles
-                        if not hasattr(exiftool_config, 'exiftool_profiles'):
-                            exiftool_config.exiftool_profiles = {}
-                        
-                        # Add the new profile
-                        exiftool_config.exiftool_profiles[profile_name] = profile_data
-                        
-                        # Update the cached config
-                        config_manager._configs['exiftool'] = exiftool_config
-                        
-                        # Save the updated config
-                        config_manager.save_config('exiftool', is_last_used=True)
-                        
-                        # Apply the new profile
-                        from AV_Spex.utils import config_edit
-                        config_edit.apply_exiftool_profile(profile_data)
-                        config_manager.save_config('spex', is_last_used=True)
-                        
-                        logger.debug(f"Added custom exiftool profile '{profile_name}' to configuration")
-                        
+                        if not found:
+                            self.exiftool_profile_dropdown.addItem(profile_name)
+                    
+                    # Set as current selection
+                    self.exiftool_profile_dropdown.setCurrentText(profile_name)
+                    
+                    # Apply the profile
+                    from AV_Spex.utils import config_edit
+                    config_edit.apply_exiftool_profile(profile_data)
+                    config_manager.save_config('spex', is_last_used=True)
+                    
+                    action = "updated" if is_edit else "added"
+                    logger.debug(f"Successfully {action} exiftool profile '{profile_name}'")
+                    QMessageBox.information(self.main_window, "Success", 
+                                        f"Profile '{profile_name}' {action} successfully!")
+                    
                 except Exception as e:
                     QMessageBox.warning(self.main_window, "Error", 
-                                    f"Error adding custom profile: {str(e)}")
+                                    f"Error saving profile: {str(e)}")
 
+    def show_edit_exiftool_dialog(self):
+        """Show the dialog to edit the currently selected exiftool profile"""
+        selected_profile = self.exiftool_profile_dropdown.currentText()
+        
+        if selected_profile == "Select a profile...":
+            QMessageBox.information(self.main_window, "No Profile Selected", 
+                                "Please select a profile to edit from the dropdown.")
+            return
+        
+        # Show the dialog in edit mode
+        self.show_custom_exiftool_dialog(edit_mode=True, profile_name=selected_profile)
+    
     def on_exiftool_profile_changed(self, index):
         """Handle exiftool profile selection change"""
         try:

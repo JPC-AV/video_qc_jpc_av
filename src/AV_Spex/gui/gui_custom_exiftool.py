@@ -13,10 +13,17 @@ from AV_Spex.utils import exiftool_import
 
 
 class CustomExiftoolDialog(QDialog, ThemeableMixin):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, edit_mode=False, profile_name=None):
         super().__init__(parent)
         self.profile = None
-        self.setWindowTitle("Custom Exiftool Profile")
+        self.edit_mode = edit_mode
+        self.original_profile_name = profile_name
+        
+        if edit_mode:
+            self.setWindowTitle(f"Edit Exiftool Profile: {profile_name}")
+        else:
+            self.setWindowTitle("Custom Exiftool Profile")
+        
         self.setModal(True)
         
         # Add theme handling
@@ -29,8 +36,11 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         layout = QVBoxLayout()
         layout.setSpacing(10)
         
-        # Add description
-        description = QLabel("Define expected Exiftool values for file validation.")
+         # Add description
+        if edit_mode:
+            description = QLabel(f"Edit the exiftool profile: {profile_name}")
+        else:
+            description = QLabel("Define expected Exiftool values for file validation.")
         description.setWordWrap(True)
         layout.addWidget(description)
         
@@ -39,6 +49,9 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         name_layout.addWidget(QLabel("Profile Name:"))
         self.profile_name_input = QLineEdit()
         self.profile_name_input.setPlaceholderText("e.g., Custom HD Profile")
+        if edit_mode:
+            self.profile_name_input.setText(profile_name)
+            self.profile_name_input.setEnabled(False)  # Don't allow renaming in edit mode
         name_layout.addWidget(self.profile_name_input)
         layout.addLayout(name_layout)
         
@@ -395,10 +408,12 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         profile = self.get_exiftool_profile()
         if profile:
             try:
-                # Store the profile with the name
+                    # Store the profile with the name
+                profile_name = self.original_profile_name if self.edit_mode else self.profile_name_input.text()
                 self.profile = {
-                    'name': self.profile_name_input.text(),
-                    'data': profile
+                    'name': profile_name,
+                    'data': profile,
+                    'is_edit': self.edit_mode
                 }
                 self.accept()
             except Exception as e:
