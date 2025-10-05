@@ -69,13 +69,18 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_widget = QWidget()
+        scroll_widget.setAutoFillBackground(False)
+        scroll_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        scroll_widget.setStyleSheet("QWidget { background-color: transparent; }")
         self.fields_layout = QGridLayout(scroll_widget)
-        self.fields_layout.setSpacing(10)
+        self.fields_layout.setSpacing(5)
+        self.fields_layout.setContentsMargins(5, 5, 5, 5)
         scroll.setWidget(scroll_widget)
         scroll.setMinimumHeight(500)
         
-        # Create input fields
+        # Create input fields - now stores list of QLineEdit widgets per field
         self.field_inputs = {}
+        self.field_containers = {}  # Store the container widgets for each field
         self.create_field_inputs()
         
         # Preview section
@@ -133,62 +138,92 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
         
         row = 0
         for field_name, label_text, default_values, tooltip in fields:
-            # Label
+            # Create horizontal layout for the entire field (label + inputs + buttons)
+            field_layout = QHBoxLayout()
+            field_layout.setContentsMargins(0, 0, 0, 0)
+            field_layout.setSpacing(5)
+            
+            # Label - now part of the field_layout
             label = QLabel(f"{label_text}:")
             label.setToolTip(tooltip)
-            self.fields_layout.addWidget(label, row, 0, Qt.AlignmentFlag.AlignVCenter)
+            label.setMinimumWidth(120)  # Optional: set a minimum width for alignment
+            field_layout.addWidget(label)
             
-            # Create list widget for multiple values
-            list_widget = QListWidget()
-            list_widget.setMaximumHeight(40)
-            list_widget.addItems(default_values)
-            list_widget.itemChanged.connect(self.update_preview)
+            # Create vertical layout for MULTIPLE line edits
+            inputs_layout = QVBoxLayout()
+            inputs_layout.setContentsMargins(0, 0, 0, 0)
+            inputs_layout.setSpacing(5)
+            
+            # Store list of line edits for this field
+            self.field_inputs[field_name] = []
+            self.field_containers[field_name] = inputs_layout
+            
+            # Add first line edit
+            first_value = default_values[0] if default_values else ""
+            line_edit = QLineEdit()
+            line_edit.setText(first_value)
+            line_edit.setPlaceholderText(f"Enter {field_name} value...")
+            line_edit.textChanged.connect(self.update_preview)
+            inputs_layout.addWidget(line_edit)
+            self.field_inputs[field_name].append(line_edit)
+            
+            # Add inputs layout to field layout
+            field_layout.addLayout(inputs_layout, 1)  # Stretch factor 1
             
             # Buttons for adding/removing items
-            button_layout = QVBoxLayout()
             add_btn = QPushButton("+")
             add_btn.setMaximumWidth(30)
+            add_btn.setMaximumHeight(25)
             add_btn.setToolTip(f"Add {label_text}")
-            add_btn.clicked.connect(lambda checked, lw=list_widget, fn=field_name: self.add_list_item(lw, fn))
+            add_btn.setStyleSheet("QPushButton { background-color: transparent; }")
+            add_btn.clicked.connect(lambda checked, fn=field_name: self.add_textbox_row(fn))
             
             remove_btn = QPushButton("-")
             remove_btn.setMaximumWidth(30)
-            remove_btn.setToolTip(f"Remove selected {label_text}")
-            remove_btn.clicked.connect(lambda checked, lw=list_widget: self.remove_list_item(lw))
+            remove_btn.setMaximumHeight(25)
+            remove_btn.setToolTip(f"Remove last {label_text}")
+            remove_btn.setStyleSheet("QPushButton { background-color: transparent; }")
+            remove_btn.clicked.connect(lambda checked, fn=field_name: self.remove_textbox_row(fn))
             
-            button_layout.addWidget(add_btn)
-            button_layout.addWidget(remove_btn)
-            button_layout.addStretch()
+            field_layout.addWidget(add_btn)
+            field_layout.addWidget(remove_btn)
             
-            # Combine list widget and buttons
-            field_layout = QHBoxLayout()
-            field_layout.addWidget(list_widget)
-            field_layout.addLayout(button_layout)
-            
+            # Create widget to hold this layout - CRITICAL: no background
             field_widget = QWidget()
             field_widget.setLayout(field_layout)
-            self.fields_layout.addWidget(field_widget, row, 1)
-            self.field_inputs[field_name] = list_widget
+            field_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+            field_widget.setAutoFillBackground(False)
+            
+            # Add to grid layout, spanning both columns
+            self.fields_layout.addWidget(field_widget, row, 0, 1, 2)
             
             row += 1
-    
-    def add_list_item(self, list_widget, field_name):
-        """Add a new item to any list widget"""
-        text, ok = QInputDialog.getText(
-            self, 
-            "Add Value", 
-            f"Enter value for {field_name}:"
-        )
-        if ok and text:
-            list_widget.addItem(text)
+
+    def add_textbox_row(self, field_name, value="", container_layout=None):
+        """Add a new text box row for a field"""
+        if container_layout is None:
+            container_layout = self.field_containers[field_name]
+        
+        line_edit = QLineEdit()
+        line_edit.setText(value)
+        line_edit.setPlaceholderText(f"Enter {field_name} value...")
+        line_edit.textChanged.connect(self.update_preview)
+        
+        container_layout.addWidget(line_edit)
+        self.field_inputs[field_name].append(line_edit)
+        
+        # Update preview if it exists (during init it doesn't exist yet)
+        if hasattr(self, 'preview_text'):
             self.update_preview()
-    
-    def remove_list_item(self, list_widget):
-        """Remove selected item from any list widget"""
-        current_item = list_widget.currentItem()
-        if current_item:
-            list_widget.takeItem(list_widget.row(current_item))
-            self.update_preview()
+
+    def remove_textbox_row(self, field_name):
+        """Remove the last text box row for a field"""
+        if len(self.field_inputs[field_name]) > 1:  # Keep at least one text box
+            line_edit = self.field_inputs[field_name].pop()
+            line_edit.deleteLater()
+            # Update preview if it exists
+            if hasattr(self, 'preview_text'):
+                self.update_preview()
     
     def import_from_file(self):
         """Import exiftool data from a JSON or text file"""
@@ -334,39 +369,73 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
     
     def load_profile_data(self, profile_data):
         """Load profile data into the form fields"""
-        # Load field values - all fields now use list widgets
-        for field_name, list_widget in self.field_inputs.items():
+        # Clear existing text boxes and add new ones based on profile data
+        for field_name, line_edits in self.field_inputs.items():
+            container_layout = self.field_containers[field_name]
+            
+            # Remove all widgets from the layout
+            while container_layout.count():
+                item = container_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            
+            self.field_inputs[field_name].clear()
+            
+            # Get the value from profile
             if hasattr(profile_data, field_name):
                 value = getattr(profile_data, field_name)
-                list_widget.clear()
                 
-                # Convert single values to list
+                # Convert to list if not already
                 if isinstance(value, list):
-                    list_widget.addItems([str(v) for v in value])
+                    values = value
                 elif value:
-                    list_widget.addItem(str(value))
-                    
-        self.update_preview()
+                    values = [value]
+                else:
+                    values = [""]
+                
+                # Add text boxes for each value
+                for val in values:
+                    line_edit = QLineEdit()
+                    line_edit.setText(str(val))
+                    line_edit.setPlaceholderText(f"Enter {field_name} value...")
+                    line_edit.textChanged.connect(self.update_preview)
+                    container_layout.addWidget(line_edit)
+                    self.field_inputs[field_name].append(line_edit)
+            else:
+                # Field not in profile, add one empty text box
+                line_edit = QLineEdit()
+                line_edit.setText("")
+                line_edit.setPlaceholderText(f"Enter {field_name} value...")
+                line_edit.textChanged.connect(self.update_preview)
+                container_layout.addWidget(line_edit)
+                self.field_inputs[field_name].append(line_edit)
+        
+        # Update preview if it exists
+        if hasattr(self, 'preview_text'):
+            self.update_preview()
     
     def update_preview(self):
         """Update the profile preview"""
         profile_name = self.profile_name_input.text() or "Unnamed Profile"
         
-        # Get first few field values for preview
-        file_type_widget = self.field_inputs.get("FileType")
+        # Get first field value for preview
         file_type_val = "N/A"
-        if file_type_widget and file_type_widget.count() > 0:
-            file_type_val = file_type_widget.item(0).text()
+        if "FileType" in self.field_inputs and self.field_inputs["FileType"]:
+            text = self.field_inputs["FileType"][0].text()
+            if text:
+                file_type_val = text
             
-        width_widget = self.field_inputs.get("ImageWidth")
         width_val = "N/A"
-        if width_widget and width_widget.count() > 0:
-            width_val = width_widget.item(0).text()
+        if "ImageWidth" in self.field_inputs and self.field_inputs["ImageWidth"]:
+            text = self.field_inputs["ImageWidth"][0].text()
+            if text:
+                width_val = text
             
-        height_widget = self.field_inputs.get("ImageHeight")
         height_val = "N/A"
-        if height_widget and height_widget.count() > 0:
-            height_val = height_widget.item(0).text()
+        if "ImageHeight" in self.field_inputs and self.field_inputs["ImageHeight"]:
+            text = self.field_inputs["ImageHeight"][0].text()
+            if text:
+                height_val = text
             
         preview = f"{profile_name}: {file_type_val} {width_val}x{height_val}"
         self.preview_text.setText(preview)
@@ -377,16 +446,23 @@ class CustomExiftoolDialog(QDialog, ThemeableMixin):
             QMessageBox.warning(self, "Validation Error", "Profile name is required.")
             return None
             
-        # Collect values from inputs - all fields now return lists
+        # Collect values from text boxes
         profile_data = {}
         
-        for field_name, list_widget in self.field_inputs.items():
-            items = []
-            for i in range(list_widget.count()):
-                items.append(list_widget.item(i).text())
+        for field_name, line_edits in self.field_inputs.items():
+            values = []
+            for line_edit in line_edits:
+                text = line_edit.text().strip()
+                if text:  # Only add non-empty values
+                    values.append(text)
             
-            # Store as list (ExiftoolProfile will handle conversion if needed)
-            profile_data[field_name] = items if len(items) > 1 else (items[0] if items else "")
+            # Store as list if multiple values, single value if one, empty string if none
+            if len(values) > 1:
+                profile_data[field_name] = values
+            elif len(values) == 1:
+                profile_data[field_name] = values[0]
+            else:
+                profile_data[field_name] = ""
                 
         # Validate required fields
         required_fields = ["FileType", "FileTypeExtension", "MIMEType"]
