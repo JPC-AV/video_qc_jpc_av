@@ -155,13 +155,13 @@ def make_report_dir(source_directory, video_id):
 def initialize_directory(source_directory):
     """
     Prepare the directory for processing by finding the video file 
-    and validating the filename.
+    and optionally validating the filename based on config settings.
 
     Args:
         source_directory (str): Path to the source directory
 
     Returns:
-        tuple: (video_path, video_id, destination_directory) if successful
+        tuple: (video_path, video_id, destination_directory, access_file_found) if successful
         None if preparation fails
     """
     # Get current time as a time structure
@@ -176,11 +176,22 @@ def initialize_directory(source_directory):
         logger.warning(f"Skipping {source_directory} due to error.\n")
         return None  # Indicates preparation failed
 
-    valid_filename = is_valid_filename(video_path)
-
-    if valid_filename is False:
-        logger.warning(f"Skipping {source_directory} due to error.\n")
-        return None  # Indicates preparation failed
+    # Get the latest checks config to see if filename validation is enabled
+    config_mgr.refresh_configs()  # Ensure we have the latest config
+    current_checks = config_mgr.get_config('checks', ChecksConfig, use_last_used=True)
+    
+    # Only validate filename if the toggle is enabled
+    if current_checks.validate_filename:
+        valid_filename = is_valid_filename(video_path)
+        
+        if valid_filename is False:
+            logger.warning(f"Skipping {source_directory} due to filename validation error.\n")
+            logger.info("To bypass filename validation, set 'validate_filename' to false in your Checks configuration.\n")
+            return None  # Indicates preparation failed
+        
+        logger.info("Filename validation passed.\n")
+    else:
+        logger.info("Filename validation is disabled in configuration, proceeding without validation.\n")
 
     logger.warning(f'Now processing {video_path}\n')
 
@@ -188,7 +199,13 @@ def initialize_directory(source_directory):
     video_id = os.path.splitext(os.path.basename(video_path))[0]
 
     # Check to confirm directory is the same name as the video file name
-    check_directory(source_directory, video_id)
+    # This check is also bypassed when filename validation is disabled
+    if current_checks.validate_filename:
+        if not check_directory(source_directory, video_id):
+            # Directory name doesn't match, but we only warn, not fail
+            logger.warning("Directory name mismatch detected but continuing...\n")
+    else:
+        logger.debug(f"Directory name check skipped (filename validation disabled).\n")
 
     # Create 'destination directory' for qc outputs
     destination_directory = make_qc_output_dir(source_directory, video_id)
