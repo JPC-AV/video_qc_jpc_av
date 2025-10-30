@@ -35,11 +35,37 @@ class ChecksWindow(QWidget, ThemeableMixin):
         """Create fixed layout structure"""
         main_layout = QVBoxLayout(self)
 
+        self.setup_validation_section(main_layout)
         self.setup_outputs_section(main_layout)
         self.setup_fixity_section(main_layout)
         self.setup_tools_section(main_layout)
         self.connect_signals()
         
+    # Validation Section
+    def setup_validation_section(self, main_layout):
+        """Set up the validation section with palette-aware styling"""
+        theme_manager = ThemeManager.instance()
+        
+        # Creating a new validation group
+        self.validation_group = QGroupBox("Validation")
+        theme_manager.style_groupbox(self.validation_group, "top left")
+        self.themed_group_boxes['validation'] = self.validation_group
+
+        validation_layout = QVBoxLayout()
+        
+        # Create checkbox with description on second line
+        self.validate_filename_cb = QCheckBox("Validate Filename")
+        self.validate_filename_cb.setStyleSheet("font-weight: bold;")
+        validate_filename_desc = QLabel("Check if filename matches the expected pattern from the Filename profile")
+        validate_filename_desc.setIndent(20)  # Indented to align with checkbox text
+        
+        # Add to layout
+        validation_layout.addWidget(self.validate_filename_cb)
+        validation_layout.addWidget(validate_filename_desc)
+        
+        self.validation_group.setLayout(validation_layout)
+        main_layout.addWidget(self.validation_group)
+    
     # Outputs Section
     def setup_outputs_section(self, main_layout):
         """Set up the outputs section with palette-aware styling"""
@@ -323,6 +349,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
     def connect_signals(self):
         """Connect all widget signals to their handlers"""
+        # Validation section
+        self.validate_filename_cb.stateChanged.connect(self.on_validate_filename_changed)
+        
         # Outputs section
         self.access_file_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file'])
@@ -387,6 +416,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.is_loading = True
 
         checks_config = config_mgr.get_config('checks', ChecksConfig)
+
+        # Validation
+        self.validate_filename_cb.setChecked(checks_config.validate_filename)
 
         # Outputs - now using booleans directly
         self.access_file_cb.setChecked(checks_config.outputs.access_file)
@@ -475,6 +507,19 @@ class ChecksWindow(QWidget, ThemeableMixin):
             field = path[1]
             updates = {section: {field: new_value}}
             
+        config_mgr.update_config('checks', updates)
+
+    def on_validate_filename_changed(self, state):
+        """Handle changes in validate filename checkbox"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
+        # Convert checkbox state to boolean
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        
+        # Update the top-level validate_filename field
+        updates = {'validate_filename': new_value}
         config_mgr.update_config('checks', updates)
 
     def on_boolean_changed(self, state, path):

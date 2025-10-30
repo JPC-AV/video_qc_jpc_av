@@ -61,6 +61,14 @@ def is_valid_filename(video_filename):
     # Force refresh to ensure we have the latest config
     config_mgr.refresh_configs()
     
+    # Get the latest checks config to check if filename validation is enabled
+    current_checks = config_mgr.get_config('checks', ChecksConfig, use_last_used=True)
+    
+    # If filename validation is disabled, return True immediately
+    if not current_checks.validate_filename:
+        logger.debug(f"Filename validation is disabled, accepting filename: {video_filename}\n")
+        return True
+    
     # Get the LATEST spex_config (critical to use use_last_used=True)
     current_spex = config_mgr.get_config('spex', SpexConfig, use_last_used=True)
     
