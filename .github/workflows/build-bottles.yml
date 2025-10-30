@@ -3,7 +3,7 @@ name: Build Bottles
 on:
   workflow_dispatch:
     inputs:
-      version:
+      tag_name:
         description: 'Version tag (e.g., v0.8.4.5)'
         required: true
         type: string
@@ -35,7 +35,7 @@ jobs:
       - name: Parse version
         id: version
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ github.event.inputs.tag_name }}"
           
           echo "📥 Input version: $VERSION"
           
