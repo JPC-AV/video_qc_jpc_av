@@ -184,6 +184,11 @@ class ConfigManager:
             Migrated configuration dictionary
         """
         if config_name == 'checks':
+            # Add validate_filename if missing (for backward compatibility)
+            if 'validate_filename' not in config_data:
+                config_data['validate_filename'] = True  # Default to True for backward compatibility
+                logger.info("Added missing 'validate_filename' field to checks config (defaulted to True)")
+            
             # Migrate outputs section
             if 'outputs' in config_data:
                 for key in ['access_file', 'report']:

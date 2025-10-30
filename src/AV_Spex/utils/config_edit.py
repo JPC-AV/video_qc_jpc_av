@@ -291,6 +291,10 @@ def apply_profile(selected_profile):
     # Prepare the updates dictionary with the structure matching the dataclass
     updates = {}
     
+    # Handle validate_filename (top-level field)
+    if 'validate_filename' in selected_profile:
+        updates['validate_filename'] = selected_profile['validate_filename']
+    
     # Handle outputs section
     if 'outputs' in selected_profile:
         updates['outputs'] = selected_profile['outputs']
@@ -535,6 +539,7 @@ def get_all_profiles() -> Dict[str, Union[dict, ChecksProfile]]:
 
 # Profile definitions with boolean values
 profile_step1 = {
+    "validate_filename": True,
     "tools": {
         "exiftool": {
             "check_tool": True,
@@ -584,6 +589,7 @@ profile_step1 = {
 }
 
 profile_step2 = {
+    "validate_filename": True,
     "tools": {
         "exiftool": {
             "check_tool": True,
@@ -633,6 +639,7 @@ profile_step2 = {
 }
 
 profile_allOff = {
+    "validate_filename": False,
     "tools": {
         "exiftool": {
             "check_tool": False,

@@ -286,6 +286,7 @@ class ChecksConfig:
     outputs: OutputsConfig
     fixity: FixityConfig
     tools: ToolsConfig
+    validate_filename: bool = True  
 
 @dataclass
 class FilenameProfile:
@@ -316,6 +317,7 @@ class ChecksProfile:
     """Custom profile for checks configuration"""
     name: str
     description: str = ""
+    validate_filename: bool = True  
     outputs: OutputsConfig = field(default_factory=lambda: OutputsConfig(
         access_file=False,
         report=False, 

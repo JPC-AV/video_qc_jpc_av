@@ -392,7 +392,7 @@ def run_qctools_command(command, input_path, output_type, output_path, check_can
     
     env = os.environ.copy()
     env['PATH'] = '/usr/local/bin:' + env.get('PATH', '')
-    full_command = f"{command} \"{input_path}\" {output_type} {output_path}"
+    full_command = f"{command} \"{input_path}\" {output_type} \"{output_path}\""
     logger.debug(f'Running command: {full_command}\n')
     
     # Use subprocess.Popen with stdout and stderr capture
