@@ -15,7 +15,7 @@ def run_command(command, input_path, output_type, output_path):
     env = os.environ.copy()
     env['PATH'] = '/usr/local/bin:' + env.get('PATH', '')
 
-    full_command = f"{command} \"{input_path}\" {output_type} {output_path}"
+    full_command = f"{command} \"{input_path}\" {output_type} \"{output_path}\""
 
     logger.debug(f'Running command: {full_command}\n')
     subprocess.run(full_command, shell=True, env=env)

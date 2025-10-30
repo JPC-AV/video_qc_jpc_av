@@ -44,7 +44,7 @@ def run_mediaconch_command(command, input_path, output_type, output_path, policy
     """
     try:
         # Construct full command
-        full_command = f"{command} {policy_path} \"{input_path}\" {output_type} {output_path}"
+        full_command = f"{command} \"{policy_path}\" \"{input_path}\" {output_type} \"{output_path}\""
         
         logger.debug(f'Running command: {full_command}\n')
         
