@@ -194,8 +194,8 @@ jobs:
           end
 
           resource "PyQt6" do
-            url "https://files.pythonhosted.org/packages/3c/9b/49da6f00a5c5741af201ed8d2d8a70db050c31c6c4aa511dc1ff54c03bb4/PyQt6-6.7.1.tar.gz"
-            sha256 "3672a82cbb4f0a85c29e862dce01c28a6094c0ab1e98754a10ee7f14b1f54f5a"
+            url "https://files.pythonhosted.org/packages/source/P/PyQt6/pyqt6-6.10.0.tar.gz"
+            sha256 "710ecfd720d9a03b2c684881ae37f528e11d17e8f1bf96431d00a6a73f308e36"
           end
         
           def install
@@ -207,7 +207,7 @@ jobs:
         
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "lxml==5.3.1"
 
-            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "PyQt6==6.7.1"
+            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "PyQt6==6.10.0"
         
             venv.pip_install_and_link buildpath
             
