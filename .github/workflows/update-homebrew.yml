@@ -192,15 +192,22 @@ jobs:
             url "https://files.pythonhosted.org/packages/db/9e/31b2f0b8f2357cd5f3e992c76c3e4e85a5cbbad8b8c5f23d0684e3f4c608/plotly-5.23.0.tar.gz"
             sha256 "89e57d003a116303a34de6700862391367dd564222ab71f8531df70279fc0193"
           end
+
+          resource "PyQt6" do
+            url "https://files.pythonhosted.org/packages/3c/9b/49da6f00a5c5741af201ed8d2d8a70db050c31c6c4aa511dc1ff54c03bb4/PyQt6-6.7.1.tar.gz"
+            sha256 "3672a82cbb4f0a85c29e862dce01c28a6094c0ab1e98754a10ee7f14b1f54f5a"
+          end
         
           def install
             venv = virtualenv_create(libexec, "python3.13")
             
-            venv.pip_install resources.reject { |r| r.name == "plotly" || r.name == "lxml" }
+            venv.pip_install resources.reject { |r| r.name == "plotly" || r.name == "lxml" || r.name == "PyQt6" }
         
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "plotly==5.23.0"
         
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "lxml==5.3.1"
+
+            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "PyQt6==6.7.1"
         
             venv.pip_install_and_link buildpath
             
