@@ -8,6 +8,10 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   build:
     strategy:
@@ -164,3 +168,61 @@ jobs:
             av-spex--*.bottle.tar.gz
             av-spex--*.bottle.json
           retention-days: 30
+
+  upload-bottles-to-release:
+    name: Upload bottles to GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    if: success()
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION="${{ github.event.inputs.tag_name }}"
+          VERSION_CLEAN=${VERSION#v}
+          echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
+          echo "tag_name=${VERSION}" >> $GITHUB_OUTPUT
+          echo "✅ Uploading bottles for version: $VERSION_CLEAN"
+
+      - name: Download all bottle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: bottles/
+
+      - name: List downloaded bottles
+        run: |
+          echo "=== Downloaded bottle artifacts ==="
+          ls -laR bottles/
+          echo "=================================="
+
+      - name: Prepare bottles for upload
+        run: |
+          mkdir -p upload
+          
+          # Copy all bottle files to upload directory
+          find bottles/ -name "*.bottle.tar.gz" -exec cp {} upload/ \;
+          find bottles/ -name "*.bottle.json" -exec cp {} upload/ \;
+          
+          echo "=== Files to upload ==="
+          ls -lah upload/
+          echo "======================="
+
+      - name: Upload bottles to release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          files: upload/*
+          fail_on_unmatched_files: true
+          body: |
+            ## AV-Spex ${{ steps.version.outputs.tag_name }}
+            
+            Pre-built bottles are available for:
+            - macOS ARM64 (Apple Silicon)
+            
+            Install with: `brew install JPC-AV/AV-Spex/av-spex`
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
