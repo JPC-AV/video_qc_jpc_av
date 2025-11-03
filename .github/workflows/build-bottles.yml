@@ -103,10 +103,8 @@ jobs:
           export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
           export HOMEBREW_NO_INSTALL_UPGRADE=1
           
-          # Install Qt and PyQt - let Homebrew handle dependencies automatically
-          # This will either use bottles or build from source as needed
-          brew install qt@6 || echo "Qt installation completed with warnings"
-          brew install pyqt@6 || brew install pyqt || echo "PyQt installation completed with warnings"
+          # Install PyQt - let Homebrew handle dependencies automatically
+          brew install pyqt || echo "PyQt installation completed with warnings"
           
           echo "✅ Dependencies installed"
 
