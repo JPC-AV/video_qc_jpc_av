@@ -11,10 +11,6 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, ExiftoolValues
 from AV_Spex.utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
-
 
 def parse_exiftool(file_path):
     exif_data_dict = parse_exiftool_json(file_path)
@@ -74,6 +70,10 @@ def check_exif_spex(exif_data):
     Returns:
         Dictionary of differences between actual and expected values
     """
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+    
     # Safely get expected values, defaulting to empty dictionary if not present
     expected_exif = asdict(spex_config.exiftool_values)
     
