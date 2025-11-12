@@ -41,5 +41,6 @@
       "evaluateBars": true,
       "thumbExport": true
     }
-  }
+  },
+  "validate_filename": false
 }
