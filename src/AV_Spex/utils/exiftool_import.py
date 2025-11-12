@@ -125,6 +125,7 @@ def extract_profile_fields(exiftool_data: Dict[str, any]) -> Dict[str, any]:
     Extract fields relevant to ExiftoolProfile from raw exiftool data.
     
     Maps various possible field names to the expected profile fields.
+    Any field can have multiple values (returned as a list).
     
     Args:
         exiftool_data: Raw exiftool data dictionary
@@ -147,47 +148,53 @@ def extract_profile_fields(exiftool_data: Dict[str, any]) -> Dict[str, any]:
         'AudioChannels': ['AudioChannels', 'Audio Channels', 'Channels'],
         'AudioSampleRate': ['AudioSampleRate', 'Audio Sample Rate', 'SampleRate'],
         'AudioBitsPerSample': ['AudioBitsPerSample', 'Audio Bits Per Sample', 'BitsPerSample'],
+        'CodecID': ['CodecID', 'Codec ID', 'AudioCodecID', 'Audio Codec ID'],
     }
     
     profile_fields = {}
     
-    # Extract mapped fields
+    # Extract mapped fields - handle both single values and lists
     for profile_field, possible_names in field_mappings.items():
+        values = []
+        
         for name in possible_names:
             if name in exiftool_data:
                 value = exiftool_data[name]
+                
+                # Handle list values
+                if isinstance(value, list):
+                    values.extend(value)
+                else:
+                    values.append(value)
+                break  # Found the field, move to next profile_field
+        
+        if values:
+            # Normalize and convert values
+            normalized_values = []
+            for val in values:
                 # Convert numeric strings if needed
                 if profile_field in ['ImageWidth', 'ImageHeight', 'DisplayWidth', 'DisplayHeight']:
-                    value = str(value)
+                    normalized_values.append(str(val))
                 elif profile_field in ['AudioSampleRate']:
-                    value = str(int(value)) if isinstance(value, (int, float)) else str(value)
-                elif profile_field in ['VideoFrameRate'] and isinstance(value, (int, float)):
-                    value = str(value)
-                    
-                profile_fields[profile_field] = value
-                break
-    
-    # Handle CodecID specially (it can be a single value or list)
-    codec_id_names = ['CodecID', 'Codec ID', 'AudioCodecID', 'Audio Codec ID']
-    codec_ids = []
-    
-    for name in codec_id_names:
-        if name in exiftool_data:
-            value = exiftool_data[name]
-            if isinstance(value, list):
-                codec_ids.extend(value)
-            else:
-                codec_ids.append(str(value))
-    
-    if codec_ids:
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_codec_ids = []
-        for codec in codec_ids:
-            if codec not in seen:
-                seen.add(codec)
-                unique_codec_ids.append(codec)
-        profile_fields['CodecID'] = unique_codec_ids
+                    normalized_values.append(str(int(val)) if isinstance(val, (int, float)) else str(val))
+                elif profile_field in ['VideoFrameRate'] and isinstance(val, (int, float)):
+                    normalized_values.append(str(val))
+                else:
+                    normalized_values.append(str(val))
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_values = []
+            for val in normalized_values:
+                if val not in seen:
+                    seen.add(val)
+                    unique_values.append(val)
+            
+            # Store as list if multiple values, single string if one value
+            if len(unique_values) > 1:
+                profile_fields[profile_field] = unique_values
+            elif len(unique_values) == 1:
+                profile_fields[profile_field] = unique_values[0]
     
     return profile_fields
 
@@ -277,17 +284,25 @@ def compare_with_expected(imported_data: Dict[str, any], expected_profile: Exift
         if field in profile_fields:
             actual_value = profile_fields[field]
             
-            # Special handling for lists (like CodecID)
-            if isinstance(expected_value, list) and isinstance(actual_value, list):
-                # Check if all expected codecs are present
+            # Normalize expected_value to always be a list for comparison
+            expected_list = expected_value if isinstance(expected_value, list) else [expected_value]
+            
+            # Special handling for when both are lists (like CodecID)
+            if isinstance(actual_value, list) and isinstance(expected_value, list):
+                # Check if all expected values are present in actual values
                 if set(expected_value).issubset(set(actual_value)):
                     matches[field] = {'expected': expected_value, 'actual': actual_value}
                 else:
                     mismatches[field] = {'expected': expected_value, 'actual': actual_value}
-            elif str(actual_value) == str(expected_value):
-                matches[field] = {'expected': expected_value, 'actual': actual_value}
             else:
-                mismatches[field] = {'expected': expected_value, 'actual': actual_value}
+                # Compare as strings, allowing for actual_value to match any item in expected_list
+                actual_str = str(actual_value).strip()
+                expected_str_list = [str(e).strip() for e in expected_list]
+                
+                if actual_str in expected_str_list:
+                    matches[field] = {'expected': expected_value, 'actual': actual_value}
+                else:
+                    mismatches[field] = {'expected': expected_value, 'actual': actual_value}
         elif expected_value:  # Only flag as missing if expected value is not empty
             missing[field] = {'expected': expected_value, 'actual': None}
     
