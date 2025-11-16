@@ -496,6 +496,26 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
     Returns:
         str or None: HTML string containing the visualization if successful, None if there are errors.
     """
+    if not qctools_colorbars_duration_output or not colorbars_values_output:
+        logger.warning("Missing required colorbar files - duration or values file is None")
+        return None
+        
+    try:
+        if not os.path.isfile(qctools_colorbars_duration_output):
+            logger.critical(f"Cannot open color bars duration csv file: {qctools_colorbars_duration_output}")
+            return None
+    except (TypeError, AttributeError) as e:
+        logger.critical(f"Invalid path for color bars duration file: {e}")
+        return None
+        
+    try:
+        if not os.path.isfile(colorbars_values_output):
+            logger.critical(f"Cannot open color bars values csv file: {colorbars_values_output}")
+            return None
+    except Exception as e:
+        logger.critical(f"Error reading colorbars CSV file: {e}")
+        return None
+    
     try:
         import plotly.graph_objs as go
     except ImportError as e:
@@ -522,10 +542,6 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
 
      # Initialize duration_text with default value
     duration_text = "Colorbars duration: Not available"
-
-    if not os.path.isfile(qctools_colorbars_duration_output):
-        logger.critical(f"Cannot open color bars csv file: {qctools_colorbars_duration_output}")
-        return None  # Return None if duration file doesn't exist
 
     try:
         with open(qctools_colorbars_duration_output, 'r') as file:
