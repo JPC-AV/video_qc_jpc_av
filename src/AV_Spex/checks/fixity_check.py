@@ -94,13 +94,13 @@ def check_fixity(directory, video_id, actual_checksum=None, check_cancelled=None
 
     if checksums_match:
         logger.info(f'Fixity check passed for {video_file_path}\n')
-        result_file = open(fixity_result_file, 'w')
+        result_file = open(fixity_result_file, 'w', encoding='utf-8')
         print(f'Fixity check passed for {video_file_path}\n', file = result_file)
         result_file.close()
     else:
         logger.critical(f'Fixity check failed for {video_file_path}\n')
         logger.critical(f'Checksum read from {most_recent_checksum_date} .md5 file is: {expected_checksum}\nChecksum created now from MKV file = {actual_checksum}\n')
-        result_file = open(fixity_result_file, 'w')
+        result_file = open(fixity_result_file, 'w', encoding='utf-8')
         print(f'Fixity check failed for {os.path.basename(video_file_path)} checksum read from .md5 file = {expected_checksum} checksum created from MKV file = {actual_checksum}\n', file = result_file)
         result_file.close()
 
@@ -124,7 +124,7 @@ def output_fixity(source_directory, video_path, check_cancelled=None, signals=No
         return None
     
     # Open fixity_result_file
-    result_file = open(fixity_result_file, 'w')
+    result_file = open(fixity_result_file, 'w', encoding='utf-8')
     # Print Md5 in 'filename[tab]Checksum' format
     print(f'{md5_checksum}  {os.path.basename(video_path)}', file = result_file)
     # Close fixity_result_file
