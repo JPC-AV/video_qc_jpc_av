@@ -136,8 +136,26 @@ def output_fixity(source_directory, video_path, check_cancelled=None, signals=No
 
 
 def read_checksum_from_file(file_path):
-    with open(file_path, 'r') as checksum_file:
-        content = checksum_file.read()
+    # Read the file in binary mode first to handle encoding issues
+    try:
+        with open(file_path, 'rb') as file:
+            content_bytes = file.read()
+    except Exception as e:
+        logger.critical(f'Error reading file {file_path}: {e}\n')
+        return None
+    
+    # Try to decode with utf-8 first, with error reporting
+    try:
+        content = content_bytes.decode('utf-8')
+    except UnicodeDecodeError as e:
+        logger.warning(f'UTF-8 decoding error in {file_path}: {e}')
+        # Try with latin-1 as a fallback, which can handle any byte
+        try:
+            content = content_bytes.decode('latin-1')
+            logger.warning(f'Used latin-1 encoding as fallback for {file_path}\n')
+        except Exception as e2:
+            logger.error(f'Failed to decode {file_path} with fallback encoding: {e2}\n')
+            return None
 
     # Try to find the MD5 checksum in the content
     checksum_parts = content.split()
