@@ -248,9 +248,9 @@ class ProcessingManager:
         # Check if frame analysis is enabled
         frame_config = self.checks_config.outputs.frame_analysis
         if any([
-            frame_config.enable_border_detection == 'yes',
-            frame_config.enable_brng_analysis == 'yes',
-            frame_config.enable_signalstats == 'yes'
+            frame_config.enable_border_detection,
+            frame_config.enable_brng_analysis,
+            frame_config.enable_signalstats
         ]):
             if self.signals:
                 self.signals.output_progress.emit("Performing enhanced frame analysis...")
@@ -291,9 +291,9 @@ class ProcessingManager:
         
         # Check if any frame analysis sub-steps are enabled
         if not any([
-            frame_config.enable_border_detection == 'yes',
-            frame_config.enable_brng_analysis == 'yes', 
-            frame_config.enable_signalstats == 'yes'
+            frame_config.enable_border_detection,
+            frame_config.enable_brng_analysis, 
+            frame_config.enable_signalstats
         ]):
             logger.info("No frame analysis sub-steps enabled")
             return None
@@ -330,13 +330,13 @@ class ProcessingManager:
         # Process results and emit signals
         if analysis_results:
             # Emit completion signals for enabled sub-steps
-            if frame_config.enable_border_detection == 'yes' and self.signals:
+            if frame_config.enable_border_detection and self.signals:
                 self.signals.step_completed.emit("Frame Analysis - Border Detection")
             
-            if frame_config.enable_brng_analysis == 'yes' and self.signals:
+            if frame_config.enable_brng_analysis and self.signals:
                 self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
             
-            if frame_config.enable_signalstats == 'yes' and self.signals:
+            if frame_config.enable_signalstats and self.signals:
                 self.signals.step_completed.emit("Frame Analysis - Signalstats")
             
             # Log summary

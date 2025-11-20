@@ -2222,7 +2222,15 @@ class EnhancedFrameAnalysis:
     
     def _find_qctools_report(self) -> Optional[str]:
         """Find QCTools report for the video"""
+        # Get the full filename with extension
+        video_filename = self.video_path.name
+        
         search_paths = [
+            # Try with full filename first (e.g., JPC_AV_01709.mkv.qctools.xml.gz)
+            self.video_path.parent / f"{video_filename}.qctools.xml.gz",
+            self.video_path.parent / f"{self.video_id}_qc_metadata" / f"{video_filename}.qctools.xml.gz",
+            self.video_path.parent / f"{self.video_id}_vrecord_metadata" / f"{video_filename}.qctools.xml.gz",
+            # Then try without extension (e.g., JPC_AV_01709.qctools.xml.gz)
             self.video_path.parent / f"{self.video_id}.qctools.xml.gz",
             self.video_path.parent / f"{self.video_id}_qc_metadata" / f"{self.video_id}.qctools.xml.gz",
             self.video_path.parent / f"{self.video_id}_vrecord_metadata" / f"{self.video_id}.qctools.xml.gz",
@@ -2676,7 +2684,7 @@ def analyze_frame_quality(video_path: str,
     # Extract parameters directly from dataclass
     method = frame_config.border_detection_mode
     duration_limit = frame_config.brng_duration_limit
-    skip_color_bars = frame_config.brng_skip_color_bars == 'yes'
+    skip_color_bars = bool(frame_config.brng_skip_color_bars)
     max_refinements = frame_config.max_border_retries
     
     # Run enhanced analysis
