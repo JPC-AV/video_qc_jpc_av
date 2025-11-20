@@ -303,6 +303,7 @@ class QCTParseToolConfig:
     barsDetection: bool
     evaluateBars: bool
     thumbExport: bool
+    tagname: str
 
 @dataclass
 class ToolsConfig:
@@ -374,7 +375,8 @@ class ChecksProfile:
             run_tool=False,
             barsDetection=False,
             evaluateBars=False,
-            thumbExport=False
+            thumbExport=False,
+            tagname=""
         )
     ))
 

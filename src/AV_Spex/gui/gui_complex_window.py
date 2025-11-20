@@ -70,23 +70,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
         thumb_export_desc.setIndent(20)
 
-        # Content Filter
-        content_filter_label = QLabel("Content Detection")
-        content_filter_label.setStyleSheet("font-weight: bold;")
-        content_filter_desc = QLabel("Select type of content to detect in the video")
-        self.content_filter_combo = QComboBox()
-        self.content_filter_combo.addItem("Select options...", None)  # Store None as data
-
-        # Create a mapping of display text to actual values
-        content_filter_options = {
-            "All Black Detection": "allBlack",
-            "Static Content Detection": "static"
-        }
-
-        # Add items with display text and corresponding data value
-        for display_text, value in content_filter_options.items():
-            self.content_filter_combo.addItem(display_text, value)
-
         # Add all widgets to the qct layout
         qct_layout.addWidget(self.run_qctparse_cb)
         qct_layout.addWidget(run_qctparse_desc)
@@ -96,9 +79,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         qct_layout.addWidget(evaluate_bars_desc)
         qct_layout.addWidget(self.thumb_export_cb)
         qct_layout.addWidget(thumb_export_desc)
-        qct_layout.addWidget(content_filter_label)
-        qct_layout.addWidget(content_filter_desc)
-        qct_layout.addWidget(self.content_filter_combo)
         
         # Tagname
         tagname_label = QLabel("Tag Name")
@@ -463,13 +443,13 @@ class ComplexWindow(QWidget, ThemeableMixin):
         """Connect all widget signals to their handlers"""
         # Sub-step enable checkboxes
         self.enable_border_detection_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'enable_border_detection'])
+            lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_border_detection'])
         )
         self.enable_brng_analysis_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'enable_brng_analysis'])
+            lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_brng_analysis'])
         )
         self.enable_signalstats_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'enable_signalstats'])
+            lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_signalstats'])
         )
         
         # Border mode combo
@@ -494,7 +474,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
             lambda text: self.on_frame_analysis_param_changed('sophisticated_padding', text)
         )
         self.auto_retry_borders_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'auto_retry_borders'])
+            lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'auto_retry_borders'])
         )
 
         # BRNG parameters
@@ -502,7 +482,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
             lambda text: self.on_frame_analysis_param_changed('brng_duration_limit', text)
         )
         self.brng_skip_colorbars_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['outputs', 'frame_analysis', 'brng_skip_color_bars'])
+            lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'brng_skip_color_bars'])
         )
         self.max_border_retries_input.textChanged.connect(
             lambda text: self.on_frame_analysis_param_changed('max_border_retries', text)
@@ -518,7 +498,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         
         # QCT Parse
         self.run_qctparse_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['tools', 'qct_parse', 'run_tool'])
+            lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'run_tool'])
         )
         self.bars_detection_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'barsDetection'])
@@ -528,9 +508,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         )
         self.thumb_export_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'thumbExport'])
-        )
-        self.content_filter_combo.currentIndexChanged.connect(
-            lambda index: self.on_qct_combo_changed(self.content_filter_combo.itemData(index), 'contentFilter')
         )
         self.tagname_input.textChanged.connect(
             lambda text: self.on_tagname_changed(text)
@@ -548,9 +525,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
             frame_config = checks_config.outputs.frame_analysis
             
             # Load sub-step enable states
-            self.enable_border_detection_cb.setChecked(frame_config.enable_border_detection.lower() == 'yes')
-            self.enable_brng_analysis_cb.setChecked(frame_config.enable_brng_analysis.lower() == 'yes')
-            self.enable_signalstats_cb.setChecked(frame_config.enable_signalstats.lower() == 'yes')
+            self.enable_border_detection_cb.setChecked(bool(frame_config.enable_border_detection))
+            self.enable_brng_analysis_cb.setChecked(bool(frame_config.enable_brng_analysis))
+            self.enable_signalstats_cb.setChecked(bool(frame_config.enable_signalstats))
             
             # Set border detection mode
             mode_index = self.border_mode_combo.findData(frame_config.border_detection_mode)
@@ -563,9 +540,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.soph_edge_width_input.setText(str(frame_config.sophisticated_edge_sample_width))
             self.soph_sample_frames_input.setText(str(frame_config.sophisticated_sample_frames))
             self.soph_padding_input.setText(str(frame_config.sophisticated_padding))
-            self.auto_retry_borders_cb.setChecked(frame_config.auto_retry_borders.lower() == 'yes')
+            self.auto_retry_borders_cb.setChecked(bool(frame_config.auto_retry_borders))
             self.brng_duration_input.setText(str(frame_config.brng_duration_limit))
-            self.brng_skip_colorbars_cb.setChecked(frame_config.brng_skip_color_bars.lower() == 'yes')
+            self.brng_skip_colorbars_cb.setChecked(bool(frame_config.brng_skip_color_bars))
             self.max_border_retries_input.setText(str(getattr(frame_config, 'max_border_retries', 3)))
             self.signalstats_duration_input.setText(str(frame_config.signalstats_duration))
             self.signalstats_periods_input.setText(str(getattr(frame_config, 'signalstats_periods', 3)))
@@ -577,17 +554,11 @@ class ComplexWindow(QWidget, ThemeableMixin):
         
         # QCT Parse
         qct = checks_config.tools.qct_parse
-        self.run_qctparse_cb.setChecked(qct.run_tool.lower() == 'yes')
+        self.run_qctparse_cb.setChecked(bool(qct.run_tool))
         self.bars_detection_cb.setChecked(qct.barsDetection)
         self.evaluate_bars_cb.setChecked(qct.evaluateBars)
         self.thumb_export_cb.setChecked(qct.thumbExport)
-        
-        if qct.contentFilter:
-            # Find the item with the matching data
-            for i in range(self.content_filter_combo.count()):
-                if self.content_filter_combo.itemData(i) == qct.contentFilter[0]:
-                    self.content_filter_combo.setCurrentIndex(i)
-                    break
+
         if qct.tagname is not None:
             self.tagname_input.setText(qct.tagname)
 
@@ -628,6 +599,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
         
         if path[0] == "tools" and path[1] == "qct_parse":
             updates = {'tools': {'qct_parse': {path[2]: new_value}}}
+            config_mgr.update_config('checks', updates)
+        elif path[0] == "outputs" and path[1] == "frame_analysis":
+            updates = {'outputs': {'frame_analysis': {path[2]: new_value}}}
             config_mgr.update_config('checks', updates)
 
     def on_frame_analysis_mode_changed(self, index):
