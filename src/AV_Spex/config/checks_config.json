@@ -2,7 +2,27 @@
   "outputs": {
     "access_file": false,
     "report": false,
-    "qctools_ext": "qctools.xml.gz"
+    "qctools_ext": "qctools.xml.gz",
+    "frame_analysis": {
+      "enable_border_detection": "yes",
+      "enable_brng_analysis": "yes",
+      "enable_signalstats": "yes",
+      "border_detection_mode": "simple",
+      "simple_border_pixels": 25,
+      "sophisticated_threshold": 10,
+      "sophisticated_edge_sample_width": 100,
+      "sophisticated_sample_frames": 30,
+      "sophisticated_padding": 5,
+      "sophisticated_viz_time": 150,
+      "sophisticated_search_window": 120,
+      "auto_retry_borders": "yes",
+      "max_border_retries": 3,
+      "brng_duration_limit": 300,
+      "brng_skip_color_bars": "yes",
+      "signalstats_start_time": 120,
+      "signalstats_duration": 60,
+      "signalstats_periods": 3
+    }
   },
   "fixity": {
     "check_fixity": false,

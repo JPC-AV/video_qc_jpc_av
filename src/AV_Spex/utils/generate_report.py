@@ -6,6 +6,8 @@ os.environ["NUMEXPR_MAX_THREADS"] = "11" # troubleshooting goofy numbpy related 
 
 import csv
 from base64 import b64encode
+import json
+
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.log_setup import logger
@@ -183,6 +185,54 @@ def find_qct_thumbs(report_directory):
         sorted_thumbs_dict[key] = thumbs_dict[key]
 
     return sorted_thumbs_dict
+
+def find_frame_analysis_outputs(source_directory, destination_directory, video_id):
+    """
+    Find frame analysis output files (border detection, BRNG analysis, signalstats).
+    
+    Args:
+        source_directory (str): Source directory for the video
+        destination_directory (str): Destination directory for outputs
+        video_id (str): Video identifier
+        
+    Returns:
+        dict: Paths to frame analysis output files
+    """
+    frame_outputs = {
+        'border_visualization': None,
+        'border_data': None,
+        'brng_analysis': None,
+        'brng_thumbnails': [],
+        'signalstats_analysis': None
+    }
+    
+    # Check for border detection outputs
+    border_viz = os.path.join(destination_directory, f"{video_id}_border_detection.jpg")
+    if os.path.exists(border_viz):
+        frame_outputs['border_visualization'] = border_viz
+    
+    border_data = os.path.join(destination_directory, f"{video_id}_border_data.json")
+    if os.path.exists(border_data):
+        frame_outputs['border_data'] = border_data
+    
+    # Check for BRNG analysis outputs
+    brng_analysis = os.path.join(destination_directory, f"{video_id}_active_brng_analysis.json")
+    if os.path.exists(brng_analysis):
+        frame_outputs['brng_analysis'] = brng_analysis
+    
+    # Check for BRNG diagnostic thumbnails
+    brng_thumbs_dir = os.path.join(destination_directory, "brng_thumbnails")
+    if os.path.exists(brng_thumbs_dir):
+        for file in os.listdir(brng_thumbs_dir):
+            if file.endswith('.jpg') or file.endswith('.png'):
+                frame_outputs['brng_thumbnails'].append(os.path.join(brng_thumbs_dir, file))
+    
+    # Check for signalstats analysis
+    signalstats = os.path.join(destination_directory, f"{video_id}_signalstats_analysis.json")
+    if os.path.exists(signalstats):
+        frame_outputs['signalstats_analysis'] = signalstats
+    
+    return frame_outputs
 
 def find_report_csvs(report_directory):
 
@@ -857,6 +907,235 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
 
     return profile_summary_html
 
+def generate_frame_analysis_html(frame_outputs, video_id):
+    """
+    Generate HTML section for frame analysis results.
+    
+    Args:
+        frame_outputs (dict): Dictionary of frame analysis output paths
+        video_id (str): Video identifier
+        
+    Returns:
+        str: HTML string for frame analysis section
+    """
+    if not any(frame_outputs.values()):
+        return ""
+    
+    html = """
+    <div class="frame-analysis-section">
+        <h2 style="color: #0a5f1c; text-decoration: underline; margin-top: 30px;">Frame Analysis Results</h2>
+    """
+    
+    # Border Detection Section
+    if frame_outputs['border_visualization'] or frame_outputs['border_data']:
+        html += "<h3 style='color: #bf971b;'>Border Detection</h3>"
+        
+        if frame_outputs['border_data']:
+            try:
+                with open(frame_outputs['border_data'], 'r') as f:
+                    border_data = json.load(f)
+                
+                # Display border detection method
+                detection_method = border_data.get('detection_method', 'unknown')
+                if detection_method == 'simple_fixed':
+                    border_size = border_data.get('border_size_used', 25)
+                    html += f"<p><strong>Method:</strong> Simple ({border_size}px borders)</p>"
+                else:
+                    html += f"<p><strong>Method:</strong> Sophisticated (quality-based detection)</p>"
+                
+                # Display active area
+                if border_data.get('active_area'):
+                    x, y, w, h = border_data['active_area']
+                    video_width = border_data['video_properties']['width']
+                    video_height = border_data['video_properties']['height']
+                    active_percentage = (w * h) / (video_width * video_height) * 100
+                    
+                    html += f"""
+                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0;">
+                        <p><strong>Active Picture Area:</strong> {w}x{h} pixels ({active_percentage:.1f}% of frame)</p>
+                        <p><strong>Position:</strong> ({x}, {y})</p>
+                        <p><strong>Borders:</strong> Left={x}px, Right={video_width-x-w}px, Top={y}px, Bottom={video_height-y-h}px</p>
+                    </div>
+                    """
+                
+                # Display head switching artifacts if detected
+                if border_data.get('head_switching_artifacts'):
+                    hs_data = border_data['head_switching_artifacts']
+                    if hs_data.get('severity') != 'none' and hs_data.get('severity') != 'error':
+                        html += f"""
+                        <div style="background-color: #ffbaba; padding: 10px; margin: 10px 0;">
+                            <p><strong>⚠️ Head Switching Artifacts Detected</strong></p>
+                            <p>Severity: {hs_data['severity']}</p>
+                            <p>Affected frames: {hs_data['artifact_percentage']:.1f}%</p>
+                        </div>
+                        """
+                        
+            except Exception as e:
+                logger.error(f"Error reading border data: {e}")
+        
+        # Display border visualization image
+        if frame_outputs['border_visualization']:
+            with open(frame_outputs['border_visualization'], "rb") as img_file:
+                encoded_img = b64encode(img_file.read()).decode()
+            html += f"""
+            <div style="margin: 20px 0;">
+                <img src="data:image/jpeg;base64,{encoded_img}" 
+                     style="max-width: 100%; height: auto; border: 1px solid #4d2b12;"
+                     alt="Border detection visualization" />
+            </div>
+            """
+    
+    # BRNG Analysis Section
+    if frame_outputs['brng_analysis']:
+        html += "<h3 style='color: #bf971b;'>BRNG Violation Analysis</h3>"
+        
+        try:
+            with open(frame_outputs['brng_analysis'], 'r') as f:
+                brng_data = json.load(f)
+            
+            # Get actionable report
+            report = brng_data.get('actionable_report', {})
+            
+            # Overall assessment
+            assessment = report.get('overall_assessment', 'Analysis complete')
+            priority = report.get('action_priority', 'none')
+            
+            # Determine background color based on priority
+            if priority == 'high':
+                bg_color = '#ffbaba'  # Red
+            elif priority == 'medium':
+                bg_color = '#fff3cd'  # Yellow
+            elif priority == 'low':
+                bg_color = '#d2ffed'  # Light green
+            else:
+                bg_color = '#f5e9e3'  # Default beige
+            
+            html += f"""
+            <div style="background-color: {bg_color}; padding: 10px; margin: 10px 0;">
+                <p><strong>Assessment:</strong> {assessment}</p>
+                <p><strong>Priority:</strong> {priority.upper()}</p>
+            </div>
+            """
+            
+            # Statistics
+            stats = report.get('summary_statistics', {})
+            if stats:
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0;">
+                    <p><strong>Analysis Statistics:</strong></p>
+                    <ul style="margin: 5px 0;">
+                        <li>Frames analyzed: {stats.get('frames_with_violations', 0)}/{stats.get('total_frames_analyzed', 0)}</li>
+                        <li>Average violation: {stats.get('average_violation_percentage', 0):.4f}% of pixels</li>
+                        <li>Maximum violation: {stats.get('max_violation_percentage', 0):.4f}% of pixels</li>
+                    </ul>
+                </div>
+                """
+            
+            # Skip information
+            skip_info = brng_data.get('skip_info', {})
+            if skip_info and skip_info.get('total_skipped_seconds', 0) > 0:
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0;">
+                    <p><strong>Content Start Detection:</strong></p>
+                    <p>Skipped first {skip_info['total_skipped_seconds']:.1f} seconds (test patterns/color bars)</p>
+                </div>
+                """
+            
+            # Recommendations
+            if report.get('recommendations'):
+                html += "<div style='margin: 10px 0;'><strong>Recommendations:</strong><ul>"
+                for rec in report['recommendations']:
+                    severity_color = '#ff0000' if rec.get('severity') == 'high' else '#bf971b'
+                    html += f"<li style='color: {severity_color};'>{rec.get('issue', 'Unknown issue')}"
+                    if rec.get('description'):
+                        html += f" - {rec['description']}"
+                    html += "</li>"
+                html += "</ul></div>"
+                
+        except Exception as e:
+            logger.error(f"Error reading BRNG analysis: {e}")
+    
+    # BRNG Diagnostic Thumbnails
+    if frame_outputs['brng_thumbnails']:
+        html += """
+        <h3 style='color: #bf971b;'>BRNG Diagnostic Thumbnails</h3>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0;">
+        """
+        
+        # Sort thumbnails by filename (which includes timecode)
+        sorted_thumbs = sorted(frame_outputs['brng_thumbnails'])
+        
+        for thumb_path in sorted_thumbs[:6]:  # Limit to 6 thumbnails in report
+            # Extract timecode from filename if possible
+            filename = os.path.basename(thumb_path)
+            parts = filename.split('_')
+            if len(parts) >= 3:
+                timecode = parts[-1].replace('.jpg', '').replace('.png', '').replace('-', ':')
+            else:
+                timecode = "Unknown"
+            
+            with open(thumb_path, "rb") as img_file:
+                encoded_thumb = b64encode(img_file.read()).decode()
+            
+            html += f"""
+            <div style="text-align: center; margin: 5px;">
+                <img src="data:image/png;base64,{encoded_thumb}" 
+                     style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
+                     onclick="window.open('data:image/png;base64,{encoded_thumb}', '_blank');"
+                     title="Click to enlarge" />
+                <p style="font-size: 12px; margin: 5px 0;">Frame at {timecode}</p>
+            </div>
+            """
+        
+        html += "</div>"
+        
+        if len(frame_outputs['brng_thumbnails']) > 6:
+            html += f"<p style='font-style: italic;'>Showing 6 of {len(frame_outputs['brng_thumbnails'])} diagnostic thumbnails</p>"
+    
+    # Signalstats Analysis Section
+    if frame_outputs['signalstats_analysis']:
+        html += "<h3 style='color: #bf971b;'>FFprobe Signalstats Analysis</h3>"
+        
+        try:
+            with open(frame_outputs['signalstats_analysis'], 'r') as f:
+                signalstats_data = json.load(f)
+            
+            diagnosis = signalstats_data.get('diagnosis', 'Analysis complete')
+            
+            # Determine background color based on diagnosis
+            if 'broadcast-compliant' in diagnosis.lower() or 'acceptable' in diagnosis.lower():
+                bg_color = '#d2ffed'
+            elif 'significant' in diagnosis.lower() or 'severe' in diagnosis.lower():
+                bg_color = '#ffbaba'
+            else:
+                bg_color = '#f5e9e3'
+            
+            html += f"""
+            <div style="background-color: {bg_color}; padding: 10px; margin: 10px 0;">
+                <p><strong>Diagnosis:</strong> {diagnosis}</p>
+            </div>
+            """
+            
+            # Display results for active area
+            if signalstats_data.get('results', {}).get('active_area'):
+                active_area = signalstats_data['results']['active_area']
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0;">
+                    <p><strong>Active Area Results:</strong></p>
+                    <ul>
+                        <li>Frames with violations: {active_area['frames_with_violations']}/{active_area['frames_analyzed']} ({active_area['violation_percentage']:.1f}%)</li>
+                        <li>Average BRNG: {active_area['avg_brng']:.4f}%</li>
+                        <li>Maximum BRNG: {active_area['max_brng']:.4f}%</li>
+                    </ul>
+                </div>
+                """
+                
+        except Exception as e:
+            logger.error(f"Error reading signalstats analysis: {e}")
+    
+    html += "</div>"
+    return html
+
 
 def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, paper_bgcolor='#f5e9e3'):
     with open(qctools_content_check_output, 'r') as file:
@@ -909,7 +1188,8 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
 
     return content_summary_html
 
-def generate_final_report(video_id, source_directory, report_directory, destination_directory, video_path=None, check_cancelled=None, signals=None):
+def generate_final_report(video_id, source_directory, report_directory, destination_directory, 
+                         video_path=None, check_cancelled=None, signals=None):
     """
     Generate final HTML report if configured.
     
@@ -919,6 +1199,8 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         report_directory (str): Directory containing report files
         destination_directory (str): Destination directory for output files
         video_path (str, optional): Path to the video file for thumbnail generation
+        check_cancelled (callable, optional): Function to check if cancelled
+        signals (object, optional): Signals for GUI updates
         
     Returns:
         str or None: Path to the generated HTML report, or None
@@ -932,7 +1214,7 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
     try:
         html_report_path = os.path.join(source_directory, f'{video_id}_avspex_report.html')
         
-        # Generate HTML report with video path
+        # Generate HTML report with video path (no frame_analysis parameter needed)
         write_html_report(video_id, report_directory, destination_directory, html_report_path, 
                          video_path=video_path, check_cancelled=check_cancelled)
         
@@ -1039,6 +1321,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if check_cancelled():
         return
+    
+    # Find frame analysis outputs
+    frame_outputs = find_frame_analysis_outputs(
+        os.path.dirname(html_report_path),  # source_directory
+        destination_directory,
+        video_id
+    )
+    
+    # Generate frame analysis HTML section
+    frame_analysis_html = generate_frame_analysis_html(frame_outputs, video_id) if frame_outputs else ""
 
     # Initialize and create html from 
     mc_csv_html, mediaconch_csv_filename = prepare_file_section(mediaconch_csv, lambda path: csv_to_html_table(path, style_mismatched=False, mismatch_color="#ffbaba", match_color="#d2ffed", check_fail=True))
@@ -1266,6 +1558,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <a id="link_mediaconch_policy" href="javascript:void(0);" onclick="toggleContent('mediaconch_policy', 'Show policy content ▼', 'Hide policy content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show policy content ▼</a>
         <div id="mediaconch_policy" class="xml-content" style="display: none;">{mediaconch_policy_content}</div>
         """
+
+    if frame_analysis_html:
+        html_template += frame_analysis_html
 
     if difference_csv:
         html_template += f"""

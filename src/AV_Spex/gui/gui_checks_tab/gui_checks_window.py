@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, QLineEdit,
-    QLabel, QComboBox, QPushButton, QScrollArea, QFileDialog, QMessageBox
+    QLabel, QComboBox, QPushButton, QScrollArea, QFileDialog, QMessageBox, QGridLayout
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
@@ -279,47 +279,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         mediaconch_layout.addWidget(policy_container)
         self.mediaconch_group.setLayout(mediaconch_layout)
         tools_layout.addWidget(self.mediaconch_group)
-
-        # QCT Parse section - SIMPLIFIED WITHOUT CONTENT DETECTION AND TAG NAME
-        self.qct_group = QGroupBox("qct-parse")
-        theme_manager.style_groupbox(self.qct_group, "top left")
-        self.themed_group_boxes['qct'] = self.qct_group
-
-        qct_layout = QVBoxLayout()
-
-        # Checkboxes with descriptions on second line
-        self.run_qctparse_cb = QCheckBox("Run Tool")
-        self.run_qctparse_cb.setStyleSheet("font-weight: bold;")
-        run_qctparse_desc = QLabel("Run qct-parse tool on input video file")
-        run_qctparse_desc.setIndent(20)
-
-        self.bars_detection_cb = QCheckBox("Detect Color Bars")
-        self.bars_detection_cb.setStyleSheet("font-weight: bold;")
-        bars_detection_desc = QLabel("Detect color bars in the video content")
-        bars_detection_desc.setIndent(20)
-
-        self.evaluate_bars_cb = QCheckBox("Evaluate Color Bars")
-        self.evaluate_bars_cb.setStyleSheet("font-weight: bold;")
-        evaluate_bars_desc = QLabel("Compare content to color bars for validation")
-        evaluate_bars_desc.setIndent(20)
-
-        self.thumb_export_cb = QCheckBox("Thumbnail Export")
-        self.thumb_export_cb.setStyleSheet("font-weight: bold;")
-        thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
-        thumb_export_desc.setIndent(20)
-
-        # Add all widgets to the qct layout 
-        qct_layout.addWidget(self.run_qctparse_cb)
-        qct_layout.addWidget(run_qctparse_desc)
-        qct_layout.addWidget(self.bars_detection_cb)
-        qct_layout.addWidget(bars_detection_desc)
-        qct_layout.addWidget(self.evaluate_bars_cb)
-        qct_layout.addWidget(evaluate_bars_desc)
-        qct_layout.addWidget(self.thumb_export_cb)
-        qct_layout.addWidget(thumb_export_desc)
-
-        self.qct_group.setLayout(qct_layout)
-        tools_layout.addWidget(self.qct_group)
         
         self.tools_group.setLayout(tools_layout)
         main_layout.addWidget(self.tools_group)
@@ -401,14 +360,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.policy_combo.currentTextChanged.connect(self.on_mediaconch_policy_changed)
         self.import_policy_btn.clicked.connect(self.open_policy_file_dialog)
                     
-        #  Run QCT-Parse turns all the checks on:
-        self.run_qctparse_cb.stateChanged.connect(self.on_run_qctparse_changed)
-
-        self.bars_detection_cb.stateChanged.connect(self.on_bars_detection_changed)
-        self.evaluate_bars_cb.stateChanged.connect(self.on_evaluate_bars_changed)
-        self.thumb_export_cb.stateChanged.connect(
-            lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'thumbExport'])
-        )
 
     def load_config_values(self):
         """Load current config values into UI elements"""
@@ -458,33 +409,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         if mediaconch.mediaconch_policy in available_policies:
             self.policy_combo.setCurrentText(mediaconch.mediaconch_policy)
         self.policy_combo.blockSignals(False)
-        
-        # QCT Parse - now using boolean directly for run_tool
-        qct = checks_config.tools.qct_parse
-        self.run_qctparse_cb.setChecked(qct.run_tool)
-        # These are already booleans in the original config
-        self.bars_detection_cb.setChecked(qct.barsDetection)
-        self.evaluate_bars_cb.setChecked(qct.evaluateBars)
-        self.thumb_export_cb.setChecked(qct.thumbExport)
-
-        # Set initial enabled state for QCT Parse dependent checkboxes
-        qct = checks_config.tools.qct_parse
-        dependent_checkboxes = [
-            self.bars_detection_cb,
-            self.evaluate_bars_cb, 
-            self.thumb_export_cb
-        ]
-
-        # Enable/disable dependent checkboxes based on run_tool state
-        for checkbox in dependent_checkboxes:
-            checkbox.setEnabled(qct.run_tool)
-
-        # Additional logic for thumbnail dependency
-        if qct.run_tool:
-            # If run_tool is enabled, check if thumbnail should be enabled
-            # Thumbnail is only enabled if at least one of bars detection or evaluate bars is checked
-            thumbnail_should_be_enabled = qct.barsDetection or qct.evaluateBars
-            self.thumb_export_cb.setEnabled(thumbnail_should_be_enabled)
 
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
@@ -502,6 +426,11 @@ class ChecksWindow(QWidget, ThemeableMixin):
             tool_name = path[1]
             field = path[2]
             updates = {'tools': {tool_name: {field: new_value}}}
+        elif len(path) == 3:  # Handle nested structures like outputs.frame_analysis.field
+            section = path[0]
+            subsection = path[1]
+            field = path[2]
+            updates = {section: {subsection: {field: new_value}}}
         else:
             section = path[0]
             field = path[1]
@@ -732,6 +661,46 @@ class ChecksWindow(QWidget, ThemeableMixin):
                 }
             })
             self.update_current_policy_display(policy_name)
+
+    def on_frame_analysis_mode_changed(self, index):
+        """Handle border detection mode changes"""
+        if self.is_loading:
+            return
+        
+        mode = self.border_mode_combo.itemData(index)
+        
+        # Show/hide appropriate parameter widgets
+        if mode == "simple":
+            self.simple_params_widget.setVisible(True)
+            self.sophisticated_params_widget.setVisible(False)
+            self.signalstats_widget.setVisible(False)
+        else:  # sophisticated
+            self.simple_params_widget.setVisible(False)
+            self.sophisticated_params_widget.setVisible(True)
+            self.signalstats_widget.setVisible(True)
+        
+        # Update config
+        updates = {'outputs': {'frame_analysis': {'border_detection_mode': mode}}}
+        config_mgr.update_config('checks', updates)
+
+    def on_frame_analysis_param_changed(self, param_name, value):
+        """Handle frame analysis parameter changes"""
+        if self.is_loading:
+            return
+        
+        # Convert to appropriate type
+        if param_name in ['simple_border_pixels', 'sophisticated_threshold', 'sophisticated_edge_sample_width',
+                        'sophisticated_sample_frames', 'sophisticated_padding', 'sophisticated_viz_time',
+                        'sophisticated_search_window', 'brng_duration_limit', 'signalstats_start_time',
+                        'signalstats_duration']:
+            try:
+                # Handle empty string case
+                value = int(value) if value.strip() else 0
+            except ValueError:
+                return  # Don't update config if conversion fails
+        
+        updates = {'outputs': {'frame_analysis': {param_name: value}}}
+        config_mgr.update_config('checks', updates)
 
     def update_current_policy_display(self, policy_name):
         """Update the display of the current policy"""
