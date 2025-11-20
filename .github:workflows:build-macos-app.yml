@@ -1,0 +1,52 @@
+name: Build macOS App
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:  # This allows manual triggering as needed
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'  # Adjust this to match your project's Python version
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # Install your package in development mode
+        pip install -e .
+        # Install PyInstaller and any other build dependencies
+        pip install pyinstaller
+        
+    - name: Install macOS dependencies
+      run: |
+        # PyObjC is helpful for macOS-specific features
+        pip install pyobjc-core
+        
+    - name: Build macOS App
+      run: |
+        # Run PyInstaller to build the app
+        pyinstaller avspex.spec
+        
+    - name: Upload App as Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: AV-Spex-App
+        path: dist/AV-Spex.app/
+        
+    - name: Attach to Release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/AV-Spex.app/
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
