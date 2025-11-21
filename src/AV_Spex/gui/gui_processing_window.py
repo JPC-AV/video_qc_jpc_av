@@ -329,12 +329,12 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             # Frame Analysis 
             if hasattr(checks_config.outputs, 'frame_analysis'):
                 frame_config = checks_config.outputs.frame_analysis
-                if frame_config.enable_border_detection == "yes":
+                if frame_config.enable_border_detection:
                     self._add_step_item("Frame Analysis - Border Detection")
-                if frame_config.enable_brng_analysis == "yes":
+                if frame_config.enable_brng_analysis:
                     self._add_step_item("Frame Analysis - BRNG Analysis")
                 # Only add signalstats if enabled AND in sophisticated mode
-                if (frame_config.enable_signalstats == "yes" and 
+                if (frame_config.enable_signalstats and 
                     frame_config.border_detection_mode == "sophisticated"):
                     self._add_step_item("Frame Analysis - Signalstats")
             
