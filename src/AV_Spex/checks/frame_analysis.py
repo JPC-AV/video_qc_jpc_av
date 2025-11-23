@@ -19,6 +19,11 @@ import xml.etree.ElementTree as ET
 from scipy import ndimage, signal
 import logging
 
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import ChecksConfig
@@ -734,6 +739,208 @@ class SophisticatedBorderDetector:
             requires_refinement=False,
             expansion_recommendations=expansions
         )
+    
+    def find_good_representative_frame(self, target_time=150, search_window=120):
+        """
+        Find a good representative frame using enhanced quality assessment
+        
+        Args:
+            target_time: Target time in seconds for frame selection
+            search_window: Window in seconds to search around target time
+            
+        Returns:
+            Frame (numpy array) or None if no suitable frame found
+        """
+        # Calculate search range
+        target_frame = int(target_time * self.fps)
+        window_frames = int(search_window * self.fps)
+        
+        start_frame = max(0, target_frame - window_frames // 2)
+        end_frame = min(self.total_frames - 1, target_frame + window_frames // 2)
+        
+        if end_frame >= self.total_frames:
+            mid_point = self.total_frames // 2
+            start_frame = max(0, mid_point - window_frames // 2)
+            end_frame = min(self.total_frames - 1, mid_point + window_frames // 2)
+        
+        logger.debug(f"Searching for good representative frame between {start_frame/self.fps:.1f}s and {end_frame/self.fps:.1f}s...")
+        
+        # Open video for frame selection
+        cap = cv2.VideoCapture(self.video_path)
+        
+        # Check frames every 1 second in the search window
+        check_interval = max(1, int(self.fps))
+        frame_indices = list(range(start_frame, end_frame, check_interval))
+        
+        # Use existing quality assessment to find the best frame
+        quality_frames = []
+        for idx in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            
+            # Use existing _assess_frame_quality method
+            quality = self._assess_frame_quality(frame)
+            if quality['is_suitable']:
+                quality_frames.append((idx, frame.copy(), quality['overall_quality']))
+        
+        cap.release()
+        
+        if quality_frames:
+            # Sort by quality score and return the best frame
+            quality_frames.sort(key=lambda x: x[2], reverse=True)
+            best_frame_idx, best_frame, best_score = quality_frames[0]
+            logger.info(f"✓ Selected high-quality frame at {best_frame_idx/self.fps:.1f}s (quality score: {best_score:.3f})")
+            return best_frame
+        else:
+            # Final fallback - use target frame
+            logger.warning(f"⚠️ No suitable frame found, using target frame as fallback")
+            cap = cv2.VideoCapture(self.video_path)
+            fallback_frame = target_frame if target_frame < self.total_frames else self.total_frames // 2
+            cap.set(cv2.CAP_PROP_POS_FRAMES, fallback_frame)
+            ret, frame = cap.read()
+            cap.release()
+            return frame if ret else None
+        
+    def generate_border_visualization(self, output_path, active_area=None, head_switching_results=None, target_time=150, search_window=120, detection_method='sophisticated'):
+        """
+        Generate visual showing detected borders and active area
+        
+        Creates a side-by-side comparison with:
+        - Left: Full frame with border regions highlighted in red
+        - Right: Active picture area only
+        
+        Args:
+            output_path: Path to save the visualization image
+            active_area: Tuple (x, y, w, h) of active picture area
+            head_switching_results: Results from head switching analysis
+            target_time: Target time for frame selection (seconds)
+            search_window: Window to search for good frame (seconds)
+            detection_method: Detection method used ('simple' or 'sophisticated')
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Import matplotlib (should be at top of file)
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+        
+        # Find a good representative frame
+        frame = self.find_good_representative_frame(target_time, search_window)
+        
+        if frame is None:
+            logger.warning("Could not find suitable frame for border visualization")
+            return False
+            
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 8))
+        
+        # Full frame with regions marked
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        ax1.imshow(frame_rgb)
+        
+        # Add title indicating detection method
+        if detection_method == 'simple':
+            ax1.set_title('Full Frame with Border Detection\n(Simple Border Detection Used)', fontsize=10, color='darkred')
+        else:
+            ax1.set_title('Full Frame with Border Detection')
+        ax1.axis('off')
+        
+        if active_area:
+            x, y, w, h = active_area
+            
+            # Mark border regions in red
+            border_added = False
+            if x > 10:  # Left border
+                left_rect = patches.Rectangle((0, 0), x, self.height, linewidth=2,
+                                            edgecolor='red', facecolor='red', alpha=0.3,
+                                            label='Border Regions')
+                ax1.add_patch(left_rect)
+                border_added = True
+            
+            if x + w < self.width - 10:  # Right border
+                right_rect = patches.Rectangle((x + w, 0), self.width - (x + w), self.height, 
+                                            linewidth=2, edgecolor='red', facecolor='red', alpha=0.3)
+                if not border_added:
+                    right_rect.set_label('Border Regions')
+                    border_added = True
+                ax1.add_patch(right_rect)
+                
+            if y > 10:  # Top border
+                top_rect = patches.Rectangle((0, 0), self.width, y, linewidth=2,
+                                        edgecolor='red', facecolor='red', alpha=0.3)
+                if not border_added:
+                    top_rect.set_label('Border Regions')
+                    border_added = True
+                ax1.add_patch(top_rect)
+                
+            if y + h < self.height - 10:  # Bottom border
+                bottom_rect = patches.Rectangle((0, y + h), self.width, self.height - (y + h), 
+                                            linewidth=2, edgecolor='red', facecolor='red', alpha=0.3)
+                if not border_added:
+                    bottom_rect.set_label('Border Regions')
+                ax1.add_patch(bottom_rect)
+            
+            # Highlight head switching artifacts if detected
+            if head_switching_results and head_switching_results.get('detected'):
+                # Draw orange line at bottom to indicate head switching artifacts
+                # The current _detect_head_switching doesn't return detailed region info,
+                # so we'll draw a line across the bottom of the frame
+                line_y = self.height - 1
+                ax1.plot([0, self.width], [line_y, line_y], 
+                        color='orange', linewidth=3, alpha=0.9, 
+                        label='Head Switching Artifacts')
+            
+            if border_added or (head_switching_results and head_switching_results.get('detected')):
+                ax1.legend()
+            
+            # Active area only
+            active_frame = frame_rgb[y:y+h, x:x+w]
+            ax2.imshow(active_frame)
+            ax2.set_title('Active Picture Area Only')
+            ax2.axis('off')
+            
+            # Add text annotations
+            border_info = f'Border sizes: L={x}px, R={self.width-x-w}px, T={y}px, B={self.height-y-h}px'
+            fig.text(0.5, 0.02, border_info, ha='center', fontsize=10)
+            
+            # Add head switching info
+            if head_switching_results and head_switching_results.get('detected'):
+                severity = head_switching_results.get('severity', 'unknown')
+                percentage = head_switching_results.get('percentage', 0)
+                hs_info = f"Head switching artifacts: {severity} ({percentage:.1f}% of frames)"
+                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=12, weight='bold', color='orange')
+            else:
+                fig.text(0.5, 0.95, 'No head switching artifacts detected', ha='center', fontsize=12, weight='bold', color='green')
+        else:
+            ax2.text(0.5, 0.5, 'No borders detected', 
+                    ha='center', va='center', transform=ax2.transAxes)
+            ax2.axis('off')
+            
+            # Still show head switching info even without borders
+            if head_switching_results and head_switching_results.get('detected'):
+                # Draw orange line at bottom
+                line_y = self.height - 1
+                ax1.plot([0, self.width], [line_y, line_y], 
+                        color='orange', linewidth=3, alpha=0.9, 
+                        label='Head Switching Artifacts')
+                ax1.legend()
+                
+                severity = head_switching_results.get('severity', 'unknown')
+                percentage = head_switching_results.get('percentage', 0)
+                hs_info = f"Head switching artifacts: {severity} ({percentage:.1f}% of frames)"
+                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=12, weight='bold', color='orange')
+            else:
+                fig.text(0.5, 0.95, 'No head switching artifacts detected', ha='center', fontsize=12, weight='bold', color='green')
+            
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"Border detection visualization saved to: {output_path}")
+        return True
 
 
 class DifferentialBRNGAnalyzer:
@@ -2294,6 +2501,28 @@ class EnhancedFrameAnalysis:
             method=method
         )
         results['initial_borders'] = asdict(border_results)
+
+        # Create border detection visualization
+        logger.info("Creating border detection visualization...")
+        viz_filename = f"{self.video_id}_border_detection.jpg"
+        viz_output_path = self.output_dir / viz_filename
+        try:
+            success = self.border_detector.generate_border_visualization(
+                output_path=str(viz_output_path),
+                active_area=border_results.active_area,
+                head_switching_results=border_results.head_switching_artifacts,
+                target_time=150,  # Default to 2.5 minutes in
+                search_window=120  # Search within 2 minutes
+            )
+            if success:
+                results['border_visualization'] = str(viz_output_path)
+                logger.info(f"✓ Border visualization saved to: {viz_output_path}")
+            else:
+                logger.warning("Failed to generate border visualization")
+        except Exception as e:
+            logger.warning(f"Error creating border visualization: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
         
         # Step 4: Signalstats analysis
         logger.info("Running signalstats analysis to identify key analysis periods...")
@@ -2310,7 +2539,7 @@ class EnhancedFrameAnalysis:
         analysis_periods = signalstats_results.analysis_periods
         logger.info(f"Identified {len(analysis_periods)} key periods for BRNG analysis")
 
-        # NEW: Compare with QCTools violation distribution if we have violations
+        # Compare with QCTools violation distribution if we have violations
         if violations:
             logger.info("\n  === Comparing Period Selection Methods ===")
             
@@ -2366,9 +2595,11 @@ class EnhancedFrameAnalysis:
             analysis_periods=analysis_periods  # Pass the periods from signalstats
         )
         results['brng_analysis'] = asdict(brng_results) if brng_results else None
-        
+
         # Step 6: Iterative border refinement (if needed)
         refinement_iterations = 0
+        refinement_history = []  # Track all iterations for comparison
+
         if method == 'sophisticated' and brng_results and brng_results.requires_border_adjustment:
             logger.info("Border refinement needed - detected BRNG violations at frame edges")
             
@@ -2377,18 +2608,48 @@ class EnhancedFrameAnalysis:
             logger.info(f"  Edge violations: {edge_pct:.1f}% of analyzed frames")
             logger.info(f"  Continuous edge patterns: {continuous_pct:.1f}% of analyzed frames")
             
+            # Store initial state for comparison
+            initial_borders = border_results
+            initial_brng = brng_results
+            
             while (refinement_iterations < max_refinement_iterations and 
                 brng_results.requires_border_adjustment):
                 
                 refinement_iterations += 1
                 logger.info(f"Refinement iteration {refinement_iterations}/{max_refinement_iterations}:")
                 
-                # Refine borders
+                # Store pre-refinement state
                 previous_area = border_results.active_area
+                previous_brng = brng_results
+                
+                # Refine borders
                 border_results = self.border_detector.refine_borders(border_results, brng_results)
                 new_area = border_results.active_area
                 
                 logger.info(f"  Active area: {previous_area[2]}x{previous_area[3]} → {new_area[2]}x{new_area[3]}")
+                
+                # CREATE VISUALIZATION FOR THIS ITERATION
+                logger.info("  Creating border visualization for refined borders...")
+                viz_filename = f"{self.video_id}_border_detection_refined_iter{refinement_iterations}.jpg"
+                viz_output_path = self.output_dir / viz_filename
+                
+                try:
+                    success = self.border_detector.generate_border_visualization(
+                        output_path=str(viz_output_path),
+                        active_area=border_results.active_area,
+                        head_switching_results=border_results.head_switching_artifacts,
+                        target_time=150,
+                        search_window=120
+                    )
+                    
+                    if success:
+                        logger.info(f"  ✓ Refined border visualization saved: {viz_filename}")
+                    else:
+                        logger.warning(f"  ⚠ Failed to create visualization for iteration {refinement_iterations}")
+                except Exception as e:
+                    logger.warning(f"  ⚠ Error creating visualization: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
                 
                 # Re-run signalstats with new borders to get updated periods
                 logger.info("  Re-running signalstats with refined borders...")
@@ -2402,16 +2663,38 @@ class EnhancedFrameAnalysis:
                 analysis_periods = signalstats_results.analysis_periods
                 
                 # Re-analyze BRNG with new borders and periods
+                logger.info("  Re-analyzing BRNG violations with refined borders...")
                 self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
-                previous_brng = brng_results
                 
                 brng_results = self.brng_analyzer.analyze_with_differential_detection(
                     output_dir=self.output_dir,
                     duration_limit=duration_limit,
                     skip_start_seconds=color_bars_end_time,
                     qctools_violations=violations,
-                    analysis_periods=analysis_periods  # Use updated periods
+                    analysis_periods=analysis_periods
                 )
+                
+                # Track this iteration's results
+                iteration_data = {
+                    'iteration': refinement_iterations,
+                    'active_area': new_area,
+                    'area_change': {
+                        'width': new_area[2] - previous_area[2],
+                        'height': new_area[3] - previous_area[3]
+                    },
+                    'violations_before': len(previous_brng.violations) if previous_brng.violations else 0,
+                    'violations_after': len(brng_results.violations) if brng_results.violations else 0,
+                    'edge_violation_pct': brng_results.aggregate_patterns.get('edge_violation_percentage', 0),
+                    'visualization_path': str(viz_output_path) if success else None
+                }
+                refinement_history.append(iteration_data)
+                
+                # Log improvement metrics
+                violation_reduction = iteration_data['violations_before'] - iteration_data['violations_after']
+                if violation_reduction > 0:
+                    logger.info(f"  Violations reduced: {iteration_data['violations_before']} → {iteration_data['violations_after']} (-{violation_reduction})")
+                else:
+                    logger.info(f"  Violations: {iteration_data['violations_after']} (no reduction)")
                 
                 # Check for improvement
                 improved = self._is_meaningful_improvement(previous_brng, brng_results)
@@ -2419,10 +2702,59 @@ class EnhancedFrameAnalysis:
                     logger.info("  Stopping refinement - further adjustments unlikely to help")
                     break
             
+            # After refinement loop completes
             results['refinement_iterations'] = refinement_iterations
+            results['refinement_history'] = refinement_history
             results['final_borders'] = asdict(border_results)
             results['final_brng_analysis'] = asdict(brng_results) if brng_results else None
             results['final_signalstats'] = asdict(signalstats_results)
+            
+            # CREATE COMPARISON VISUALIZATION (initial vs final)
+            if refinement_iterations > 0:
+                logger.info("\nCreating before/after comparison visualization...")
+                comparison_path = self.output_dir / f"{self.video_id}_border_refinement_comparison.jpg"
+                
+                try:
+                    self._create_refinement_comparison(
+                        initial_borders=initial_borders,
+                        final_borders=border_results,
+                        initial_brng=initial_brng,
+                        final_brng=brng_results,
+                        output_path=comparison_path,
+                        refinement_history=refinement_history
+                    )
+                    logger.info(f"✓ Refinement comparison saved: {comparison_path.name}")
+                    results['refinement_comparison'] = str(comparison_path)
+                except Exception as e:
+                    logger.warning(f"Could not create refinement comparison: {e}")
+            
+            # Summary of refinement
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Border Refinement Summary:")
+            logger.info(f"  Iterations performed: {refinement_iterations}")
+            
+            if refinement_iterations > 0:
+                initial_area = initial_borders.active_area
+                final_area = border_results.active_area
+                width_change = final_area[2] - initial_area[2]
+                height_change = final_area[3] - initial_area[3]
+                
+                logger.info(f"  Initial active area: {initial_area[2]}x{initial_area[3]}")
+                logger.info(f"  Final active area: {final_area[2]}x{final_area[3]}")
+                logger.info(f"  Size change: width {width_change:+d}px, height {height_change:+d}px")
+                
+                initial_violations = len(initial_brng.violations) if initial_brng.violations else 0
+                final_violations = len(brng_results.violations) if brng_results.violations else 0
+                violation_reduction = initial_violations - final_violations
+                
+                logger.info(f"  Violations: {initial_violations} → {final_violations} ({violation_reduction:+d})")
+                
+                # Calculate improvement percentage
+                if initial_violations > 0:
+                    improvement_pct = (violation_reduction / initial_violations) * 100
+                    logger.info(f"  Improvement: {improvement_pct:.1f}%")
+            
+            logger.info(f"{'='*60}\n")
         
         # Step 7: Generate comprehensive summary
         results['summary'] = self._generate_summary(results)
@@ -2431,6 +2763,231 @@ class EnhancedFrameAnalysis:
         self._save_results(results)
         
         return results
+    
+    def _create_refinement_comparison(self, initial_borders, final_borders, 
+                                 initial_brng, final_brng, output_path, 
+                                 refinement_history):
+        """
+        Create a comparison visualization showing before and after refinement.
+        
+        This creates a side-by-side comparison showing:
+        - Left: Initial border detection
+        - Right: Final refined borders
+        - Annotations showing the changes and improvements
+        
+        Args:
+            initial_borders: BorderDetectionResult before refinement
+            final_borders: BorderDetectionResult after refinement
+            initial_brng: BRNGAnalysisResult before refinement
+            final_brng: BRNGAnalysisResult after refinement
+            output_path: Path to save the comparison image
+            refinement_history: List of iteration data dictionaries
+        """
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+        
+        # Get a good frame for visualization
+        frame = self.border_detector.find_good_representative_frame(
+            target_time=150,
+            search_window=120
+        )
+        
+        if frame is None:
+            logger.warning("Could not find frame for refinement comparison")
+            return False
+        
+        # Create figure with 2 columns
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
+        
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # LEFT: Initial borders
+        ax1.imshow(frame_rgb)
+        ax1.set_title('Initial Border Detection', fontsize=14, weight='bold')
+        ax1.axis('off')
+        
+        if initial_borders.active_area:
+            x1, y1, w1, h1 = initial_borders.active_area
+            
+            # Draw initial borders in red
+            if x1 > 10:
+                left_rect = patches.Rectangle((0, 0), x1, self.border_detector.height,
+                                            linewidth=2, edgecolor='red', 
+                                            facecolor='red', alpha=0.3,
+                                            label='Initial Borders')
+                ax1.add_patch(left_rect)
+            
+            if x1 + w1 < self.border_detector.width - 10:
+                right_rect = patches.Rectangle((x1 + w1, 0), 
+                                            self.border_detector.width - (x1 + w1), 
+                                            self.border_detector.height,
+                                            linewidth=2, edgecolor='red', 
+                                            facecolor='red', alpha=0.3)
+                ax1.add_patch(right_rect)
+            
+            if y1 > 10:
+                top_rect = patches.Rectangle((0, 0), self.border_detector.width, y1,
+                                            linewidth=2, edgecolor='red', 
+                                            facecolor='red', alpha=0.3)
+                ax1.add_patch(top_rect)
+            
+            if y1 + h1 < self.border_detector.height - 10:
+                bottom_rect = patches.Rectangle((0, y1 + h1), 
+                                            self.border_detector.width, 
+                                            self.border_detector.height - (y1 + h1),
+                                            linewidth=2, edgecolor='red', 
+                                            facecolor='red', alpha=0.3)
+                ax1.add_patch(bottom_rect)
+            
+            # Draw active area outline in green
+            active_rect = patches.Rectangle((x1, y1), w1, h1,
+                                        linewidth=3, edgecolor='green', 
+                                        facecolor='none',
+                                        label='Active Area')
+            ax1.add_patch(active_rect)
+            ax1.legend(loc='upper right')
+        
+        # RIGHT: Final borders
+        ax2.imshow(frame_rgb)
+        ax2.set_title('After Refinement', fontsize=14, weight='bold')
+        ax2.axis('off')
+        
+        if final_borders.active_area:
+            x2, y2, w2, h2 = final_borders.active_area
+            
+            # Draw final borders in red
+            if x2 > 10:
+                left_rect = patches.Rectangle((0, 0), x2, self.border_detector.height,
+                                            linewidth=2, edgecolor='red', 
+                                            facecolor='red', alpha=0.3,
+                                            label='Refined Borders')
+                ax2.add_patch(left_rect)
+            
+            if x2 + w2 < self.border_detector.width - 10:
+                right_rect = patches.Rectangle((x2 + w2, 0), 
+                                            self.border_detector.width - (x2 + w2), 
+                                            self.border_detector.height,
+                                            linewidth=2, edgecolor='red', 
+                                            facecolor='red', alpha=0.3)
+                ax2.add_patch(right_rect)
+            
+            if y2 > 10:
+                top_rect = patches.Rectangle((0, 0), self.border_detector.width, y2,
+                                            linewidth=2, edgecolor='red', 
+                                            facecolor='red', alpha=0.3)
+                ax2.add_patch(top_rect)
+            
+            if y2 + h2 < self.border_detector.height - 10:
+                bottom_rect = patches.Rectangle((0, y2 + h2), 
+                                            self.border_detector.width, 
+                                            self.border_detector.height - (y2 + h2),
+                                            linewidth=2, edgecolor='red', 
+                                            facecolor='red', alpha=0.3)
+                ax2.add_patch(bottom_rect)
+            
+            # Draw active area outline in green
+            active_rect = patches.Rectangle((x2, y2), w2, h2,
+                                        linewidth=3, edgecolor='green', 
+                                        facecolor='none',
+                                        label='Active Area')
+            ax2.add_patch(active_rect)
+            
+            # If borders changed significantly, draw arrows showing the change
+            if abs(x2 - x1) > 5:  # Left border moved
+                mid_y = self.border_detector.height // 2
+                if x2 < x1:  # Border expanded left
+                    ax2.annotate('', xy=(x2, mid_y), xytext=(x1, mid_y),
+                            arrowprops=dict(arrowstyle='<-', color='cyan', lw=3))
+                else:  # Border contracted right
+                    ax2.annotate('', xy=(x2, mid_y), xytext=(x1, mid_y),
+                            arrowprops=dict(arrowstyle='->', color='cyan', lw=3))
+            
+            ax2.legend(loc='upper right')
+        
+        # Add comprehensive comparison text
+        comparison_text = self._format_refinement_comparison_text(
+            initial_borders, final_borders, initial_brng, final_brng, refinement_history
+        )
+        
+        # Add text box with comparison details
+        fig.text(0.5, 0.02, comparison_text, ha='center', fontsize=10,
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        
+        # Add main title
+        iterations = len(refinement_history)
+        title = f'Border Refinement: {iterations} Iteration{"s" if iterations != 1 else ""}'
+        fig.text(0.5, 0.97, title, ha='center', fontsize=16, weight='bold')
+        
+        plt.tight_layout(rect=[0, 0.06, 1, 0.96])
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        return True
+
+
+    def _format_refinement_comparison_text(self, initial_borders, final_borders, 
+                                        initial_brng, final_brng, refinement_history):
+        """
+        Format the comparison text for the refinement visualization.
+        
+        Returns:
+            Formatted string with comparison details
+        """
+        x1, y1, w1, h1 = initial_borders.active_area
+        x2, y2, w2, h2 = final_borders.active_area
+        
+        # Calculate changes
+        width_change = w2 - w1
+        height_change = h2 - h1
+        left_change = x2 - x1
+        right_change = (self.border_detector.width - (x2 + w2)) - (self.border_detector.width - (x1 + w1))
+        top_change = y2 - y1
+        bottom_change = (self.border_detector.height - (y2 + h2)) - (self.border_detector.height - (y1 + h1))
+        
+        # BRNG violations
+        initial_violations = len(initial_brng.violations) if initial_brng.violations else 0
+        final_violations = len(final_brng.violations) if final_brng.violations else 0
+        violation_reduction = initial_violations - final_violations
+        
+        # Build text
+        lines = []
+        lines.append(f"Active Area: {w1}x{h1} → {w2}x{h2} (Δ width: {width_change:+d}px, Δ height: {height_change:+d}px)")
+        
+        # Border changes
+        border_changes = []
+        if abs(left_change) > 2:
+            direction = "expanded" if left_change < 0 else "contracted"
+            border_changes.append(f"Left {direction} {abs(left_change)}px")
+        if abs(right_change) > 2:
+            direction = "expanded" if right_change > 0 else "contracted"
+            border_changes.append(f"Right {direction} {abs(right_change)}px")
+        if abs(top_change) > 2:
+            direction = "expanded" if top_change < 0 else "contracted"
+            border_changes.append(f"Top {direction} {abs(top_change)}px")
+        if abs(bottom_change) > 2:
+            direction = "expanded" if bottom_change > 0 else "contracted"
+            border_changes.append(f"Bottom {direction} {abs(bottom_change)}px")
+        
+        if border_changes:
+            lines.append(f"Border Changes: {', '.join(border_changes)}")
+        else:
+            lines.append("Border Changes: None")
+        
+        # Violation improvement
+        lines.append(f"BRNG Violations: {initial_violations} → {final_violations} ({violation_reduction:+d})")
+        
+        if initial_violations > 0:
+            improvement_pct = (violation_reduction / initial_violations) * 100
+            lines.append(f"Improvement: {improvement_pct:.1f}%")
+        
+        # Edge violation percentages
+        initial_edge_pct = initial_brng.aggregate_patterns.get('edge_violation_percentage', 0)
+        final_edge_pct = final_brng.aggregate_patterns.get('edge_violation_percentage', 0)
+        lines.append(f"Edge Violations: {initial_edge_pct:.1f}% → {final_edge_pct:.1f}%")
+        
+        return " | ".join(lines)
     
     def _detect_color_bars_duration(self) -> float:
         """Detect color bars duration from video or QCTools report"""
