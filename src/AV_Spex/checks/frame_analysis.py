@@ -851,37 +851,79 @@ class SophisticatedBorderDetector:
         if active_area:
             x, y, w, h = active_area
             
-            # Mark border regions in red
+            # Mark border regions differently based on detection method
             border_added = False
-            if x > 10:  # Left border
-                left_rect = patches.Rectangle((0, 0), x, self.height, linewidth=2,
-                                            edgecolor='red', facecolor='red', alpha=0.3,
-                                            label='Border Regions')
-                ax1.add_patch(left_rect)
-                border_added = True
             
-            if x + w < self.width - 10:  # Right border
-                right_rect = patches.Rectangle((x + w, 0), self.width - (x + w), self.height, 
-                                            linewidth=2, edgecolor='red', facecolor='red', alpha=0.3)
-                if not border_added:
-                    right_rect.set_label('Border Regions')
-                    border_added = True
-                ax1.add_patch(right_rect)
+            if detection_method == 'simple':
+                # Use dotted red lines for simple border detection
+                line_style = '--'  # Dashed line style
+                line_width = 2.5
+                line_color = 'red'
                 
-            if y > 10:  # Top border
-                top_rect = patches.Rectangle((0, 0), self.width, y, linewidth=2,
-                                        edgecolor='red', facecolor='red', alpha=0.3)
-                if not border_added:
-                    top_rect.set_label('Border Regions')
+                # Draw outline around active area with dotted red lines
+                # Left border
+                if x > 10:
+                    ax1.plot([x, x], [0, self.height], linestyle=line_style, 
+                            linewidth=line_width, color=line_color, label='Border Edge (Simple Detection)')
                     border_added = True
-                ax1.add_patch(top_rect)
                 
-            if y + h < self.height - 10:  # Bottom border
-                bottom_rect = patches.Rectangle((0, y + h), self.width, self.height - (y + h), 
-                                            linewidth=2, edgecolor='red', facecolor='red', alpha=0.3)
-                if not border_added:
-                    bottom_rect.set_label('Border Regions')
-                ax1.add_patch(bottom_rect)
+                # Right border
+                if x + w < self.width - 10:
+                    ax1.plot([x + w, x + w], [0, self.height], linestyle=line_style, 
+                            linewidth=line_width, color=line_color)
+                    if not border_added:
+                        ax1.plot([x + w, x + w], [0, self.height], linestyle=line_style, 
+                                linewidth=line_width, color=line_color, label='Border Edge (Simple Detection)')
+                        border_added = True
+                
+                # Top border
+                if y > 10:
+                    ax1.plot([0, self.width], [y, y], linestyle=line_style, 
+                            linewidth=line_width, color=line_color)
+                    if not border_added:
+                        ax1.plot([0, self.width], [y, y], linestyle=line_style, 
+                                linewidth=line_width, color=line_color, label='Border Edge (Simple Detection)')
+                        border_added = True
+                
+                # Bottom border
+                if y + h < self.height - 10:
+                    ax1.plot([0, self.width], [y + h, y + h], linestyle=line_style, 
+                            linewidth=line_width, color=line_color)
+                    if not border_added:
+                        ax1.plot([0, self.width], [y + h, y + h], linestyle=line_style, 
+                                linewidth=line_width, color=line_color, label='Border Edge (Simple Detection)')
+                        border_added = True
+            else:
+                # Use shaded rectangles for sophisticated border detection
+                if x > 10:  # Left border
+                    left_rect = patches.Rectangle((0, 0), x, self.height, linewidth=2,
+                                                edgecolor='red', facecolor='red', alpha=0.3,
+                                                label='Border Regions')
+                    ax1.add_patch(left_rect)
+                    border_added = True
+                
+                if x + w < self.width - 10:  # Right border
+                    right_rect = patches.Rectangle((x + w, 0), self.width - (x + w), self.height, 
+                                                linewidth=2, edgecolor='red', facecolor='red', alpha=0.3)
+                    if not border_added:
+                        right_rect.set_label('Border Regions')
+                        border_added = True
+                    ax1.add_patch(right_rect)
+                    
+                if y > 10:  # Top border
+                    top_rect = patches.Rectangle((0, 0), self.width, y, linewidth=2,
+                                            edgecolor='red', facecolor='red', alpha=0.3)
+                    if not border_added:
+                        top_rect.set_label('Border Regions')
+                        border_added = True
+                    ax1.add_patch(top_rect)
+                    
+                if y + h < self.height - 10:  # Bottom border
+                    bottom_rect = patches.Rectangle((0, y + h), self.width, self.height - (y + h), 
+                                                linewidth=2, edgecolor='red', facecolor='red', alpha=0.3)
+                    if not border_added:
+                        bottom_rect.set_label('Border Regions')
+                    ax1.add_patch(bottom_rect)
             
             # Highlight head switching artifacts if detected
             if head_switching_results and head_switching_results.get('detected'):
@@ -2512,7 +2554,8 @@ class EnhancedFrameAnalysis:
                 active_area=border_results.active_area,
                 head_switching_results=border_results.head_switching_artifacts,
                 target_time=150,  # Default to 2.5 minutes in
-                search_window=120  # Search within 2 minutes
+                search_window=120,  # Search within 2 minutes
+                detection_method=border_results.detection_method
             )
             if success:
                 results['border_visualization'] = str(viz_output_path)
@@ -2639,7 +2682,8 @@ class EnhancedFrameAnalysis:
                         active_area=border_results.active_area,
                         head_switching_results=border_results.head_switching_artifacts,
                         target_time=150,
-                        search_window=120
+                        search_window=120,
+                        detection_method=border_results.detection_method
                     )
                     
                     if success:
