@@ -362,7 +362,7 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
 
 def validateEntireVideoAsBars(startObj, pkt, durationStart, framesList, buffSize, bit_depth_10):
     """
-    Validates if the entire video consists of color bars by checking TOUT value.
+    Validates if the entire video consists of color bars by checking TOUT, UMAX, UDIF, VMAX, and VDIF values.
     This is used when bars start is detected but no end is found.
     
     Parameters:
@@ -388,15 +388,23 @@ def validateEntireVideoAsBars(startObj, pkt, durationStart, framesList, buffSize
     if bit_depth_10:
         YMAX_thresh = 800
         YMIN_thresh = 10
-        YDIF_thresh = 15
+        YDIF_thresh = 25
         SATMAX_thresh = 300
+        UMAX_thresh = 1020  
+        UDIF_thresh = 20   
+        VMAX_thresh = 970  
+        VDIF_thresh = 15   
     else:
         YMAX_thresh = 199
         YMIN_thresh = 3
         YDIF_thresh = 2
         SATMAX_thresh = 75
+        UMAX_thresh = 255  
+        UDIF_thresh = 5
+        VMAX_thresh = 243   
+        VDIF_thresh = 4
     
-    logger.debug(f"No end duration found for color bars - validating if entire video is color bars using TOUT (threshold: {TOUT_MAX})")
+    logger.debug(f"No end duration found for color bars - validating if entire video is color bars using TOUT (threshold: {TOUT_MAX}), UMAX, UDIF, VMAX, VDIF")
     
     # Counters for validation
     total_frames_checked = 0
@@ -435,13 +443,22 @@ def validateEntireVideoAsBars(startObj, pkt, durationStart, framesList, buffSize
                         ymin_value = float(framesList[middleFrame].get('YMIN', 999))
                         ydif_value = float(framesList[middleFrame].get('YDIF', 999))
                         satmax_value = float(framesList[middleFrame].get('SATMAX', 0))
+                        # New checks
+                        umax_value = float(framesList[middleFrame].get('UMAX', 9999))
+                        udif_value = float(framesList[middleFrame].get('UDIF', 9999))
+                        vmax_value = float(framesList[middleFrame].get('VMAX', 9999))
+                        vdif_value = float(framesList[middleFrame].get('VDIF', 9999))
                         
-                        # Check TOUT and basic bar characteristics
+                        # Check TOUT, basic bar characteristics, and U/V values
                         if (tout_value <= TOUT_MAX and 
                             ymax_value > YMAX_thresh and 
                             ymin_value < YMIN_thresh and 
                             ydif_value < YDIF_thresh and
-                            satmax_value > SATMAX_thresh):
+                            satmax_value > SATMAX_thresh and
+                            umax_value < UMAX_thresh and
+                            udif_value < UDIF_thresh and
+                            vmax_value < VMAX_thresh and
+                            vdif_value < VDIF_thresh):
                             frames_meeting_criteria += 1
                     except (ValueError, KeyError) as e:
                         logger.debug(f"Error checking frame values: {e}")
@@ -459,7 +476,7 @@ def validateEntireVideoAsBars(startObj, pkt, durationStart, framesList, buffSize
         
         # If at least 95% of frames meet the criteria, consider entire video as bars
         if percentage_valid >= 95.0:
-            logger.info(f"Confirmed: Entire video consists of color bars (TOUT <= {TOUT_MAX})")
+            logger.info(f"Confirmed: Entire video consists of color bars (TOUT <= {TOUT_MAX}, UMAX < {UMAX_thresh}, UDIF < {UDIF_thresh}, VMAX < {VMAX_thresh}, VDIF < {VDIF_thresh})")
             return True, video_end_time
         else:
             logger.debug(f"Only {percentage_valid:.1f}% of frames meet criteria - not confirming as entire video bars")
@@ -467,7 +484,7 @@ def validateEntireVideoAsBars(startObj, pkt, durationStart, framesList, buffSize
     else:
         logger.debug("No frames were checked during validation")
         return False, None
-
+    
 
 def evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize):
     """
@@ -1089,7 +1106,7 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
                 barsEndString = dts2ts(str(video_end_time))
                 logger.info(f"Entire video confirmed as color bars - setting end duration to {barsEndString}\n")
             else:
-                logger.warning("Could not confirm entire video as color bars - TOUT and VREP criteria not met\n")
+                logger.warning("Could not confirm entire video as color bars\n")
         
         if durationStart == "" and durationEnd == "":
             logger.error("No color bars detected\n")
