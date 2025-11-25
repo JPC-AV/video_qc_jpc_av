@@ -10,7 +10,17 @@ on:
 
 jobs:
   build-macos:
-    runs-on: macos-13  # Intel for maximum compatibility
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+            name: Intel
+          - runner: macos-latest  # ARM64
+            arch: arm64
+            name: AppleSilicon
+    
+    runs-on: ${{ matrix.runner }}
     
     outputs:
       version: ${{ steps.get_version.outputs.VERSION }}
@@ -30,7 +40,7 @@ jobs:
     - name: Install dependencies
       shell: bash -el {0}
       env:
-        MACOSX_DEPLOYMENT_TARGET: "11.0"  # Better compatibility
+        MACOSX_DEPLOYMENT_TARGET: "14.0"  # macOS 14+ compatibility
       run: |
         conda info
         which python
@@ -39,7 +49,7 @@ jobs:
         # Install PyInstaller via conda-forge
         conda install -c conda-forge pyinstaller -y
         
-        # Force newer PyQt6 build (keeps your improvement)
+        # Force newer PyQt6 build
         pip install "PyQt6>=6.7" --force-reinstall --no-deps
         pip install PyQt6-sip --force-reinstall
         
@@ -55,7 +65,7 @@ jobs:
       run: |
         VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building AV-Spex version $VERSION for Intel with Rosetta 2 support"
+        echo "Building AV-Spex version $VERSION for ${{ matrix.name }} (${{ matrix.arch }})"
         
     - name: Clean previous build artifacts
       shell: bash -el {0}
@@ -65,9 +75,9 @@ jobs:
     - name: Build with PyInstaller
       shell: bash -el {0}
       env:
-        MACOSX_DEPLOYMENT_TARGET: "11.0"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
       run: |
-        echo "Building Intel binary with macOS 11+ compatibility..."
+        echo "Building ${{ matrix.arch }} binary with macOS 14+ compatibility..."
         pyinstaller --noconfirm --log-level=INFO avspex.spec
         
     - name: Verify build
@@ -76,6 +86,7 @@ jobs:
         if [ -d "dist/AV-Spex.app" ]; then
           echo "✅ App bundle created successfully"
           file "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
+          lipo -info "dist/AV-Spex.app/Contents/MacOS/AV-Spex"
           test -x ./dist/AV-Spex.app/Contents/MacOS/AV-Spex && echo "✅ Executable is valid"
         else
           echo "❌ App bundle not found!"
@@ -92,10 +103,11 @@ jobs:
           "ref": "${{ github.ref }}",
           "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
           "workflow_run_id": "${{ github.run_id }}",
-          "architecture": "x86_64",
+          "architecture": "${{ matrix.arch }}",
+          "runner": "${{ matrix.runner }}",
           "python_version": "$(python --version)",
           "python_type": "conda",
-          "compatibility": "Intel native, Apple Silicon via Rosetta 2"
+          "compatibility": "${{ matrix.name }} native, macOS 14+"
         }
         EOF
         
@@ -103,12 +115,12 @@ jobs:
       shell: bash -el {0}
       run: |
         cd dist
-        tar -czf AV-Spex-${{ steps.get_version.outputs.VERSION }}-x86_64-unsigned.tar.gz AV-Spex.app build-info.json
+        tar -czf AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz AV-Spex.app build-info.json
         echo "Archive created successfully"
         
     - name: Upload app bundle
       uses: actions/upload-artifact@v4
       with:
-        name: av-spex-${{ steps.get_version.outputs.VERSION }}-x86_64-unsigned
-        path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-x86_64-unsigned.tar.gz
+        name: av-spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned
+        path: dist/AV-Spex-${{ steps.get_version.outputs.VERSION }}-${{ matrix.arch }}-unsigned.tar.gz
         retention-days: 30
