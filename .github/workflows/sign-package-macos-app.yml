@@ -19,6 +19,10 @@ permissions:
 
 jobs:
   sign-and-package:
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+    
     runs-on: macos-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     
@@ -29,12 +33,12 @@ jobs:
         ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       
     - name: Install dependencies
-      run: brew install create-dmg
+      run: brew install create-dmg jq
         
     - name: Download unsigned app bundle
       uses: actions/download-artifact@v4
       with:
-        pattern: av-spex-*-unsigned
+        pattern: av-spex-*-${{ matrix.arch }}-unsigned
         path: ./artifacts
         run-id: ${{ github.event.inputs.build_run_id || github.event.workflow_run.id }}
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -42,19 +46,23 @@ jobs:
         
     - name: Extract build artifacts and get version
       run: |
-        APP_ARCHIVE=$(find artifacts -name "*.tar.gz" | head -1)
+        APP_ARCHIVE=$(find artifacts -name "*-${{ matrix.arch }}-*.tar.gz" | head -1)
         if [ -z "$APP_ARCHIVE" ]; then
-          echo "❌ No app bundle archive found!"
+          echo "❌ No app bundle archive found for ${{ matrix.arch }}!"
           exit 1
         fi
+        
+        echo "📦 Processing: $(basename "$APP_ARCHIVE")"
         
         mkdir -p dist
         tar -xzf "$APP_ARCHIVE" -C dist/
         
         if [ -f "dist/build-info.json" ]; then
           VERSION=$(cat "dist/build-info.json" | jq -r '.version')
+          ARCH=$(cat "dist/build-info.json" | jq -r '.architecture')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "✅ Found version: $VERSION"
+          echo "ARCH=$ARCH" >> $GITHUB_ENV
+          echo "✅ Found version: $VERSION ($ARCH)"
         else
           echo "❌ Build info not found!"
           exit 1
@@ -138,7 +146,7 @@ jobs:
           for plugin in "$QT_PLATFORMS_DIR"/*.dylib; do
             if [ -f "$plugin" ]; then
               plugin_name=$(basename "$plugin")
-              echo "🔑 Signing critical platform plugin: $plugin_name"
+              echo "🔒 Signing critical platform plugin: $plugin_name"
               
               if codesign --force --timestamp --options runtime \
                          --entitlements qt_entitlements.plist \
@@ -221,11 +229,18 @@ jobs:
         
     - name: Create DMG
       run: |
+        # Determine architecture label for DMG name
+        if [ "${{ matrix.arch }}" = "x86_64" ]; then
+          ARCH_LABEL="Intel"
+        else
+          ARCH_LABEL="AppleSilicon"
+        fi
+        
         mkdir -p dist/dmg
         cp -R "dist/AV-Spex.app" dist/dmg/
 
         create-dmg \
-          --volname "AV-Spex $VERSION" \
+          --volname "AV-Spex $VERSION ($ARCH_LABEL)" \
           --volicon "av_spex_the_logo.icns" \
           --window-pos 200 120 \
           --window-size 600 300 \
@@ -234,33 +249,33 @@ jobs:
           --hide-extension "AV-Spex.app" \
           --app-drop-link 425 120 \
           --no-internet-enable \
-          "dist/AV-Spex-$VERSION.dmg" \
+          "dist/AV-Spex-$VERSION-${{ matrix.arch }}.dmg" \
           "dist/dmg"
 
-        codesign --force --timestamp --sign "$CERT_NAME" "dist/AV-Spex-$VERSION.dmg"
+        codesign --force --timestamp --sign "$CERT_NAME" "dist/AV-Spex-$VERSION-${{ matrix.arch }}.dmg"
         
     - name: Notarize DMG
       run: |
         echo "Submitting DMG for notarization..."
-        xcrun notarytool submit "dist/AV-Spex-$VERSION.dmg" --keychain-profile "DEV_CERT_PW" --wait --timeout 1800
-        xcrun stapler staple "dist/AV-Spex-$VERSION.dmg"
+        xcrun notarytool submit "dist/AV-Spex-$VERSION-${{ matrix.arch }}.dmg" --keychain-profile "DEV_CERT_PW" --wait --timeout 1800
+        xcrun stapler staple "dist/AV-Spex-$VERSION-${{ matrix.arch }}.dmg"
         
         echo "Final verification..."
         spctl --assess --type execute --verbose dist/AV-Spex.app
-        spctl --assess --type install --verbose "dist/AV-Spex-$VERSION.dmg"
+        spctl --assess --type install --verbose "dist/AV-Spex-$VERSION-${{ matrix.arch }}.dmg"
         
     - name: Upload signed DMG
       uses: actions/upload-artifact@v4
       with:
-        name: AV-Spex-${{ env.VERSION }}-signed-dmg
-        path: dist/AV-Spex-${{ env.VERSION }}.dmg
+        name: AV-Spex-${{ env.VERSION }}-${{ matrix.arch }}-signed-dmg
+        path: dist/AV-Spex-${{ env.VERSION }}-${{ matrix.arch }}.dmg
         retention-days: 90
         
     - name: Create Release (for tags)
       if: startsWith(github.event.workflow_run.head_branch, 'v')
       uses: softprops/action-gh-release@v1
       with:
-        files: dist/AV-Spex-${{ env.VERSION }}.dmg
+        files: dist/AV-Spex-${{ env.VERSION }}-${{ matrix.arch }}.dmg
         tag_name: ${{ github.event.workflow_run.head_branch }}
         name: AV-Spex ${{ github.event.workflow_run.head_branch }}
         draft: false
@@ -268,14 +283,20 @@ jobs:
         body: |
           ## AV-Spex v${{ env.VERSION }}
           
+          **Architecture:** ${{ matrix.arch }}
+          
           **Build Information:**
           - Built from commit: ${{ github.event.workflow_run.head_sha }}
           - Build workflow: ${{ github.event.workflow_run.id }}
           - Signed and notarized: ✅
           
           ### Installation
-          1. Download the DMG file below
+          1. Download the appropriate DMG file for your Mac:
+             - **Intel Macs**: `AV-Spex-${{ env.VERSION }}-x86_64.dmg`
+             - **Apple Silicon Macs (M1/M2/M3/M4)**: `AV-Spex-${{ env.VERSION }}-arm64.dmg`
           2. Open the DMG and drag AV-Spex.app to your Applications folder
+          
+          > **Note:** Intel builds will work on Apple Silicon via Rosetta 2, but native ARM64 builds offer better performance.
 
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -285,8 +306,13 @@ jobs:
       run: |
         security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
 
+  trigger-homebrew:
+    needs: sign-and-package
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.workflow_run.head_branch, 'v') || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v'))
+    
+    steps:
     - name: Trigger Homebrew formula update
-      if: startsWith(github.event.workflow_run.head_branch, 'v') || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v'))
       run: |
         # Determine the tag name based on trigger type
         if [ "${{ github.event_name }}" = "workflow_run" ]; then
@@ -296,7 +322,6 @@ jobs:
         fi
         
         echo "Triggering Homebrew update for tag: $TAG_NAME"
-        echo "Version from environment: ${{ env.VERSION }}"
         
         # Trigger the homebrew workflow with proper parameters
         curl -X POST \
@@ -304,7 +329,7 @@ jobs:
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
           https://api.github.com/repos/${{ github.repository }}/actions/workflows/update-homebrew.yml/dispatches \
-          -d "{\"ref\":\"main\", \"inputs\": {\"tag_name\": \"$TAG_NAME\", \"version\": \"${{ env.VERSION }}\"}}"
+          -d "{\"ref\":\"main\", \"inputs\": {\"tag_name\": \"$TAG_NAME\"}}"
         
         # Verify the API call
         if [ $? -eq 0 ]; then
@@ -313,4 +338,3 @@ jobs:
           echo "❌ Failed to trigger Homebrew workflow"
           exit 1
         fi
-
