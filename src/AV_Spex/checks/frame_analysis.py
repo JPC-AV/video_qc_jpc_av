@@ -292,7 +292,7 @@ class QCToolsParser:
                 logger.info(f"  Analyzed {frames_after_color_bars:,} content frames")
                 logger.info(f"  Found {frames_with_violations:,} frames with BRNG violations ({violation_pct:.1f}% of content)")
                 if frames_with_violations > 0:
-                    logger.info(f"  Max BRNG value: {max_brng_value:.4f}%")
+                    logger.info(f"  Max BRNG value: {max_brng_value:.4f}%\n")
             else:
                 logger.warning("  No frames analyzed after color bars - check color bars duration")
             
@@ -791,11 +791,11 @@ class SophisticatedBorderDetector:
             # Sort by quality score and return the best frame
             quality_frames.sort(key=lambda x: x[2], reverse=True)
             best_frame_idx, best_frame, best_score = quality_frames[0]
-            logger.info(f"✓ Selected high-quality frame at {best_frame_idx/self.fps:.1f}s (quality score: {best_score:.3f})")
+            logger.info(f"✓ Selected high-quality frame at {best_frame_idx/self.fps:.1f}s (quality score: {best_score:.3f})\n")
             return best_frame
         else:
             # Final fallback - use target frame
-            logger.warning(f"⚠️ No suitable frame found, using target frame as fallback")
+            logger.warning(f"⚠️ No suitable frame found, using target frame as fallback\n")
             cap = cv2.VideoCapture(self.video_path)
             fallback_frame = target_frame if target_frame < self.total_frames else self.total_frames // 2
             cap.set(cv2.CAP_PROP_POS_FRAMES, fallback_frame)
@@ -2064,9 +2064,9 @@ class DifferentialBRNGAnalyzer:
 class IntegratedSignalstatsAnalyzer:
     """Signalstats analyzer with QCTools integration"""
     
-    def __init__(self, video_path: str):
+    def __init__(self, video_path: str, qctools_report: str = None):
         self.video_path = str(video_path)
-        self.qctools_report = self._find_qctools_report()
+        self.qctools_report = qctools_report if qctools_report else self._find_qctools_report(log_result=False)
         self._init_video_properties()
         
     def _init_video_properties(self):
@@ -2079,7 +2079,7 @@ class IntegratedSignalstatsAnalyzer:
         self.duration = self.total_frames / self.fps if self.fps > 0 else 0
         cap.release()
     
-    def _find_qctools_report(self) -> Optional[str]:
+    def _find_qctools_report(self, log_result: bool = True) -> Optional[str]:
         """Find existing QCTools report"""
         video_path = Path(self.video_path)
         video_id = video_path.stem
@@ -2098,7 +2098,8 @@ class IntegratedSignalstatsAnalyzer:
         
         for pattern in search_patterns:
             if pattern.exists():
-                logger.info(f"Found QCTools report: {pattern}")
+                if log_result:
+                    logger.info(f"Found QCTools report: {pattern}\n")
                 return str(pattern)
         
         return None
@@ -2463,15 +2464,17 @@ class EnhancedFrameAnalysis:
         self.config_mgr.refresh_configs()
         self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
         
-        # Initialize components
+        # Find QCTools report once (with logging)
+        self.qctools_report = self._find_qctools_report()
+        if not self.qctools_report:
+            logger.warning(f"No QCTools report found for {self.video_path.name}")
+        
+        # Initialize components (pass qctools_report to avoid duplicate search)
         self.border_detector = SophisticatedBorderDetector(video_path)
         self.brng_analyzer = None  # Will be initialized with border data
-        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path)
-        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path)
-
+        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path, qctools_report=self.qctools_report)
         
-        # Find QCTools report
-        self.qctools_report = self._find_qctools_report()
+        # Initialize QCTools parser if report exists
         self.qctools_parser = None
         if self.qctools_report:
             self.qctools_parser = QCToolsParser(self.qctools_report)
@@ -2568,7 +2571,7 @@ class EnhancedFrameAnalysis:
         logger.info(f"Frame analysis configuration:")
         logger.info(f"  Border detection: {'enabled' if border_detection_enabled else 'disabled'}")
         logger.info(f"  BRNG analysis: {'enabled' if brng_analysis_enabled else 'disabled'}")
-        logger.info(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}")
+        logger.info(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}\n")
         
         # Track what was actually run
         results['steps_enabled'] = {
@@ -2582,7 +2585,7 @@ class EnhancedFrameAnalysis:
         if skip_color_bars:
             color_bars_end_time = self._detect_color_bars_duration()
             if color_bars_end_time > 0:
-                logger.info(f"Color bars detected, ending at {color_bars_end_time:.1f}s")
+                logger.info(f"Color bars detected, ending at {color_bars_end_time:.1f}s\n")
                 results['color_bars_end_time'] = color_bars_end_time
 
         # Step 2: Parse QCTools for initial violations (needed for BRNG analysis or border detection)
@@ -2608,7 +2611,7 @@ class EnhancedFrameAnalysis:
         # Step 3: Border detection (conditional)
         border_results = None
         if border_detection_enabled:
-            logger.info(f"Detecting borders using {method} method...")
+            logger.info(f"Detecting borders using {method} method...\n")
             border_results = self.border_detector.detect_borders_with_quality_assessment(
                 violations=violations,
                 method=method
@@ -2616,7 +2619,7 @@ class EnhancedFrameAnalysis:
             results['initial_borders'] = asdict(border_results)
 
             # Create border detection visualization
-            logger.info("Creating border detection visualization...")
+            logger.info("Creating border detection visualization...\n")
             viz_filename = f"{self.video_id}_border_detection.jpg"
             viz_output_path = self.output_dir / viz_filename
             try:
@@ -3286,7 +3289,7 @@ class EnhancedFrameAnalysis:
         with open(output_file, 'w') as f:
             json.dump(cleaned_results, f, indent=2)
         
-        logger.info(f"Results saved to: {output_file}")
+        logger.info(f"Results saved to: {output_file}\n")
         print(results['summary'])
 
     def _analyze_qctools_violation_distribution(self, violations: List[FrameViolation]) -> List[Tuple[float, int]]:
