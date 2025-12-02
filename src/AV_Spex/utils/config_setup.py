@@ -235,12 +235,12 @@ class SpexConfig:
 
 @dataclass
 class FrameAnalysisConfig:
-    """Configuration for frame analysis (borders, BRNG violations, signalstats)"""
+    '''Configuration for frame analysis (borders, BRNG violations, signalstats)'''
     
-    # Individual sub-step enable flags
-    enable_border_detection: str = "yes"
-    enable_brng_analysis: str = "yes"
-    enable_signalstats: str = "yes"
+    # Individual sub-step enable flags (now using bool to match JSON config)
+    enable_border_detection: bool = True
+    enable_brng_analysis: bool = True
+    enable_signalstats: bool = True
     
     # Border detection settings
     border_detection_mode: str = "simple"
@@ -251,17 +251,14 @@ class FrameAnalysisConfig:
     sophisticated_edge_sample_width: int = 100
     sophisticated_sample_frames: int = 30
     sophisticated_padding: int = 5
-    # REMOVED: sophisticated_viz_time
-    # REMOVED: sophisticated_search_window
-    auto_retry_borders: str = "yes"
+    auto_retry_borders: bool = True
     max_border_retries: int = 3
     
     # BRNG analysis settings
     brng_duration_limit: int = 300
-    brng_skip_color_bars: str = "yes"
+    brng_skip_color_bars: bool = True
     
     # Signalstats settings
-    # REMOVED: signalstats_start_time (auto-determined now)
     signalstats_duration: int = 60
     signalstats_periods: int = 3
 
