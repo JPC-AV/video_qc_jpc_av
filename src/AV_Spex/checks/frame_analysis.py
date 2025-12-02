@@ -2537,10 +2537,11 @@ class EnhancedFrameAnalysis:
         return None
     
     def analyze(self, 
-            method: str = 'sophisticated',
-            duration_limit: int = 300,
-            skip_color_bars: bool = True,
-            max_refinement_iterations: int = 3) -> Dict:
+        method: str = 'sophisticated',
+        duration_limit: int = 300,
+        skip_color_bars: bool = True,
+        max_refinement_iterations: int = 3,
+        color_bars_end_time: float = None) -> Dict:
         """
         Run complete enhanced frame analysis with optional iterative refinement.
         
@@ -2581,9 +2582,9 @@ class EnhancedFrameAnalysis:
         }
         
         # Step 1: Detect color bars (always run if skip_color_bars is True, as it's a prerequisite)
-        color_bars_end_time = 0
         if skip_color_bars:
-            color_bars_end_time = self._detect_color_bars_duration()
+            if color_bars_end_time is None:
+                color_bars_end_time = self._detect_color_bars_duration()
             if color_bars_end_time > 0:
                 logger.info(f"Color bars detected, ending at {color_bars_end_time:.1f}s\n")
                 results['color_bars_end_time'] = color_bars_end_time
@@ -3419,7 +3420,8 @@ def analyze_frame_quality(video_path: str,
         method=method,
         duration_limit=duration_limit,
         skip_color_bars=skip_color_bars,
-        max_refinement_iterations=max_refinements
+        max_refinement_iterations=max_refinements,
+        color_bars_end_time=color_bars_end_time  # Add this
     )
     
     return results

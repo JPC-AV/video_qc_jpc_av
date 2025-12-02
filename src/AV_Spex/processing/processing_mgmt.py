@@ -310,7 +310,7 @@ class ProcessingManager:
                 start_seconds, end_seconds = parse_colorbars_duration_csv(str(colorbars_csv))
                 if end_seconds:
                     color_bars_end_time = end_seconds
-                    logger.info(f"Color bars detected by qct-parse, ending at {end_seconds:.1f}s")
+                    logger.info(f"Color bars detected by qct-parse, ending at {end_seconds:.1f}s\n")
         
         # Run the enhanced frame analysis - pass dataclass directly
         try:
