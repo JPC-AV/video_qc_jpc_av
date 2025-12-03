@@ -2246,12 +2246,12 @@ class IntegratedSignalstatsAnalyzer:
         )
         
         # Log final comparison summary
-        logger.info(f"\n  === Signalstats Analysis Summary ===")
-        logger.info(f"  Active area results (what matters for QC):")
-        logger.info(f"    Frames with violations: {total_violations:,} / {total_frames:,} ({violation_pct:.1f}%)")
-        logger.info(f"    Max BRNG value: {max_brng:.4f}%")
-        logger.info(f"    Average BRNG value: {avg_brng:.4f}%")
-        logger.info(f"  Diagnosis: {diagnosis}")
+        logger.debug(f"\n  === Signalstats Analysis Summary ===")
+        logger.debug(f"  Active area results (what matters for QC):")
+        logger.debug(f"    Frames with violations: {total_violations:,} / {total_frames:,} ({violation_pct:.1f}%)")
+        logger.debug(f"    Max BRNG value: {max_brng:.4f}%")
+        logger.debug(f"    Average BRNG value: {avg_brng:.4f}%")
+        logger.debug(f"  Diagnosis: {diagnosis}")
         
         return SignalstatsResult(
             violation_percentage=violation_pct,
@@ -2585,8 +2585,10 @@ class EnhancedFrameAnalysis:
         if skip_color_bars:
             if color_bars_end_time is None:
                 color_bars_end_time = self._detect_color_bars_duration()
+                # Only log if we detected color bars via fallback (not already passed in)
+                if color_bars_end_time > 0:
+                    logger.info(f"Color bars detected, ending at {color_bars_end_time:.1f}s\n")
             if color_bars_end_time > 0:
-                logger.info(f"Color bars detected, ending at {color_bars_end_time:.1f}s\n")
                 results['color_bars_end_time'] = color_bars_end_time
 
         # Step 2: Parse QCTools for initial violations (needed for BRNG analysis or border detection)
@@ -3375,7 +3377,6 @@ class EnhancedFrameAnalysis:
         return suggested_periods
 
 
-# Public API function for processing_mgmt to call
 def analyze_frame_quality(video_path: str, 
                          border_data_path: str = None,
                          output_dir: str = None,

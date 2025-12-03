@@ -226,12 +226,13 @@ class ProcessingManager:
         if self.check_cancelled():
             return None
         
-        # Process QCTools output
-        process_qctools_output(
+        # Process QCTools output and capture color bars detection
+        qctools_results = process_qctools_output(
             video_path, source_directory, destination_directory, video_id, 
             report_directory=report_directory,
             check_cancelled=self.check_cancelled, signals=self.signals
         )
+        color_bars_end_time = qctools_results.get('color_bars_end_time') if qctools_results else None
         
         if self.signals:
             self.signals.output_progress.emit("Creating access file...")
@@ -255,9 +256,10 @@ class ProcessingManager:
             if self.signals:
                 self.signals.output_progress.emit("Performing enhanced frame analysis...")
             
-            # Run the new unified frame analysis
+            # Run the new unified frame analysis, passing color bars info from qct-parse
             frame_analysis_results = self.process_frame_analysis(
-                video_path, source_directory, destination_directory, video_id
+                video_path, source_directory, destination_directory, video_id,
+                color_bars_end_time=color_bars_end_time
             )
             
             processing_results['frame_analysis'] = frame_analysis_results
@@ -277,10 +279,17 @@ class ProcessingManager:
         
         return processing_results
         
-    def process_frame_analysis(self, video_path, source_directory, destination_directory, video_id):
+    def process_frame_analysis(self, video_path, source_directory, destination_directory, video_id, color_bars_end_time=None):
         """
         Process comprehensive frame analysis including border detection,
         BRNG violations, and optionally signalstats using the enhanced unified module.
+        
+        Args:
+            video_path: Path to video file
+            source_directory: Source directory containing video
+            destination_directory: Output directory for results
+            video_id: Video identifier
+            color_bars_end_time: End time of color bars (from qct-parse), None if not detected
         """
         
         if self.check_cancelled():
@@ -301,23 +310,12 @@ class ProcessingManager:
         if self.signals:
             self.signals.output_progress.emit("Performing enhanced frame analysis...")
         
-        # Check for color bars from qct-parse if available
-        color_bars_end_time = None
-        report_directory = Path(source_directory) / f"{video_id}_report_csvs"
-        if report_directory.exists():
-            colorbars_csv = report_directory / "qct-parse_colorbars_durations.csv"
-            if colorbars_csv.exists():
-                start_seconds, end_seconds = parse_colorbars_duration_csv(str(colorbars_csv))
-                if end_seconds:
-                    color_bars_end_time = end_seconds
-                    logger.info(f"Color bars detected by qct-parse, ending at {end_seconds:.1f}s\n")
-        
-        # Run the enhanced frame analysis - pass dataclass directly
+        # Run the enhanced frame analysis - color_bars_end_time passed from qct-parse
         try:
             analysis_results = analyze_frame_quality(
                 video_path=video_path,
                 output_dir=destination_directory,
-                frame_config=frame_config,  # Pass the dataclass directly
+                frame_config=frame_config,
                 color_bars_end_time=color_bars_end_time
             )
         except Exception as e:
@@ -341,7 +339,7 @@ class ProcessingManager:
             
             # Log summary
             if 'summary' in analysis_results:
-                logger.info("\n" + analysis_results['summary'])
+                logger.debug("\n" + analysis_results['summary'] + "\n")
             
             # Format results for compatibility with existing code
             formatted_results = self._format_frame_analysis_results(analysis_results)
