@@ -178,12 +178,12 @@ class QCToolsParser:
             # Log period-specific summary
             if frames_in_period > 0:
                 violation_pct = (frames_with_violations / frames_in_period * 100)
-                logger.info(f"    Period {period_num}: {frames_in_period:,} frames analyzed, "
+                logger.debug(f"    Period {period_num}: {frames_in_period:,} frames analyzed, "
                         f"{frames_with_violations:,} with violations ({violation_pct:.1f}%)")
                 if frames_with_violations > 0:
-                    logger.info(f"    Period {period_num} max BRNG: {max_brng_value:.4f}%")
+                    logger.debug(f"    Period {period_num} max BRNG: {max_brng_value:.4f}%")
             else:
-                logger.info(f"    Period {period_num}: No frames found in time range {start_time:.1f}s - {end_time:.1f}s")
+                logger.debug(f"    Period {period_num}: No frames found in time range {start_time:.1f}s - {end_time:.1f}s")
             
         except Exception as e:
             logger.error(f"Error parsing QCTools report for period {period_num}: {e}")
@@ -281,18 +281,18 @@ class QCToolsParser:
             file_handle.close()
             
             # Log summary
-            logger.info(f"  Checked {total_frames_checked:,} frames from QCTools report")
+            logger.debug(f"  Checked {total_frames_checked:,} frames from QCTools report")
             if frames_skipped > 0:
-                logger.info(f"  Skipped {frames_skipped:,} color bar frames (first {color_bars_end_time:.1f}s)")
+                logger.debug(f"  Skipped {frames_skipped:,} color bar frames (first {color_bars_end_time:.1f}s)")
             if black_frames_skipped > 0:
-                logger.info(f"  Skipped {black_frames_skipped:,} all-black frames")
+                logger.debug(f"  Skipped {black_frames_skipped:,} all-black frames")
             
             if frames_after_color_bars > 0:
                 violation_pct = (frames_with_violations / frames_after_color_bars * 100) if frames_after_color_bars > 0 else 0
-                logger.info(f"  Analyzed {frames_after_color_bars:,} content frames")
-                logger.info(f"  Found {frames_with_violations:,} frames with BRNG violations ({violation_pct:.1f}% of content)")
+                logger.debug(f"  Analyzed {frames_after_color_bars:,} content frames")
+                logger.debug(f"  Found {frames_with_violations:,} frames with BRNG violations ({violation_pct:.1f}% of content)")
                 if frames_with_violations > 0:
-                    logger.info(f"  Max BRNG value: {max_brng_value:.4f}%\n")
+                    logger.debug(f"  Max BRNG value: {max_brng_value:.4f}%\n")
             else:
                 logger.warning("  No frames analyzed after color bars - check color bars duration")
             
@@ -463,9 +463,9 @@ class SophisticatedBorderDetector:
         active_height = self.height - borders['top'] - borders['bottom']
 
         # Log the detection results
-        logger.info(f"  Detected borders - L:{borders['left']}px R:{borders['right']}px T:{borders['top']}px B:{borders['bottom']}px")
-        logger.info(f"  Active picture area: {active_width}x{active_height} (from {self.width}x{self.height})")
-        logger.info(f"  Using {len(quality_frames)} quality frames for detection")
+        logger.debug(f"  Detected borders - L:{borders['left']}px R:{borders['right']}px T:{borders['top']}px B:{borders['bottom']}px")
+        logger.debug(f"  Active picture area: {active_width}x{active_height} (from {self.width}x{self.height})")
+        logger.debug(f"  Using {len(quality_frames)} quality frames for detection\n")
         
         # Add padding for safety
         padding = 5
@@ -981,7 +981,7 @@ class SophisticatedBorderDetector:
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close()
         
-        logger.info(f"Border detection visualization saved to: {output_path}")
+        # logger.info(f"Border detection visualization saved to: {output_path}")
         return True
 
 
@@ -1026,7 +1026,7 @@ class DifferentialBRNGAnalyzer:
 
         # Use analysis periods if provided, otherwise fall back to original behavior
         if analysis_periods:
-            logger.info(f"  Using {len(analysis_periods)} analysis periods from signalstats")
+            # logger.debug(f"  Using {len(analysis_periods)} analysis periods from signalstats")
             all_violations = []
             
             for i, (start_time, duration) in enumerate(analysis_periods):
@@ -1063,10 +1063,10 @@ class DifferentialBRNGAnalyzer:
                 all_violations.extend(period_violations)
             
             violations = all_violations
-            logger.info(f"  Analyzed {len(violations)} frames with potential violations across all periods")
+            logger.debug(f"  Analyzed {len(violations)} frames with potential violations across all periods")
         else:
             # Original single-period analysis (similar handling)
-            logger.info(f"  Creating temporary comparison videos (duration: {duration_limit}s)")
+            logger.debug(f"  Creating temporary comparison videos (duration: {duration_limit}s)")
             
             temp_dir = output_dir / "temp_brng"
             temp_dir.mkdir(exist_ok=True)
@@ -1109,9 +1109,9 @@ class DifferentialBRNGAnalyzer:
                 min_time_separation=5.0
             )
             
-            logger.info(f"  Creating diagnostic thumbnails for {len(selected_violations)} temporally diverse violations")
+            logger.debug(f"  Creating diagnostic thumbnails for {len(selected_violations)} temporally diverse violations\n")
             thumbnails = self._create_diagnostic_thumbnails(selected_violations, temp_video_paths, thumb_dir)
-            logger.info(f"  Saved {len(thumbnails)} thumbnails to {thumb_dir}")
+            logger.info(f"Saved {len(thumbnails)} thumbnails to {thumb_dir}")
         
         # Clean up all temporary files
         for video_info in temp_video_paths:
@@ -1196,7 +1196,7 @@ class DifferentialBRNGAnalyzer:
         
         # Use QCTools violations to target specific frames
         if qctools_violations and len(qctools_violations) > 0:
-            logger.info(f"  Targeting {len(qctools_violations)} frames identified by QCTools")
+            logger.debug(f"  Targeting {len(qctools_violations)} frames identified by QCTools")
             
             sample_indices = []
             for v in qctools_violations[:500]:  # Increased limit
@@ -1208,11 +1208,11 @@ class DifferentialBRNGAnalyzer:
                     if 0 <= frame_in_segment < total_frames:
                         sample_indices.append(frame_in_segment)
             
-            logger.info(f"  Mapped {len(sample_indices)} violation frames to processed video positions")
+            logger.debug(f"  Mapped {len(sample_indices)} violation frames to processed video positions")
             
             # If we didn't get enough samples from QCTools, add some distributed samples
             if len(sample_indices) < 50:
-                logger.info(f"  Adding distributed samples to reach minimum coverage")
+                logger.debug(f"  Adding distributed samples to reach minimum coverage")
                 additional_samples = np.linspace(0, total_frames - 1, 100, dtype=int)
                 for sample in additional_samples:
                     if sample not in sample_indices:
@@ -1224,7 +1224,7 @@ class DifferentialBRNGAnalyzer:
             num_samples = min(500, total_frames)
             sample_indices = np.linspace(0, total_frames - 1, num_samples, dtype=int).tolist()
         
-        logger.info(f"  Analyzing {len(sample_indices)} frame samples...")
+        logger.debug(f"  Analyzing {len(sample_indices)} frame samples...")
         
         frames_checked = 0
         for idx in sample_indices:
@@ -1273,7 +1273,7 @@ class DifferentialBRNGAnalyzer:
         # Sort by violation score
         violations.sort(key=lambda x: x.violation_score, reverse=True)
         
-        logger.info(f"  Checked {frames_checked} frames, found {len(violations)} with violations above threshold")
+        logger.debug(f"  Checked {frames_checked} frames, found {len(violations)} with violations above threshold")
         
         return violations
     
@@ -1502,7 +1502,7 @@ class DifferentialBRNGAnalyzer:
                     if remaining_needed <= 0:
                         break
         
-        logger.info(f"  Final selection: {len(selected_violations)} thumbnails spanning {selected_violations[-1].timestamp - selected_violations[0].timestamp:.1f} seconds")
+        logger.debug(f"  Final selection: {len(selected_violations)} thumbnails spanning {selected_violations[-1].timestamp - selected_violations[0].timestamp:.1f} seconds")
         
         return selected_violations
     
@@ -2099,7 +2099,7 @@ class IntegratedSignalstatsAnalyzer:
         for pattern in search_patterns:
             if pattern.exists():
                 if log_result:
-                    logger.info(f"Found QCTools report: {pattern}\n")
+                    logger.debug(f"Found QCTools report for Signalstats Analyzer: {pattern}\n")
                 return str(pattern)
         
         return None
@@ -2128,7 +2128,7 @@ class IntegratedSignalstatsAnalyzer:
             end_time = start_time + duration
             start_tc = self._seconds_to_timecode(start_time)
             end_tc = self._seconds_to_timecode(end_time)
-            logger.info(f"    Period {i+1}: {start_tc} - {end_tc} ({duration}s)")
+            logger.debug(f"    Period {i+1}: {start_tc} - {end_tc} ({duration}s)")
         
         # Log active area vs full frame comparison
         active_area = border_data.active_area if border_data else None
@@ -2136,10 +2136,10 @@ class IntegratedSignalstatsAnalyzer:
             x, y, w, h = active_area
             full_w, full_h = self.width, self.height
             crop_pct = (w * h) / (full_w * full_h) * 100
-            logger.info(f"  Comparison mode: Full frame ({full_w}x{full_h}) vs Active area ({w}x{h} at {x},{y})")
-            logger.info(f"  Active area is {crop_pct:.1f}% of full frame")
+            logger.debug(f"  Comparison mode: Full frame ({full_w}x{full_h}) vs Active area ({w}x{h} at {x},{y})")
+            logger.info(f"  Active area is {crop_pct:.1f}% of full frame\n")
         else:
-            logger.info(f"  Comparison mode: Full frame analysis only (no border detection)")
+            logger.debug(f"  Comparison mode: Full frame analysis only (no border detection)")
         
         # Analyze periods
         all_results = []
@@ -2147,7 +2147,7 @@ class IntegratedSignalstatsAnalyzer:
         comparison_results = []
         
         for i, (start_time, duration) in enumerate(analysis_periods):
-            logger.info(f"  Analyzing period {i+1} ({self._seconds_to_timecode(start_time)} - {self._seconds_to_timecode(start_time + duration)}):")
+            logger.debug(f"  Analyzing period {i+1} ({self._seconds_to_timecode(start_time)} - {self._seconds_to_timecode(start_time + duration)}):")
             
             period_comparison = {
                 'period': i+1,
@@ -2165,12 +2165,12 @@ class IntegratedSignalstatsAnalyzer:
                                         qctools_result['frames_analyzed'] * 100) if qctools_result['frames_analyzed'] > 0 else 0,
                         'max_brng': max(qctools_result['brng_values']) * 100 if qctools_result['brng_values'] else 0
                     }
-                    logger.info(f"    QCTools (full frame): {period_comparison['qctools_full_frame']['violations_pct']:.1f}% violations, "
+                    logger.debug(f"    QCTools (full frame): {period_comparison['qctools_full_frame']['violations_pct']:.1f}% violations, "
                             f"max BRNG: {period_comparison['qctools_full_frame']['max_brng']:.4f}%")
             
             # Get FFprobe data (active area only)
             if active_area:
-                logger.info(f"    Running FFprobe on active area only...")
+                logger.debug(f"    Running FFprobe on active area only...")
                 ffprobe_result = self._analyze_with_ffprobe_period(
                     active_area, start_time, duration, i+1
                 )
@@ -2180,7 +2180,7 @@ class IntegratedSignalstatsAnalyzer:
                                         ffprobe_result['frames_analyzed'] * 100) if ffprobe_result['frames_analyzed'] > 0 else 0,
                         'max_brng': max(ffprobe_result['brng_values']) * 100 if ffprobe_result['brng_values'] else 0
                     }
-                    logger.info(f"    FFprobe (active area): {period_comparison['ffprobe_active_area']['violations_pct']:.1f}% violations, "
+                    logger.debug(f"    FFprobe (active area): {period_comparison['ffprobe_active_area']['violations_pct']:.1f}% violations, "
                             f"max BRNG: {period_comparison['ffprobe_active_area']['max_brng']:.4f}%")
                     
                     # Compare results
@@ -2189,13 +2189,13 @@ class IntegratedSignalstatsAnalyzer:
                         active_violations = period_comparison['ffprobe_active_area']['violations_pct']
                         
                         if full_violations > active_violations + 5:
-                            logger.info(f"    → Border violations detected: Full frame has {full_violations - active_violations:.1f}% more violations")
+                            logger.info(f"    → Border violations detected: Full frame has {full_violations - active_violations:.1f}% more violations\n")
                             period_comparison['diagnosis'] = 'border_violations'
                         elif active_violations > 10:
-                            logger.info(f"    → Content violations: Active area itself has {active_violations:.1f}% violations")
+                            logger.info(f"    → Content violations: Active area itself has {active_violations:.1f}% violations\n")
                             period_comparison['diagnosis'] = 'content_violations'
                         else:
-                            logger.info(f"    → Minimal violations in both full frame and active area")
+                            logger.info(f"    → Minimal violations in both full frame and active area\n")
                             period_comparison['diagnosis'] = 'minimal_violations'
                     
                     # Use FFprobe result for aggregate
@@ -2251,7 +2251,7 @@ class IntegratedSignalstatsAnalyzer:
         logger.debug(f"    Frames with violations: {total_violations:,} / {total_frames:,} ({violation_pct:.1f}%)")
         logger.debug(f"    Max BRNG value: {max_brng:.4f}%")
         logger.debug(f"    Average BRNG value: {avg_brng:.4f}%")
-        logger.debug(f"  Diagnosis: {diagnosis}")
+        logger.debug(f"  Diagnosis: {diagnosis}\n")
         
         return SignalstatsResult(
             violation_percentage=violation_pct,
@@ -2305,7 +2305,7 @@ class IntegratedSignalstatsAnalyzer:
         effective_start = max(content_start, color_bars_end or 0) + 10
         
         # Log what we're doing
-        logger.info(f"  Content starts at {effective_start:.1f}s (after color bars at {color_bars_end:.1f}s)")
+        logger.debug(f"  Content starts at {effective_start:.1f}s (after color bars at {color_bars_end:.1f}s)")
         
         # Use quality hints if available (but ensure they're after color bars)
         if quality_hints:
@@ -2431,7 +2431,7 @@ class IntegratedSignalstatsAnalyzer:
             violation_pct = (frames_with_violations / len(brng_values) * 100) if brng_values else 0
             max_brng = max(brng_values) if brng_values else 0
             
-            logger.info(f"    Period {period_num} FFprobe results: {len(brng_values):,} frames, "
+            logger.debug(f"    Period {period_num} FFprobe results: {len(brng_values):,} frames, "
                        f"{frames_with_violations:,} violations ({violation_pct:.1f}%), "
                        f"max BRNG: {max_brng*100:.4f}%")
             
@@ -2497,7 +2497,7 @@ class EnhancedFrameAnalysis:
         
         for path in search_paths:
             if path.exists():
-                logger.info(f"Found QCTools report: {path}")
+                logger.debug(f"Found QCTools report for Frame Analysis: {path}\n")
                 return str(path)
         
         return None
@@ -2570,9 +2570,9 @@ class EnhancedFrameAnalysis:
         
         # Log which steps will run
         logger.info(f"Frame analysis configuration:")
-        logger.info(f"  Border detection: {'enabled' if border_detection_enabled else 'disabled'}")
-        logger.info(f"  BRNG analysis: {'enabled' if brng_analysis_enabled else 'disabled'}")
-        logger.info(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}\n")
+        logger.debug(f"  Border detection: {'enabled' if border_detection_enabled else 'disabled'}")
+        logger.debug(f"  BRNG analysis: {'enabled' if brng_analysis_enabled else 'disabled'}")
+        logger.debug(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}\n")
         
         # Track what was actually run
         results['steps_enabled'] = {
@@ -2614,7 +2614,7 @@ class EnhancedFrameAnalysis:
         # Step 3: Border detection (conditional)
         border_results = None
         if border_detection_enabled:
-            logger.info(f"Detecting borders using {method} method...\n")
+            logger.info(f"Detecting borders using {method} method...")
             border_results = self.border_detector.detect_borders_with_quality_assessment(
                 violations=violations,
                 method=method
@@ -2636,7 +2636,7 @@ class EnhancedFrameAnalysis:
                 )
                 if success:
                     results['border_visualization'] = str(viz_output_path)
-                    logger.info(f"✓ Border visualization saved to: {viz_output_path}")
+                    logger.info(f"✓ Border visualization saved to: {viz_output_path}\n")
                 else:
                     logger.warning("Failed to generate border visualization")
             except Exception as e:
@@ -2644,11 +2644,11 @@ class EnhancedFrameAnalysis:
                 import traceback
                 logger.debug(traceback.format_exc())
         else:
-            logger.info("Skipping border detection (disabled in config)")
+            logger.warning("Skipping border detection (disabled in config)")
             # Create a default border result for downstream steps if needed
             if brng_analysis_enabled or signalstats_enabled:
                 # Use full frame as "active area" when border detection is disabled
-                logger.info("Using full frame dimensions as active area")
+                logger.debug("Using full frame dimensions as active area")
                 border_results = BorderDetectionResult(
                     active_area=(0, 0, self.border_detector.width, self.border_detector.height),
                     border_regions={},
@@ -2664,7 +2664,7 @@ class EnhancedFrameAnalysis:
         signalstats_results = None
         analysis_periods = []
         if signalstats_enabled:
-            logger.info("Running signalstats analysis to identify key analysis periods...")
+            logger.info("Running signalstats analysis on active picture area to identify key analysis periods...")
             signalstats_results = self.signalstats_analyzer.analyze_with_signalstats(
                 border_data=border_results,
                 content_start_time=0,
@@ -2686,12 +2686,12 @@ class EnhancedFrameAnalysis:
                 qctools_suggested_periods = self._analyze_qctools_violation_distribution(violations)
                 
                 # Log the signalstats periods for comparison
-                logger.info(f"\n  Signalstats-selected analysis periods:")
+                logger.debug(f"\n  Signalstats-selected analysis periods:")
                 for i, (start, duration) in enumerate(analysis_periods):
-                    logger.info(f"    Period {i+1}: {start:.1f}s - {start+duration:.1f}s")
+                    logger.debug(f"    Period {i+1}: {start:.1f}s - {start+duration:.1f}s")
                 
                 # Check for overlaps
-                logger.info(f"\n  Checking for overlaps between methods:")
+                logger.debug(f"\n  Checking for overlaps between methods:")
                 for i, (ss_start, ss_duration) in enumerate(analysis_periods):
                     ss_end = ss_start + ss_duration
                     overlaps = []
@@ -2707,29 +2707,29 @@ class EnhancedFrameAnalysis:
                     
                     if overlaps:
                         overlap_str = ", ".join([f"QCT Period {j} ({dur:.1f}s)" for j, dur in overlaps])
-                        logger.info(f"    Signalstats Period {i+1} overlaps with: {overlap_str}")
+                        logger.debug(f"    Signalstats Period {i+1} overlaps with: {overlap_str}")
                     else:
-                        logger.info(f"    Signalstats Period {i+1}: NO OVERLAP with QCTools violations")
+                        logger.debug(f"    Signalstats Period {i+1}: NO OVERLAP with QCTools violations")
                 
                 # Count violations in each signalstats period
                 logger.info(f"\n  Actual QCTools violations in signalstats periods:")
                 for i, (start, duration) in enumerate(analysis_periods):
                     end = start + duration
                     period_violations = [v for v in violations if start <= v.timestamp < end]
-                    logger.info(f"    Period {i+1} ({start:.1f}s - {end:.1f}s): {len(period_violations)} violations")
+                    logger.debug(f"    Period {i+1} ({start:.1f}s - {end:.1f}s): {len(period_violations)} violations")
                     if period_violations and len(period_violations) <= 5:
                         # Show the actual timestamps if there are only a few
                         for v in period_violations:
-                            logger.info(f"      - Violation at {v.timestamp:.1f}s")
+                            logger.debug(f"      - Violation at {v.timestamp:.1f}s")
         else:
-            logger.info("Skipping signalstats analysis (disabled in config)")
+            logger.warning("Skipping signalstats analysis (disabled in config)\n")
         
         # Step 5: BRNG analysis (conditional)
         brng_results = None
         if brng_analysis_enabled:
             # If signalstats wasn't run, create default analysis periods
             if not analysis_periods:
-                logger.info("Creating default analysis periods (signalstats was disabled)")
+                logger.info(f"Creating default analysis periods for BRNG highlights (signalstats was disabled)\n")
                 # Create evenly distributed periods across the video
                 video_duration = self._get_video_duration()
                 if video_duration:
@@ -2742,13 +2742,13 @@ class EnhancedFrameAnalysis:
                         for i in range(num_periods):
                             start_time = content_start + spacing * (i + 1)
                             analysis_periods.append((start_time, period_duration))
-                        logger.info(f"Created {len(analysis_periods)} default analysis periods")
+                        logger.debug(f"Created {len(analysis_periods)} default BRNG analysis periods\n")
             
-            logger.info("Analyzing BRNG violations in identified periods...")
+            logger.info("\nAnalyzing BRNG violations in identified periods...")
             self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
             
             brng_results = self.brng_analyzer.analyze_with_differential_detection(
-                output_dir=self.output_dir,
+                output_dir=self.output_dir, 
                 duration_limit=duration_limit,
                 skip_start_seconds=color_bars_end_time,
                 qctools_violations=violations,
@@ -2756,7 +2756,7 @@ class EnhancedFrameAnalysis:
             )
             results['brng_analysis'] = asdict(brng_results) if brng_results else None
         else:
-            logger.info("Skipping BRNG analysis (disabled in config)")
+            logger.warning("Skipping BRNG analysis (disabled in config)\n")
         
         # Step 6: Iterative border refinement (only if both border detection AND BRNG analysis are enabled)
         refinement_iterations = 0
@@ -3312,8 +3312,8 @@ class EnhancedFrameAnalysis:
         
         # Log the overall distribution
         logger.info(f"\n  === QCTools Violation Distribution ===")
-        logger.info(f"  Total violations found: {len(violations)}")
-        logger.info(f"  Time range: {timestamps[0]:.1f}s - {timestamps[-1]:.1f}s")
+        logger.debug(f"  Total violations found: {len(violations)}")
+        logger.debug(f"  Time range: {timestamps[0]:.1f}s - {timestamps[-1]:.1f}s")
         
         # Create a histogram of violations over time (10-second bins)
         bin_size = 10.0
@@ -3336,9 +3336,9 @@ class EnhancedFrameAnalysis:
         bin_scores.sort(key=lambda x: x[1], reverse=True)
         
         # Log the top bins
-        logger.info(f"  Top 10-second bins with violations:")
+        logger.debug(f"  Top 10-second bins with violations:")
         for i, (start_time, count) in enumerate(bin_scores[:10]):
-            logger.info(f"    {i+1}. {start_time:.1f}s - {start_time+bin_size:.1f}s: {count} violations")
+            logger.debug(f"    {i+1}. {start_time:.1f}s - {start_time+bin_size:.1f}s: {count} violations")
         
         # Select 3 periods based on violation density
         suggested_periods = []
@@ -3361,7 +3361,7 @@ class EnhancedFrameAnalysis:
         
         # If we couldn't find 3 non-overlapping dense regions, fall back to even distribution
         if len(suggested_periods) < 3:
-            logger.info(f"  Only found {len(suggested_periods)} dense violation regions")
+            logger.debug(f"  Only found {len(suggested_periods)} dense violation regions")
             # Add evenly distributed periods from the violation range
             violation_duration = timestamps[-1] - timestamps[0]
             if violation_duration > 180:  # If violations span > 3 minutes
@@ -3370,9 +3370,9 @@ class EnhancedFrameAnalysis:
                     start = timestamps[0] + (i + len(suggested_periods)) * spacing
                     suggested_periods.append((start, 60))
         
-        logger.info(f"\n  QCTools-based suggested analysis periods:")
+        logger.debug(f"\n  QCTools-based suggested analysis periods:")
         for i, (start, duration) in enumerate(suggested_periods):
-            logger.info(f"    Period {i+1}: {start:.1f}s - {start+duration:.1f}s")
+            logger.debug(f"    Period {i+1}: {start:.1f}s - {start+duration:.1f}s")
         
         return suggested_periods
 

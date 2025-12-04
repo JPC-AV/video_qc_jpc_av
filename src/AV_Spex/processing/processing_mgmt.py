@@ -339,7 +339,7 @@ class ProcessingManager:
             
             # Log summary
             if 'summary' in analysis_results:
-                logger.debug("\n" + analysis_results['summary'] + "\n")
+                logger.debug(analysis_results['summary'] + "\n")
             
             # Format results for compatibility with existing code
             formatted_results = self._format_frame_analysis_results(analysis_results)
@@ -538,7 +538,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                 start_seconds, end_seconds = parse_colorbars_duration_csv(str(colorbars_csv))
                 if end_seconds:
                     results['color_bars_end_time'] = end_seconds
-                    logger.info(f"Color bars detected, ending at {end_seconds:.1f}s")
+                    logger.debug(f"Color bars detected, ending at {end_seconds:.1f}s\n")
 
     return results
 
