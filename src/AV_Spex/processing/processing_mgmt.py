@@ -316,7 +316,8 @@ class ProcessingManager:
                 video_path=video_path,
                 output_dir=destination_directory,
                 frame_config=frame_config,
-                color_bars_end_time=color_bars_end_time
+                color_bars_end_time=color_bars_end_time,
+                signals=self.signals  # Pass signals to emit step completion as each step finishes
             )
         except Exception as e:
             logger.error(f"Error during frame analysis: {e}")
@@ -325,17 +326,10 @@ class ProcessingManager:
         if self.check_cancelled():
             return None
         
-        # Process results and emit signals
+        # Process results
         if analysis_results:
-            # Emit completion signals for enabled sub-steps
-            if frame_config.enable_border_detection and self.signals:
-                self.signals.step_completed.emit("Frame Analysis - Border Detection")
-            
-            if frame_config.enable_brng_analysis and self.signals:
-                self.signals.step_completed.emit("Frame Analysis - BRNG Analysis")
-            
-            if frame_config.enable_signalstats and self.signals:
-                self.signals.step_completed.emit("Frame Analysis - Signalstats")
+            # Step completion signals are now emitted inside analyze_frame_quality
+            # as each step completes, so we don't need to emit them here
             
             # Log summary
             if 'summary' in analysis_results:

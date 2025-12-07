@@ -2453,11 +2453,12 @@ class EnhancedFrameAnalysis:
     Combines efficiency of refactored version with sophistication of original.
     """
     
-    def __init__(self, video_path: str, output_dir: str = None):
+    def __init__(self, video_path: str, output_dir: str = None, signals=None):
         self.video_path = Path(video_path)
         self.video_id = self.video_path.stem
         self.output_dir = Path(output_dir) if output_dir else self.video_path.parent
         self.output_dir.mkdir(exist_ok=True)
+        self.signals = signals  # Store signals for emitting step completion
 
         # Store config manager as an instance attribute
         self.config_mgr = ConfigManager()
@@ -2541,7 +2542,8 @@ class EnhancedFrameAnalysis:
         duration_limit: int = 300,
         skip_color_bars: bool = True,
         max_refinement_iterations: int = 3,
-        color_bars_end_time: float = None) -> Dict:
+        color_bars_end_time: float = None,
+        signals=None) -> Dict:
         """
         Run complete enhanced frame analysis with optional iterative refinement.
         
@@ -2550,6 +2552,8 @@ class EnhancedFrameAnalysis:
             duration_limit: Maximum duration to analyze (seconds)
             skip_color_bars: Whether to skip color bars at start
             max_refinement_iterations: Maximum border refinement iterations
+            color_bars_end_time: End time of color bars if detected
+            signals: Optional signals object for emitting step completion events
         
         Returns:
             Complete analysis results dictionary
@@ -2643,6 +2647,10 @@ class EnhancedFrameAnalysis:
                 logger.warning(f"Error creating border visualization: {e}")
                 import traceback
                 logger.debug(traceback.format_exc())
+            
+            # Emit border detection completion signal
+            if signals and frame_config.enable_border_detection:
+                signals.step_completed.emit("Frame Analysis - Border Detection")
         else:
             logger.warning("Skipping border detection (disabled in config)")
             # Create a default border result for downstream steps if needed
@@ -2721,6 +2729,10 @@ class EnhancedFrameAnalysis:
                         # Show the actual timestamps if there are only a few
                         for v in period_violations:
                             logger.debug(f"      - Violation at {v.timestamp:.1f}s")
+            
+            # Emit signalstats completion signal
+            if signals and frame_config.enable_signalstats:
+                signals.step_completed.emit("Frame Analysis - Signalstats")
         else:
             logger.warning("Skipping signalstats analysis (disabled in config)\n")
         
@@ -2755,6 +2767,10 @@ class EnhancedFrameAnalysis:
                 analysis_periods=analysis_periods  # Pass the periods from signalstats
             )
             results['brng_analysis'] = asdict(brng_results) if brng_results else None
+            
+            # Emit BRNG analysis completion signal
+            if signals and frame_config.enable_brng_analysis:
+                signals.step_completed.emit("Frame Analysis - BRNG Analysis")
         else:
             logger.warning("Skipping BRNG analysis (disabled in config)\n")
         
@@ -3381,7 +3397,8 @@ def analyze_frame_quality(video_path: str,
                          border_data_path: str = None,
                          output_dir: str = None,
                          frame_config: 'FrameAnalysisConfig' = None,
-                         color_bars_end_time: float = None) -> Dict:
+                         color_bars_end_time: float = None,
+                         signals = None) -> Dict:
     """
     Main entry point for frame analysis from processing_mgmt.
     
@@ -3391,6 +3408,7 @@ def analyze_frame_quality(video_path: str,
         output_dir: Output directory for results
         frame_config: FrameAnalysisConfig dataclass with analysis parameters
         color_bars_end_time: End time of color bars if detected
+        signals: Optional signals object for emitting step completion events
     
     Returns:
         Complete analysis results dictionary
@@ -3408,7 +3426,7 @@ def analyze_frame_quality(video_path: str,
     max_refinements = frame_config.max_border_retries
     
     # Run enhanced analysis
-    analyzer = EnhancedFrameAnalysis(video_path, output_dir)
+    analyzer = EnhancedFrameAnalysis(video_path, output_dir, signals=signals)
     
     # Load existing border data if provided
     if border_data_path and Path(border_data_path).exists():
@@ -3422,7 +3440,8 @@ def analyze_frame_quality(video_path: str,
         duration_limit=duration_limit,
         skip_color_bars=skip_color_bars,
         max_refinement_iterations=max_refinements,
-        color_bars_end_time=color_bars_end_time  # Add this
+        color_bars_end_time=color_bars_end_time,
+        signals=signals
     )
     
     return results
