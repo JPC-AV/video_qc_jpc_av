@@ -2105,21 +2105,26 @@ class IntegratedSignalstatsAnalyzer:
         return None
     
     def analyze_with_signalstats(self,
-                            border_data: BorderDetectionResult = None,
-                            content_start_time: float = 0,
-                            color_bars_end_time: float = None,
-                            analysis_duration: int = 60,
-                            num_periods: int = 3) -> SignalstatsResult:
+                        border_data: BorderDetectionResult = None,
+                        content_start_time: float = 0,
+                        color_bars_end_time: float = None,
+                        analysis_duration: int = 60,
+                        num_periods: int = 3,
+                        qctools_periods: List[Tuple[float, int]] = None) -> SignalstatsResult:
         """
         Analyze using signalstats, comparing full frame (QCTools) vs active area (FFprobe).
+        
+        Args:
+            qctools_periods: Pre-computed periods from QCTools violation distribution analysis
         """
-        # Determine analysis periods
+        # Determine analysis periods - now with QCTools priority
         analysis_periods = self._find_analysis_periods(
             content_start_time, 
             color_bars_end_time,
             analysis_duration,
             num_periods,
-            border_data.quality_frame_hints if border_data else None
+            border_data.quality_frame_hints if border_data else None,
+            qctools_periods=qctools_periods  # NEW PARAMETER
         )
         
         # Log analysis configuration
@@ -2298,16 +2303,51 @@ class IntegratedSignalstatsAnalyzer:
         return f"{minutes:02d}:{remaining_seconds:06.3f}"
     
     def _find_analysis_periods(self, content_start: float, color_bars_end: float,
-                          duration: int, num_periods: int,
-                          quality_hints: List[Tuple[float, float]] = None) -> List[Tuple[float, int]]:
-        """Find good analysis periods, using quality hints if available"""
+                      duration: int, num_periods: int,
+                      quality_hints: List[Tuple[float, float]] = None,
+                      qctools_periods: List[Tuple[float, int]] = None) -> List[Tuple[float, int]]:
+        """Find good analysis periods, preferring QCTools violation clusters when available"""
+        
         # Start after color bars with a safety margin
         effective_start = max(content_start, color_bars_end or 0) + 10
         
-        # Log what we're doing
         logger.debug(f"  Content starts at {effective_start:.1f}s (after color bars at {color_bars_end:.1f}s)")
         
-        # Use quality hints if available (but ensure they're after color bars)
+        # PRIORITY 1: Use QCTools-based periods if available (these target actual violations)
+        if qctools_periods:
+            valid_periods = []
+            for start_time, period_duration in qctools_periods:
+                # Ensure period is after color bars
+                adjusted_start = max(effective_start, start_time)
+                if adjusted_start + period_duration <= self.duration - 10:
+                    valid_periods.append((adjusted_start, period_duration))
+            
+            if len(valid_periods) >= num_periods:
+                logger.info(f"  Using {num_periods} QCTools-based analysis periods (targeting violation clusters)")
+                return valid_periods[:num_periods]
+            elif valid_periods:
+                # Use available QCTools periods and supplement with distributed periods
+                logger.info(f"  Using {len(valid_periods)} QCTools-based periods, adding {num_periods - len(valid_periods)} distributed periods")
+                
+                # Calculate distributed periods for remaining slots
+                available_duration = self.duration - effective_start - 30
+                needed = num_periods - len(valid_periods)
+                spacing = available_duration / (needed + 1)
+                
+                for i in range(needed):
+                    candidate_start = effective_start + spacing * (i + 1)
+                    # Avoid overlap with existing QCTools periods
+                    overlaps = False
+                    for existing_start, existing_dur in valid_periods:
+                        if not (candidate_start + duration < existing_start or candidate_start > existing_start + existing_dur):
+                            overlaps = True
+                            break
+                    if not overlaps:
+                        valid_periods.append((candidate_start, duration))
+                
+                return valid_periods[:num_periods]
+        
+        # PRIORITY 2: Use quality hints if available (from border detection)
         if quality_hints:
             valid_hints = [(t, q) for t, q in quality_hints if t >= effective_start]
             if len(valid_hints) >= num_periods:
@@ -2317,14 +2357,14 @@ class IntegratedSignalstatsAnalyzer:
                     if period_start + duration <= self.duration - 30:
                         periods.append((period_start, duration))
                 if len(periods) >= num_periods:
+                    logger.info(f"  Using {len(periods)} quality hint-based analysis periods")
                     return periods
         
-        # Fall back to even distribution
+        # PRIORITY 3: Fall back to even distribution
+        logger.info(f"  Using evenly distributed analysis periods (no violation clusters found)")
         available_duration = self.duration - effective_start - 30
         if available_duration < duration * num_periods:
-            # If not enough space for all periods, reduce number or duration
             if available_duration >= duration:
-                # At least one full period possible
                 periods = []
                 actual_periods = min(num_periods, int(available_duration / duration))
                 spacing = (available_duration - duration) / max(1, actual_periods - 1)
@@ -2333,7 +2373,6 @@ class IntegratedSignalstatsAnalyzer:
                     periods.append((start, duration))
                 return periods
             else:
-                # Reduce duration
                 return [(effective_start, min(duration, available_duration))]
         
         periods = []
@@ -2597,9 +2636,10 @@ class EnhancedFrameAnalysis:
 
         # Step 2: Parse QCTools for initial violations (needed for BRNG analysis or border detection)
         violations = []
-        if self.qctools_parser and (brng_analysis_enabled or border_detection_enabled):
+        if self.qctools_report :
             logger.info("Parsing QCTools report for violations...")
-            violations = self.qctools_parser.parse_for_violations_streaming(
+            parser = QCToolsParser(self.qctools_report )
+            violations = parser.parse_for_violations_streaming(
                 max_frames=100,
                 skip_color_bars=skip_color_bars,
                 color_bars_end_time=color_bars_end_time
@@ -2614,6 +2654,12 @@ class EnhancedFrameAnalysis:
             logger.info("No QCTools report found")
         else:
             logger.info("Skipping QCTools parsing (neither BRNG analysis nor border detection enabled)")
+
+        # Analyze QCTools violation distribution to find optimal analysis periods
+        qctools_suggested_periods = []
+        if violations:
+            qctools_suggested_periods = self._analyze_qctools_violation_distribution(violations)
+            logger.info(f"Identified {len(qctools_suggested_periods)} periods with highest violation density")
         
         # Step 3: Border detection (conditional)
         border_results = None
@@ -2675,10 +2721,11 @@ class EnhancedFrameAnalysis:
             logger.info("Running signalstats analysis on active picture area to identify key analysis periods...")
             signalstats_results = self.signalstats_analyzer.analyze_with_signalstats(
                 border_data=border_results,
-                content_start_time=0,
+                content_start_time=color_bars_end_time + 10 if color_bars_end_time else 10,
                 color_bars_end_time=color_bars_end_time,
                 analysis_duration=frame_config.signalstats_duration,
-                num_periods=frame_config.signalstats_periods
+                num_periods=frame_config.signalstats_periods,
+                qctools_periods=qctools_suggested_periods
             )
             results['signalstats'] = asdict(signalstats_results)
 
@@ -2687,11 +2734,8 @@ class EnhancedFrameAnalysis:
             logger.info(f"Identified {len(analysis_periods)} key periods for BRNG analysis")
 
             # Compare with QCTools violation distribution if we have violations
-            if violations:
+            if violations and qctools_suggested_periods:
                 logger.info("\n  === Comparing Period Selection Methods ===")
-                
-                # Get QCTools-based period suggestions
-                qctools_suggested_periods = self._analyze_qctools_violation_distribution(violations)
                 
                 # Log the signalstats periods for comparison
                 logger.debug(f"\n  Signalstats-selected analysis periods:")
@@ -2764,7 +2808,7 @@ class EnhancedFrameAnalysis:
                 duration_limit=duration_limit,
                 skip_start_seconds=color_bars_end_time,
                 qctools_violations=violations,
-                analysis_periods=analysis_periods  # Pass the periods from signalstats
+                analysis_periods=analysis_periods 
             )
             results['brng_analysis'] = asdict(brng_results) if brng_results else None
             
@@ -2845,7 +2889,8 @@ class EnhancedFrameAnalysis:
                             content_start_time=0,
                             color_bars_end_time=color_bars_end_time,
                             analysis_duration=frame_config.signalstats_duration,
-                            num_periods=frame_config.signalstats_periods
+                            num_periods=frame_config.signalstats_periods,
+                            qctools_periods=qctools_suggested_periods
                         )
                         analysis_periods = signalstats_results.analysis_periods
                     
