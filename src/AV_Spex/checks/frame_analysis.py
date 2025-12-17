@@ -2659,7 +2659,7 @@ class EnhancedFrameAnalysis:
         qctools_suggested_periods = []
         if violations:
             qctools_suggested_periods = self._analyze_qctools_violation_distribution(violations)
-            logger.info(f"Identified {len(qctools_suggested_periods)} periods with highest violation density")
+            logger.info(f"Identified {len(qctools_suggested_periods)} periods with highest violation density\n")
         
         # Step 3: Border detection (conditional)
         border_results = None
