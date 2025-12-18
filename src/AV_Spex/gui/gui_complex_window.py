@@ -32,12 +32,53 @@ class ComplexWindow(QWidget, ThemeableMixin):
         """Create fixed layout structure"""
         main_layout = QVBoxLayout(self)
 
-        # Reordered: QCT Parse first, then frame analysis sections
+        self.setup_qctools_section(main_layout)
         self.setup_qct_parse_section(main_layout)
         self.setup_frame_analysis_sections(main_layout)
         self.connect_signals()
+
+    def setup_qctools_section(self, main_layout):
+        """Set up the QCTools section"""
+        theme_manager = ThemeManager.instance()
         
-    # QCT Parse Section (moved to top)
+        # QCTools section
+        self.qctools_group = QGroupBox("QCTools")
+        theme_manager.style_groupbox(self.qctools_group, "top center")
+        self.themed_group_boxes['qctools'] = self.qctools_group
+
+        qctools_layout = QVBoxLayout()
+
+        # Run Tool checkbox
+        self.run_qctools_cb = QCheckBox("Run Tool")
+        self.run_qctools_cb.setStyleSheet("font-weight: bold;")
+        run_qctools_desc = QLabel("Run QCTools on input video file")
+        run_qctools_desc.setIndent(20)
+
+        # File Extension field
+        qctools_ext_label = QLabel("QCTools File Extension")
+        qctools_ext_label.setStyleSheet("font-weight: bold;")
+        qctools_ext_desc = QLabel("Set the extension for QCTools output files")
+        qctools_ext_desc.setIndent(20)
+        self.qctools_ext_input = QLineEdit()
+        self.qctools_ext_input.setPlaceholderText(".qctools.mkv.qctools.xml.gz")
+        
+        # Create a horizontal layout for the extension input
+        qctools_ext_layout = QHBoxLayout()
+        qctools_ext_layout.addWidget(qctools_ext_label)
+        qctools_ext_layout.addWidget(self.qctools_ext_input)
+        qctools_ext_layout.addStretch()
+
+        # Add all widgets to the qctools layout
+        qctools_layout.addWidget(self.run_qctools_cb)
+        qctools_layout.addWidget(run_qctools_desc)
+        qctools_layout.addSpacing(10)  # Add some space between sections
+        qctools_layout.addLayout(qctools_ext_layout)
+        qctools_layout.addWidget(qctools_ext_desc)
+        
+        self.qctools_group.setLayout(qctools_layout)
+        main_layout.addWidget(self.qctools_group)
+        
+    # QCT Parse Section
     def setup_qct_parse_section(self, main_layout):
         """Set up the qct-parse section with palette-aware styling"""
         theme_manager = ThemeManager.instance()
@@ -441,6 +482,14 @@ class ComplexWindow(QWidget, ThemeableMixin):
 
     def connect_signals(self):
         """Connect all widget signals to their handlers"""
+        # QCTools section
+        self.run_qctools_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['tools', 'qctools', 'run_tool'])
+        )
+        self.qctools_ext_input.textChanged.connect(
+            lambda text: self.on_text_changed('qctools_ext', text)
+        )
+
         # Sub-step enable checkboxes
         self.enable_border_detection_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_border_detection'])
@@ -519,6 +568,11 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.is_loading = True
 
         checks_config = config_mgr.get_config('checks', ChecksConfig)
+
+        # QCTools
+        qctools = checks_config.tools.qctools
+        self.run_qctools_cb.setChecked(bool(qctools.run_tool))
+        self.qctools_ext_input.setText(checks_config.outputs.qctools_ext)
         
         # Frame Analysis
         if hasattr(checks_config.outputs, 'frame_analysis'):
@@ -600,6 +654,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
         if path[0] == "tools" and path[1] == "qct_parse":
             updates = {'tools': {'qct_parse': {path[2]: new_value}}}
             config_mgr.update_config('checks', updates)
+        elif path[0] == "tools" and path[1] == "qctools":
+            updates = {'tools': {'qctools': {path[2]: new_value}}}
+            config_mgr.update_config('checks', updates)
         elif path[0] == "outputs" and path[1] == "frame_analysis":
             updates = {'outputs': {'frame_analysis': {path[2]: new_value}}}
             config_mgr.update_config('checks', updates)
@@ -655,3 +712,13 @@ class ComplexWindow(QWidget, ThemeableMixin):
 
         updates = {'tools': {'qct_parse': {'tagname': text if text else None}}}
         config_mgr.update_config('checks', updates)
+
+    def on_text_changed(self, field, text):
+        """Handle changes in text inputs"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
+        if field == 'qctools_ext':
+            updates = {'outputs': {'qctools_ext': text}}
+            config_mgr.update_config('checks', updates)

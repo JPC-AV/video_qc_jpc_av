@@ -382,8 +382,6 @@ class ChecksProfilesConfig:
     """Container for custom checks profiles"""
     custom_profiles: Dict[str, ChecksProfile] = field(default_factory=dict)
 
-# Add these dataclasses to your config_setup.py file
-
 @dataclass
 class ExiftoolProfile:
     """Profile for exiftool expected values configuration"""

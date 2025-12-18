@@ -89,29 +89,11 @@ class ChecksWindow(QWidget, ThemeableMixin):
         report_desc = QLabel("Creates a .html report containing the results of Spex Checks")
         report_desc.setIndent(20)
         
-        self.qctools_ext_label = QLabel("QCTools File Extension")
-        self.qctools_ext_label.setStyleSheet("font-weight: bold;")
-        qctools_ext_desc = QLabel("Set the extension for QCTools output")
-        self.qctools_ext_input = QLineEdit()
-
-        # Create a horizontal layout for the QCTools extension input
-        qctools_ext_layout = QHBoxLayout()
-        qctools_ext_layout.addWidget(self.qctools_ext_label)
-        qctools_ext_layout.addWidget(self.qctools_ext_input)
-        
         # Add to layout
         outputs_layout.addWidget(self.access_file_cb)
         outputs_layout.addWidget(access_file_desc)
         outputs_layout.addWidget(self.report_cb)
         outputs_layout.addWidget(report_desc)
-
-        # Create a vertical layout just for the QCTools section
-        qctools_section = QVBoxLayout()
-        qctools_section.addLayout(qctools_ext_layout)
-        qctools_ext_desc.setIndent(150)
-        qctools_section.addWidget(qctools_ext_desc)
-        # Add the QCTools section to the main outputs layout
-        outputs_layout.addLayout(qctools_section)
         
         self.outputs_group.setLayout(outputs_layout)
         main_layout.addWidget(self.outputs_group)
@@ -185,7 +167,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.tool_group_boxes = {}
         
         # Setup basic tools
-        basic_tools = ['exiftool', 'ffprobe', 'mediainfo', 'mediatrace', 'qctools']
+        basic_tools = ['exiftool', 'ffprobe', 'mediainfo', 'mediatrace']
         self.tool_widgets = {}
         
         # Individual tool group boxes with left-aligned titles
@@ -199,31 +181,21 @@ class ChecksWindow(QWidget, ThemeableMixin):
             self.tool_group_boxes[tool] = tool_group
             self.themed_group_boxes[f'tool_{tool}'] = tool_group
             
-            if tool.lower() == 'qctools':
-                run_cb = QCheckBox("Run Tool")
-                run_cb.setStyleSheet("font-weight: bold;")
-                run_desc = QLabel("Run QCTools on input video file")
-                run_desc.setIndent(20)
-                
-                self.tool_widgets[tool] = {'run': run_cb}
-                tool_layout.addWidget(run_cb)
-                tool_layout.addWidget(run_desc)
-            else:
-                check_cb = QCheckBox("Check Tool")
-                check_cb.setStyleSheet("font-weight: bold;")
-                check_desc = QLabel("Check the output of the tool against expected Spex")
-                check_desc.setIndent(20)
-                
-                run_cb = QCheckBox("Run Tool")
-                run_cb.setStyleSheet("font-weight: bold;")
-                run_desc = QLabel(f"Run the tool on the input video")
-                run_desc.setIndent(20)
-                
-                self.tool_widgets[tool] = {'check': check_cb, 'run': run_cb}
-                tool_layout.addWidget(check_cb)
-                tool_layout.addWidget(check_desc)
-                tool_layout.addWidget(run_cb)
-                tool_layout.addWidget(run_desc)
+            check_cb = QCheckBox("Check Tool")
+            check_cb.setStyleSheet("font-weight: bold;")
+            check_desc = QLabel("Check the output of the tool against expected Spex")
+            check_desc.setIndent(20)
+            
+            run_cb = QCheckBox("Run Tool")
+            run_cb.setStyleSheet("font-weight: bold;")
+            run_desc = QLabel(f"Run the tool on the input video")
+            run_desc.setIndent(20)
+            
+            self.tool_widgets[tool] = {'check': check_cb, 'run': run_cb}
+            tool_layout.addWidget(check_cb)
+            tool_layout.addWidget(check_desc)
+            tool_layout.addWidget(run_cb)
+            tool_layout.addWidget(run_desc)
             
             tool_group.setLayout(tool_layout)
             tools_layout.addWidget(tool_group)
@@ -318,9 +290,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.report_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'report'])
         )
-        self.qctools_ext_input.textChanged.connect(
-            lambda text: self.on_text_changed(['outputs', 'qctools_ext'], text)
-        )
         
         # Fixity section - handle most checkboxes normally
         fixity_checkboxes = {
@@ -341,17 +310,12 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         # Tools section
         for tool, widgets in self.tool_widgets.items():
-            if tool == 'qctools':
-                widgets['run'].stateChanged.connect(
+            widgets['check'].stateChanged.connect(
+                lambda state, t=tool: self.on_checkbox_changed(state, ['tools', t, 'check_tool'])
+            )
+            widgets['run'].stateChanged.connect(
                 lambda state, t=tool: self.on_checkbox_changed(state, ['tools', t, 'run_tool'])
             )
-            else:
-                widgets['check'].stateChanged.connect(
-                    lambda state, t=tool: self.on_checkbox_changed(state, ['tools', t, 'check_tool'])
-                )
-                widgets['run'].stateChanged.connect(
-                    lambda state, t=tool: self.on_checkbox_changed(state, ['tools', t, 'run_tool'])
-                )
         
         # MediaConch
         self.run_mediaconch_cb.stateChanged.connect(
@@ -374,7 +338,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Outputs - now using booleans directly
         self.access_file_cb.setChecked(checks_config.outputs.access_file)
         self.report_cb.setChecked(checks_config.outputs.report)
-        self.qctools_ext_input.setText(checks_config.outputs.qctools_ext)
         
         # Fixity - now using booleans directly
         self.check_fixity_cb.setChecked(checks_config.fixity.check_fixity)
@@ -386,11 +349,8 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Tools - now using booleans directly
         for tool, widgets in self.tool_widgets.items():
             tool_config = getattr(checks_config.tools, tool)
-            if tool == 'qctools':
-                widgets['run'].setChecked(tool_config.run_tool)
-            else:
-                widgets['check'].setChecked(tool_config.check_tool)
-                widgets['run'].setChecked(tool_config.run_tool)
+            widgets['check'].setChecked(tool_config.check_tool)
+            widgets['run'].setChecked(tool_config.run_tool)
         
         # MediaConch - now using boolean directly
         mediaconch = checks_config.tools.mediaconch
