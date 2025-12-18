@@ -792,7 +792,12 @@ profile_step1 = {
     "outputs": {
         "access_file": False,
         "report": False,
-        "qctools_ext": "qctools.xml.gz"
+        "qctools_ext": "qctools.xml.gz",
+        "frame_analysis": {
+            "enable_border_detection": False,
+            "enable_brng_analysis": False,
+            "enable_signalstats": False
+        }
     },
     "fixity": {
         "check_fixity": False,
@@ -842,7 +847,12 @@ profile_step2 = {
     "outputs": {
         "access_file": False,
         "report": True,
-        "qctools_ext": "qctools.xml.gz"
+        "qctools_ext": "qctools.xml.gz",
+        "frame_analysis": {
+            "enable_border_detection": True,
+            "enable_brng_analysis": True,
+            "enable_signalstats": True
+        }
     },
     "fixity": {
         "check_fixity": True,
@@ -892,7 +902,12 @@ profile_allOff = {
     "outputs": {
         "access_file": False,
         "report": False,
-        "qctools_ext": "qctools.xml.gz"
+        "qctools_ext": "qctools.xml.gz",
+        "frame_analysis": {
+            "enable_border_detection": False,
+            "enable_brng_analysis": False,
+            "enable_signalstats": False
+        }
     },
     "fixity": {
         "check_fixity": False,
