@@ -1102,6 +1102,20 @@ class DifferentialBRNGAnalyzer:
             thumb_dir = output_dir / "brng_thumbnails"
             thumb_dir.mkdir(exist_ok=True)
             
+            # Clean up previous thumbnails to ensure only current run's thumbnails are shown
+            for old_thumb in thumb_dir.glob("*.jpg"):
+                try:
+                    old_thumb.unlink()
+                    logger.debug(f"  Removed previous thumbnail: {old_thumb.name}")
+                except Exception as e:
+                    logger.warning(f"  Could not remove old thumbnail {old_thumb.name}: {e}")
+            for old_thumb in thumb_dir.glob("*.png"):
+                try:
+                    old_thumb.unlink()
+                    logger.debug(f"  Removed previous thumbnail: {old_thumb.name}")
+                except Exception as e:
+                    logger.warning(f"  Could not remove old thumbnail {old_thumb.name}: {e}")
+            
             # Select violations with temporal spacing
             selected_violations = self._select_diverse_violations_for_thumbnails(
                 violations, 

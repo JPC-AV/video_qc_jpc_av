@@ -203,7 +203,8 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
         'border_data': None,
         'brng_analysis': None,
         'brng_thumbnails': [],
-        'signalstats_analysis': None
+        'signalstats_analysis': None,
+        'enhanced_frame_analysis': None
     }
     
     # Check for border detection outputs
@@ -227,10 +228,27 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
             if file.endswith('.jpg') or file.endswith('.png'):
                 frame_outputs['brng_thumbnails'].append(os.path.join(brng_thumbs_dir, file))
     
-    # Check for signalstats analysis
-    signalstats = os.path.join(destination_directory, f"{video_id}_signalstats_analysis.json")
-    if os.path.exists(signalstats):
-        frame_outputs['signalstats_analysis'] = signalstats
+    # Check for enhanced frame analysis JSON (contains signalstats data)
+    enhanced_analysis = os.path.join(destination_directory, f"{video_id}_enhanced_frame_analysis.json")
+    if os.path.exists(enhanced_analysis):
+        frame_outputs['enhanced_frame_analysis'] = enhanced_analysis
+        # Extract signalstats data from enhanced frame analysis
+        try:
+            with open(enhanced_analysis, 'r') as f:
+                enhanced_data = json.load(f)
+            # Check for signalstats in main results or final_signalstats (from refinement)
+            if enhanced_data.get('final_signalstats'):
+                frame_outputs['signalstats_analysis'] = enhanced_data['final_signalstats']
+            elif enhanced_data.get('signalstats'):
+                frame_outputs['signalstats_analysis'] = enhanced_data['signalstats']
+        except Exception as e:
+            logger.warning(f"Could not read signalstats from enhanced frame analysis: {e}")
+    
+    # Also check for standalone signalstats file (legacy support)
+    if not frame_outputs['signalstats_analysis']:
+        signalstats = os.path.join(destination_directory, f"{video_id}_signalstats_analysis.json")
+        if os.path.exists(signalstats):
+            frame_outputs['signalstats_analysis'] = signalstats
     
     return frame_outputs
 
@@ -1079,9 +1097,9 @@ def generate_frame_analysis_html(frame_outputs, video_id):
             
             html += f"""
             <div style="text-align: center; margin: 5px;">
-                <img src="data:image/png;base64,{encoded_thumb}" 
+                <img src="data:image/jpeg;base64,{encoded_thumb}" 
                      style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
-                     onclick="window.open('data:image/png;base64,{encoded_thumb}', '_blank');"
+                     onclick="openImage('data:image/jpeg;base64,{encoded_thumb}', 'BRNG Diagnostic - Frame at {timecode}')"
                      title="Click to enlarge" />
                 <p style="font-size: 12px; margin: 5px 0;">Frame at {timecode}</p>
             </div>
@@ -1094,11 +1112,15 @@ def generate_frame_analysis_html(frame_outputs, video_id):
     
     # Signalstats Analysis Section
     if frame_outputs['signalstats_analysis']:
-        html += "<h3 style='color: #bf971b;'>FFprobe Signalstats Analysis</h3>"
+        html += "<h3 style='color: #bf971b;'>Signalstats Analysis</h3>"
         
         try:
-            with open(frame_outputs['signalstats_analysis'], 'r') as f:
-                signalstats_data = json.load(f)
+            # Handle both dict (from enhanced_frame_analysis.json) and file path (legacy)
+            if isinstance(frame_outputs['signalstats_analysis'], dict):
+                signalstats_data = frame_outputs['signalstats_analysis']
+            else:
+                with open(frame_outputs['signalstats_analysis'], 'r') as f:
+                    signalstats_data = json.load(f)
             
             diagnosis = signalstats_data.get('diagnosis', 'Analysis complete')
             
@@ -1116,7 +1138,26 @@ def generate_frame_analysis_html(frame_outputs, video_id):
             </div>
             """
             
-            # Display results for active area
+            # Display violation percentage if available
+            violation_pct = signalstats_data.get('violation_percentage')
+            max_brng = signalstats_data.get('max_brng')
+            avg_brng = signalstats_data.get('avg_brng')
+            
+            if violation_pct is not None or max_brng is not None:
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0;">
+                    <p><strong>Overall Results:</strong></p>
+                    <ul>
+                """
+                if violation_pct is not None:
+                    html += f"<li>Frames with violations: {violation_pct:.1f}%</li>"
+                if avg_brng is not None:
+                    html += f"<li>Average BRNG: {avg_brng:.4f}%</li>"
+                if max_brng is not None:
+                    html += f"<li>Maximum BRNG: {max_brng:.4f}%</li>"
+                html += "</ul></div>"
+            
+            # Display results for active area (legacy format)
             if signalstats_data.get('results', {}).get('active_area'):
                 active_area = signalstats_data['results']['active_area']
                 html += f"""
@@ -1129,6 +1170,24 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     </ul>
                 </div>
                 """
+            
+            # Display analysis periods if available
+            if signalstats_data.get('analysis_periods'):
+                periods = signalstats_data['analysis_periods']
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0;">
+                    <p><strong>Analysis Periods:</strong> {len(periods)} periods analyzed</p>
+                    <ul>
+                """
+                for i, period in enumerate(periods[:5]):  # Show up to 5 periods
+                    if isinstance(period, (list, tuple)) and len(period) >= 2:
+                        start, duration = period[0], period[1]
+                        html += f"<li>Period {i+1}: {start:.1f}s - {start + duration:.1f}s ({duration}s duration)</li>"
+                    elif isinstance(period, dict):
+                        start = period.get('start_time', period.get('start', 0))
+                        duration = period.get('duration', 60)
+                        html += f"<li>Period {i+1}: {start:.1f}s - {start + duration:.1f}s ({duration}s duration)</li>"
+                html += "</ul></div>"
                 
         except Exception as e:
             logger.error(f"Error reading signalstats analysis: {e}")
@@ -1562,12 +1621,6 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if frame_analysis_html:
         html_template += frame_analysis_html
 
-    if difference_csv:
-        html_template += f"""
-        <h3>{difference_csv_filename}</h3>
-        {diff_csv_html}
-        """
-
     # Rest of the HTML template remains the same...
     if no_qct_parse_files:
         html_template += """
@@ -1587,6 +1640,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3>Values relative to colorbar's thresholds</h3>
         {colorbars_eval_html}
+        """
+
+    if difference_csv:
+        html_template += f"""
+        <h3>{difference_csv_filename}</h3>
+        {diff_csv_html}
         """
 
     if profile_summary_html:
