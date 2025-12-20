@@ -1962,39 +1962,77 @@ class DifferentialBRNGAnalyzer:
         return thumbnails
 
     def _create_enhanced_violations_display(self, frame_h: np.ndarray, frame_o: np.ndarray) -> np.ndarray:
-        """Create enhanced violations display with multiple visualization techniques"""
+        """Create violations display by extracting magenta pixels from the highlighted frame"""
         
-        # Method 1: Use sensitive detection for more pixels
-        violation_mask_sensitive = self._detect_differential_violations_frame(
-            frame_h, frame_o, sensitivity='visualization'
-        )
+        # Extract magenta pixels directly from the highlighted frame
+        # This ensures we show exactly what ffmpeg's signalstats detected
+        magenta_mask = self._extract_magenta_pixels(frame_h)
         
-        # Method 2: Create a simple difference mask as backup
-        diff_mask = self._create_simple_difference_mask(frame_h, frame_o)
-        
-        # Method 3: Combine both masks
-        combined_mask = cv2.bitwise_or(violation_mask_sensitive, diff_mask)
-        
-        # Create the visualization
+        # Create the visualization with yellow highlighting
         violations_only = np.zeros_like(frame_o)
+        violations_only[magenta_mask > 0] = [0, 255, 255]  # Yellow in BGR
         
-        # Use bright cyan for primary violations
-        violations_only[violation_mask_sensitive > 0] = [0, 255, 255]  # Cyan
-        
-        # Use yellow for additional differences (less confident but visible)
-        additional_violations = cv2.bitwise_and(diff_mask, cv2.bitwise_not(violation_mask_sensitive))
-        violations_only[additional_violations > 0] = [0, 255, 255]  # Keep cyan but with lower intensity
-        
-        # Enhance visibility by adding slight transparency overlay where violations occur
-        violation_overlay = np.zeros_like(frame_o)
-        all_violations = combined_mask > 0
-        
-        if np.any(all_violations):
-            # Add the original frame content at low opacity where violations occur
-            violation_overlay[all_violations] = frame_o[all_violations] * 0.3
+        # Optionally add slight transparency overlay for better visibility
+        if np.any(magenta_mask > 0):
+            violation_overlay = np.zeros_like(frame_o)
+            violation_overlay[magenta_mask > 0] = frame_o[magenta_mask > 0] * 0.3
             violations_only = cv2.addWeighted(violations_only, 0.8, violation_overlay, 0.2, 0)
         
         return violations_only
+    
+    def _extract_magenta_pixels(self, frame: np.ndarray) -> np.ndarray:
+        """Extract magenta-colored pixels from a frame (as added by ffmpeg signalstats filter)"""
+        
+        # Split channels (BGR format)
+        b, g, r = cv2.split(frame)
+        
+        # Magenta has high blue and red, low green
+        # Use multiple detection methods for robustness
+        
+        # Method 1: Direct BGR thresholding
+        # Magenta should have B>threshold, R>threshold, G<threshold
+        magenta_threshold = 200  # Fairly bright magenta
+        green_threshold = 100    # Green should be lower
+        
+        bgr_magenta = (
+            (b > magenta_threshold) & 
+            (r > magenta_threshold) & 
+            (g < green_threshold)
+        )
+        
+        # Method 2: Ratio-based detection (R and B similar, G much lower)
+        # Avoid division by zero
+        safe_g = np.maximum(g, 1).astype(np.float32)
+        rb_avg = ((r.astype(np.float32) + b.astype(np.float32)) / 2)
+        
+        ratio_magenta = (rb_avg / safe_g > 1.8) & (b > 150) & (r > 150)
+        
+        # Method 3: HSV-based detection
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv)
+        
+        # Magenta hue is around 140-160 in OpenCV's 0-180 range
+        # Also check near 0/180 (red-magenta boundary)
+        hsv_magenta = (
+            (((h >= 140) & (h <= 160)) | (h < 5) | (h > 175)) &
+            (s > 100) &  # Saturated
+            (v > 150)    # Bright
+        )
+        
+        # Combine methods - use any 2 out of 3
+        method1 = bgr_magenta.astype(np.uint8)
+        method2 = ratio_magenta.astype(np.uint8)
+        method3 = hsv_magenta.astype(np.uint8)
+        
+        vote_sum = method1 + method2 + method3
+        magenta_mask = (vote_sum >= 2).astype(np.uint8) * 255
+        
+        # Clean up noise
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        magenta_mask = cv2.morphologyEx(magenta_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        magenta_mask = cv2.morphologyEx(magenta_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+        
+        return magenta_mask
 
     def _create_simple_difference_mask(self, frame_h: np.ndarray, frame_o: np.ndarray) -> np.ndarray:
         """Create a simple difference mask as backup for visualization"""
