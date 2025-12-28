@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import subprocess
 import shlex
+import csv
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, asdict
@@ -2120,6 +2121,8 @@ class IntegratedSignalstatsAnalyzer:
         self.video_path = str(video_path)
         self.qctools_report = qctools_report if qctools_report else self._find_qctools_report(log_result=False)
         self._init_video_properties()
+        self._brng_cache = None
+        self._brng_cache_active_area = None
         
     def _init_video_properties(self):
         """Initialize video properties"""
@@ -2483,17 +2486,19 @@ class IntegratedSignalstatsAnalyzer:
         return True  # Always use QCTools data when available for consistency
     
     def _analyze_with_ffprobe_period(self, active_area: Tuple, 
-                                   start_time: float, duration: int, period_num: int) -> Dict:
-        """Analyze using FFprobe signalstats for specific period"""
-        # Build filter chain
-        filter_chain = f"movie={shlex.quote(self.video_path)}"
-        filter_chain += f",select='between(t\\,{start_time}\\,{start_time + duration})'"
+                                start_time: float, duration: int, period_num: int) -> Dict:
+        """Analyze using FFprobe signalstats for specific period - with fast seeking"""
         
+        crop_filter = ""
         if active_area:
             x, y, w, h = active_area
-            filter_chain += f",crop={w}:{h}:{x}:{y}"
+            crop_filter = f"crop={w}:{h}:{x}:{y},"
         
-        filter_chain += ",signalstats=stat=brng"
+        # Use movie filter's seek_point parameter for fast seeking
+        # trim=duration limits output to N seconds after seek point
+        filter_chain = f"movie={shlex.quote(self.video_path)}:seek_point={start_time}"
+        filter_chain += f",{crop_filter}signalstats=stat=brng"
+        filter_chain += f",trim=duration={duration}"
         
         cmd = [
             'ffprobe',
