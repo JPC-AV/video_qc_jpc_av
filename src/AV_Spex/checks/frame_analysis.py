@@ -2306,12 +2306,12 @@ class IntegratedSignalstatsAnalyzer:
         )
         
         # Log final comparison summary
-        logger.debug(f"\n  === Signalstats Analysis Summary ===")
-        logger.debug(f"  Active area results (what matters for QC):")
-        logger.debug(f"    Frames with violations: {total_violations:,} / {total_frames:,} ({violation_pct:.1f}%)")
-        logger.debug(f"    Max BRNG value: {max_brng:.4f}%")
-        logger.debug(f"    Average BRNG value: {avg_brng:.4f}%")
-        logger.debug(f"  Diagnosis: {diagnosis}\n")
+        logger.info(f"\n  === Signalstats Analysis Summary ===")
+        logger.info(f"  Active area results (what matters for QC):")
+        logger.info(f"    Frames with violations: {total_violations:,} / {total_frames:,} ({violation_pct:.1f}%)")
+        logger.info(f"    Max BRNG value: {max_brng:.4f}%")
+        logger.info(f"    Average BRNG value: {avg_brng:.4f}%")
+        logger.info(f"  Diagnosis: {diagnosis}\n")
         
         return SignalstatsResult(
             violation_percentage=violation_pct,
@@ -2872,8 +2872,14 @@ class EnhancedFrameAnalysis:
             # Emit BRNG analysis completion signal
             if signals and frame_config.enable_brng_analysis:
                 signals.step_completed.emit("Frame Analysis - BRNG Analysis")
+            # Log BRNG analysis summary
+            if brng_results:
+                self._log_brng_analysis_summary(brng_results, analysis_periods)
         else:
             logger.warning("Skipping BRNG analysis (disabled in config)\n")
+            # Log correlation between signalstats and BRNG analysis
+            if signalstats_results and brng_results:
+                self._log_analysis_correlation(signalstats_results, brng_results)
         
         # Step 6: Iterative border refinement (only if both border detection AND BRNG analysis are enabled)
         refinement_iterations = 0
@@ -3372,6 +3378,195 @@ class EnhancedFrameAnalysis:
             lines.append(f"\nBorder refinement: {results['refinement_iterations']} iteration(s)")
         
         return "\n".join(lines)
+    
+    def _log_brng_analysis_summary(self, brng_results: BRNGAnalysisResult, 
+                                analysis_periods: List[Tuple[float, int]]) -> None:
+        """Log a comprehensive summary of BRNG analysis results."""
+        if not brng_results or not brng_results.violations:
+            logger.info("\n  === BRNG Frame Analysis Summary ===")
+            logger.info("  No BRNG violations detected in analyzed periods.\n")
+            return
+        
+        violations = brng_results.violations
+        aggregate = brng_results.aggregate_patterns
+        report = brng_results.actionable_report
+        stats = report.get('summary_statistics', {})
+        
+        # Calculate time range
+        if analysis_periods:
+            time_start = min(p[0] for p in analysis_periods)
+            time_end = max(p[0] + p[1] for p in analysis_periods)
+            time_range_str = f"{time_start:.1f}s - {time_end:.1f}s"
+        else:
+            time_range_str = "N/A"
+        
+        logger.info(f"\n  === BRNG Frame Analysis Summary ===")
+        logger.info(f"  Analyzed {len(violations)} frames across {len(analysis_periods)} periods ({time_range_str})\n")
+        
+        # Aggregate diagnostic types from all violations
+        diagnostic_counts = {}
+        edge_artifact_edges = set()
+        
+        for v in violations:
+            if v.diagnostics:
+                for diag in v.diagnostics:
+                    # Normalize edge artifact messages
+                    if diag.startswith("Edge artifacts"):
+                        diagnostic_counts["Edge artifacts"] = diagnostic_counts.get("Edge artifacts", 0) + 1
+                        # Extract edge names from message like "Edge artifacts (left, right)"
+                        if "(" in diag and ")" in diag:
+                            edges_str = diag[diag.find("(")+1:diag.find(")")]
+                            for edge in edges_str.split(", "):
+                                edge_artifact_edges.add(edge.strip())
+                    elif diag == "Border adjustment recommended":
+                        diagnostic_counts["Border adjustment flags"] = diagnostic_counts.get("Border adjustment flags", 0) + 1
+                    else:
+                        diagnostic_counts[diag] = diagnostic_counts.get(diag, 0) + 1
+        
+        # Log diagnostic types
+        logger.info("  Violation Types Detected:")
+        total_violations = len(violations)
+        
+        # Order diagnostics by relevance
+        priority_order = ["Sub-black detected", "Highlight clipping", "Edge artifacts", 
+                        "Linear blanking patterns", "Border adjustment flags", 
+                        "General broadcast range violations"]
+        
+        logged_any = False
+        for diag_type in priority_order:
+            if diag_type in diagnostic_counts:
+                count = diagnostic_counts[diag_type]
+                pct = (count / total_violations) * 100
+                
+                if diag_type == "Edge artifacts" and edge_artifact_edges:
+                    edges_str = ", ".join(sorted(edge_artifact_edges))
+                    logger.info(f"    • {diag_type} ({edges_str}): {count} frames ({pct:.1f}%)")
+                else:
+                    logger.info(f"    • {diag_type}: {count} frames ({pct:.1f}%)")
+                logged_any = True
+        
+        # Log any remaining diagnostics not in priority order
+        for diag_type, count in diagnostic_counts.items():
+            if diag_type not in priority_order:
+                pct = (count / total_violations) * 100
+                logger.info(f"    • {diag_type}: {count} frames ({pct:.1f}%)")
+                logged_any = True
+        
+        if not logged_any:
+            logger.info("    • No specific diagnostic patterns identified")
+        
+        # Add warning if edge percentage is high
+        edge_pct = aggregate.get('edge_violation_percentage', 0)
+        if edge_pct > 50:
+            logger.info(f"    ⚠ High edge percentage ({edge_pct:.1f}%) suggests border detection needs adjustment")
+        
+        # Log violation distribution statistics
+        logger.info(f"\n  Violation Statistics:")
+        logger.info(f"    Average BRNG: {stats.get('average_violation_percentage', 0):.2f}%")
+        logger.info(f"    Maximum BRNG: {stats.get('max_violation_percentage', 0):.2f}%")
+        logger.info(f"    Edge violations: {edge_pct:.1f}% of analyzed frames")
+        
+        linear_pct = aggregate.get('linear_pattern_percentage', 0)
+        if linear_pct > 0:
+            logger.info(f"    Linear patterns: {linear_pct:.1f}% of analyzed frames")
+        
+        # Log assessment and priority
+        logger.info(f"\n  Assessment: {report.get('overall_assessment', 'Unknown')}")
+        logger.info(f"  Priority: {report.get('action_priority', 'none').upper()}")
+        
+        # Log recommendations if border adjustment needed
+        if brng_results.requires_border_adjustment:
+            recommendations = brng_results.refinement_recommendations
+            if recommendations:
+                edges_affected = aggregate.get('boundary_edges_detected', [])
+                logger.info(f"\n  Recommendation: Re-run border detection with adjusted parameters")
+                logger.info(f"    Affected edges: {', '.join(edges_affected)}")
+                
+                expansion_parts = []
+                for edge in ['left', 'right', 'top', 'bottom']:
+                    if edge in recommendations:
+                        expansion_parts.append(f"{edge[0].upper()}+{recommendations[edge]}px")
+                if expansion_parts:
+                    logger.info(f"    Suggested expansion: {', '.join(expansion_parts)}\n")
+                else:
+                    logger.info("")
+            else:
+                logger.info("")
+        else:
+            logger.info("")
+
+
+    def _log_analysis_correlation(self, signalstats_results: SignalstatsResult,
+                                brng_results: BRNGAnalysisResult) -> None:
+        """Log the correlation between signalstats and BRNG analysis results."""
+        if not signalstats_results or not brng_results:
+            return
+        
+        logger.info("  === Analysis Correlation ===\n")
+        
+        # Signalstats summary
+        logger.info("  Signalstats (quantitative full-frame vs active-area comparison):")
+        logger.info(f"    Active area violations: {signalstats_results.violation_percentage:.1f}% of frames")
+        logger.info(f"    Max BRNG in active area: {signalstats_results.max_brng:.2f}%")
+        logger.info(f"    Diagnosis: {signalstats_results.diagnosis}\n")
+        
+        # BRNG analysis summary
+        aggregate = brng_results.aggregate_patterns
+        edge_pct = aggregate.get('edge_violation_percentage', 0)
+        
+        # Determine dominant diagnostic from violations
+        diagnostic_counts = {}
+        for v in brng_results.violations:
+            if v.diagnostics:
+                for diag in v.diagnostics:
+                    if diag.startswith("Edge artifacts"):
+                        diag = "Edge artifacts"
+                    elif diag == "Border adjustment recommended":
+                        continue  # Skip meta-diagnostics
+                    diagnostic_counts[diag] = diagnostic_counts.get(diag, 0) + 1
+        
+        dominant_diag = max(diagnostic_counts.items(), key=lambda x: x[1])[0] if diagnostic_counts else "Unknown"
+        
+        logger.info("  BRNG Analysis (qualitative frame inspection):")
+        logger.info(f"    Edge violation ratio: {edge_pct:.1f}%")
+        logger.info(f"    Dominant diagnostic: {dominant_diag}\n")
+        
+        # Interpretation
+        logger.info("  Interpretation:")
+        
+        # Determine agreement between methods
+        signalstats_says_border = "border" in signalstats_results.diagnosis.lower()
+        signalstats_says_content = "active" in signalstats_results.diagnosis.lower() and "requires" in signalstats_results.diagnosis.lower()
+        brng_says_border = brng_results.requires_border_adjustment or edge_pct > 50
+        brng_says_content = not brng_says_border and edge_pct < 30
+        
+        if signalstats_says_border and brng_says_border:
+            logger.info("    ✓ Both methods agree: violations are concentrated at frame edges")
+            logger.info("      → Border detection likely missed some blanking areas")
+            logger.info("      → Active picture content appears broadcast-safe once borders are corrected\n")
+        elif signalstats_says_content and brng_says_content:
+            logger.info("    ✓ Both methods agree: violations are in the active picture area")
+            logger.info("      → Content itself has broadcast range issues")
+            logger.info("      → Review source material or encoding parameters\n")
+        elif signalstats_says_content and brng_says_border:
+            logger.info("    ⚠ Methods show mixed results:")
+            logger.info("      → Signalstats: active area has violations")
+            logger.info("      → BRNG analysis: high edge violation percentage")
+            logger.info("      → Both content issues and border detection may need attention\n")
+        elif signalstats_says_border and brng_says_content:
+            logger.info("    ⚠ Methods show mixed results:")
+            logger.info("      → Signalstats: border areas have more violations")
+            logger.info("      → BRNG analysis: violations spread throughout frame")
+            logger.info("      → Review thumbnails to determine actual issue location\n")
+        else:
+            # Default case
+            if edge_pct > 50:
+                logger.info("    → High edge violation percentage suggests border issues")
+            elif edge_pct < 20:
+                logger.info("    → Low edge percentage suggests content-based violations")
+            else:
+                logger.info("    → Mixed violation distribution - review thumbnails for details")
+            logger.info("")
     
     def _save_results(self, results: Dict):
         """Save analysis results to JSON"""
