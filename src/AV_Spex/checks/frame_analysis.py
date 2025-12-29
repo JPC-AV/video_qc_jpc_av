@@ -1776,110 +1776,69 @@ class DifferentialBRNGAnalyzer:
         }
     
     def _generate_actionable_report(self, violations: List[FrameViolation],
-                               aggregate_patterns: Dict) -> Dict:
-        """Generate actionable recommendations based on violation patterns"""
+                           aggregate_patterns: Dict) -> Dict:
+        """Generate detailed report based on violation patterns"""
         if not violations:
             return {
                 'overall_assessment': 'No BRNG violations detected',
-                'action_priority': 'none',
-                'recommendations': []
+                'summary_statistics': {
+                    'total_violations': 0,
+                    'average_violation_percentage': 0,
+                    'max_violation_percentage': 0,
+                    'edge_violation_percentage': 0,
+                    'linear_pattern_percentage': 0
+                }
             }
         
-        recommendations = []
-        
-        # Check for border adjustment needs with more detailed analysis
-        if aggregate_patterns['requires_border_adjustment']:
-            edges = aggregate_patterns.get('boundary_edges_detected', [])
-            linear_pct = aggregate_patterns.get('linear_pattern_percentage', 0)
-            continuous_pct = aggregate_patterns.get('continuous_edge_percentage', 0)
-            linear_scores = aggregate_patterns.get('linear_pattern_scores', {})
-            
-            # Determine severity based on linear patterns
-            max_linear_score = max(linear_scores.values()) if linear_scores else 0
-            
-            if max_linear_score > 50 or linear_pct > 40:
-                severity = 'high'
-                description = f'Strong linear blanking patterns detected ({linear_pct:.1f}% of frames). Border detection likely missed blanking lines.'
-            elif linear_pct > 20 or continuous_pct > 25:
-                severity = 'medium'
-                description = f'Moderate blanking patterns detected. {linear_pct:.1f}% frames show linear patterns, {continuous_pct:.1f}% have continuous edges.'
-            else:
-                severity = 'low'
-                description = f'Edge violations detected on {", ".join(edges)}. May indicate minor border detection issues.'
-            
-            recommendations.append({
-                'issue': 'Border Detection Needs Adjustment',
-                'severity': severity,
-                'action': f'Re-run border detection with adjusted parameters',
-                'affected_edges': edges,
-                'linear_pattern_scores': linear_scores,
-                'description': description
-            })
-            action_priority = 'high' if severity == 'high' else 'medium'
-        else:
-            # Check for content violations
-            avg_violation_pct = np.mean([v.violation_percentage for v in violations])
-            max_violation_pct = max([v.violation_percentage for v in violations])
-            
-            if avg_violation_pct > 1.0 or max_violation_pct > 5.0:
-                recommendations.append({
-                    'issue': 'Content BRNG Violations',
-                    'severity': 'medium',
-                    'action': 'Review source material or encoding parameters',
-                    'description': f'Average violation: {avg_violation_pct:.2f}%, Maximum: {max_violation_pct:.2f}%'
-                })
-                action_priority = 'medium'
-            elif avg_violation_pct > 0.1:
-                recommendations.append({
-                    'issue': 'Minor BRNG Violations',
-                    'severity': 'low',
-                    'action': 'Review may be needed for broadcast compliance',
-                    'description': f'Low-level violations detected: {avg_violation_pct:.2f}% average'
-                })
-                action_priority = 'low'
-            else:
-                action_priority = 'none'
+        # Calculate statistics
+        avg_violation_pct = np.mean([v.violation_percentage for v in violations])
+        max_violation_pct = max([v.violation_percentage for v in violations])
         
         return {
             'overall_assessment': self._get_overall_assessment(violations, aggregate_patterns),
-            'action_priority': action_priority,
-            'recommendations': recommendations,
             'summary_statistics': {
                 'total_violations': len(violations),
-                'average_violation_percentage': np.mean([v.violation_percentage for v in violations]) if violations else 0,
-                'max_violation_percentage': max([v.violation_percentage for v in violations]) if violations else 0,
+                'average_violation_percentage': avg_violation_pct,
+                'max_violation_percentage': max_violation_pct,
                 'edge_violation_percentage': aggregate_patterns.get('edge_violation_percentage', 0),
                 'linear_pattern_percentage': aggregate_patterns.get('linear_pattern_percentage', 0)
             }
         }
 
     def _get_overall_assessment(self, violations: List[FrameViolation],
-                            aggregate_patterns: Dict) -> str:
-        """Generate overall assessment text with enhanced pattern recognition"""
+                        aggregate_patterns: Dict) -> str:
+        """Generate descriptive assessment text based on analysis findings"""
         if not violations:
-            return "Video is broadcast-safe with no BRNG violations"
+            return "No BRNG violations detected in analyzed frames"
         
-        if aggregate_patterns['requires_border_adjustment']:
-            linear_pct = aggregate_patterns.get('linear_pattern_percentage', 0)
-            linear_scores = aggregate_patterns.get('linear_pattern_scores', {})
-            max_linear = max(linear_scores.values()) if linear_scores else 0
-            
-            if max_linear > 50 or linear_pct > 40:
-                return "Border detection missed blanking lines - strong linear patterns at frame edges"
-            elif linear_pct > 20:
-                return "Border adjustment recommended - moderate blanking patterns detected"
-            else:
-                return "Border detection adjustment required - edges contain violations"
+        # Build description based on what was found
+        edge_pct = aggregate_patterns.get('edge_violation_percentage', 0)
+        linear_pct = aggregate_patterns.get('linear_pattern_percentage', 0)
+        avg_violation = np.mean([v.violation_percentage for v in violations])
         
-        avg_violation_pct = np.mean([v.violation_percentage for v in violations])
-        if avg_violation_pct < 0.01:
-            return "Video appears broadcast-compliant with minimal violations"
-        elif avg_violation_pct < 0.1:
-            return "Minor broadcast range issues detected - likely acceptable"
-        elif avg_violation_pct < 1.0:
-            return "Moderate broadcast range issues detected"
+        parts = []
+        
+        # Describe violation level
+        if avg_violation >= 1.0:
+            parts.append(f"Average BRNG: {avg_violation:.2f}%")
+        elif avg_violation >= 0.1:
+            parts.append(f"Average BRNG: {avg_violation:.2f}% (low-level)")
         else:
-            return "Significant broadcast range issues requiring attention"
+            parts.append(f"Average BRNG: {avg_violation:.3f}% (minimal)")
+        
+        # Describe spatial distribution
+        if edge_pct > 70:
+            parts.append(f"{edge_pct:.0f}% of violations at frame edges")
+        elif edge_pct > 40:
+            parts.append(f"{edge_pct:.0f}% edge violations, {100-edge_pct:.0f}% content area")
+        elif edge_pct > 0:
+            parts.append(f"Violations primarily in content area ({100-edge_pct:.0f}%)")
+        
+        # Note linear patterns if present
+        if linear_pct > 20:
+            parts.append(f"linear blanking patterns detected ({linear_pct:.0f}%)")
+        
+        return "; ".join(parts)
     
     def _create_diagnostic_thumbnails(self, violations: List[FrameViolation],
                              temp_video_paths: List[Dict],
@@ -3336,7 +3295,7 @@ class EnhancedFrameAnalysis:
         return " | ".join(lines)
     
     def _generate_summary(self, results: Dict) -> str:
-        """Generate comprehensive human-readable summary"""
+        """Generate comprehensive human-readable summary with specific details"""
         lines = []
         lines.append(f"Enhanced Frame Analysis Summary - {self.video_id}")
         lines.append("=" * 60)
@@ -3349,33 +3308,80 @@ class EnhancedFrameAnalysis:
                 if isinstance(violations, str):
                     lines.append(f"  {violations}")
                 else:
-                    lines.append(f"  Frames with BRNG violations: {violations}")
+                    lines.append(f"  Frames with BRNG > 0: {violations}")
         
-        # Border detection
+        # Border detection with frame dimensions
         if 'initial_borders' in results:
             borders = results.get('final_borders', results['initial_borders'])
             if borders['active_area']:
                 x, y, w, h = borders['active_area']
-                lines.append(f"\nActive area: {w}x{h} at ({x},{y})")
-                lines.append(f"Detection method: {borders['detection_method']}")
+                lines.append(f"\nBorder Detection:")
+                lines.append(f"  Active area: {w}x{h} at ({x},{y})")
+                lines.append(f"  Method: {borders['detection_method']}")
+                # Calculate border widths
+                frame_w, frame_h = 720, 486  # Standard NTSC
+                left_border = x
+                right_border = frame_w - (x + w)
+                top_border = y
+                bottom_border = frame_h - (y + h)
+                lines.append(f"  Borders: L:{left_border}px R:{right_border}px T:{top_border}px B:{bottom_border}px")
         
-        # BRNG analysis
+        # BRNG analysis statistics
         if results.get('brng_analysis'):
             brng = results.get('final_brng_analysis', results['brng_analysis'])
-            report = brng['actionable_report']
-            lines.append(f"\nBRNG Assessment: {report['overall_assessment']}")
-            lines.append(f"Priority: {report['action_priority'].upper()}")
+            stats = brng.get('actionable_report', {}).get('summary_statistics', {})
+            aggregate = brng.get('aggregate_patterns', {})
+            
+            lines.append(f"\nBRNG Analysis:")
+            lines.append(f"  Frames analyzed: {stats.get('total_violations', 0)}")
+            lines.append(f"  Average BRNG: {stats.get('average_violation_percentage', 0):.2f}%")
+            lines.append(f"  Maximum BRNG: {stats.get('max_violation_percentage', 0):.2f}%")
+            lines.append(f"  Edge violations: {stats.get('edge_violation_percentage', 0):.1f}% of analyzed frames")
+            
+            linear_pct = stats.get('linear_pattern_percentage', 0)
+            if linear_pct > 0:
+                lines.append(f"  Linear patterns: {linear_pct:.1f}% of analyzed frames")
+            
+            # Diagnostic breakdown
+            if brng.get('violations'):
+                diagnostic_counts = {}
+                for v in brng['violations']:
+                    if isinstance(v, dict) and v.get('diagnostics'):
+                        for diag in v['diagnostics']:
+                            if diag.startswith("Edge artifacts"):
+                                diagnostic_counts["Edge artifacts"] = diagnostic_counts.get("Edge artifacts", 0) + 1
+                            elif diag != "Border adjustment recommended":
+                                diagnostic_counts[diag] = diagnostic_counts.get(diag, 0) + 1
+                
+                if diagnostic_counts:
+                    lines.append(f"  Violation types:")
+                    for diag, count in sorted(diagnostic_counts.items(), key=lambda x: x[1], reverse=True):
+                        lines.append(f"    {diag}: {count} frames")
         
-        # Signalstats
+        # Signalstats comparison
         if results.get('signalstats'):
             stats = results['signalstats']
-            lines.append(f"\nSignalstats: {stats['diagnosis']}")
-            lines.append(f"  Violations: {stats['violation_percentage']:.1f}% of frames")
-            lines.append(f"  Max BRNG: {stats['max_brng']:.4f}%")
+            lines.append(f"\nSignalstats (active area analysis):")
+            lines.append(f"  Frames with violations: {stats['violation_percentage']:.1f}%")
+            lines.append(f"  Max BRNG: {stats['max_brng']:.2f}%")
+            lines.append(f"  Avg BRNG: {stats['avg_brng']:.2f}%")
+            
+            # Add analysis period info
+            periods = stats.get('analysis_periods', [])
+            if periods:
+                period_strs = [f"{p[0]:.1f}s-{p[0]+p[1]:.1f}s" for p in periods]
+                lines.append(f"  Analysis periods: {', '.join(period_strs)}")
         
         # Refinement info
-        if 'refinement_iterations' in results:
-            lines.append(f"\nBorder refinement: {results['refinement_iterations']} iteration(s)")
+        if 'refinement_iterations' in results and results['refinement_iterations'] > 0:
+            lines.append(f"\nBorder refinement performed: {results['refinement_iterations']} iteration(s)")
+            if 'initial_borders' in results and 'final_borders' in results:
+                initial = results['initial_borders']['active_area']
+                final = results['final_borders']['active_area']
+                if initial and final:
+                    w_change = final[2] - initial[2]
+                    h_change = final[3] - initial[3]
+                    lines.append(f"  Size change: width {w_change:+d}px, height {h_change:+d}px")
         
         return "\n".join(lines)
     
@@ -3460,7 +3466,7 @@ class EnhancedFrameAnalysis:
         if edge_pct > 50:
             logger.info(f"    ⚠ High edge percentage ({edge_pct:.1f}%) suggests border detection needs adjustment")
         
-        # Log violation distribution statistics
+       # Log violation distribution statistics
         logger.info(f"\n  Violation Statistics:")
         logger.info(f"    Average BRNG: {stats.get('average_violation_percentage', 0):.2f}%")
         logger.info(f"    Maximum BRNG: {stats.get('max_violation_percentage', 0):.2f}%")
@@ -3470,30 +3476,7 @@ class EnhancedFrameAnalysis:
         if linear_pct > 0:
             logger.info(f"    Linear patterns: {linear_pct:.1f}% of analyzed frames")
         
-        # Log assessment and priority
-        logger.info(f"\n  Assessment: {report.get('overall_assessment', 'Unknown')}")
-        logger.info(f"  Priority: {report.get('action_priority', 'none').upper()}")
-        
-        # Log recommendations if border adjustment needed
-        if brng_results.requires_border_adjustment:
-            recommendations = brng_results.refinement_recommendations
-            if recommendations:
-                edges_affected = aggregate.get('boundary_edges_detected', [])
-                logger.info(f"\n  Recommendation: Re-run border detection with adjusted parameters")
-                logger.info(f"    Affected edges: {', '.join(edges_affected)}")
-                
-                expansion_parts = []
-                for edge in ['left', 'right', 'top', 'bottom']:
-                    if edge in recommendations:
-                        expansion_parts.append(f"{edge[0].upper()}+{recommendations[edge]}px")
-                if expansion_parts:
-                    logger.info(f"    Suggested expansion: {', '.join(expansion_parts)}\n")
-                else:
-                    logger.info("")
-            else:
-                logger.info("")
-        else:
-            logger.info("")
+        logger.info("")  # Blank line for spacing
 
 
     def _log_analysis_correlation(self, signalstats_results: SignalstatsResult,
