@@ -1064,7 +1064,7 @@ class DifferentialBRNGAnalyzer:
                 all_violations.extend(period_violations)
             
             violations = all_violations
-            logger.debug(f"  Analyzed {len(violations)} frames with potential violations across all periods")
+            logger.info(f"  Analyzed {len(violations)} frames with potential violations across all periods\n")
         else:
             # Original single-period analysis (similar handling)
             logger.debug(f"  Creating temporary comparison videos (duration: {duration_limit}s)")
@@ -1288,7 +1288,7 @@ class DifferentialBRNGAnalyzer:
         # Sort by violation score
         violations.sort(key=lambda x: x.violation_score, reverse=True)
         
-        logger.debug(f"  Checked {frames_checked} frames, found {len(violations)} with violations above threshold")
+        logger.debug(f"  Checked {frames_checked} frames, found {len(violations)} with violations above threshold\n")
         
         return violations
     
@@ -1483,7 +1483,7 @@ class DifferentialBRNGAnalyzer:
         
         # Always include the highest scoring violation
         selected_violations.append(violations[0])
-        logger.info(f"  Selected thumbnail 1: Frame {violations[0].frame_num} at {violations[0].timestamp:.1f}s (score: {violations[0].violation_score:.4f})")
+        logger.info(f"\n  Selected thumbnail 1: Frame {violations[0].frame_num} at {violations[0].timestamp:.1f}s (score: {violations[0].violation_score:.4f})")
         
         # Select additional violations with time separation constraint
         for violation in violations[1:]:
@@ -1512,7 +1512,7 @@ class DifferentialBRNGAnalyzer:
             for violation in violations:
                 if violation not in selected_violations:
                     selected_violations.append(violation)
-                    logger.info(f"  Added thumbnail {len(selected_violations)} (relaxed spacing): Frame {violation.frame_num} at {violation.timestamp:.1f}s")
+                    logger.info(f"  Added thumbnail {len(selected_violations)} (relaxed spacing): Frame {violation.frame_num} at {violation.timestamp:.1f}s\n")
                     remaining_needed -= 1
                     if remaining_needed <= 0:
                         break
@@ -2850,8 +2850,10 @@ class EnhancedFrameAnalysis:
             
             edge_pct = brng_results.aggregate_patterns.get('edge_violation_percentage', 0)
             continuous_pct = brng_results.aggregate_patterns.get('continuous_edge_percentage', 0)
-            logger.info(f"  Edge violations: {edge_pct:.1f}% of analyzed frames")
-            logger.info(f"  Continuous edge patterns: {continuous_pct:.1f}% of analyzed frames")
+            logger.info(f"  Edge violations (any): {edge_pct:.1f}% of analyzed frames")
+            logger.info(f"  Edge violations (solid line): {continuous_pct:.1f}% of analyzed frames")
+            if continuous_pct == 0 and edge_pct > 95:
+                logger.info(f"    → Violations are scattered rather than forming a solid line")
             
             # Check if auto_retry is enabled
             auto_retry_enabled = self._is_step_enabled(frame_config.auto_retry_borders)
@@ -2880,7 +2882,7 @@ class EnhancedFrameAnalysis:
                     logger.info(f"  Active area: {previous_area[2]}x{previous_area[3]} → {new_area[2]}x{new_area[3]}")
                     
                     # CREATE VISUALIZATION FOR THIS ITERATION
-                    logger.info("  Creating border visualization for refined borders...")
+                    logger.info("  Creating border visualization for refined borders...\n")
                     viz_filename = f"{self.video_id}_border_detection_refined_iter{refinement_iterations}.jpg"
                     viz_output_path = self.output_dir / viz_filename
                     
@@ -3336,11 +3338,12 @@ class EnhancedFrameAnalysis:
             lines.append(f"  Frames analyzed: {stats.get('total_violations', 0)}")
             lines.append(f"  Average BRNG: {stats.get('average_violation_percentage', 0):.2f}%")
             lines.append(f"  Maximum BRNG: {stats.get('max_violation_percentage', 0):.2f}%")
-            lines.append(f"  Edge violations: {stats.get('edge_violation_percentage', 0):.1f}% of analyzed frames")
-            
-            linear_pct = stats.get('linear_pattern_percentage', 0)
-            if linear_pct > 0:
-                lines.append(f"  Linear patterns: {linear_pct:.1f}% of analyzed frames")
+            edge_pct = aggregate.get('edge_violation_percentage', 0)
+            continuous_pct = aggregate.get('continuous_edge_percentage', 0)
+            lines.append(f"  Edge violations (any): {edge_pct:.1f}% of analyzed frames")
+            lines.append(f"  Edge violations (solid line): {continuous_pct:.1f}% of analyzed frames")
+            if continuous_pct == 0 and edge_pct > 95:
+                lines.append(f"    → Violations are scattered rather than forming a solid line")
             
             # Diagnostic breakdown
             if brng.get('violations'):
@@ -3470,7 +3473,11 @@ class EnhancedFrameAnalysis:
         logger.info(f"\n  Violation Statistics:")
         logger.info(f"    Average BRNG: {stats.get('average_violation_percentage', 0):.2f}%")
         logger.info(f"    Maximum BRNG: {stats.get('max_violation_percentage', 0):.2f}%")
-        logger.info(f"    Edge violations: {edge_pct:.1f}% of analyzed frames")
+        continuous_pct = aggregate.get('continuous_edge_percentage', 0)
+        logger.info(f"    Edge violations (any): {edge_pct:.1f}% of analyzed frames")
+        logger.info(f"    Edge violations (solid line): {continuous_pct:.1f}% of analyzed frames")
+        if continuous_pct == 0 and edge_pct > 95:
+            logger.info(f"      → Violations are scattered rather than forming a solid line")
         
         linear_pct = aggregate.get('linear_pattern_percentage', 0)
         if linear_pct > 0:
@@ -3511,7 +3518,11 @@ class EnhancedFrameAnalysis:
         dominant_diag = max(diagnostic_counts.items(), key=lambda x: x[1])[0] if diagnostic_counts else "Unknown"
         
         logger.info("  BRNG Analysis (qualitative frame inspection):")
-        logger.info(f"    Edge violation ratio: {edge_pct:.1f}%")
+        continuous_pct = aggregate.get('continuous_edge_percentage', 0)
+        logger.info(f"    Edge violations (any): {edge_pct:.1f}%")
+        logger.info(f"    Edge violations (solid line): {continuous_pct:.1f}%")
+        if continuous_pct == 0 and edge_pct > 95:
+            logger.info(f"      → Violations are scattered rather than forming a solid line")
         logger.info(f"    Dominant diagnostic: {dominant_diag}\n")
         
         # Interpretation
@@ -3589,7 +3600,6 @@ class EnhancedFrameAnalysis:
             json.dump(cleaned_results, f, indent=2)
         
         logger.info(f"Results saved to: {output_file}\n")
-        print(results['summary'])
 
     def _analyze_qctools_violation_distribution(self, violations: List[FrameViolation]) -> List[Tuple[float, int]]:
         """
