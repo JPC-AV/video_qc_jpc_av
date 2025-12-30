@@ -2325,7 +2325,7 @@ class IntegratedSignalstatsAnalyzer:
         # Start after color bars with a safety margin
         effective_start = max(content_start, color_bars_end or 0) + 10
         
-        logger.debug(f"  Content starts at {effective_start:.1f}s (after color bars at {color_bars_end:.1f}s)")
+        logger.debug(f"  Content starts at {effective_start:.1f}s (after color bars at {color_bars_end:.1f}s)\n")
         
         # PRIORITY 1: Use QCTools-based periods if available (these target actual violations)
         if qctools_periods:
@@ -2846,14 +2846,14 @@ class EnhancedFrameAnalysis:
 
         if (border_detection_enabled and brng_analysis_enabled and 
             method == 'sophisticated' and brng_results and brng_results.requires_border_adjustment):
-            logger.info("Border refinement needed - detected BRNG violations at frame edges")
+            logger.warning("Border refinement needed - detected BRNG violations at frame edges")
             
             edge_pct = brng_results.aggregate_patterns.get('edge_violation_percentage', 0)
             continuous_pct = brng_results.aggregate_patterns.get('continuous_edge_percentage', 0)
-            logger.info(f"  Edge violations (any): {edge_pct:.1f}% of analyzed frames")
-            logger.info(f"  Edge violations (solid line): {continuous_pct:.1f}% of analyzed frames")
+            logger.debug(f"  Edge violations (any): {edge_pct:.1f}% of analyzed frames")
+            logger.debug(f"  Edge violations (solid line): {continuous_pct:.1f}% of analyzed frames")
             if continuous_pct == 0 and edge_pct > 95:
-                logger.info(f"    → Violations are scattered rather than forming a solid line")
+                logger.info(f"    → Violations are scattered rather than forming a solid line\n")
             
             # Check if auto_retry is enabled
             auto_retry_enabled = self._is_step_enabled(frame_config.auto_retry_borders)
@@ -2869,7 +2869,7 @@ class EnhancedFrameAnalysis:
                     brng_results.requires_border_adjustment):
                     
                     refinement_iterations += 1
-                    logger.info(f"Refinement iteration {refinement_iterations}/{max_refinement_iterations}:")
+                    logger.debug(f"Refinement iteration {refinement_iterations}/{max_refinement_iterations}:")
                     
                     # Store pre-refinement state
                     previous_area = border_results.active_area
@@ -2897,7 +2897,7 @@ class EnhancedFrameAnalysis:
                         )
                         
                         if success:
-                            logger.info(f"  ✓ Refined border visualization saved: {viz_filename}")
+                            logger.info(f"  ✓ Refined border visualization saved: {viz_filename}\n")
                         else:
                             logger.warning(f"  ⚠ Failed to create visualization for iteration {refinement_iterations}")
                     except Exception as e:
@@ -2907,7 +2907,7 @@ class EnhancedFrameAnalysis:
                     
                     # Re-run signalstats with new borders to get updated periods (only if signalstats is enabled)
                     if signalstats_enabled:
-                        logger.info("  Re-running signalstats with refined borders...")
+                        logger.debug("  Re-running signalstats with refined borders...\n")
                         signalstats_results = self.signalstats_analyzer.analyze_with_signalstats(
                             border_data=border_results,
                             content_start_time=0,
@@ -2919,7 +2919,7 @@ class EnhancedFrameAnalysis:
                         analysis_periods = signalstats_results.analysis_periods
                     
                     # Re-analyze BRNG with new borders and periods
-                    logger.info("  Re-analyzing BRNG violations with refined borders...")
+                    logger.debug("  Re-analyzing BRNG violations with refined borders...\n")
                     self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
                     
                     brng_results = self.brng_analyzer.analyze_with_differential_detection(
@@ -2986,32 +2986,54 @@ class EnhancedFrameAnalysis:
                         logger.warning(f"Could not create refinement comparison: {e}")
                 
                 # Summary of refinement
-                logger.info(f"\n{'='*60}")
-                logger.info(f"Border Refinement Summary:")
-                logger.info(f"  Iterations performed: {refinement_iterations}")
+                logger.debug(f"\n{'='*60}")
+                logger.debug(f"Border Refinement Summary:")
+                logger.debug(f"  Iterations performed: {refinement_iterations}")
                 
                 if refinement_iterations > 0:
+                    # Area changes
                     initial_area = initial_borders.active_area
                     final_area = border_results.active_area
                     width_change = final_area[2] - initial_area[2]
                     height_change = final_area[3] - initial_area[3]
                     
-                    logger.info(f"  Initial active area: {initial_area[2]}x{initial_area[3]}")
-                    logger.info(f"  Final active area: {final_area[2]}x{final_area[3]}")
-                    logger.info(f"  Size change: width {width_change:+d}px, height {height_change:+d}px")
+                    logger.debug(f"  Initial active area: {initial_area[2]}x{initial_area[3]}")
+                    logger.debug(f"  Final active area: {final_area[2]}x{final_area[3]}")
+                    logger.debug(f"  Size change: width {width_change:+d}px, height {height_change:+d}px")
                     
+                    # Violation count (less meaningful but still reported)
                     initial_violations = len(initial_brng.violations) if initial_brng.violations else 0
                     final_violations = len(brng_results.violations) if brng_results.violations else 0
-                    violation_reduction = initial_violations - final_violations
+                    violation_change = final_violations - initial_violations
+                    logger.debug(f"  Violation frames: {initial_violations} → {final_violations} ({violation_change:+d})")
                     
-                    logger.info(f"  Violations: {initial_violations} → {final_violations} ({violation_reduction:+d})")
+                    # Edge violation percentage (primary metric for border refinement success)
+                    initial_edge_pct = initial_brng.aggregate_patterns.get('edge_violation_percentage', 0)
+                    final_edge_pct = brng_results.aggregate_patterns.get('edge_violation_percentage', 0)
+                    edge_pct_change = final_edge_pct - initial_edge_pct
+                    logger.debug(f"  Edge violations: {initial_edge_pct:.1f}% → {final_edge_pct:.1f}% ({edge_pct_change:+.1f}%)")
                     
-                    # Calculate improvement percentage
-                    if initial_violations > 0:
-                        improvement_pct = (violation_reduction / initial_violations) * 100
-                        logger.info(f"  Improvement: {improvement_pct:.1f}%")
+                    # BRNG severity changes
+                    if initial_brng.violations and brng_results.violations:
+                        initial_max = max(v.brng_value for v in initial_brng.violations)
+                        final_max = max(v.brng_value for v in brng_results.violations)
+                        initial_avg = sum(v.brng_value for v in initial_brng.violations) / len(initial_brng.violations)
+                        final_avg = sum(v.brng_value for v in brng_results.violations) / len(brng_results.violations)
+                        
+                        logger.debug(f"  Max BRNG: {initial_max:.2f}% → {final_max:.2f}%")
+                        logger.debug(f"  Avg BRNG: {initial_avg:.2f}% → {final_avg:.2f}%")
+                    
+                    # Border adjustment status
+                    initial_needs_adjustment = initial_brng.requires_border_adjustment
+                    final_needs_adjustment = brng_results.requires_border_adjustment
+                    if initial_needs_adjustment and not final_needs_adjustment:
+                        logger.debug(f"  Border status: ✓ No longer requires adjustment")
+                    elif not initial_needs_adjustment and final_needs_adjustment:
+                        logger.debug(f"  Border status: ⚠ Now requires adjustment (unexpected)")
+                    elif final_needs_adjustment:
+                        logger.debug(f"  Border status: Still requires adjustment")
                 
-                logger.info(f"{'='*60}\n")
+                logger.debug(f"{'='*60}\n")
         
         # Step 7: Generate comprehensive summary
         results['summary'] = self._generate_summary(results)
@@ -3020,7 +3042,7 @@ class EnhancedFrameAnalysis:
         self._save_results(results)
         
         return results
-    
+
     def _detect_color_bars_duration(self) -> float:
         """Detect color bars duration from video or QCTools report"""
         # First check if qct-parse already detected color bars
