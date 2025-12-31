@@ -131,7 +131,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Create checkboxes with descriptions on second line
         self.output_fixity_cb = QCheckBox("Output fixity")
         self.output_fixity_cb.setStyleSheet("font-weight: bold;")
-        output_fixity_desc = QLabel("Generate whole file md5 checksum of .mkv files to .txt and .md5")
+        output_fixity_desc = QLabel("Generate whole file checksum of .mkv files to .txt and checksum file")
         output_fixity_desc.setIndent(20)
         
         self.check_fixity_cb = QCheckBox("Validate fixity")
@@ -165,6 +165,28 @@ class ChecksWindow(QWidget, ThemeableMixin):
         fixity_layout.addWidget(overwrite_stream_desc)
         fixity_layout.addWidget(self.validate_stream_cb)
         fixity_layout.addWidget(validate_stream_desc)
+        
+        # Checksum algorithm selection
+        algorithm_container = QWidget()
+        algorithm_layout = QHBoxLayout(algorithm_container)
+        algorithm_layout.setContentsMargins(0, 10, 0, 0)  # Add some top margin
+        
+        algorithm_label = QLabel("Checksum Algorithm:")
+        algorithm_label.setStyleSheet("font-weight: bold;")
+        
+        self.checksum_algorithm_combo = QComboBox()
+        self.checksum_algorithm_combo.addItems(["md5", "sha256"])
+        self.checksum_algorithm_combo.setMinimumWidth(150)
+        
+        algorithm_layout.addWidget(algorithm_label)
+        algorithm_layout.addWidget(self.checksum_algorithm_combo)
+        algorithm_layout.addStretch()
+        
+        algorithm_desc = QLabel("Select the hash algorithm for generating and validating checksums")
+        algorithm_desc.setIndent(20)
+        
+        fixity_layout.addWidget(algorithm_container)
+        fixity_layout.addWidget(algorithm_desc)
         
         self.fixity_group.setLayout(fixity_layout)
         main_layout.addWidget(self.fixity_group)
@@ -380,6 +402,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Special handling for overwrite_stream_cb to auto-check embed_stream_cb
         self.overwrite_stream_cb.stateChanged.connect(self.on_overwrite_stream_changed)
         
+        # Checksum algorithm dropdown
+        self.checksum_algorithm_combo.currentTextChanged.connect(self.on_checksum_algorithm_changed)
+        
         # Tools section
         for tool, widgets in self.tool_widgets.items():
             if tool == 'qctools':
@@ -431,6 +456,16 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.embed_stream_cb.setChecked(checks_config.fixity.embed_stream_fixity)
         self.output_fixity_cb.setChecked(checks_config.fixity.output_fixity)
         self.overwrite_stream_cb.setChecked(checks_config.fixity.overwrite_stream_fixity)
+        
+        # Checksum algorithm
+        self.checksum_algorithm_combo.blockSignals(True)
+        algorithm = getattr(checks_config.fixity, 'checksum_algorithm', 'md5')
+        index = self.checksum_algorithm_combo.findText(algorithm)
+        if index >= 0:
+            self.checksum_algorithm_combo.setCurrentIndex(index)
+        else:
+            self.checksum_algorithm_combo.setCurrentText('md5')
+        self.checksum_algorithm_combo.blockSignals(False)
         
         # Tools - now using booleans directly
         for tool, widgets in self.tool_widgets.items():
@@ -541,6 +576,15 @@ class ChecksWindow(QWidget, ThemeableMixin):
             return
         
         updates = {path[0]: {path[1]: text}}
+        config_mgr.update_config('checks', updates)
+
+    def on_checksum_algorithm_changed(self, algorithm):
+        """Handle changes in checksum algorithm selection"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
+        updates = {'fixity': {'checksum_algorithm': algorithm}}
         config_mgr.update_config('checks', updates)
 
     def on_overwrite_stream_changed(self, state):

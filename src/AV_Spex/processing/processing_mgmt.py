@@ -71,14 +71,14 @@ class ProcessingManager:
             if self.signals:
                 self.signals.step_completed.emit("Validate Stream Fixity")
 
-        # Initialize md5_checksum variable
-        md5_checksum = None
+        # Initialize file_checksum variable
+        file_checksum = None
 
         # Create checksum for video file and output results
         if self.checks_config.fixity.output_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Outputting fixity...")
-            md5_checksum = output_fixity(source_directory, video_path, check_cancelled=self.check_cancelled, signals=self.signals)
+            file_checksum = output_fixity(source_directory, video_path, check_cancelled=self.check_cancelled, signals=self.signals)
             if self.signals:
                 self.signals.step_completed.emit("Output Fixity")
 
@@ -86,7 +86,7 @@ class ProcessingManager:
         if self.checks_config.fixity.check_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Validating fixity...")
-            check_fixity(source_directory, video_id, actual_checksum=md5_checksum, check_cancelled=self.check_cancelled, signals=self.signals)
+            check_fixity(source_directory, video_id, actual_checksum=file_checksum, check_cancelled=self.check_cancelled, signals=self.signals)
             if self.signals:
                 self.signals.step_completed.emit("Validate Fixity")
 
