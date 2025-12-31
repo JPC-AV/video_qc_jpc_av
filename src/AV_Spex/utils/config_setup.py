@@ -255,6 +255,7 @@ class FixityConfig:
     output_fixity: bool
     overwrite_stream_fixity: bool
     checksum_algorithm: str = "md5"
+    stream_hash_algorithm: str = "md5"
 
 # Tool-specific configurations 
 @dataclass
@@ -336,7 +337,8 @@ class ChecksProfile:
         embed_stream_fixity=False, 
         output_fixity=False,
         overwrite_stream_fixity=False,
-        checksum_algorithm="md5" 
+        checksum_algorithm="md5",
+        stream_hash_algorithm="md5"
     ))
     tools: ToolsConfig = field(default_factory=lambda: ToolsConfig(
         exiftool=BasicToolConfig(check_tool=False, run_tool=False),

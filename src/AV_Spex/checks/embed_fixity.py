@@ -10,7 +10,13 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
+# Add this helper function after the imports (around line 13):
+
+def get_stream_hash_algorithm():
+    """Get the configured stream hash algorithm from config."""
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    return getattr(checks_config.fixity, 'stream_hash_algorithm', 'md5').lower()
 
 def get_total_frames(video_path):
     """
@@ -100,7 +106,9 @@ def get_total_frames(video_path):
 
 
 def make_stream_hash(video_path, check_cancelled=None, signals=None):
-    """Calculate MD5 checksum of video and audio streams using ffmpeg."""   
+    """Calculate checksum of video and audio streams using ffmpeg."""   
+    
+    algorithm = get_stream_hash_algorithm()
 
     if not signals:
         print(f"\rFFmpeg 'streamhash' Progress: Initializing...", end='', flush=True)
@@ -121,14 +129,18 @@ def make_stream_hash(video_path, check_cancelled=None, signals=None):
         '-i', video_path,
         '-map', '0',
         '-f', 'streamhash',
-        '-hash', 'md5',
+        '-hash', algorithm,
         '-'
     ]
     
-    # Constants for parsing
+    # Constants for parsing - adjust based on algorithm
     frame_prefix = 'frame='
-    video_hash_prefix = '0,v,MD5'
-    audio_hash_prefix = '1,a,MD5'
+    if algorithm == 'sha256':
+        video_hash_prefix = '0,v,SHA256'
+        audio_hash_prefix = '1,a,SHA256'
+    else:
+        video_hash_prefix = '0,v,MD5'
+        audio_hash_prefix = '1,a,MD5'
     
     # Update progress less frequently (every 10 frames or so)
     update_frequency = max(1, total_frames // 100)
@@ -311,6 +323,9 @@ def embed_fixity(video_path, check_cancelled=None, signals=None):
     Generates new stream hashes and embeds them in the MKV file.
     Handles removal of old hashes if overwriting.
     """
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    
     logger.debug('Generating video and audio stream hashes. This may take a moment...')
     hash_result = make_stream_hash(video_path, check_cancelled=check_cancelled, signals=signals)
     if hash_result is None:
@@ -401,6 +416,7 @@ def process_embedded_fixity(video_path, check_cancelled=None, signals=None):
     Handles embedding stream fixity tags in the video file.
     Decides whether to embed for the first time, overwrite, or skip.
     """
+    config_mgr = ConfigManager()
     checks_config = config_mgr.get_config('checks', ChecksConfig)
 
     existing_tags = extract_tags(video_path)
