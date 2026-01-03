@@ -411,6 +411,11 @@ def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
     """
     Validates embedded stream hashes against newly computed hashes.
     Checks for algorithm mismatch before computing to avoid wasted effort.
+    
+    Returns:
+        True: Validation completed successfully (hashes were compared)
+        False: Validation failed (algorithm mismatch, missing tags, or missing hashes)
+        None: Cancelled by user
     """
     if check_cancelled():
         return None
@@ -422,7 +427,7 @@ def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
     
     if not existing_tags:
         logger.critical("mkvextract unable to extract MKV tags! Cannot validate stream hashes.\n")
-        return
+        return False
     
     existing_video_hash, existing_audio_hash = extract_hashes(existing_tags)
     
@@ -430,12 +435,12 @@ def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
     if existing_video_hash is None:
         logger.warning('No video stream hash found\n')
         embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
-        return
+        return False
     
     if existing_audio_hash is None:
         logger.warning('No audio stream hash found\n')
         embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
-        return
+        return False
     
     # Detect algorithms from stored hashes
     video_algorithm = detect_hash_algorithm(existing_video_hash)
@@ -461,20 +466,20 @@ def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
         logger.error(f'ALGORITHM MISMATCH: Stored video hash uses {video_algorithm.upper()}, '
                     f'but configured algorithm is {configured_algorithm.upper()}')
         logger.error('Validation stopped. Please update configuration or re-embed with correct algorithm.\n')
-        return
+        return False
     
     if audio_algorithm and audio_algorithm != configured_algorithm:
         logger.error(f'ALGORITHM MISMATCH: Stored audio hash uses {audio_algorithm.upper()}, '
                     f'but configured algorithm is {configured_algorithm.upper()}')
         logger.error('Validation stopped. Please update configuration or re-embed with correct algorithm.\n')
-        return
+        return False
     
     # Edge case: video and audio use different algorithms
     if video_algorithm and audio_algorithm and video_algorithm != audio_algorithm:
         logger.error(f'ALGORITHM MISMATCH: Video hash uses {video_algorithm.upper()}, '
                     f'but audio hash uses {audio_algorithm.upper()}')
         logger.error('Validation stopped. Hashes must use the same algorithm.\n')
-        return
+        return False
     
     if check_cancelled():
         return None
@@ -492,6 +497,9 @@ def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
 
     if check_cancelled():
         return None
+    
+    # Validation completed successfully
+    return True
 
 
 def process_embedded_fixity(video_path, check_cancelled=None, signals=None):

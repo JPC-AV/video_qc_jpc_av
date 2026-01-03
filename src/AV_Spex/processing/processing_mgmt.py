@@ -66,10 +66,12 @@ class ProcessingManager:
             if self.checks_config.fixity.embed_stream_fixity:
                 logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
             else:
-                validate_embedded_md5(video_path, check_cancelled=self.check_cancelled, signals=self.signals)
-            # Mark checkbox
-            if self.signals:
-                self.signals.step_completed.emit("Validate Stream Fixity")
+                validation_result = validate_embedded_md5(video_path, check_cancelled=self.check_cancelled, signals=self.signals)
+                # Only mark complete if validation succeeded (True)
+                # Don't mark complete if failed (False) or cancelled (None)
+                if validation_result is True:
+                    if self.signals:
+                        self.signals.step_completed.emit("Validate Stream Fixity")
 
         # Initialize file_checksum variable
         file_checksum = None
