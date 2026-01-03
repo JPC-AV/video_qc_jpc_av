@@ -105,23 +105,78 @@ def check_fixity(directory, video_id, actual_checksum=None, check_cancelled=None
             output_fixity(directory, video_file_path, check_cancelled=check_cancelled, signals=signals)
             return
         elif checksum_files and actual_checksum is None:
-            # Read the most recent checksum file to detect algorithm from content
-            # This is more reliable than detecting from file extension
-            most_recent_checksum_path = checksum_files[0][0]
-            most_recent_checksum, detected_algorithm = read_checksum_from_file(most_recent_checksum_path)
+            # Filter checksum files to find those matching the configured algorithm
+            # by reading the content and detecting the algorithm from checksum length
+            matching_checksum_files = []
+            for checksum_file_path, file_date, file_algorithm in checksum_files:
+                _, detected_algo = read_checksum_from_file(checksum_file_path)
+                if detected_algo == algorithm:
+                    matching_checksum_files.append((checksum_file_path, file_date, detected_algo))
             
-            if detected_algorithm is None:
-                # Fall back to extension-based detection if content detection fails
-                detected_algorithm = checksum_files[0][2]
-                logger.warning(f'Could not detect algorithm from checksum content, falling back to extension-based detection: {detected_algorithm}')
+            # Determine which files to validate against
+            if matching_checksum_files:
+                # Use files matching the configured algorithm
+                files_to_validate = matching_checksum_files
+                validation_algorithm = algorithm
+                logger.debug(f'Found {len(matching_checksum_files)} checksum file(s) matching configured algorithm: {algorithm.upper()}')
+            else:
+                # No files match configured algorithm - fall back to most recent file's algorithm
+                most_recent_checksum_path = checksum_files[0][0]
+                _, detected_algorithm = read_checksum_from_file(most_recent_checksum_path)
+                
+                if detected_algorithm is None:
+                    # Fall back to extension-based detection if content detection fails
+                    detected_algorithm = checksum_files[0][2]
+                
+                logger.warning(
+                    f'No checksum files found matching configured algorithm ({algorithm.upper()}). '
+                    f'Falling back to {detected_algorithm.upper()} from existing checksum files.'
+                )
+                # Re-filter for the detected algorithm
+                files_to_validate = []
+                for checksum_file_path, file_date, file_algorithm in checksum_files:
+                    _, detected_algo = read_checksum_from_file(checksum_file_path)
+                    if detected_algo == detected_algorithm:
+                        files_to_validate.append((checksum_file_path, file_date, detected_algo))
+                
+                if not files_to_validate:
+                    # If still no matches, use all files (shouldn't happen, but safety fallback)
+                    files_to_validate = [(f[0], f[1], detected_algorithm) for f in checksum_files]
+                
+                validation_algorithm = detected_algorithm
             
-            # Calculate the checksum using the same algorithm as stored checksum
+            # Calculate the checksum using the determined algorithm
             actual_checksum = calculate_checksum(
                 video_file_path, 
-                algorithm=detected_algorithm,
+                algorithm=validation_algorithm,
                 check_cancelled=check_cancelled, 
                 signals=signals
             )
+        elif checksum_files and actual_checksum is not None:
+            # Checksum was pre-calculated - detect its algorithm from length
+            if len(actual_checksum) == 64:
+                provided_algorithm = 'sha256'
+            elif len(actual_checksum) == 32:
+                provided_algorithm = 'md5'
+            else:
+                logger.warning(f'Could not detect algorithm from provided checksum length ({len(actual_checksum)}), assuming configured algorithm: {algorithm}')
+                provided_algorithm = algorithm
+            
+            # Filter checksum files to match the provided checksum's algorithm
+            files_to_validate = []
+            for checksum_file_path, file_date, file_algorithm in checksum_files:
+                _, detected_algo = read_checksum_from_file(checksum_file_path)
+                if detected_algo == provided_algorithm:
+                    files_to_validate.append((checksum_file_path, file_date, detected_algo))
+            
+            if not files_to_validate:
+                logger.warning(f'No checksum files found matching provided checksum algorithm ({provided_algorithm.upper()})')
+                # Use all files as fallback, but comparison will likely fail if algorithms differ
+                files_to_validate = checksum_files
+        else:
+            # No checksum files and actual_checksum is provided - nothing to validate against
+            logger.warning(f'No existing checksum files to validate against')
+            return
     else:
         logger.critical(f'Video file not found: {video_file_path}')
         return
@@ -131,7 +186,8 @@ def check_fixity(directory, video_id, actual_checksum=None, check_cancelled=None
     most_recent_checksum = None
     most_recent_checksum_date = None
 
-    for checksum_file_path, file_date, file_algorithm in checksum_files:
+    # Only validate against files with matching algorithm
+    for checksum_file_path, file_date, file_algorithm in files_to_validate:
         # Read the checksum from the file (returns tuple of checksum, algorithm)
         expected_checksum, _ = read_checksum_from_file(checksum_file_path)
 
