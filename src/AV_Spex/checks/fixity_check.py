@@ -105,14 +105,20 @@ def check_fixity(directory, video_id, actual_checksum=None, check_cancelled=None
             output_fixity(directory, video_file_path, check_cancelled=check_cancelled, signals=signals)
             return
         elif checksum_files and actual_checksum is None:
-            # Get the algorithm of the most recent checksum file for comparison
-            # This ensures backward compatibility - verify against the stored algorithm
-            most_recent_file_algorithm = checksum_files[0][2]
+            # Read the most recent checksum file to detect algorithm from content
+            # This is more reliable than detecting from file extension
+            most_recent_checksum_path = checksum_files[0][0]
+            most_recent_checksum, detected_algorithm = read_checksum_from_file(most_recent_checksum_path)
+            
+            if detected_algorithm is None:
+                # Fall back to extension-based detection if content detection fails
+                detected_algorithm = checksum_files[0][2]
+                logger.warning(f'Could not detect algorithm from checksum content, falling back to extension-based detection: {detected_algorithm}')
             
             # Calculate the checksum using the same algorithm as stored checksum
             actual_checksum = calculate_checksum(
                 video_file_path, 
-                algorithm=most_recent_file_algorithm,
+                algorithm=detected_algorithm,
                 check_cancelled=check_cancelled, 
                 signals=signals
             )
@@ -126,8 +132,8 @@ def check_fixity(directory, video_id, actual_checksum=None, check_cancelled=None
     most_recent_checksum_date = None
 
     for checksum_file_path, file_date, file_algorithm in checksum_files:
-        # Read the checksum from the file
-        expected_checksum = read_checksum_from_file(checksum_file_path)
+        # Read the checksum from the file (returns tuple of checksum, algorithm)
+        expected_checksum, _ = read_checksum_from_file(checksum_file_path)
 
         # Update most recent checksum if this one is newer
         if most_recent_checksum_date is None or file_date > most_recent_checksum_date:
@@ -208,7 +214,7 @@ def read_checksum_from_file(file_path):
         file_path: Path to the checksum file
         
     Returns:
-        str: The checksum string, or None if not found
+        tuple: (checksum, algorithm) where algorithm is 'md5', 'sha256', or None if not found
     """
     # Read the file in binary mode first to handle encoding issues
     try:
@@ -216,7 +222,7 @@ def read_checksum_from_file(file_path):
             content_bytes = file.read()
     except Exception as e:
         logger.critical(f'Error reading file {file_path}: {e}\n')
-        return None
+        return (None, None)
     
     # Try to decode with utf-8 first, with error reporting
     try:
@@ -229,7 +235,7 @@ def read_checksum_from_file(file_path):
             logger.warning(f'Used latin-1 encoding as fallback for {file_path}\n')
         except Exception as e2:
             logger.error(f'Failed to decode {file_path} with fallback encoding: {e2}\n')
-            return None
+            return (None, None)
 
     # Try to find the checksum in the content
     # Support both MD5 (32 hex chars) and SHA256 (64 hex chars)
@@ -238,14 +244,14 @@ def read_checksum_from_file(file_path):
         # Check for SHA256 (64 characters)
         if len(part) == 64 and all(c in '0123456789abcdefABCDEF' for c in part):
             logger.info(f'SHA256 checksum found in {os.path.basename(file_path)}: {part}\n')
-            return part
+            return (part, 'sha256')
         # Check for MD5 (32 characters)
         elif len(part) == 32 and all(c in '0123456789abcdefABCDEF' for c in part):
             logger.info(f'MD5 checksum found in {os.path.basename(file_path)}: {part}\n')
-            return part
+            return (part, 'md5')
 
     logger.critical(f'Checksum not found in {file_path}\n')
-    return None
+    return (None, None)
 
 
 def calculate_checksum(filename, algorithm='md5', check_cancelled=None, signals=None):
