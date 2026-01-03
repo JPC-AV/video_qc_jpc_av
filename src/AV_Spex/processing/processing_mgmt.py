@@ -72,6 +72,9 @@ class ProcessingManager:
                 if validation_result is True:
                     if self.signals:
                         self.signals.step_completed.emit("Validate Stream Fixity")
+                elif validation_result is False:
+                    if self.signals:
+                        self.signals.step_failed.emit("Validate Stream Fixity")
 
         # Initialize file_checksum variable
         file_checksum = None
