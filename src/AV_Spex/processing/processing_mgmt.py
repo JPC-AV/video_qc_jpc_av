@@ -133,7 +133,7 @@ class ProcessingManager:
 
         # Run MediaConch command
         if not run_mediaconch_command(
-            'mediaconch -p', 
+            'mediaconch', 
             video_path, 
             '-oc', 
             mediaconch_output_path, 
