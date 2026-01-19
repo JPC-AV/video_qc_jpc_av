@@ -64,8 +64,7 @@ class ConfigManager:
         """
         logo_path = os.path.join(self._logo_files_dir, logo_filename)
         if os.path.exists(logo_path):
-            # Quote the path if it contains spaces
-            return f'"{logo_path}"' if ' ' in logo_path else logo_path
+            return logo_path
         return None
     
     def get_available_policies(self) -> list[str]:
@@ -87,14 +86,12 @@ class ConfigManager:
         # Check user directory first
         user_path = os.path.join(self._user_policies_dir, policy_name)
         if os.path.exists(user_path):
-            # Quote the path if it contains spaces
-            return f'"{user_path}"' if ' ' in user_path else user_path
+            return user_path
             
         # Then check bundled policies
         bundled_path = os.path.join(self._bundled_policies_dir, policy_name)
         if os.path.exists(bundled_path):
-            # Quote the path if it contains spaces
-            return f'"{bundled_path}"' if ' ' in bundled_path else bundled_path
+            return bundled_path
             
         return None
 
