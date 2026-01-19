@@ -43,13 +43,19 @@ def run_mediaconch_command(command, input_path, output_type, output_path, policy
         bool: True if command executed successfully, False otherwise
     """
     try:
-        # Construct full command
-        full_command = f"{command} \"{policy_path}\" \"{input_path}\" {output_type} \"{output_path}\""
+        # Construct command as list (safer than shell=True)
+        cmd_list = [
+            command,
+            '-p', policy_path,
+            input_path,
+            output_type,
+            output_path
+        ]
         
-        logger.debug(f'Running command: {full_command}\n')
+        logger.debug(f'Running command: {" ".join(cmd_list)}\n')
         
-        # Run the command
-        result = subprocess.run(full_command, shell=True, capture_output=True, text=True)
+        # Run the command with shell=False (safer and handles spaces properly)
+        result = subprocess.run(cmd_list, capture_output=True, text=True)
         
         # Check for command execution errors
         if result.returncode != 0:
@@ -61,7 +67,6 @@ def run_mediaconch_command(command, input_path, output_type, output_path, policy
     except Exception as e:
         logger.critical(f'Error running MediaConch command: {e}')
         return False
-
 
 def parse_mediaconch_output(output_path):
     """

@@ -317,7 +317,6 @@ Each tool has a 'run' or 'check' option. **'run'** outputs a sidecar file. **'ch
       - **run_tool**: yes/no
    - **Mediaconch**
       - **mediaconch_policy**: mediaconch xml file   
-         (Add new files with the   CLI `--mediaconch-policy` option or through the GUI)
       - **run_mediaconch**: yes/no
    - **Mediainfo**
       - **check_tool**: yes/no

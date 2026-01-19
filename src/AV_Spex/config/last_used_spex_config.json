@@ -1,0 +1,378 @@
+{
+  "filename_values": {
+    "Collection": "2012_79",
+    "MediaType": "2",
+    "ObjectID": "\\d{3}_\\d{1}[a-zA-Z]",
+    "FileExtension": "mkv",
+    "DigitalGeneration": "PM"
+  },
+  "mediainfo_values": {
+    "expected_general": {
+      "file_extension": "mkv",
+      "format": "Matroska",
+      "overall_bit_rate_mode": "Variable"
+    },
+    "expected_video": {
+      "format": "FFV1",
+      "format_settings_gop": "N=1",
+      "codec_id": "V_MS/VFW/FOURCC / FFV1",
+      "width": "720 pixels",
+      "height": "486 pixels",
+      "pixel_aspect_ratio": "0.900",
+      "display_aspect_ratio": "4:3",
+      "frame_rate_mode": "Constant",
+      "frame_rate": "29.970",
+      "standard": "NTSC",
+      "color_space": "YUV",
+      "chroma_subsampling": "4:2:2",
+      "bit_depth": "10 bits",
+      "scan_type": "Interlaced",
+      "scan_order": "Bottom Field First",
+      "compression_mode": "Lossless",
+      "color_primaries": "BT.601 NTSC",
+      "colour_primaries_source": "Container",
+      "transfer_characteristics": "BT.709",
+      "transfer_characteristics_source": "Container",
+      "matrix_coefficients": "BT.601",
+      "max_slices_count": "24",
+      "error_detection_type": "Per slice"
+    },
+    "expected_audio": {
+      "format": [
+        "FLAC",
+        "PCM"
+      ],
+      "channels": "2 channels",
+      "sampling_rate": "48.0 kHz",
+      "bit_depth": "24 bits",
+      "compression_mode": "Lossless"
+    }
+  },
+  "exiftool_values": {
+    "file_type": "MKV",
+    "file_type_extension": "mkv",
+    "mime_type": "video/x-matroska",
+    "video_frame_rate": "29.97",
+    "image_width": "720",
+    "image_height": "486",
+    "video_scan_type": "Interlaced",
+    "display_width": "4",
+    "display_height": "3",
+    "display_unit": "Display Aspect Ratio",
+    "codec_id": [
+      "A_FLAC",
+      "A_PCM/INT/LIT"
+    ],
+    "audio_channels": "2",
+    "audio_sample_rate": "48000",
+    "audio_bits_per_sample": "24"
+  },
+  "ffmpeg_values": {
+    "video_stream": {
+      "codec_name": "ffv1",
+      "codec_long_name": "FFmpeg video codec #1",
+      "codec_type": "video",
+      "codec_tag_string": "FFV1",
+      "codec_tag": "0x31564646",
+      "width": "720",
+      "height": "486",
+      "display_aspect_ratio": "4:3",
+      "pix_fmt": "yuv422p10le",
+      "color_space": "smpte170m",
+      "color_transfer": "bt709",
+      "color_primaries": "smpte170m",
+      "field_order": "bt",
+      "bits_per_raw_sample": "10"
+    },
+    "audio_stream": {
+      "codec_name": [
+        "flac",
+        "pcm_s24le"
+      ],
+      "codec_long_name": [
+        "FLAC (Free Lossless Audio Codec)",
+        "PCM signed 24-bit little-endian"
+      ],
+      "codec_type": "audio",
+      "codec_tag": "0x0000",
+      "sample_fmt": "s32",
+      "sample_rate": "48000",
+      "channels": "2",
+      "channel_layout": "stereo",
+      "bits_per_raw_sample": "24"
+    },
+    "format": {
+      "format_name": "matroska webm",
+      "format_long_name": "Matroska / WebM",
+      "tags": {
+        "creation_time": null,
+        "ENCODER": null,
+        "TITLE": null,
+        "ENCODER_SETTINGS": {
+          "Source_VTR": [
+            "SVO5800",
+            "SN 122345",
+            "composite",
+            "analog balanced"
+          ],
+          "TBC_Framesync": [
+            "DPS575 with flash firmware h2.16",
+            "SN 15230",
+            "SDI",
+            "audio embedded"
+          ],
+          "ADC": [
+            "DPS575 with flash firmware h2.16",
+            "SN 15230",
+            "SDI"
+          ],
+          "Capture_Device": [
+            "Black Magic Ultra Jam",
+            "SN B022159",
+            "Thunderbolt"
+          ],
+          "Computer": [
+            "2023 Mac Mini",
+            "Apple M2 Pro chip",
+            "SN H9HDW53JMV",
+            "OS 14.5",
+            "vrecord v2023-08-07",
+            "ffmpeg"
+          ]
+        },
+        "DESCRIPTION": null,
+        "ORIGINAL MEDIA TYPE": null,
+        "ENCODED_BY": null
+      }
+    }
+  },
+  "mediatrace_values": {
+    "COLLECTION": null,
+    "TITLE": null,
+    "CATALOG_NUMBER": null,
+    "DESCRIPTION": null,
+    "DATE_DIGITIZED": null,
+    "ENCODER_SETTINGS": {
+      "Source_VTR": [
+        "SVO5800",
+        "SN 122345",
+        "composite",
+        "analog balanced"
+      ],
+      "TBC_Framesync": [
+        "DPS575 with flash firmware h2.16",
+        "SN 15230",
+        "SDI",
+        "audio embedded"
+      ],
+      "ADC": [
+        "DPS575 with flash firmware h2.16",
+        "SN 15230",
+        "SDI"
+      ],
+      "Capture_Device": [
+        "Black Magic Ultra Jam",
+        "SN B022159",
+        "Thunderbolt"
+      ],
+      "Computer": [
+        "2023 Mac Mini",
+        "Apple M2 Pro chip",
+        "SN H9HDW53JMV",
+        "OS 14.5",
+        "vrecord v2023-08-07",
+        "ffmpeg"
+      ]
+    },
+    "ENCODED_BY": null,
+    "ORIGINAL_MEDIA_TYPE": null,
+    "DATE_TAGGED": null,
+    "TERMS_OF_USE": null,
+    "_TECHNICAL_NOTES": null,
+    "_ORIGINAL_FPS": null
+  },
+  "qct_parse_values": {
+    "content": {
+      "allBlack": {
+        "YMAX": [
+          300.0,
+          "lt"
+        ],
+        "YHIGH": [
+          115.0,
+          "lt"
+        ],
+        "YLOW": [
+          97.0,
+          "lt"
+        ],
+        "YMIN": [
+          6.5,
+          "lt"
+        ]
+      },
+      "static": {
+        "YMIN": [
+          5.0,
+          "lt"
+        ],
+        "YLOW": [
+          6.0,
+          "lt"
+        ],
+        "YAVG": [
+          240.0,
+          "lt"
+        ],
+        "YMAX": [
+          1018.0,
+          "gt"
+        ],
+        "YDIF": [
+          260.0,
+          "gt"
+        ],
+        "ULOW": [
+          325.0,
+          "gt"
+        ],
+        "UAVG": [
+          509.0,
+          "gt"
+        ],
+        "UHIGH": [
+          695.0,
+          "lt"
+        ],
+        "UMAX": [
+          990.0,
+          "gt"
+        ],
+        "UDIF": [
+          138.0,
+          "gt"
+        ],
+        "VMIN": [
+          100.0,
+          "lt"
+        ],
+        "VLOW": [
+          385.0,
+          "gt"
+        ],
+        "VAVG": [
+          500.0,
+          "gt"
+        ],
+        "VHIGH": [
+          650.0,
+          "lt"
+        ],
+        "VMAX": [
+          940.0,
+          "gt"
+        ],
+        "VDIF": [
+          98.0,
+          "gt"
+        ]
+      }
+    },
+    "profiles": {
+      "default": {
+        "YLOW": 64.0,
+        "YHIGH": 940.0,
+        "ULOW": 64.0,
+        "UHIGH": 940.0,
+        "VLOW": 0.0,
+        "VHIGH": 1023.0,
+        "SATMAX": 181.02,
+        "TOUT": 0.009,
+        "VREP": 0.03
+      },
+      "highTolerance": {
+        "YLOW": 40.0,
+        "YMAX": 1000.0,
+        "UMIN": 64.0,
+        "UMAX": 1000.0,
+        "VMIN": 0.0,
+        "VMAX": 1023.0,
+        "SATMAX": 181.02,
+        "TOUT": 0.009,
+        "VREP": 0.03
+      },
+      "midTolerance": {
+        "YLOW": 40.0,
+        "YMAX": 980.0,
+        "UMIN": 64.0,
+        "UMAX": 980.0,
+        "VMIN": 0.0,
+        "VMAX": 1023.0,
+        "SATMAX": 181.02,
+        "TOUT": 0.009,
+        "VREP": 0.03
+      },
+      "lowTolerance": {
+        "YLOW": 64.0,
+        "YMAX": 940.0,
+        "UMIN": 64.0,
+        "UMAX": 940.0,
+        "VMIN": 0.0,
+        "VMAX": 1023.0,
+        "SATMAX": 181.02,
+        "TOUT": 0.009,
+        "VREP": 0.03
+      }
+    },
+    "fullTagList": {
+      "YMIN": null,
+      "YLOW": null,
+      "YAVG": null,
+      "YHIGH": null,
+      "YMAX": null,
+      "UMIN": null,
+      "ULOW": null,
+      "UAVG": null,
+      "UHIGH": null,
+      "UMAX": null,
+      "VMIN": null,
+      "VLOW": null,
+      "VAVG": null,
+      "VHIGH": null,
+      "VMAX": null,
+      "SATMIN": null,
+      "SATLOW": null,
+      "SATAVG": null,
+      "SATHIGH": null,
+      "SATMAX": null,
+      "HUEMED": null,
+      "HUEAVG": null,
+      "YDIF": null,
+      "UDIF": null,
+      "VDIF": null,
+      "TOUT": null,
+      "VREP": null,
+      "BRNG": null,
+      "mse_y": null,
+      "mse_u": null,
+      "mse_v": null,
+      "mse_avg": null,
+      "psnr_y": null,
+      "psnr_u": null,
+      "psnr_v": null,
+      "psnr_avg": null,
+      "Overall_Min_level": null,
+      "Overall_Max_level": null
+    },
+    "smpte_color_bars": {
+      "YMAX": 940.0,
+      "YMIN": 28.0,
+      "UMIN": 148.0,
+      "UMAX": 876.0,
+      "VMIN": 124.0,
+      "VMAX": 867.0,
+      "SATMIN": 0.0,
+      "SATMAX": 405.0
+    }
+  }
+}
