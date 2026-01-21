@@ -35,7 +35,7 @@ def validate_input_paths(input_paths, is_file_mode):
 
 def move_vrec_files(directory, video_id):
     # Define expected file extensions once
-    VRECORD_EXTENSIONS = (
+    vrecord_extensions = (
         '_QC_output_graphs.jpeg',
         '_vrecord_input.log',
         '_capture_options.log',
@@ -52,14 +52,14 @@ def move_vrec_files(directory, video_id):
     files_to_move = []
     for filename in os.listdir(directory):
         file_path = os.path.join(directory, filename)
-        if os.path.isfile(file_path) and filename.endswith(VRECORD_EXTENSIONS):
+        if os.path.isfile(file_path) and filename.endswith(vrecord_extensions):
             files_to_move.append((file_path, filename))
 
     # If no files to move, check if they're already in the vrecord directory
     if not files_to_move:
         if os.path.exists(vrecord_directory):
             existing_files = os.listdir(vrecord_directory)
-            if any(f.endswith(VRECORD_EXTENSIONS) for f in existing_files):
+            if any(f.endswith(vrecord_extensions) for f in existing_files):
                 logger.debug(f"Existing vrecord files found in {os.path.basename(directory)}/{os.path.basename(vrecord_directory)}\n")
                 return
         logger.debug("No vrecord files found.\n")
