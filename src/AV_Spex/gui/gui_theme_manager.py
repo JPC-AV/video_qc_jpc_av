@@ -412,26 +412,46 @@ class ThemeManager(QObject):
                 background: {bg_color};
                 width: 14px;
                 margin: 0px;
+                border-radius: 7px;
             }}
             QScrollBar::handle:vertical {{
-                background: {mid_color};
-                min-height: 20px;
+                background: rgba(180, 180, 180, 0.7);
+                min-height: 30px;
                 border-radius: 7px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: rgba(200, 200, 200, 0.9);
+            }}
+            QScrollBar::handle:vertical:pressed {{
+                background: rgba(220, 220, 220, 1.0);
             }}
             QScrollBar:horizontal {{
                 background: {bg_color};
                 height: 14px;
                 margin: 0px;
+                border-radius: 7px;
             }}
             QScrollBar::handle:horizontal {{
-                background: {mid_color};
-                min-width: 20px;
+                background: rgba(180, 180, 180, 0.7);
+                min-width: 30px;
                 border-radius: 7px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: rgba(200, 200, 200, 0.9);
+            }}
+            QScrollBar::handle:horizontal:pressed {{
+                background: rgba(220, 220, 220, 1.0);
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
                 height: 0px;
                 width: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
             }}
         """)
         
