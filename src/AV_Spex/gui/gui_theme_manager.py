@@ -397,7 +397,7 @@ class ThemeManager(QObject):
                 highlight_text_color = "#ffffff"
                 mid_color = "#999999"
             
-        # Apply stylesheet with fallback-safe colors
+        # Apply stylesheet with optimized scrollbar styling
         text_edit.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {bg_color};
@@ -408,17 +408,19 @@ class ThemeManager(QObject):
                 selection-background-color: {highlight_color};
                 selection-color: {highlight_text_color};
             }}
+            
+            /* Vertical Scrollbar */
             QScrollBar:vertical {{
                 background: {bg_color};
-                width: 14px;
+                width: 10px;
                 margin: 0px;
-                border-radius: 7px;
+                border: none;
+                padding: 2px;
             }}
             QScrollBar::handle:vertical {{
                 background: rgba(180, 180, 180, 0.7);
                 min-height: 30px;
-                border-radius: 7px;
-                margin: 2px;
+                border-radius: 3px;
             }}
             QScrollBar::handle:vertical:hover {{
                 background: rgba(200, 200, 200, 0.9);
@@ -426,17 +428,19 @@ class ThemeManager(QObject):
             QScrollBar::handle:vertical:pressed {{
                 background: rgba(220, 220, 220, 1.0);
             }}
+            
+            /* Horizontal Scrollbar */
             QScrollBar:horizontal {{
                 background: {bg_color};
-                height: 14px;
+                height: 10px;
                 margin: 0px;
-                border-radius: 7px;
+                border: none;
+                padding: 2px;
             }}
             QScrollBar::handle:horizontal {{
                 background: rgba(180, 180, 180, 0.7);
                 min-width: 30px;
-                border-radius: 7px;
-                margin: 2px;
+                border-radius: 3px;
             }}
             QScrollBar::handle:horizontal:hover {{
                 background: rgba(200, 200, 200, 0.9);
@@ -444,13 +448,13 @@ class ThemeManager(QObject):
             QScrollBar::handle:horizontal:pressed {{
                 background: rgba(220, 220, 220, 1.0);
             }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+            
+            /* Remove scrollbar arrows and make pages/corners invisible */
+            QScrollBar::add-line, QScrollBar::sub-line {{
                 height: 0px;
                 width: 0px;
             }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
-            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            QScrollBar::add-page, QScrollBar::sub-page, QScrollBar::corner {{
                 background: none;
             }}
         """)
