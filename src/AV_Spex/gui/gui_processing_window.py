@@ -367,6 +367,29 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         if not found:
             self.details_text.append(f"Warning: No matching step found for '{step_name}'")
 
+    def mark_step_failed(self, step_name):
+        """Mark a step as failed in the list."""
+        found = False
+        for i in range(self.steps_list.count()):
+            item = self.steps_list.item(i)
+            item_text = item.text()[2:]  # Remove the checkbox prefix
+            
+            # Check for exact match first
+            if item_text == step_name:
+                item.setText(f"❌ {step_name}")
+                item.setFont(QFont("Arial", weight=QFont.Weight.Bold))
+                found = True
+                break
+            # If no exact match, try case-insensitive matching
+            elif item_text.lower() == step_name.lower():
+                item.setText(f"❌ {item_text}")  # Keep original capitalization
+                item.setFont(QFont("Arial", weight=QFont.Weight.Bold))
+                found = True
+                break
+        
+        if not found:
+            self.details_text.append(f"Warning: No matching step found for '{step_name}'")
+
     def reset_steps_list(self):
         """Reset the steps list when processing a new file, but preserve dependency check status."""
         for i in range(self.steps_list.count()):

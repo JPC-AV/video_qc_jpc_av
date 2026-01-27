@@ -116,9 +116,14 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.outputs_group.setLayout(outputs_layout)
         main_layout.addWidget(self.outputs_group)
     
-    # Fixity Section
+    # Fixity Section - RESTRUCTURED with two algorithm dropdowns
     def setup_fixity_section(self, main_layout):
-        """Set up the fixity section with palette-aware styling"""
+        """Set up the fixity section with palette-aware styling.
+        
+        Layout structure:
+        - File Fixity row: [Checksum Algorithm dropdown] [Output fixity] [Validate fixity]
+        - Stream Fixity row: [Stream Hash Algorithm dropdown] [Embed] [Overwrite] [Validate]
+        """
         theme_manager = ThemeManager.instance()
         
         # Creating a new fixity group
@@ -128,43 +133,148 @@ class ChecksWindow(QWidget, ThemeableMixin):
         
         fixity_layout = QVBoxLayout()
         
-        # Create checkboxes with descriptions on second line
+        # ========================================================================
+        # FILE FIXITY SECTION
+        # ========================================================================
+        file_fixity_label = QLabel("File Fixity")
+        file_fixity_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        fixity_layout.addWidget(file_fixity_label)
+        
+        # Container for file fixity row
+        file_fixity_container = QWidget()
+        file_fixity_layout = QHBoxLayout(file_fixity_container)
+        file_fixity_layout.setContentsMargins(0, 5, 0, 10)
+        
+        # Checksum algorithm dropdown (left side)
+        algorithm_widget = QWidget()
+        algorithm_layout = QVBoxLayout(algorithm_widget)
+        algorithm_layout.setContentsMargins(0, 0, 20, 0)
+        algorithm_layout.setSpacing(2)
+        
+        algorithm_label = QLabel("Checksum Algorithm:")
+        algorithm_label.setStyleSheet("font-weight: bold;")
+        
+        self.checksum_algorithm_combo = QComboBox()
+        self.checksum_algorithm_combo.addItems(["md5", "sha256"])
+        self.checksum_algorithm_combo.setMinimumWidth(120)
+        
+        algorithm_desc = QLabel("Hash algorithm for file checksums")
+        algorithm_desc.setStyleSheet("color: gray; font-size: 10px;")
+        
+        algorithm_layout.addWidget(algorithm_label)
+        algorithm_layout.addWidget(self.checksum_algorithm_combo)
+        algorithm_layout.addWidget(algorithm_desc)
+        
+        file_fixity_layout.addWidget(algorithm_widget)
+        
+        # File fixity checkboxes (right side)
+        file_checkboxes_widget = QWidget()
+        file_checkboxes_layout = QVBoxLayout(file_checkboxes_widget)
+        file_checkboxes_layout.setContentsMargins(0, 0, 0, 0)
+        file_checkboxes_layout.setSpacing(5)
+        
+        # Output fixity checkbox
         self.output_fixity_cb = QCheckBox("Output fixity")
         self.output_fixity_cb.setStyleSheet("font-weight: bold;")
-        output_fixity_desc = QLabel("Generate whole file md5 checksum of .mkv files to .txt and .md5")
+        output_fixity_desc = QLabel("Generate whole file checksum of .mkv files")
         output_fixity_desc.setIndent(20)
+        output_fixity_desc.setStyleSheet("color: gray; font-size: 10px;")
         
+        # Validate fixity checkbox
         self.check_fixity_cb = QCheckBox("Validate fixity")
         self.check_fixity_cb.setStyleSheet("font-weight: bold;")
-        check_fixity_desc = QLabel("Validates fixity of .mkv files against a checksum file in the directory")
+        check_fixity_desc = QLabel("Validate .mkv files against existing checksum file")
         check_fixity_desc.setIndent(20)
+        check_fixity_desc.setStyleSheet("color: gray; font-size: 10px;")
         
+        file_checkboxes_layout.addWidget(self.output_fixity_cb)
+        file_checkboxes_layout.addWidget(output_fixity_desc)
+        file_checkboxes_layout.addWidget(self.check_fixity_cb)
+        file_checkboxes_layout.addWidget(check_fixity_desc)
+        
+        file_fixity_layout.addWidget(file_checkboxes_widget)
+        file_fixity_layout.addStretch()
+        
+        fixity_layout.addWidget(file_fixity_container)
+        
+        # Separator line
+        separator = QWidget()
+        separator.setFixedHeight(1)
+        separator.setStyleSheet("background-color: gray;")
+        fixity_layout.addWidget(separator)
+        
+        # ========================================================================
+        # STREAM FIXITY SECTION
+        # ========================================================================
+        stream_fixity_label = QLabel("Stream Fixity")
+        stream_fixity_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        fixity_layout.addWidget(stream_fixity_label)
+        
+        # Container for stream fixity row
+        stream_fixity_container = QWidget()
+        stream_fixity_layout = QHBoxLayout(stream_fixity_container)
+        stream_fixity_layout.setContentsMargins(0, 5, 0, 0)
+        
+        # Stream hash algorithm dropdown (left side)
+        stream_algorithm_widget = QWidget()
+        stream_algorithm_layout = QVBoxLayout(stream_algorithm_widget)
+        stream_algorithm_layout.setContentsMargins(0, 0, 20, 0)
+        stream_algorithm_layout.setSpacing(2)
+        
+        stream_algorithm_label = QLabel("Stream Hash Algorithm:")
+        stream_algorithm_label.setStyleSheet("font-weight: bold;")
+        
+        self.stream_hash_algorithm_combo = QComboBox()
+        self.stream_hash_algorithm_combo.addItems(["md5", "sha256"])
+        self.stream_hash_algorithm_combo.setMinimumWidth(120)
+        
+        stream_algorithm_desc = QLabel("Hash algorithm for stream checksums")
+        stream_algorithm_desc.setStyleSheet("color: gray; font-size: 10px;")
+        
+        stream_algorithm_layout.addWidget(stream_algorithm_label)
+        stream_algorithm_layout.addWidget(self.stream_hash_algorithm_combo)
+        stream_algorithm_layout.addWidget(stream_algorithm_desc)
+        
+        stream_fixity_layout.addWidget(stream_algorithm_widget)
+        
+        # Stream fixity checkboxes (right side)
+        stream_checkboxes_widget = QWidget()
+        stream_checkboxes_layout = QVBoxLayout(stream_checkboxes_widget)
+        stream_checkboxes_layout.setContentsMargins(0, 0, 0, 0)
+        stream_checkboxes_layout.setSpacing(5)
+        
+        # Embed stream fixity checkbox
         self.embed_stream_cb = QCheckBox("Embed Stream fixity")
         self.embed_stream_cb.setStyleSheet("font-weight: bold;")
-        embed_stream_desc = QLabel("Embeds video and audio stream checksums into .mkv tags")
+        embed_stream_desc = QLabel("Embed video and audio stream checksums into .mkv tags")
         embed_stream_desc.setIndent(20)
+        embed_stream_desc.setStyleSheet("color: gray; font-size: 10px;")
         
+        # Overwrite stream fixity checkbox
         self.overwrite_stream_cb = QCheckBox("Overwrite Stream fixity")
         self.overwrite_stream_cb.setStyleSheet("font-weight: bold;")
         overwrite_stream_desc = QLabel("Embed stream checksums regardless if existing ones are found")
         overwrite_stream_desc.setIndent(20)
+        overwrite_stream_desc.setStyleSheet("color: gray; font-size: 10px;")
         
+        # Validate stream fixity checkbox
         self.validate_stream_cb = QCheckBox("Validate Stream fixity")
         self.validate_stream_cb.setStyleSheet("font-weight: bold;")
-        validate_stream_desc = QLabel("Validates any embedded stream fixity, will embedded stream fixity if none is found")
+        validate_stream_desc = QLabel("Validate embedded stream fixity, will embed if none found")
         validate_stream_desc.setIndent(20)
+        validate_stream_desc.setStyleSheet("color: gray; font-size: 10px;")
         
-        # Add to layout
-        fixity_layout.addWidget(self.output_fixity_cb)
-        fixity_layout.addWidget(output_fixity_desc)
-        fixity_layout.addWidget(self.check_fixity_cb)
-        fixity_layout.addWidget(check_fixity_desc)
-        fixity_layout.addWidget(self.embed_stream_cb)
-        fixity_layout.addWidget(embed_stream_desc)
-        fixity_layout.addWidget(self.overwrite_stream_cb)
-        fixity_layout.addWidget(overwrite_stream_desc)
-        fixity_layout.addWidget(self.validate_stream_cb)
-        fixity_layout.addWidget(validate_stream_desc)
+        stream_checkboxes_layout.addWidget(self.embed_stream_cb)
+        stream_checkboxes_layout.addWidget(embed_stream_desc)
+        stream_checkboxes_layout.addWidget(self.overwrite_stream_cb)
+        stream_checkboxes_layout.addWidget(overwrite_stream_desc)
+        stream_checkboxes_layout.addWidget(self.validate_stream_cb)
+        stream_checkboxes_layout.addWidget(validate_stream_desc)
+        
+        stream_fixity_layout.addWidget(stream_checkboxes_widget)
+        stream_fixity_layout.addStretch()
+        
+        fixity_layout.addWidget(stream_fixity_container)
         
         self.fixity_group.setLayout(fixity_layout)
         main_layout.addWidget(self.fixity_group)
@@ -380,6 +490,12 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Special handling for overwrite_stream_cb to auto-check embed_stream_cb
         self.overwrite_stream_cb.stateChanged.connect(self.on_overwrite_stream_changed)
         
+        # Checksum algorithm dropdown (for file fixity)
+        self.checksum_algorithm_combo.currentTextChanged.connect(self.on_checksum_algorithm_changed)
+        
+        # Stream hash algorithm dropdown (NEW)
+        self.stream_hash_algorithm_combo.currentTextChanged.connect(self.on_stream_hash_algorithm_changed)
+        
         # Tools section
         for tool, widgets in self.tool_widgets.items():
             if tool == 'qctools':
@@ -431,6 +547,26 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.embed_stream_cb.setChecked(checks_config.fixity.embed_stream_fixity)
         self.output_fixity_cb.setChecked(checks_config.fixity.output_fixity)
         self.overwrite_stream_cb.setChecked(checks_config.fixity.overwrite_stream_fixity)
+        
+        # Checksum algorithm (for file fixity)
+        self.checksum_algorithm_combo.blockSignals(True)
+        algorithm = getattr(checks_config.fixity, 'checksum_algorithm', 'md5')
+        index = self.checksum_algorithm_combo.findText(algorithm)
+        if index >= 0:
+            self.checksum_algorithm_combo.setCurrentIndex(index)
+        else:
+            self.checksum_algorithm_combo.setCurrentText('md5')
+        self.checksum_algorithm_combo.blockSignals(False)
+        
+        # Stream hash algorithm (NEW)
+        self.stream_hash_algorithm_combo.blockSignals(True)
+        stream_algorithm = getattr(checks_config.fixity, 'stream_hash_algorithm', 'md5')
+        stream_index = self.stream_hash_algorithm_combo.findText(stream_algorithm)
+        if stream_index >= 0:
+            self.stream_hash_algorithm_combo.setCurrentIndex(stream_index)
+        else:
+            self.stream_hash_algorithm_combo.setCurrentText('md5')
+        self.stream_hash_algorithm_combo.blockSignals(False)
         
         # Tools - now using booleans directly
         for tool, widgets in self.tool_widgets.items():
@@ -541,6 +677,24 @@ class ChecksWindow(QWidget, ThemeableMixin):
             return
         
         updates = {path[0]: {path[1]: text}}
+        config_mgr.update_config('checks', updates)
+
+    def on_checksum_algorithm_changed(self, algorithm):
+        """Handle changes in checksum algorithm selection (for file fixity)"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
+        updates = {'fixity': {'checksum_algorithm': algorithm}}
+        config_mgr.update_config('checks', updates)
+
+    def on_stream_hash_algorithm_changed(self, algorithm):
+        """Handle changes in stream hash algorithm selection (NEW)"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
+        updates = {'fixity': {'stream_hash_algorithm': algorithm}}
         config_mgr.update_config('checks', updates)
 
     def on_overwrite_stream_changed(self, state):

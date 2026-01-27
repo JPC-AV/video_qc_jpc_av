@@ -66,19 +66,24 @@ class ProcessingManager:
             if self.checks_config.fixity.embed_stream_fixity:
                 logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
             else:
-                validate_embedded_md5(video_path, check_cancelled=self.check_cancelled, signals=self.signals)
-            # Mark checkbox
-            if self.signals:
-                self.signals.step_completed.emit("Validate Stream Fixity")
+                validation_result = validate_embedded_md5(video_path, check_cancelled=self.check_cancelled, signals=self.signals)
+                # Only mark complete if validation succeeded (True)
+                # Don't mark complete if failed (False) or cancelled (None)
+                if validation_result is True:
+                    if self.signals:
+                        self.signals.step_completed.emit("Validate Stream Fixity")
+                elif validation_result is False:
+                    if self.signals:
+                        self.signals.step_failed.emit("Validate Stream Fixity")
 
-        # Initialize md5_checksum variable
-        md5_checksum = None
+        # Initialize file_checksum variable
+        file_checksum = None
 
         # Create checksum for video file and output results
         if self.checks_config.fixity.output_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Outputting fixity...")
-            md5_checksum = output_fixity(source_directory, video_path, check_cancelled=self.check_cancelled, signals=self.signals)
+            file_checksum = output_fixity(source_directory, video_path, check_cancelled=self.check_cancelled, signals=self.signals)
             if self.signals:
                 self.signals.step_completed.emit("Output Fixity")
 
@@ -86,7 +91,7 @@ class ProcessingManager:
         if self.checks_config.fixity.check_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Validating fixity...")
-            check_fixity(source_directory, video_id, actual_checksum=md5_checksum, check_cancelled=self.check_cancelled, signals=self.signals)
+            check_fixity(source_directory, video_id, actual_checksum=file_checksum, check_cancelled=self.check_cancelled, signals=self.signals)
             if self.signals:
                 self.signals.step_completed.emit("Validate Fixity")
 

@@ -233,14 +233,20 @@ class SpexConfig:
     qct_parse_values: QCTParseValues
     signalflow_profiles: Dict[str, Dict] = field(default_factory=dict)
 
-# Output configuration - Now using booleans
+# Output configuration 
 @dataclass
 class OutputsConfig:
     access_file: bool
     report: bool
-    qctools_ext: str  # This stays as string since it's a file extension
+    qctools_ext: str
 
-# Fixity configuration - Now using booleans
+@dataclass
+class ChecksumAlgorithm(Enum):
+    """Supported checksum algorithms for fixity checking"""
+    MD5 = "md5"
+    SHA256 = "sha256"
+
+# Fixity configuration 
 @dataclass
 class FixityConfig:
     check_fixity: bool
@@ -248,8 +254,10 @@ class FixityConfig:
     embed_stream_fixity: bool
     output_fixity: bool
     overwrite_stream_fixity: bool
+    checksum_algorithm: str = "md5"
+    stream_hash_algorithm: str = "md5"
 
-# Tool-specific configurations - Now using booleans
+# Tool-specific configurations 
 @dataclass
 class BasicToolConfig:
     check_tool: bool
@@ -328,7 +336,9 @@ class ChecksProfile:
         validate_stream_fixity=False,
         embed_stream_fixity=False, 
         output_fixity=False,
-        overwrite_stream_fixity=False
+        overwrite_stream_fixity=False,
+        checksum_algorithm="md5",
+        stream_hash_algorithm="md5"
     ))
     tools: ToolsConfig = field(default_factory=lambda: ToolsConfig(
         exiftool=BasicToolConfig(check_tool=False, run_tool=False),
