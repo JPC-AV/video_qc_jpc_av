@@ -13,6 +13,7 @@ class ProcessingSignals(QObject):
     tool_started = pyqtSignal(str)  # Signal for when a specific tool starts
     tool_completed = pyqtSignal(str)  # Signal for when a tool completes
     step_completed = pyqtSignal(str)  # Signal when a specific step is completed
+    step_failed = pyqtSignal(str)     # Signal when a specific step fails 
     
     fixity_progress = pyqtSignal(str)  # For detailed fixity status
     mediaconch_progress = pyqtSignal(str)  # For detailed mediaconch status

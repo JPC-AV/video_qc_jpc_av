@@ -10,7 +10,33 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
+def get_stream_hash_algorithm():
+    """Get the configured stream hash algorithm from config."""
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    return getattr(checks_config.fixity, 'stream_hash_algorithm', 'md5').lower()
+
+
+def detect_hash_algorithm(hash_string):
+    """
+    Detect the hash algorithm used based on the hash string length.
+    
+    Args:
+        hash_string: The hash string to analyze
+        
+    Returns:
+        str: 'md5', 'sha256', or None if unknown
+    """
+    if hash_string is None:
+        return None
+    
+    hash_length = len(hash_string)
+    if hash_length == 32:
+        return 'md5'
+    elif hash_length == 64:
+        return 'sha256'
+    else:
+        return None
 
 def get_total_frames(video_path):
     """
@@ -100,7 +126,9 @@ def get_total_frames(video_path):
 
 
 def make_stream_hash(video_path, check_cancelled=None, signals=None):
-    """Calculate MD5 checksum of video and audio streams using ffmpeg."""   
+    """Calculate checksum of video and audio streams using ffmpeg."""   
+    
+    algorithm = get_stream_hash_algorithm()
 
     if not signals:
         print(f"\rFFmpeg 'streamhash' Progress: Initializing...", end='', flush=True)
@@ -121,14 +149,18 @@ def make_stream_hash(video_path, check_cancelled=None, signals=None):
         '-i', video_path,
         '-map', '0',
         '-f', 'streamhash',
-        '-hash', 'md5',
+        '-hash', algorithm,
         '-'
     ]
     
-    # Constants for parsing
+    # Constants for parsing - adjust based on algorithm
     frame_prefix = 'frame='
-    video_hash_prefix = '0,v,MD5'
-    audio_hash_prefix = '1,a,MD5'
+    if algorithm == 'sha256':
+        video_hash_prefix = '0,v,SHA256'
+        audio_hash_prefix = '1,a,SHA256'
+    else:
+        video_hash_prefix = '0,v,MD5'
+        audio_hash_prefix = '1,a,MD5'
     
     # Update progress less frequently (every 10 frames or so)
     update_frequency = max(1, total_frames // 100)
@@ -295,15 +327,28 @@ def extract_hashes(xml_tags):
 
 
 def compare_hashes(existing_video_hash, existing_audio_hash, video_hash, audio_hash):
+    """
+    Compare stored hashes with newly computed hashes and log results.
+    """
+    # Detect algorithm for logging purposes
+    algorithm = detect_hash_algorithm(existing_video_hash)
+    algorithm_display = algorithm.upper() if algorithm else "Unknown"
+    
+    logger.info(f"Comparing {algorithm_display} hashes:\n")
+    
     if existing_video_hash == video_hash:
-        logger.info("Video hashes match.")
+        logger.info("✓ Video hashes match.")
     else:
-        logger.critical(f"Video hashes do not match. MD5 stored in MKV file: {existing_video_hash} Generated MD5: {video_hash}\n")
+        logger.critical(f"✗ Video hashes do not match.\n"
+                       f"  Stored:    {existing_video_hash}\n"
+                       f"  Computed:  {video_hash}\n")
 
     if existing_audio_hash == audio_hash:
-        logger.info("Audio hashes match.\n")
+        logger.info("✓ Audio hashes match.\n")
     else:
-        logger.critical(f"Audio hashes do not match. MD5 stored in MKV file: {existing_audio_hash} Generated MD5:{audio_hash}\n")
+        logger.critical(f"✗ Audio hashes do not match.\n"
+                       f"  Stored:    {existing_audio_hash}\n"
+                       f"  Computed:  {audio_hash}\n")
 
 
 def embed_fixity(video_path, check_cancelled=None, signals=None):
@@ -311,6 +356,9 @@ def embed_fixity(video_path, check_cancelled=None, signals=None):
     Generates new stream hashes and embeds them in the MKV file.
     Handles removal of old hashes if overwriting.
     """
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    
     logger.debug('Generating video and audio stream hashes. This may take a moment...')
     hash_result = make_stream_hash(video_path, check_cancelled=check_cancelled, signals=signals)
     if hash_result is None:
@@ -360,40 +408,98 @@ def embed_fixity(video_path, check_cancelled=None, signals=None):
 
 
 def validate_embedded_md5(video_path, check_cancelled=None, signals=None):
-
+    """
+    Validates embedded stream hashes against newly computed hashes.
+    Checks for algorithm mismatch before computing to avoid wasted effort.
+    
+    Returns:
+        True: Validation completed successfully (hashes were compared)
+        False: Validation failed (algorithm mismatch, missing tags, or missing hashes)
+        None: Cancelled by user
+    """
     if check_cancelled():
         return None
+    
+    configured_algorithm = get_stream_hash_algorithm()
 
     logger.debug('Extracting existing video and audio stream hashes\n')
     existing_tags = extract_tags(video_path)
-    if existing_tags:
-        existing_video_hash, existing_audio_hash = extract_hashes(existing_tags)
-        # Print result of extracting hashes:
-        if existing_video_hash is not None:
-            logger.info(f'Video stream md5 found: {existing_video_hash}')
-        else:
-            logger.warning('No video stream hash found\n')
-            embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
-            return
-        if existing_audio_hash is not None:
-            logger.info(f'Audio stream md5 found: {existing_audio_hash}\n')
-        else:
-            logger.warning('No audio stream hash found\n')
-            embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
-            return
-        logger.debug('Generating video and audio stream hashes. This may take a moment...')
-        hash_result = make_stream_hash(video_path, check_cancelled=check_cancelled, signals=signals)
-        if hash_result is None:
-            return None
-        video_hash, audio_hash = hash_result
-        logger.debug(f"\n")
-        logger.debug('Validating stream fixity\n')
-        compare_hashes(existing_video_hash, existing_audio_hash, video_hash, audio_hash)
-    else:
+    
+    if not existing_tags:
         logger.critical("mkvextract unable to extract MKV tags! Cannot validate stream hashes.\n")
+        return False
+    
+    existing_video_hash, existing_audio_hash = extract_hashes(existing_tags)
+    
+    # Check if hashes exist
+    if existing_video_hash is None:
+        logger.warning('No video stream hash found\n')
+        embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
+        return False
+    
+    if existing_audio_hash is None:
+        logger.warning('No audio stream hash found\n')
+        embed_fixity(video_path, check_cancelled=check_cancelled, signals=signals)
+        return False
+    
+    # Detect algorithms from stored hashes
+    video_algorithm = detect_hash_algorithm(existing_video_hash)
+    audio_algorithm = detect_hash_algorithm(existing_audio_hash)
+    
+    # Display found hashes and detected algorithms
+    logger.info(f'Video stream hash found: {existing_video_hash}')
+    if video_algorithm:
+        logger.info(f'  Detected algorithm: {video_algorithm.upper()}')
+    else:
+        logger.warning(f'  Could not detect algorithm from hash length ({len(existing_video_hash)})')
+    
+    logger.info(f'Audio stream hash found: {existing_audio_hash}')
+    if audio_algorithm:
+        logger.info(f'  Detected algorithm: {audio_algorithm.upper()}')
+    else:
+        logger.warning(f'  Could not detect algorithm from hash length ({len(existing_audio_hash)})')
+    
+    logger.info(f'Configured algorithm: {configured_algorithm.upper()}\n')
+    
+    # Check for algorithm mismatch - stop before computing if mismatch detected
+    if video_algorithm and video_algorithm != configured_algorithm:
+        logger.error(f'ALGORITHM MISMATCH: Stored video hash uses {video_algorithm.upper()}, '
+                    f'but configured algorithm is {configured_algorithm.upper()}')
+        logger.error('Validation stopped. Please update configuration or re-embed with correct algorithm.\n')
+        return False
+    
+    if audio_algorithm and audio_algorithm != configured_algorithm:
+        logger.error(f'ALGORITHM MISMATCH: Stored audio hash uses {audio_algorithm.upper()}, '
+                    f'but configured algorithm is {configured_algorithm.upper()}')
+        logger.error('Validation stopped. Please update configuration or re-embed with correct algorithm.\n')
+        return False
+    
+    # Edge case: video and audio use different algorithms
+    if video_algorithm and audio_algorithm and video_algorithm != audio_algorithm:
+        logger.error(f'ALGORITHM MISMATCH: Video hash uses {video_algorithm.upper()}, '
+                    f'but audio hash uses {audio_algorithm.upper()}')
+        logger.error('Validation stopped. Hashes must use the same algorithm.\n')
+        return False
+    
+    if check_cancelled():
+        return None
+    
+    # Algorithms match - proceed with validation
+    logger.debug('Generating video and audio stream hashes. This may take a moment...')
+    hash_result = make_stream_hash(video_path, check_cancelled=check_cancelled, signals=signals)
+    if hash_result is None:
+        return None
+    
+    video_hash, audio_hash = hash_result
+    logger.debug(f"\n")
+    logger.debug('Validating stream fixity\n')
+    compare_hashes(existing_video_hash, existing_audio_hash, video_hash, audio_hash)
 
     if check_cancelled():
         return None
+    
+    # Validation completed successfully
+    return True
 
 
 def process_embedded_fixity(video_path, check_cancelled=None, signals=None):
@@ -401,6 +507,7 @@ def process_embedded_fixity(video_path, check_cancelled=None, signals=None):
     Handles embedding stream fixity tags in the video file.
     Decides whether to embed for the first time, overwrite, or skip.
     """
+    config_mgr = ConfigManager()
     checks_config = config_mgr.get_config('checks', ChecksConfig)
 
     existing_tags = extract_tags(video_path)
