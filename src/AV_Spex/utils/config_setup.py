@@ -233,12 +233,14 @@ class SpexConfig:
     qct_parse_values: QCTParseValues
     signalflow_profiles: Dict[str, Dict] = field(default_factory=dict)
 
-# Output configuration 
+# Output configuration
+VALID_QCTOOLS_EXTENSIONS = ("qctools.xml.gz", "qctools.mkv")
+
 @dataclass
 class OutputsConfig:
     access_file: bool
     report: bool
-    qctools_ext: str
+    qctools_ext: str  # Must be one of VALID_QCTOOLS_EXTENSIONS
 
 @dataclass
 class ChecksumAlgorithm(Enum):
@@ -269,7 +271,7 @@ class QCToolsConfig:
 
 @dataclass
 class MediaConchConfig:
-    mediaconch_policy: str  # This stays as string since it's a filename
+    mediaconch_policy: str  
     run_mediaconch: bool
 
 @dataclass
