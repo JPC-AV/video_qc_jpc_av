@@ -8,7 +8,7 @@ from pathlib import Path
 from AV_Spex.processing import run_tools
 from AV_Spex.utils import dir_setup
 from AV_Spex.utils.log_setup import logger
-from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, VALID_QCTOOLS_EXTENSIONS
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.generate_report import generate_final_report
 from AV_Spex.checks.fixity_check import check_fixity, output_fixity
@@ -356,6 +356,9 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         else:
             # No existing report found, create a new one in the destination directory
             qctools_ext = checks_config.outputs.qctools_ext
+            if qctools_ext not in VALID_QCTOOLS_EXTENSIONS:
+                logger.warning(f"Invalid QCTools extension '{qctools_ext}', defaulting to 'qctools.xml.gz'")
+                qctools_ext = "qctools.xml.gz"
             qctools_output_path = os.path.join(destination_directory, f'{video_id}.{qctools_ext}')
             
             # Check if we already created one in the destination directory
