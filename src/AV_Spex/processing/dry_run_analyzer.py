@@ -277,9 +277,9 @@ class DryRunAnalyzer:
         
         return analyses
     
-    def _find_tool_output(self, destination_directory: str, video_id: str, 
+    def _find_tool_output(self, source_directory: str, video_id: str, 
                           tool_name: str) -> Optional[str]:
-        """Find existing tool output file."""
+        """Find existing tool output file in the _qc_metadata directory."""
         extensions = {
             'mediainfo': '_mediainfo.json',
             'mediatrace': '_mediatrace.xml',
@@ -288,12 +288,18 @@ class DryRunAnalyzer:
         }
         
         ext = extensions.get(tool_name)
-        if ext and destination_directory:
-            output_path = os.path.join(destination_directory, f"{video_id}{ext}")
+        if not ext:
+            return None
+        
+        # Construct the path to the _qc_metadata directory
+        qc_metadata_dir = os.path.join(source_directory, f"{video_id}_qc_metadata")
+        
+        if os.path.isdir(qc_metadata_dir):
+            output_path = os.path.join(qc_metadata_dir, f"{video_id}{ext}")
             if os.path.exists(output_path):
                 return output_path
+        
         return None
-    
     # -------------------------------------------------------------------------
     # Output Steps Analysis
     # -------------------------------------------------------------------------
