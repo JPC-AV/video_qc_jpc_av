@@ -288,10 +288,10 @@ class DryRunAnalyzer:
                           tool_name: str) -> Optional[str]:
         """Find existing tool output file in the _qc_metadata directory."""
         extensions = {
-            'mediainfo': '_mediainfo.json',
-            'mediatrace': '_mediatrace.xml',
-            'exiftool': '_exiftool.json',
-            'ffprobe': '_ffprobe.json'
+            'mediainfo': '_mediainfo_output.json',
+            'mediatrace': '_mediatrace_output.xml',
+            'exiftool': '_exiftool_output.json',
+            'ffprobe': '_ffprobe_output.txt'
         }
         
         ext = extensions.get(tool_name)
