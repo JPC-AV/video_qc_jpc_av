@@ -18,6 +18,13 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, VALID_QCTOOLS_EXTENSIONS
 from AV_Spex.utils.config_manager import ConfigManager
 
+# Import MessageType for color-coded console output
+try:
+    from AV_Spex.gui.gui_processing_window_console import MessageType
+except ImportError:
+    # Fallback if GUI module not available (e.g., CLI mode)
+    MessageType = None
+
 
 class StepStatus(Enum):
     """Status of a processing step in dry run analysis."""
@@ -465,28 +472,42 @@ class DryRunAnalyzer:
         logger.info("")
     
     def _log_analysis_summary(self, analyses: List[StepAnalysis]):
-        """Log analysis results in a readable format."""
+        """Log analysis results in a readable format with color-coded output."""
         
         will_run = [a for a in analyses if a.status == StepStatus.WILL_RUN]
-        skipped = [a for a in analyses if a.status != StepStatus.WILL_RUN]
+        skipped_disabled = [a for a in analyses if a.status == StepStatus.SKIPPED_DISABLED]
+        skipped_precondition = [a for a in analyses if a.status == StepStatus.SKIPPED_PRECONDITION]
+        skipped_exists = [a for a in analyses if a.status == StepStatus.SKIPPED_ALREADY_EXISTS]
+        
+        # Helper to get extra dict for color-coded logging
+        def get_msg_extra(msg_type):
+            if MessageType is not None:
+                return {'msg_type': msg_type}
+            return {}
         
         if will_run:
-            logger.info("Steps that WILL RUN:")
+            logger.info("Steps that WILL RUN:", extra=get_msg_extra(MessageType.SUCCESS if MessageType else None))
             for analysis in will_run:
-                logger.info(f"  ✓ {analysis.step_name}")
+                logger.info(f"  ✓ {analysis.step_name}", extra=get_msg_extra(MessageType.SUCCESS if MessageType else None))
                 if analysis.reason and analysis.reason != "Ready to run":
                     logger.debug(f"      {analysis.reason}")
         
-        if skipped:
-            logger.info("\nSteps that will be SKIPPED:")
-            for analysis in skipped:
-                status_icon = {
-                    StepStatus.SKIPPED_DISABLED: "○",
-                    StepStatus.SKIPPED_PRECONDITION: "✗",
-                    StepStatus.SKIPPED_ALREADY_EXISTS: "●"
-                }.get(analysis.status, "?")
-                
-                logger.info(f"  {status_icon} {analysis.step_name}")
-                logger.info(f"      Reason: {analysis.reason}")
+        if skipped_disabled:
+            logger.info("\nSteps DISABLED in configuration:", extra=get_msg_extra(MessageType.NORMAL if MessageType else None))
+            for analysis in skipped_disabled:
+                logger.info(f"  ○ {analysis.step_name}", extra=get_msg_extra(MessageType.NORMAL if MessageType else None))
+                logger.info(f"      Reason: {analysis.reason}", extra=get_msg_extra(MessageType.NORMAL if MessageType else None))
+        
+        if skipped_precondition:
+            logger.info("\nSteps SKIPPED (precondition not met):", extra=get_msg_extra(MessageType.WARNING if MessageType else None))
+            for analysis in skipped_precondition:
+                logger.info(f"  ✗ {analysis.step_name}", extra=get_msg_extra(MessageType.WARNING if MessageType else None))
+                logger.info(f"      Reason: {analysis.reason}", extra=get_msg_extra(MessageType.WARNING if MessageType else None))
+        
+        if skipped_exists:
+            logger.info("\nSteps SKIPPED (output already exists):", extra=get_msg_extra(MessageType.INFO if MessageType else None))
+            for analysis in skipped_exists:
+                logger.info(f"  ● {analysis.step_name}", extra=get_msg_extra(MessageType.INFO if MessageType else None))
+                logger.info(f"      Reason: {analysis.reason}", extra=get_msg_extra(MessageType.INFO if MessageType else None))
         
         logger.info("")
