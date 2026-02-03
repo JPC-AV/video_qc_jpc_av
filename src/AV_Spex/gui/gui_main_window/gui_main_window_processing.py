@@ -33,6 +33,73 @@ class MainWindowProcessing:
         except Exception as e:
             self.main_window.signals.error.emit(str(e))
 
+    def call_dry_run(self):
+        """Initialize and start dry run analysis"""
+        try:
+            # Create the processing window if it doesn't exist
+            if not hasattr(self.main_window, 'processing_window') or self.main_window.processing_window is None:
+                self.initialize_processing_window()
+            
+            # Add a divider in the console for the dry run
+            if self.main_window.processing_window and hasattr(self.main_window.processing_window, 'details_text'):
+                self.main_window.processing_window.details_text.add_processing_divider()
+            
+            # Create worker with dry_run=True
+            self.main_window.worker = ProcessingWorker(
+                self.main_window.source_directories, 
+                self.main_window.signals,
+                dry_run=True
+            )
+            
+            # Connect worker signals
+            self.main_window.worker.started_processing.connect(self.on_dry_run_started)
+            self.main_window.worker.finished.connect(self.on_worker_finished)
+            self.main_window.worker.error.connect(self.on_error)
+            self.main_window.worker.dry_run_finished.connect(self.on_dry_run_results)
+            
+            # Start the worker thread
+            self.main_window.worker.start()
+            
+        except Exception as e:
+            logger.error(f"Error starting dry run: {str(e)}")
+            self.main_window.signals.error.emit(str(e))
+
+    def on_dry_run_started(self, message=None):
+        """Handle dry run start"""
+        if hasattr(self.main_window, 'main_status_label'):
+            self.main_window.main_status_label.setText("Running dry run analysis...")
+            self.main_window.main_status_label.setVisible(True)
+        
+        if hasattr(self.main_window, 'processing_indicator'):
+            self.main_window.processing_indicator.setVisible(True)
+        
+        if hasattr(self.main_window, 'open_processing_button'):
+            self.main_window.open_processing_button.setEnabled(True)
+        
+        # Disable buttons during analysis
+        if hasattr(self.main_window, 'check_spex_button'):
+            self.main_window.check_spex_button.setEnabled(False)
+        if hasattr(self.main_window, 'dry_run_button'):
+            self.main_window.dry_run_button.setEnabled(False)
+        
+        if self.main_window.processing_window:
+            self.main_window.processing_window.update_status("Running dry run analysis...")
+
+    def on_dry_run_results(self, results):
+        """Handle dry run results"""
+        # Update processing window status
+        if self.main_window.processing_window:
+            self.main_window.processing_window.update_status("Dry run analysis complete!")
+        
+        # Show summary message
+        total_dirs = len(results)
+        QMessageBox.information(
+            self.main_window,
+            "Dry Run Complete",
+            f"Analyzed {total_dirs} director{'y' if total_dirs == 1 else 'ies'}.\n\n"
+            "Check the processing window for detailed results."
+        )
+
     def initialize_processing_window(self):
         """Create and configure the processing window and connect signals"""
         self.main_window.processing_window = ProcessingWindow(self.main_window)
@@ -79,6 +146,7 @@ class MainWindowProcessing:
         """Handle worker thread completion."""
         # Check if this was a cancellation
         was_cancelled = hasattr(self.main_window.worker, 'user_cancelled') and self.main_window.worker.user_cancelled
+        was_dry_run = hasattr(self.main_window.worker, 'dry_run') and self.main_window.worker.dry_run
 
         # Hide the processing indicator
         self.main_window.processing_indicator.setVisible(False)
@@ -87,11 +155,14 @@ class MainWindowProcessing:
         # Update UI to indicate processing is complete
         if hasattr(self.main_window, 'processing_window') and self.main_window.processing_window:
             if not was_cancelled:
-                self.main_window.processing_window.update_status("Processing completed successfully!")
-                self.main_window.processing_window.progress_bar.setMaximum(100)
-                self.main_window.processing_window.progress_bar.setValue(100)
-                # To prevent "0%" showing when jobs are done.
-                self.main_window.processing_window.overlay_label.setText("Complete")
+                if was_dry_run:
+                    self.main_window.processing_window.update_status("Dry run analysis complete!")
+                else:
+                    self.main_window.processing_window.update_status("Processing completed successfully!")
+                    self.main_window.processing_window.progress_bar.setMaximum(100)
+                    self.main_window.processing_window.progress_bar.setValue(100)
+                    # To prevent "0%" showing when jobs are done.
+                    self.main_window.processing_window.overlay_label.setText("Complete")
             
             # Change the cancel button to a close button
             self.main_window.processing_window.cancel_button.setText("Close")
@@ -109,6 +180,10 @@ class MainWindowProcessing:
         # Re-enable the Check Spex button
         if hasattr(self.main_window, 'check_spex_button'):
             self.main_window.check_spex_button.setEnabled(True)
+
+        # Re-enable the Dry Run button
+        if hasattr(self.main_window, 'dry_run_button'):
+            self.main_window.dry_run_button.setEnabled(True)
 
         # Disable the Cancel Processing button in the main window
         if hasattr(self.main_window, 'cancel_processing_button'):
@@ -169,6 +244,10 @@ class MainWindowProcessing:
         if hasattr(self.main_window, 'check_spex_button'):
             self.main_window.check_spex_button.setEnabled(False)
 
+        # Disable Dry Run button
+        if hasattr(self.main_window, 'dry_run_button'):
+            self.main_window.dry_run_button.setEnabled(False)
+
         # Apply disabled style to Check Spex button
         if hasattr(self.main_window, 'check_spex_button'):
             self.main_window.check_spex_button.setStyleSheet("""
@@ -213,6 +292,8 @@ class MainWindowProcessing:
         # Re-enable both buttons
         if hasattr(self.main_window, 'check_spex_button'):
             self.main_window.check_spex_button.setEnabled(True)
+        if hasattr(self.main_window, 'dry_run_button'):
+            self.main_window.dry_run_button.setEnabled(True)
         if hasattr(self.main_window, 'open_processing_button'):
             self.main_window.open_processing_button.setEnabled(False)
         
@@ -252,6 +333,10 @@ class MainWindowProcessing:
         if hasattr(self.main_window, 'check_spex_button'):
             self.main_window.check_spex_button.setEnabled(True)
 
+        # Re-enable the Dry Run button
+        if hasattr(self.main_window, 'dry_run_button'):
+            self.main_window.dry_run_button.setEnabled(True)
+
         # Show error message box to the user
         QMessageBox.critical(self.main_window, "Error", error_message)
         
@@ -268,11 +353,17 @@ class MainWindowProcessing:
             self.main_window.processing_window.update_detailed_status("")
 
     def cancel_processing(self):
-        """Cancel ongoing processing"""
+        """Cancel ongoing processing or dry run"""
         if hasattr(self.main_window, 'worker') and self.main_window.worker and self.main_window.worker.isRunning():
+            # Check if this is a dry run
+            is_dry_run = hasattr(self.main_window.worker, 'dry_run') and self.main_window.worker.dry_run
+            
             # Update the processing window
             if self.main_window.processing_window:
-                self.main_window.processing_window.update_status("Cancelling processing...")
+                if is_dry_run:
+                    self.main_window.processing_window.update_status("Cancelling dry run...")
+                else:
+                    self.main_window.processing_window.update_status("Cancelling processing...")
                 
                 # Update UI to indicate cancellation state
                 self.main_window.processing_window.progress_bar.setMaximum(100)
@@ -293,6 +384,10 @@ class MainWindowProcessing:
             
             # Re-enable the Check Spex button
             self.main_window.check_spex_button.setEnabled(True)
+
+            # Re-enable the Dry Run button
+            if hasattr(self.main_window, 'dry_run_button'):
+                self.main_window.dry_run_button.setEnabled(True)
 
     def on_processing_cancelled(self):
         """Handle processing cancellation"""
@@ -319,6 +414,10 @@ class MainWindowProcessing:
         # Re-enable the Check Spex button
         if hasattr(self.main_window, 'check_spex_button'):
             self.main_window.check_spex_button.setEnabled(True)
+
+        # Re-enable the Dry Run button
+        if hasattr(self.main_window, 'dry_run_button'):
+            self.main_window.dry_run_button.setEnabled(True)
         
         # Notify user
         QMessageBox.information(self.main_window, "Cancelled", "Processing was cancelled.")
