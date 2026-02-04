@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict
 from enum import Enum
 
-from AV_Spex.utils import dir_setup
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, VALID_QCTOOLS_EXTENSIONS
 from AV_Spex.utils.config_manager import ConfigManager
@@ -99,7 +98,7 @@ class DryRunAnalyzer:
         analyses = []
         
         # Initialize directory to get video info
-        init_result = dir_setup.initialize_directory(source_directory)
+        init_result = self._initialize_for_analysis(source_directory)
         if init_result is None:
             logger.error(f"Failed to initialize directory: {source_directory}")
             return [StepAnalysis(
@@ -113,7 +112,7 @@ class DryRunAnalyzer:
         video_path, video_id, destination_directory, access_file_found = init_result
         logger.info(f"Video file: {os.path.basename(video_path)}")
         logger.info(f"Video ID: {video_id}")
-        logger.info(f"Destination: {destination_directory}")
+        logger.info(f"Destination: {destination_directory}\n")
         
         # Analyze each processing step
         analyses.extend(self._analyze_fixity_steps(source_directory, video_path, video_id))
@@ -124,6 +123,55 @@ class DryRunAnalyzer:
         ))
         
         return analyses
+    
+    # -------------------------------------------------------------------------
+    # Init Dir
+    # -------------------------------------------------------------------------
+    
+    def _initialize_for_analysis(self, source_directory: str):
+        """
+        Simplified directory initialization for dry run analysis.
+        Does not create directories or move files—just identifies the video
+        and verifies naming consistency.
+        
+        Returns:
+            tuple: (video_path, video_id, destination_directory, access_file_found)
+            None: if no valid video file found
+        """
+        # Find MKV files (excluding qctools reports)
+        found_mkvs = [
+            f for f in os.listdir(source_directory)
+            if f.lower().endswith('.mkv') and 'qctools' not in f.lower()
+        ]
+        
+        if not found_mkvs:
+            logger.error(f"No MKV video file found in: {source_directory}")
+            return None
+        
+        if len(found_mkvs) > 1:
+            logger.error(f"Multiple MKV files found in {source_directory}: {found_mkvs}")
+            return None
+        
+        video_path = os.path.join(source_directory, found_mkvs[0])
+        video_id = os.path.splitext(found_mkvs[0])[0]
+        
+        # Verify directory name matches video_id
+        directory_name = os.path.basename(source_directory)
+        if not directory_name.startswith(video_id):
+            logger.warning(
+                f'Directory name "{directory_name}" does not match video file "{video_id}"'
+            )
+        
+        # Determine destination directory path (don't create it)
+        destination_directory = os.path.join(source_directory, f'{video_id}_qc_metadata')
+        
+        # Check for existing access file
+        access_file_found = next(
+            (f for f in os.listdir(source_directory) if f.lower().endswith('.mp4')),
+            None
+        )
+        
+        return video_path, video_id, destination_directory, access_file_found
     
     # -------------------------------------------------------------------------
     # Fixity Analysis
@@ -284,9 +332,9 @@ class DryRunAnalyzer:
         
         return analyses
     
-    def _find_tool_output(self, source_directory: str, video_id: str, 
-                          tool_name: str) -> Optional[str]:
-        """Find existing tool output file in the _qc_metadata directory."""
+    def _find_tool_output(self, destination_directory: str, video_id: str, 
+                      tool_name: str) -> Optional[str]:
+        """Find existing tool output file in the destination directory."""
         extensions = {
             'mediainfo': '_mediainfo_output.json',
             'mediatrace': '_mediatrace_output.xml',
@@ -298,11 +346,9 @@ class DryRunAnalyzer:
         if not ext:
             return None
         
-        # Construct the path to the _qc_metadata directory
-        qc_metadata_dir = os.path.join(source_directory, f"{video_id}_qc_metadata")
-        
-        if os.path.isdir(qc_metadata_dir):
-            output_path = os.path.join(qc_metadata_dir, f"{video_id}{ext}")
+        # destination_directory is already the _qc_metadata directory
+        if os.path.isdir(destination_directory):
+            output_path = os.path.join(destination_directory, f"{video_id}{ext}")
             if os.path.exists(output_path):
                 return output_path
         
