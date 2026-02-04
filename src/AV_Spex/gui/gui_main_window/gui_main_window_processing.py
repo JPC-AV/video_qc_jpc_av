@@ -154,10 +154,7 @@ class MainWindowProcessing:
         
         # Update UI to indicate processing is complete
         if hasattr(self.main_window, 'processing_window') and self.main_window.processing_window:
-            if not was_cancelled:
-                if was_dry_run:
-                    self.main_window.processing_window.update_status("Dry run analysis complete!")
-                else:
+            if not was_cancelled and not was_dry_run:
                     self.main_window.processing_window.update_status("Processing completed successfully!")
                     self.main_window.processing_window.progress_bar.setMaximum(100)
                     self.main_window.processing_window.progress_bar.setValue(100)
