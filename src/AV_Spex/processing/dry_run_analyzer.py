@@ -307,7 +307,7 @@ class DryRunAnalyzer:
             analyses.append(self._analyze_step(
                 step_name=f"{display_name} (run)",
                 enabled=tool_config.run_tool,
-                precondition_met=True,  # Always possible if tool is installed
+                precondition_met=True, 
                 precondition_reason=None
             ))
             
@@ -318,10 +318,10 @@ class DryRunAnalyzer:
             reason = None
             if not can_check:
                 reason = f"No existing {display_name} output and run_tool is disabled"
+            elif tool_config.run_tool:
+                reason = "Will check output after running tool"
             elif existing_output:
                 reason = f"Will use existing output: {os.path.basename(existing_output)}"
-            else:
-                reason = "Will check output after running tool"
             
             analyses.append(self._analyze_step(
                 step_name=f"{display_name} (check against expected values)",
