@@ -34,18 +34,23 @@ class QtLogHandler(logging.Handler, QObject):
         # Format the record according to our formatter
         msg = self.format(record)
         
-        # Map logging levels to MessageType
-        msg_type = MessageType.NORMAL
-        if record.levelno >= logging.CRITICAL:
-            msg_type = MessageType.ERROR  # Critical as error but could be a distinct type
-        elif record.levelno >= logging.ERROR:
-            msg_type = MessageType.ERROR
-        elif record.levelno >= logging.WARNING:
-            msg_type = MessageType.WARNING
-        elif record.levelno >= logging.INFO:
-            msg_type = MessageType.INFO
-        elif record.levelno == logging.DEBUG:
-            msg_type = MessageType.COMMAND  # Use command style for debug messages
+        # Check for custom msg_type passed via extra parameter
+        # This allows callers to override the default level-based coloring
+        msg_type = getattr(record, 'msg_type', None)
+        
+        # Fall back to mapping logging levels to MessageType if no custom type
+        if msg_type is None:
+            msg_type = MessageType.NORMAL
+            if record.levelno >= logging.CRITICAL:
+                msg_type = MessageType.ERROR  # Critical as error but could be a distinct type
+            elif record.levelno >= logging.ERROR:
+                msg_type = MessageType.ERROR
+            elif record.levelno >= logging.WARNING:
+                msg_type = MessageType.WARNING
+            elif record.levelno >= logging.INFO:
+                msg_type = MessageType.INFO
+            elif record.levelno == logging.DEBUG:
+                msg_type = MessageType.COMMAND  # Use command style for debug messages
             
         # Emit the signal with message and type
         self.log_message.emit(msg, msg_type)
