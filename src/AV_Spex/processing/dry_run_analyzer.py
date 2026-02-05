@@ -229,7 +229,7 @@ class DryRunAnalyzer:
             precondition_met=has_fixity_file,
             precondition_reason=(
                 f"Found: {os.path.basename(fixity_file)}" if has_fixity_file 
-                else "No .md5 or _fixity_check.txt file found"
+                else "No checksum file found (.md5, .sha256, or _fixity.txt)"
             )
         ))
         
@@ -239,9 +239,19 @@ class DryRunAnalyzer:
         """Check if fixity sidecar file exists."""
         source_path = Path(source_directory)
         
-        # Check for .md5 file
-        md5_patterns = [f"{video_id}*.md5", "*.md5"]
-        for pattern in md5_patterns:
+        # Match the suffixes recognized by fixity_check.py
+        # Check source directory for checksum/fixity files
+        fixity_patterns = [
+            f"{video_id}*_checksums.md5",
+            f"{video_id}*_fixity.md5",
+            f"{video_id}*_checksums.sha256",
+            f"{video_id}*_fixity.sha256",
+            f"{video_id}*_fixity.txt",
+            # Fallback to any matching extension
+            f"{video_id}*.md5",
+            f"{video_id}*.sha256",
+        ]
+        for pattern in fixity_patterns:
             matches = list(source_path.glob(pattern))
             if matches:
                 return str(matches[0])
@@ -254,7 +264,7 @@ class DryRunAnalyzer:
                 return str(fixity_files[0])
         
         return None
-    
+        
     # -------------------------------------------------------------------------
     # MediaConch Analysis
     # -------------------------------------------------------------------------
