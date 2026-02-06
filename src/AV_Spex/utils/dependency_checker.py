@@ -155,6 +155,13 @@ class DependencyCheckDialog(QDialog):
                 version_command="qcli --version",
                 description="Required for quality control analysis and video QC metrics",
                 install_hint="Install via: brew install qcli (macOS) or visit https://mediaarea.net/QCTools"
+            ),
+            DependencyInfo(
+                name="MKVToolNix",
+                command="mkvmerge",
+                version_command="mkvmerge --version",
+                description="Required for MKV container operations",
+                install_hint="Install via: brew install mkvtoolnix (macOS) or visit https://mkvtoolnix.download/"
             )
         ]
     
@@ -374,6 +381,11 @@ class DependencyManager:
                 version_command="qcli --version",
                 description="Required for quality control analysis and video QC metrics",
                 install_hint="Install via: brew install qcli (macOS) or visit https://mediaarea.net/QCTools"
+            ),
+            DependencyInfo(
+                name="MKVToolNix",
+                command="mkvmerge",
+                install_hint="Install via: brew install mkvtoolnix (macOS) or visit https://mkvtoolnix.download/"
             )
         ]
 
@@ -393,7 +405,7 @@ def cli_deps_check():
     
     check_py_version()
     
-    required_commands = ['ffmpeg', 'mediainfo', 'exiftool', 'mediaconch', 'qcli']
+    required_commands = ['ffmpeg', 'mediainfo', 'exiftool', 'mediaconch', 'qcli', 'mkvmerge']
     for command in required_commands:
         if not check_external_dependency(command):
             logger.critical(f"Error: {command} not found. Please install it.")
