@@ -1089,10 +1089,26 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     else:
         colorbars_eval_html = None
 
+    # Check if SMPTE fallback was used
+    smpte_fallback = False
     if colorbars_values_output:
-        colorbars_html = make_color_bars_graphs(video_id,qctools_colorbars_duration_output,colorbars_values_output,thumbs_dict)
+        try:
+            with open(colorbars_values_output, 'r') as f:
+                first_line = f.readline().strip()
+            if first_line == "SMPTE_FALLBACK":
+                smpte_fallback = True
+                colorbars_html = """
+                <div style="background-color: #fff3cd; padding: 15px; border: 1px solid #856404; margin: 10px 0; border-radius: 5px;">
+                    <p style="margin: 0; color: #856404;"><strong>No color bars detected.</strong> Evaluation was performed using standard SMPTE color bar values.</p>
+                </div>
+                """
+            else:
+                colorbars_html = make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, thumbs_dict)
+        except Exception as e:
+            logger.error(f"Error reading colorbars values file: {e}")
+            colorbars_html = None
     else:
-         colorbars_html = None
+        colorbars_html = None
 
     if qctools_profile_check_output and failureInfoSummary_profile:
         profile_summary_html = make_profile_piecharts(qctools_profile_check_output, thumbs_dict, failureInfoSummary_profile, video_id, failure_csv_path=profile_fails_csv_path, check_cancelled=check_cancelled)
@@ -1283,14 +1299,22 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         """
 
     if colorbars_html:
+        if smpte_fallback:
+            colorbars_header = "Color Bars Detection"
+        else:
+            colorbars_header = f"SMPTE Colorbars vs {video_id} Colorbars"
         html_template += f"""
-        <h3>SMPTE Colorbars vs {video_id} Colorbars</h3>
+        <h3>{colorbars_header}</h3>
         {colorbars_html}
         """
 
     if colorbars_eval_html:
+        if smpte_fallback:
+            eval_header = "Values relative to SMPTE colorbar's thresholds"
+        else:
+            eval_header = "Values relative to colorbar's thresholds"
         html_template += f"""
-        <h3>Values relative to colorbar's thresholds</h3>
+        <h3>{eval_header}</h3>
         {colorbars_eval_html}
         """
 
