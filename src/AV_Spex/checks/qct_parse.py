@@ -1124,33 +1124,35 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     if qct_parse['evaluateBars']:
         # if bars detection was run but durationStart and durationEnd remain unassigned
         if qct_parse['barsDetection'] and durationStart == "" and durationEnd == "":
-            logger.critical(f"Cannot run color bars evaluation - no color bars found.\n")
+            logger.warning(f"No color bars found - falling back to SMPTE color bars values from config.\n")
+            maxBarsDict = asdict(spex_config.qct_parse_values.smpte_color_bars)
         elif qct_parse['barsDetection'] and durationStart != "" and durationEnd != "":
             maxBarsDict = evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize)
             if maxBarsDict is None:
                 logger.critical("Something went wrong - Cannot run evaluate color bars\n")
-            else:
-                logger.debug(f"Starting qct-parse color bars evaluation on {baseName}\n")
-                # make maxBars vs smpte bars csv
-                smpte_color_bars = asdict(spex_config.qct_parse_values.smpte_color_bars)
-                colorbars_values_output = os.path.join(report_directory, "qct-parse_colorbars_values.csv")
-                print_color_bar_values(baseName, smpte_color_bars, maxBarsDict, colorbars_values_output)
-                # set durationStart/End, profile, profile name, and thumbExportDelay for bars evaluation check
-                durationStart = 0
-                durationEnd = 99999999
-                profile = maxBarsDict
-                profile_name = 'color_bars_evaluation'
-                thumbExportDelay = 9000            
-                # check xml against thresholds, return kbeyond (dictionary of tags:framecount exceeding), frameCount (total # of frames), and overallFrameFail (total # of failed frames)
-                kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled)
-                colorbars_eval_fails_csv_path = os.path.join(report_directory, "qct-parse_colorbars_eval_failures.csv")
-                if failureInfo:
-                    save_failures_to_csv(failureInfo, colorbars_eval_fails_csv_path)
-                qctools_bars_eval_check_output = os.path.join(report_directory, "qct-parse_colorbars_eval_summary.csv")
-                printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_bars_eval_check_output)
-                logger.debug(f"qct-parse bars evaluation complete. qct-parse summary written to {qctools_bars_eval_check_output}\n")
         else:
             logger.critical("Cannot run color bars evaluation without running Bars Detection.")
+
+        if maxBarsDict is not None:
+            logger.debug(f"Starting qct-parse color bars evaluation on {baseName}\n")
+            # make maxBars vs smpte bars csv
+            smpte_color_bars = asdict(spex_config.qct_parse_values.smpte_color_bars)
+            colorbars_values_output = os.path.join(report_directory, "qct-parse_colorbars_values.csv")
+            print_color_bar_values(baseName, smpte_color_bars, maxBarsDict, colorbars_values_output)
+            # set durationStart/End, profile, profile name, and thumbExportDelay for bars evaluation check
+            durationStart = 0
+            durationEnd = 99999999
+            profile = maxBarsDict
+            profile_name = 'color_bars_evaluation'
+            thumbExportDelay = 9000            
+            # check xml against thresholds
+            kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled)
+            colorbars_eval_fails_csv_path = os.path.join(report_directory, "qct-parse_colorbars_eval_failures.csv")
+            if failureInfo:
+                save_failures_to_csv(failureInfo, colorbars_eval_fails_csv_path)
+            qctools_bars_eval_check_output = os.path.join(report_directory, "qct-parse_colorbars_eval_summary.csv")
+            printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_bars_eval_check_output)
+            logger.debug(f"qct-parse bars evaluation complete. qct-parse summary written to {qctools_bars_eval_check_output}\n")
 
     if check_cancelled():
         return None
