@@ -1122,10 +1122,12 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     ######## Iterate Through the XML for Bars Evaluation ########
     if qct_parse['evaluateBars']:
-        # if bars detection was run but durationStart and durationEnd remain unassigned
+        bars_fallback = False
+        
         if qct_parse['barsDetection'] and durationStart == "" and durationEnd == "":
             logger.warning(f"No color bars found - falling back to SMPTE color bars values from config.\n")
             maxBarsDict = asdict(spex_config.qct_parse_values.smpte_color_bars)
+            bars_fallback = True
         elif qct_parse['barsDetection'] and durationStart != "" and durationEnd != "":
             maxBarsDict = evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize)
             if maxBarsDict is None:
@@ -1135,17 +1137,20 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
         if maxBarsDict is not None:
             logger.debug(f"Starting qct-parse color bars evaluation on {baseName}\n")
-            # make maxBars vs smpte bars csv
             smpte_color_bars = asdict(spex_config.qct_parse_values.smpte_color_bars)
             colorbars_values_output = os.path.join(report_directory, "qct-parse_colorbars_values.csv")
-            print_color_bar_values(baseName, smpte_color_bars, maxBarsDict, colorbars_values_output)
-            # set durationStart/End, profile, profile name, and thumbExportDelay for bars evaluation check
+            
+            if bars_fallback:
+                with open(colorbars_values_output, 'w') as f:
+                    f.write("SMPTE_FALLBACK\n")
+            else:
+                print_color_bar_values(baseName, smpte_color_bars, maxBarsDict, colorbars_values_output)
+            
             durationStart = 0
             durationEnd = 99999999
             profile = maxBarsDict
             profile_name = 'color_bars_evaluation'
             thumbExportDelay = 9000            
-            # check xml against thresholds
             kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled)
             colorbars_eval_fails_csv_path = os.path.join(report_directory, "qct-parse_colorbars_eval_failures.csv")
             if failureInfo:
