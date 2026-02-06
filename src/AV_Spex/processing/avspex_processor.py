@@ -9,7 +9,7 @@ from dataclasses import asdict
 
 from AV_Spex.processing.processing_mgmt import ProcessingManager
 from AV_Spex.utils import dir_setup
-from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger, start_file_log, stop_file_log
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -126,6 +126,30 @@ class AVSpexProcessor:
             return False
 
         video_path, video_id, destination_directory, access_file_found = init_dir_result
+        
+        # START PER-FILE LOGGING
+        # Capture all logs for this specific file to the qc_metadata directory
+        per_file_log_path = start_file_log(destination_directory, video_id)
+        logger.debug(f"Per-file log started: {per_file_log_path}")
+        
+        try:
+            # Wrap all processing in try/finally to ensure we always stop the file log
+            return self._process_directory_contents(
+                source_directory, video_path, video_id, 
+                destination_directory, access_file_found
+            )
+        finally:
+            # STOP PER-FILE LOGGING
+            # Always stop the per-file log, even if processing fails or is cancelled
+            stop_file_log()
+
+    def _process_directory_contents(self, source_directory, video_path, video_id, 
+                                     destination_directory, access_file_found):
+        """
+        Internal method that handles the actual processing logic.
+        Separated from process_single_directory to allow proper try/finally 
+        handling of per-file logging.
+        """
         processing_mgmt = ProcessingManager(signals=self.signals, check_cancelled_fn=self.check_cancelled)
 
         if self.check_cancelled():

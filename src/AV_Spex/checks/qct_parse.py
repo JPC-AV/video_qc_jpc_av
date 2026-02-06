@@ -304,6 +304,12 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
     consecutive_failures = 0
     failure_tolerance = 15  # Allow up to 15 consecutive frames to fail before ending
 
+    # Confirmation window: require consecutive passing frames before confirming bars start
+    # This prevents false detection on unstable/skewed bars from analog artifacts
+    bars_confirmation_count = 0
+    bars_confirmation_threshold = 30  # ~1 second at 30fps must pass before confirming bars
+    bars_candidate_start = None       # timestamp of potential bars start (beginning of passing run)
+
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
     if parser_iter is None:
@@ -339,13 +345,25 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
                         consecutive_failures = 0  # Reset failure counter when bars are detected
                         
                         if durationStart == "":
-                            durationStart = float(framesList[middleFrame][pkt])
-                            barsStartString = dts2ts(framesList[middleFrame][pkt])
-                            logger.debug("Bars start at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")")							
-                        durationEnd = float(framesList[middleFrame][pkt])
-                    else:
-                        # Only count as failure if we've already started detecting bars
+                            # Track confirmation window before committing to bars start
+                            bars_confirmation_count += 1
+                            if bars_candidate_start is None:
+                                bars_candidate_start = float(framesList[middleFrame][pkt])
+                            
+                            if bars_confirmation_count >= bars_confirmation_threshold:
+                                durationStart = bars_candidate_start
+                                barsStartString = dts2ts(str(bars_candidate_start))
+                                logger.debug("Bars start at " + str(bars_candidate_start) + " (" + barsStartString + ")")
+                        
                         if durationStart != "":
+                            durationEnd = float(framesList[middleFrame][pkt])
+                    else:
+                        if durationStart == "":
+                            # Reset confirmation window - unstable bars interrupted the run
+                            bars_confirmation_count = 0
+                            bars_candidate_start = None
+                        else:
+                            # Only count as failure if we've already confirmed bars start
                             consecutive_failures += 1
                             
                             # Only end if we've had enough consecutive failures AND minimum duration
@@ -1122,35 +1140,42 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     ######## Iterate Through the XML for Bars Evaluation ########
     if qct_parse['evaluateBars']:
-        # if bars detection was run but durationStart and durationEnd remain unassigned
+        bars_fallback = False
+        
         if qct_parse['barsDetection'] and durationStart == "" and durationEnd == "":
-            logger.critical(f"Cannot run color bars evaluation - no color bars found.\n")
+            logger.warning(f"No color bars found - falling back to SMPTE color bars values from config.\n")
+            maxBarsDict = asdict(spex_config.qct_parse_values.smpte_color_bars)
+            bars_fallback = True
         elif qct_parse['barsDetection'] and durationStart != "" and durationEnd != "":
             maxBarsDict = evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize)
             if maxBarsDict is None:
                 logger.critical("Something went wrong - Cannot run evaluate color bars\n")
-            else:
-                logger.debug(f"Starting qct-parse color bars evaluation on {baseName}\n")
-                # make maxBars vs smpte bars csv
-                smpte_color_bars = asdict(spex_config.qct_parse_values.smpte_color_bars)
-                colorbars_values_output = os.path.join(report_directory, "qct-parse_colorbars_values.csv")
-                print_color_bar_values(baseName, smpte_color_bars, maxBarsDict, colorbars_values_output)
-                # set durationStart/End, profile, profile name, and thumbExportDelay for bars evaluation check
-                durationStart = 0
-                durationEnd = 99999999
-                profile = maxBarsDict
-                profile_name = 'color_bars_evaluation'
-                thumbExportDelay = 9000            
-                # check xml against thresholds, return kbeyond (dictionary of tags:framecount exceeding), frameCount (total # of frames), and overallFrameFail (total # of failed frames)
-                kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled)
-                colorbars_eval_fails_csv_path = os.path.join(report_directory, "qct-parse_colorbars_eval_failures.csv")
-                if failureInfo:
-                    save_failures_to_csv(failureInfo, colorbars_eval_fails_csv_path)
-                qctools_bars_eval_check_output = os.path.join(report_directory, "qct-parse_colorbars_eval_summary.csv")
-                printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_bars_eval_check_output)
-                logger.debug(f"qct-parse bars evaluation complete. qct-parse summary written to {qctools_bars_eval_check_output}\n")
         else:
             logger.critical("Cannot run color bars evaluation without running Bars Detection.")
+
+        if maxBarsDict is not None:
+            logger.debug(f"Starting qct-parse color bars evaluation on {baseName}\n")
+            smpte_color_bars = asdict(spex_config.qct_parse_values.smpte_color_bars)
+            colorbars_values_output = os.path.join(report_directory, "qct-parse_colorbars_values.csv")
+            
+            if bars_fallback:
+                with open(colorbars_values_output, 'w') as f:
+                    f.write("SMPTE_FALLBACK\n")
+            else:
+                print_color_bar_values(baseName, smpte_color_bars, maxBarsDict, colorbars_values_output)
+            
+            durationStart = 0
+            durationEnd = 99999999
+            profile = maxBarsDict
+            profile_name = 'color_bars_evaluation'
+            thumbExportDelay = 9000            
+            kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled)
+            colorbars_eval_fails_csv_path = os.path.join(report_directory, "qct-parse_colorbars_eval_failures.csv")
+            if failureInfo:
+                save_failures_to_csv(failureInfo, colorbars_eval_fails_csv_path)
+            qctools_bars_eval_check_output = os.path.join(report_directory, "qct-parse_colorbars_eval_summary.csv")
+            printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_bars_eval_check_output)
+            logger.debug(f"qct-parse bars evaluation complete. qct-parse summary written to {qctools_bars_eval_check_output}\n")
 
     if check_cancelled():
         return None

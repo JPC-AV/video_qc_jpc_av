@@ -34,18 +34,23 @@ class QtLogHandler(logging.Handler, QObject):
         # Format the record according to our formatter
         msg = self.format(record)
         
-        # Map logging levels to MessageType
-        msg_type = MessageType.NORMAL
-        if record.levelno >= logging.CRITICAL:
-            msg_type = MessageType.ERROR  # Critical as error but could be a distinct type
-        elif record.levelno >= logging.ERROR:
-            msg_type = MessageType.ERROR
-        elif record.levelno >= logging.WARNING:
-            msg_type = MessageType.WARNING
-        elif record.levelno >= logging.INFO:
-            msg_type = MessageType.INFO
-        elif record.levelno == logging.DEBUG:
-            msg_type = MessageType.COMMAND  # Use command style for debug messages
+        # Check for custom msg_type passed via extra parameter
+        # This allows callers to override the default level-based coloring
+        msg_type = getattr(record, 'msg_type', None)
+        
+        # Fall back to mapping logging levels to MessageType if no custom type
+        if msg_type is None:
+            msg_type = MessageType.NORMAL
+            if record.levelno >= logging.CRITICAL:
+                msg_type = MessageType.ERROR  # Critical as error but could be a distinct type
+            elif record.levelno >= logging.ERROR:
+                msg_type = MessageType.ERROR
+            elif record.levelno >= logging.WARNING:
+                msg_type = MessageType.WARNING
+            elif record.levelno >= logging.INFO:
+                msg_type = MessageType.INFO
+            elif record.levelno == logging.DEBUG:
+                msg_type = MessageType.COMMAND  # Use command style for debug messages
             
         # Emit the signal with message and type
         self.log_message.emit(msg, msg_type)
@@ -115,6 +120,83 @@ def setup_logger():
 
 # Initialize logger once on module import
 logger = setup_logger() 
+
+
+# Store reference to the current per-file handler so we can remove it later
+_current_file_handler = None
+
+def start_file_log(output_directory, video_id, log_level=logging.DEBUG):
+    """
+    Start capturing logs to a per-file log in the output directory.
+    
+    This creates a new file handler that captures logs only for this specific
+    file's processing. The handler is added to the existing logger, so logs
+    still go to the main log file and console as well.
+    
+    Args:
+        output_directory (str): The qc_metadata directory for this file
+        video_id (str): The video identifier (used in log filename)
+        log_level (int): Minimum log level to capture (default: DEBUG)
+    
+    Returns:
+        str: Path to the created log file
+    """
+    global _current_file_handler
+    
+    # Remove any existing per-file handler first
+    stop_file_log()
+    
+    # Create the log file path
+    log_filename = f"{video_id}_processing.log"
+    log_path = os.path.join(output_directory, log_filename)
+    
+    # Create file handler for this specific file
+    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+    
+    # Use a clean format for per-file logs
+    log_format = '%(asctime)s - %(levelname)s: %(message)s'
+    file_handler.setFormatter(logging.Formatter(log_format))
+    file_handler.setLevel(log_level)
+    
+    # Add a marker attribute so we can identify this handler later
+    file_handler._is_per_file_handler = True
+    
+    # Add to the logger
+    logger.addHandler(file_handler)
+    _current_file_handler = file_handler
+    
+    # Log the start of processing
+    logger.info(f"=== Processing log for: {video_id} ===")
+    logger.info(f"Processing started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    return log_path
+
+
+def stop_file_log():
+    """
+    Stop capturing logs to the per-file log and close the handler.
+    
+    This removes the per-file handler from the logger, ensuring subsequent
+    logs don't go to the old file.
+    """
+    global _current_file_handler
+    
+    if _current_file_handler is not None:
+        # Log completion before removing
+        logger.info(f"Processing completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("=== End of processing log ===")
+        
+        # Remove from logger and close
+        logger.removeHandler(_current_file_handler)
+        _current_file_handler.close()
+        _current_file_handler = None
+    
+    # Also check for any orphaned per-file handlers (safety cleanup)
+    for handler in logger.handlers[:]:  # Use slice copy to avoid modification during iteration
+        if getattr(handler, '_is_per_file_handler', False):
+            logger.removeHandler(handler)
+            handler.close()
+
 
 def connect_logger_to_ui(ui_component):
     """

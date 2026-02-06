@@ -193,6 +193,12 @@ class ConfigManager:
                         config_data['outputs'][key] = self._migrate_yes_no_to_bool(
                             config_data['outputs'][key]
                         )
+                # Validate qctools_ext against allowed values
+                if 'qctools_ext' in config_data['outputs']:
+                    valid_extensions = ("qctools.xml.gz", "qctools.mkv")
+                    if config_data['outputs']['qctools_ext'] not in valid_extensions:
+                        logger.info(f"Invalid qctools_ext '{config_data['outputs']['qctools_ext']}', resetting to 'qctools.xml.gz'")
+                        config_data['outputs']['qctools_ext'] = "qctools.xml.gz"
             
             # Migrate fixity section
             if 'fixity' in config_data:

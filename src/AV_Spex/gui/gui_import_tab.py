@@ -600,8 +600,17 @@ class ImportTab(ThemeableMixin):
         # Use a stretch factor of 0 to keep it from expanding
         bottom_row.addLayout(self.now_processing_layout, 0)
         
-        # Add a stretch to push the Check Spex button to the right
+       # Add a stretch to push the buttons to the right
         bottom_row.addStretch(1)
+        
+        # Dry Run button - analyze what would happen without processing
+        self.main_window.dry_run_button = QPushButton("Dry Run")
+        self.main_window.dry_run_button.setToolTip(
+            "Analyze what would happen during processing without actually running any tools"
+        )
+        theme_manager.style_button(self.main_window.dry_run_button)
+        self.main_window.dry_run_button.clicked.connect(self.on_dry_run_clicked)
+        bottom_row.addWidget(self.main_window.dry_run_button, 0)
         
         # Check Spex button
         self.main_window.check_spex_button = QPushButton("Check Spex!")
@@ -685,3 +694,30 @@ class ImportTab(ThemeableMixin):
         
         # Call worker thread
         self.main_window.processing.call_process_directories()
+
+    def on_dry_run_clicked(self):
+        """Handle the Dry Run button click."""
+        self.update_selected_directories()
+        
+        # Check if any directories are selected
+        if not self.main_window.source_directories:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self.main_window,
+                "No Directories Selected",
+                "Please select at least one directory to analyze."
+            )
+            return
+        
+        # Save current config state (so dry run uses current settings)
+        config_mgr.save_config('checks', is_last_used=True)
+        config_mgr.save_config('spex', is_last_used=True)
+        
+        # Make sure the processing window is visible
+        if hasattr(self.main_window, 'processing_window') and self.main_window.processing_window:
+            self.main_window.processing_window.show()
+            self.main_window.processing_window.raise_()
+            self.main_window.processing_window.activateWindow()
+        
+        # Call dry run
+        self.main_window.processing.call_dry_run()
