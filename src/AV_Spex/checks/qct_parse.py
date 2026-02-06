@@ -304,6 +304,12 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
     consecutive_failures = 0
     failure_tolerance = 15  # Allow up to 15 consecutive frames to fail before ending
 
+    # Confirmation window: require consecutive passing frames before confirming bars start
+    # This prevents false detection on unstable/skewed bars from analog artifacts
+    bars_confirmation_count = 0
+    bars_confirmation_threshold = 30  # ~1 second at 30fps must pass before confirming bars
+    bars_candidate_start = None       # timestamp of potential bars start (beginning of passing run)
+
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
     if parser_iter is None:
@@ -339,13 +345,25 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
                         consecutive_failures = 0  # Reset failure counter when bars are detected
                         
                         if durationStart == "":
-                            durationStart = float(framesList[middleFrame][pkt])
-                            barsStartString = dts2ts(framesList[middleFrame][pkt])
-                            logger.debug("Bars start at " + str(framesList[middleFrame][pkt]) + " (" + dts2ts(framesList[middleFrame][pkt]) + ")")							
-                        durationEnd = float(framesList[middleFrame][pkt])
-                    else:
-                        # Only count as failure if we've already started detecting bars
+                            # Track confirmation window before committing to bars start
+                            bars_confirmation_count += 1
+                            if bars_candidate_start is None:
+                                bars_candidate_start = float(framesList[middleFrame][pkt])
+                            
+                            if bars_confirmation_count >= bars_confirmation_threshold:
+                                durationStart = bars_candidate_start
+                                barsStartString = dts2ts(str(bars_candidate_start))
+                                logger.debug("Bars start at " + str(bars_candidate_start) + " (" + barsStartString + ")")
+                        
                         if durationStart != "":
+                            durationEnd = float(framesList[middleFrame][pkt])
+                    else:
+                        if durationStart == "":
+                            # Reset confirmation window - unstable bars interrupted the run
+                            bars_confirmation_count = 0
+                            bars_candidate_start = None
+                        else:
+                            # Only count as failure if we've already confirmed bars start
                             consecutive_failures += 1
                             
                             # Only end if we've had enough consecutive failures AND minimum duration
