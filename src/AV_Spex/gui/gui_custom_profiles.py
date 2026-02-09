@@ -808,7 +808,22 @@ class ProfileSelectionDialog(QDialog, ThemeableMixin):
             
             # Show result to user
             renamed = import_results.get('renamed_profiles', [])
-            if renamed:
+            errors = import_results.get('errors', [])
+            
+            if errors:
+                error_text = "\n".join(f"• {e}" for e in errors)
+                if renamed:
+                    # Partial success: some profiles imported, some errors
+                    QMessageBox.warning(
+                        self, "Import Partially Successful",
+                        f"Some items were imported, but errors occurred:\n\n{error_text}"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, "Import Errors",
+                        f"The file was read, but errors occurred during import:\n\n{error_text}"
+                    )
+            elif renamed:
                 self._show_rename_notification(filepath, renamed)
             else:
                 QMessageBox.information(

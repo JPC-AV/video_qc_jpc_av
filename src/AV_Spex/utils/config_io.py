@@ -201,7 +201,8 @@ class ConfigIO:
             config_data = json.load(f)
         
         import_results = {
-            'renamed_profiles': []
+            'renamed_profiles': [],
+            'errors': []
         }
         
         # Process spex config if present in the imported data
@@ -253,6 +254,7 @@ class ConfigIO:
                 logger.info("Imported and updated filename configuration")
             except Exception as e:
                 logger.error(f"Error importing filename config: {str(e)}")
+                import_results['errors'].append(f"Filename config: {str(e)}")
         
         # Process signalflow config if present
         if 'signalflow' in config_data and 'signalflow_profiles' in config_data['signalflow']:
@@ -277,6 +279,7 @@ class ConfigIO:
                 logger.info("Imported and updated signalflow configuration")
             except Exception as e:
                 logger.error(f"Error importing signalflow config: {str(e)}")
+                import_results['errors'].append(f"Signalflow config: {str(e)}")
 
         # Process custom checks profiles if present (merge alongside existing)
         if 'profiles_checks' in config_data and 'custom_profiles' in config_data['profiles_checks']:
@@ -285,6 +288,7 @@ class ConfigIO:
                 import_results['renamed_profiles'].extend(renamed)
             except Exception as e:
                 logger.error(f"Error importing checks profiles: {str(e)}")
+                import_results['errors'].append(f"Checks profiles: {str(e)}")
 
         # Process exiftool profiles if present (merge alongside existing)
         if 'exiftool' in config_data and 'exiftool_profiles' in config_data['exiftool']:
@@ -293,6 +297,7 @@ class ConfigIO:
                 import_results['renamed_profiles'].extend(renamed)
             except Exception as e:
                 logger.error(f"Error importing exiftool profiles: {str(e)}")
+                import_results['errors'].append(f"Exiftool profiles: {str(e)}")
 
         return import_results
 
@@ -340,9 +345,14 @@ class ConfigIO:
                     f"to avoid collision with existing profile"
                 )
             
-            # Update the profile's internal name field to match
-            if isinstance(profile_data, dict) and 'name' in profile_data:
+            # Normalize the profile dict: ensure required ChecksProfile fields
+            # are present. Built-in profile exports won't have 'name' or
+            # 'description', which causes ChecksProfile.__init__() to fail
+            # during deserialization.
+            if isinstance(profile_data, dict):
                 profile_data['name'] = final_name
+                if 'description' not in profile_data:
+                    profile_data['description'] = ''
             
             merged_profiles[final_name] = profile_data
             # Track the new name so subsequent imports in the same batch

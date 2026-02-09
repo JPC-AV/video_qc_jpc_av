@@ -165,7 +165,24 @@ class ImportTab(ThemeableMixin):
                     
                     # Show result to user — with rename notification if applicable
                     renamed = import_results.get('renamed_profiles', [])
-                    if renamed:
+                    errors = import_results.get('errors', [])
+                    
+                    if errors:
+                        error_text = "\n".join(f"• {e}" for e in errors)
+                        if renamed:
+                            # Partial success: some profiles imported, some errors
+                            QMessageBox.warning(
+                                self.main_window, "Import Partially Successful",
+                                f"Some items were imported from {file_path}, "
+                                f"but errors occurred:\n\n{error_text}"
+                            )
+                        else:
+                            QMessageBox.warning(
+                                self.main_window, "Import Errors",
+                                f"The file was read, but errors occurred during import:"
+                                f"\n\n{error_text}"
+                            )
+                    elif renamed:
                         self._show_rename_notification(file_path, renamed)
                     else:
                         QMessageBox.information(
