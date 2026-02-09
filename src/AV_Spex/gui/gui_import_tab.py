@@ -43,15 +43,15 @@ class ImportTab(ThemeableMixin):
                 self.export_config_dialog('checks')
             elif selected_option == "Export Spex Config":
                 self.export_config_dialog('spex')
-            elif selected_option == "Export File name Config":
+            elif selected_option == "Export All File name Profiles":
                 self.export_config_dialog('filename')
-            elif selected_option == "Export Signal flow Config":
+            elif selected_option == "Export All Signal flow Profiles":
                 self.export_config_dialog('signalflow')
             elif selected_option == "Export Spex and Checks Config":
                 self.export_config_dialog(['checks','spex'])
-            elif selected_option == "Export Custom Checks Profiles":
+            elif selected_option == "Export All Custom Checks Profiles":
                 self.export_config_dialog('profiles_checks')
-            elif selected_option == "Export Exiftool Profiles":
+            elif selected_option == "Export All Exiftool Profiles":
                 self.export_config_dialog('exiftool')
             elif selected_option == "Export All Config":
                 self.export_config_dialog(['checks', 'spex', 'filename', 
@@ -611,12 +611,12 @@ class ImportTab(ThemeableMixin):
 
         # Add the default placeholder option first
         self.main_window.export_config_dropdown.addItem("Export Config Type...")  
-        self.main_window.export_config_dropdown.addItem("Export File name Config")
-        self.main_window.export_config_dropdown.addItem("Export Signal flow Config")
+        self.main_window.export_config_dropdown.addItem("Export All File name Profiles")
+        self.main_window.export_config_dropdown.addItem("Export All Signal flow Profiles")
         self.main_window.export_config_dropdown.addItem("Export Checks Config")
         self.main_window.export_config_dropdown.addItem("Export Spex Config")
-        self.main_window.export_config_dropdown.addItem("Export Custom Checks Profiles")
-        self.main_window.export_config_dropdown.addItem("Export Exiftool Profiles")
+        self.main_window.export_config_dropdown.addItem("Export All Custom Checks Profiles")
+        self.main_window.export_config_dropdown.addItem("Export All Exiftool Profiles")
         self.main_window.export_config_dropdown.addItem("Export Spex and Checks Config")
         self.main_window.export_config_dropdown.addItem("Export All Config")
 
