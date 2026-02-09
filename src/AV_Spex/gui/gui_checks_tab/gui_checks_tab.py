@@ -1,7 +1,9 @@
+import json
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
     QLabel, QScrollArea, QComboBox, QFrame,
-    QMessageBox, QInputDialog, QPushButton
+    QMessageBox, QInputDialog, QPushButton, QFileDialog
 )
 from PyQt6.QtCore import Qt
 
@@ -10,6 +12,7 @@ from AV_Spex.gui.gui_checks_tab.gui_checks_window import ChecksWindow
 from AV_Spex.gui.gui_custom_profiles import ProfileSelectionDialog, CustomProfileDialog
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import SpexConfig, ChecksConfig
+from AV_Spex.utils.config_io import ConfigIO
 from AV_Spex.utils import config_edit
 from AV_Spex.utils.log_setup import logger
 
@@ -94,7 +97,6 @@ class ChecksTab(ThemeableMixin):
                     # Set the dropdown to the new profile
                     self.main_window.checks_profile_dropdown.setCurrentText(f"[Custom] {name.strip()}")
                     
-                    from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.information(
                         self.main_window, 
                         "Success", 
@@ -102,8 +104,144 @@ class ChecksTab(ThemeableMixin):
                     )
                     
                 except Exception as e:
-                    from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.critical(self.main_window, "Error", f"Failed to create profile: {str(e)}")
+
+        def on_export_profile_clicked(self):
+            """Export the currently selected custom profile to a JSON file."""
+            selected_text = self.main_window.checks_profile_dropdown.currentText()
+            
+            # Only allow exporting custom profiles
+            if not selected_text.startswith("[Custom] "):
+                QMessageBox.information(
+                    self.main_window,
+                    "Export Profile",
+                    "Only custom profiles can be exported.\n"
+                    "Select a custom profile from the dropdown first."
+                )
+                return
+            
+            profile_name = selected_text.replace("[Custom] ", "")
+            
+            # Open save dialog
+            safe_name = profile_name.replace(' ', '_').replace('/', '_')
+            suggested_filename = f"av_spex_profile_{safe_name}.json"
+            
+            filepath, _ = QFileDialog.getSaveFileName(
+                self.main_window,
+                "Export Profile",
+                suggested_filename,
+                "JSON Files (*.json);;All Files (*)"
+            )
+            
+            if not filepath:
+                return  # User cancelled
+            
+            try:
+                config_io = ConfigIO(config_mgr)
+                result = config_io.save_single_profile(
+                    'profiles_checks', profile_name, filepath
+                )
+                
+                if result:
+                    QMessageBox.information(
+                        self.main_window,
+                        "Export Successful",
+                        f"Profile '{profile_name}' exported to:\n{result}"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self.main_window,
+                        "Export Failed",
+                        f"Profile '{profile_name}' could not be found for export."
+                    )
+            except Exception as e:
+                logger.error(f"Error exporting profile: {e}")
+                QMessageBox.critical(
+                    self.main_window,
+                    "Export Error",
+                    f"Failed to export profile:\n{str(e)}"
+                )
+
+        def on_import_profile_clicked(self):
+            """Import custom profile(s) from a JSON file."""
+            filepath, _ = QFileDialog.getOpenFileName(
+                self.main_window,
+                "Import Profile",
+                "",
+                "JSON Files (*.json);;All Files (*)"
+            )
+            
+            if not filepath:
+                return  # User cancelled
+            
+            try:
+                config_io = ConfigIO(config_mgr)
+                import_results = config_io.import_configs(filepath)
+                
+                # Refresh the dropdown to show any newly imported profiles
+                self.refresh_profile_dropdown()
+                
+                # Reload config values in case the active config was updated
+                self.main_window.config_widget.load_config_values()
+                
+                # Build user-facing summary
+                renamed = import_results.get('renamed_profiles', [])
+                
+                if renamed:
+                    # Show notification about renamed profiles
+                    self._show_rename_notification(renamed)
+                else:
+                    QMessageBox.information(
+                        self.main_window,
+                        "Import Successful",
+                        f"Profile(s) imported successfully from:\n{filepath}"
+                    )
+                    
+            except json.JSONDecodeError:
+                QMessageBox.critical(
+                    self.main_window,
+                    "Import Error",
+                    "The selected file is not valid JSON.\n"
+                    "Please select a valid AV Spex profile or config export file."
+                )
+            except Exception as e:
+                logger.error(f"Error importing profile: {e}")
+                QMessageBox.critical(
+                    self.main_window,
+                    "Import Error",
+                    f"Failed to import profile:\n{str(e)}"
+                )
+
+        def _show_rename_notification(self, renamed_profiles):
+            """
+            Show a notification dialog listing profiles that were renamed
+            during import due to name collisions.
+            
+            Args:
+                renamed_profiles: List of (original_name, new_name) tuples
+            """
+            rename_lines = []
+            for original, renamed in renamed_profiles:
+                rename_lines.append(f'  "{original}"  →  "{renamed}"')
+            
+            rename_text = "\n".join(rename_lines)
+            
+            msg = QMessageBox(self.main_window)
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setWindowTitle("Import Successful — Profiles Renamed")
+            msg.setText(
+                "Some imported profiles were renamed to avoid "
+                "conflicts with existing profiles:"
+            )
+            msg.setInformativeText(rename_text)
+            msg.setDetailedText(
+                "When an imported profile has the same name as an existing profile, "
+                "AV Spex adds an '(imported)' suffix to the imported profile to "
+                "preserve both versions.\n\n"
+                "You can rename imported profiles through Manage Profiles."
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
 
         def refresh_profile_dropdown(self):
             """Refresh the profile dropdown with current profiles."""
@@ -136,6 +274,9 @@ class ChecksTab(ThemeableMixin):
             
             # Re-enable signals
             self.main_window.checks_profile_dropdown.blockSignals(False)
+            
+            # Update export button enabled state
+            self._update_export_button_state()
 
         def set_dropdown_from_config(self):
             """Set dropdown selection based on current configuration."""
@@ -151,6 +292,13 @@ class ChecksTab(ThemeableMixin):
                 # For now, just default to first item
                 if self.main_window.checks_profile_dropdown.count() > 0:
                     self.main_window.checks_profile_dropdown.setCurrentIndex(0)
+
+        def _update_export_button_state(self):
+            """Enable/disable the export button based on whether a custom profile is selected."""
+            if hasattr(self.main_window, 'export_profile_btn'):
+                selected = self.main_window.checks_profile_dropdown.currentText()
+                is_custom = selected.startswith("[Custom] ")
+                self.main_window.export_profile_btn.setEnabled(is_custom)
     
     def __init__(self, main_window):
         self.main_window = main_window
@@ -216,7 +364,7 @@ class ChecksTab(ThemeableMixin):
         checks_profile_label.setStyleSheet("font-weight: bold;")
         checks_profile_desc = QLabel("Choose from a preset Checks profile to apply a set of Checks to run on your Spex")
         
-        # Profile selection layout
+        # Profile selection layout (Row 1: dropdown + manage/create buttons)
         profile_selection_layout = QHBoxLayout()
         
         self.main_window.checks_profile_dropdown = QComboBox()
@@ -231,6 +379,11 @@ class ChecksTab(ThemeableMixin):
         self.profile_handlers.set_dropdown_from_config()
 
         self.main_window.checks_profile_dropdown.currentIndexChanged.connect(self.profile_handlers.on_profile_selected)
+        
+        # Also update export button state when dropdown selection changes
+        self.main_window.checks_profile_dropdown.currentIndexChanged.connect(
+            lambda _: self.profile_handlers._update_export_button_state()
+        )
         
         # Set minimum width to make dropdown longer horizontally
         self.main_window.checks_profile_dropdown.setMinimumWidth(350)
@@ -252,10 +405,41 @@ class ChecksTab(ThemeableMixin):
         profile_selection_layout.addWidget(manage_profiles_btn)
         profile_selection_layout.addWidget(create_profile_btn)
 
+        # Profile import/export layout (Row 2: export + import buttons)
+        profile_io_layout = QHBoxLayout()
+        profile_io_layout.addStretch()  # Right-align the buttons
+        
+        # Export button — only enabled when a custom profile is selected
+        self.main_window.export_profile_btn = QPushButton("Export Profile")
+        self.main_window.export_profile_btn.setToolTip(
+            "Export the selected custom profile to a JSON file for sharing"
+        )
+        self.main_window.export_profile_btn.clicked.connect(
+            self.profile_handlers.on_export_profile_clicked
+        )
+        theme_manager.style_button(self.main_window.export_profile_btn)
+        
+        # Import button — always enabled
+        import_profile_btn = QPushButton("Import Profile")
+        import_profile_btn.setToolTip(
+            "Import a custom profile from a JSON file"
+        )
+        import_profile_btn.clicked.connect(
+            self.profile_handlers.on_import_profile_clicked
+        )
+        theme_manager.style_button(import_profile_btn)
+        
+        profile_io_layout.addWidget(self.main_window.export_profile_btn)
+        profile_io_layout.addWidget(import_profile_btn)
+        
+        # Set initial export button state
+        self.profile_handlers._update_export_button_state()
+
         # Add widgets to layout
         profile_layout.addWidget(checks_profile_label)
         profile_layout.addWidget(checks_profile_desc)
         profile_layout.addLayout(profile_selection_layout)
+        profile_layout.addLayout(profile_io_layout)
         
         self.profile_group.setLayout(profile_layout)
         vertical_layout.addWidget(self.profile_group)
