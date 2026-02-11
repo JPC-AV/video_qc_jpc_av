@@ -94,7 +94,6 @@ class ChecksTab(ThemeableMixin):
                     # Set the dropdown to the new profile
                     self.main_window.checks_profile_dropdown.setCurrentText(f"[Custom] {name.strip()}")
                     
-                    from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.information(
                         self.main_window, 
                         "Success", 
@@ -102,7 +101,6 @@ class ChecksTab(ThemeableMixin):
                     )
                     
                 except Exception as e:
-                    from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.critical(self.main_window, "Error", f"Failed to create profile: {str(e)}")
 
         def refresh_profile_dropdown(self):
@@ -151,7 +149,7 @@ class ChecksTab(ThemeableMixin):
                 # For now, just default to first item
                 if self.main_window.checks_profile_dropdown.count() > 0:
                     self.main_window.checks_profile_dropdown.setCurrentIndex(0)
-    
+
     def __init__(self, main_window):
         self.main_window = main_window
         
@@ -216,7 +214,7 @@ class ChecksTab(ThemeableMixin):
         checks_profile_label.setStyleSheet("font-weight: bold;")
         checks_profile_desc = QLabel("Choose from a preset Checks profile to apply a set of Checks to run on your Spex")
         
-        # Profile selection layout
+        # Profile selection layout (Row 1: dropdown + manage/create buttons)
         profile_selection_layout = QHBoxLayout()
         
         self.main_window.checks_profile_dropdown = QComboBox()
