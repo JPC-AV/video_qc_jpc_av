@@ -549,6 +549,7 @@ def apply_custom_profile(profile_name: str):
     try:
         # Convert the profile to the format expected by apply_profile
         profile_dict = {
+            "validate_filename": profile.validate_filename,
             "outputs": asdict(profile.outputs),
             "fixity": asdict(profile.fixity),
             "tools": asdict(profile.tools)
@@ -571,6 +572,7 @@ def create_profile_from_current_config(profile_name: str, description: str = "")
     new_profile = ChecksProfile(
         name=profile_name,
         description=description,
+        validate_filename=current_config.validate_filename,
         outputs=current_config.outputs,
         fixity=current_config.fixity,
         tools=current_config.tools
