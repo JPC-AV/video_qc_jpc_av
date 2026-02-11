@@ -146,23 +146,61 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
     def setup_fixity_section(self):
         """Setup the fixity configuration section."""
         fixity_group = QGroupBox("Fixity Settings")
-        fixity_layout = QGridLayout()
+        fixity_layout = QVBoxLayout()
         
-        # Create checkboxes for each fixity setting (now using checkboxes for booleans)
         self.fixity_checks = {}
-        fixity_options = [
-            ("check_fixity", "Check Fixity:", 0),
-            ("validate_stream_fixity", "Validate Stream Fixity:", 1),
-            ("embed_stream_fixity", "Embed Stream Fixity:", 2),
-            ("output_fixity", "Output Fixity:", 3),
-            ("overwrite_stream_fixity", "Overwrite Stream Fixity:", 4)
-        ]
         
-        for setting, label, row in fixity_options:
-            fixity_layout.addWidget(QLabel(label), row, 0)
+        # --- File Fixity ---
+        file_fixity_label = QLabel("File Fixity")
+        file_fixity_label.setStyleSheet("font-weight: bold;")
+        fixity_layout.addWidget(file_fixity_label)
+        
+        file_grid = QGridLayout()
+        
+        file_fixity_options = [
+            ("output_fixity", "Output Fixity:", 0),
+            ("check_fixity", "Validate Fixity:", 1),
+        ]
+        for setting, label, row in file_fixity_options:
+            file_grid.addWidget(QLabel(label), row, 0)
             checkbox = QCheckBox()
             self.fixity_checks[setting] = checkbox
-            fixity_layout.addWidget(checkbox, row, 1)
+            file_grid.addWidget(checkbox, row, 1)
+        
+        file_grid.addWidget(QLabel("Checksum Algorithm:"), 2, 0)
+        self.checksum_algorithm_combo = QComboBox()
+        self.checksum_algorithm_combo.addItems(["md5", "sha256"])
+        file_grid.addWidget(self.checksum_algorithm_combo, 2, 1)
+        
+        fixity_layout.addLayout(file_grid)
+        
+        # Spacer between sections
+        fixity_layout.addSpacing(10)
+        
+        # --- Stream Fixity ---
+        stream_fixity_label = QLabel("Stream Fixity")
+        stream_fixity_label.setStyleSheet("font-weight: bold;")
+        fixity_layout.addWidget(stream_fixity_label)
+        
+        stream_grid = QGridLayout()
+        
+        stream_fixity_options = [
+            ("embed_stream_fixity", "Embed Stream Fixity:", 0),
+            ("overwrite_stream_fixity", "Overwrite Stream Fixity:", 1),
+            ("validate_stream_fixity", "Validate Stream Fixity:", 2),
+        ]
+        for setting, label, row in stream_fixity_options:
+            stream_grid.addWidget(QLabel(label), row, 0)
+            checkbox = QCheckBox()
+            self.fixity_checks[setting] = checkbox
+            stream_grid.addWidget(checkbox, row, 1)
+        
+        stream_grid.addWidget(QLabel("Stream Hash Algorithm:"), 3, 0)
+        self.stream_hash_algorithm_combo = QComboBox()
+        self.stream_hash_algorithm_combo.addItems(["md5", "sha256"])
+        stream_grid.addWidget(self.stream_hash_algorithm_combo, 3, 1)
+        
+        fixity_layout.addLayout(stream_grid)
         
         fixity_group.setLayout(fixity_layout)
         self.config_layout.addWidget(fixity_group)
@@ -376,6 +414,17 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             self.fixity_checks['output_fixity'].setChecked(current_config.fixity.output_fixity)
             self.fixity_checks['overwrite_stream_fixity'].setChecked(current_config.fixity.overwrite_stream_fixity)
             
+            # Load checksum algorithms
+            algorithm = getattr(current_config.fixity, 'checksum_algorithm', 'md5')
+            index = self.checksum_algorithm_combo.findText(algorithm)
+            if index >= 0:
+                self.checksum_algorithm_combo.setCurrentIndex(index)
+            
+            stream_algorithm = getattr(current_config.fixity, 'stream_hash_algorithm', 'md5')
+            stream_index = self.stream_hash_algorithm_combo.findText(stream_algorithm)
+            if stream_index >= 0:
+                self.stream_hash_algorithm_combo.setCurrentIndex(stream_index)
+            
             # Load basic tools (now booleans)
             for tool_name in self.basic_tool_checks:
                 tool_config = getattr(current_config.tools, tool_name)
@@ -429,6 +478,17 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.fixity_checks['output_fixity'].setChecked(profile.fixity.output_fixity)
         self.fixity_checks['overwrite_stream_fixity'].setChecked(profile.fixity.overwrite_stream_fixity)
         
+        # Load checksum algorithms
+        algorithm = getattr(profile.fixity, 'checksum_algorithm', 'md5')
+        index = self.checksum_algorithm_combo.findText(algorithm)
+        if index >= 0:
+            self.checksum_algorithm_combo.setCurrentIndex(index)
+        
+        stream_algorithm = getattr(profile.fixity, 'stream_hash_algorithm', 'md5')
+        stream_index = self.stream_hash_algorithm_combo.findText(stream_algorithm)
+        if stream_index >= 0:
+            self.stream_hash_algorithm_combo.setCurrentIndex(stream_index)
+        
         # Load basic tools (now booleans)
         for tool_name in self.basic_tool_checks:
             tool_config = getattr(profile.tools, tool_name)
@@ -479,7 +539,9 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             validate_stream_fixity=self.fixity_checks['validate_stream_fixity'].isChecked(),
             embed_stream_fixity=self.fixity_checks['embed_stream_fixity'].isChecked(),
             output_fixity=self.fixity_checks['output_fixity'].isChecked(),
-            overwrite_stream_fixity=self.fixity_checks['overwrite_stream_fixity'].isChecked()
+            overwrite_stream_fixity=self.fixity_checks['overwrite_stream_fixity'].isChecked(),
+            checksum_algorithm=self.checksum_algorithm_combo.currentText(),
+            stream_hash_algorithm=self.stream_hash_algorithm_combo.currentText()
         )
         
         # Create tools config (now with booleans)
