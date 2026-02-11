@@ -107,6 +107,15 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         desc_layout.addWidget(self.description_input)
         info_layout.addLayout(desc_layout)
         
+        # Validate filename
+        validate_fn_layout = QHBoxLayout()
+        validate_fn_layout.addWidget(QLabel("Validate Filename:"))
+        self.validate_filename_check = QCheckBox()
+        self.validate_filename_check.setChecked(True)  # Default matches ChecksProfile default
+        validate_fn_layout.addWidget(self.validate_filename_check)
+        validate_fn_layout.addStretch()
+        info_layout.addLayout(validate_fn_layout)
+        
         info_group.setLayout(info_layout)
         layout.addWidget(info_group)
     
@@ -352,6 +361,9 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         try:
             current_config = config_edit.config_mgr.get_config('checks', config_edit.ChecksConfig)
             
+            # Load validate filename
+            self.validate_filename_check.setChecked(current_config.validate_filename)
+            
             # Load outputs (now booleans)
             self.access_file_check.setChecked(current_config.outputs.access_file)
             self.report_check.setChecked(current_config.outputs.report)
@@ -401,6 +413,9 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         # Load profile info
         self.name_input.setText(profile.name)
         self.description_input.setPlainText(profile.description)
+        
+        # Load validate filename
+        self.validate_filename_check.setChecked(profile.validate_filename)
         
         # Load outputs (now booleans)
         self.access_file_check.setChecked(profile.outputs.access_file)
@@ -504,6 +519,7 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         return ChecksProfile(
             name=name,
             description=self.description_input.toPlainText().strip(),
+            validate_filename=self.validate_filename_check.isChecked(),
             outputs=outputs,
             fixity=fixity,
             tools=tools
