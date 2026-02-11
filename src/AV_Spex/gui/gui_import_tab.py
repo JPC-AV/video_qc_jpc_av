@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QDir, QSize
 from PyQt6.QtGui import QPixmap
 
+import json
 import os
 
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
@@ -42,12 +43,19 @@ class ImportTab(ThemeableMixin):
                 self.export_config_dialog('checks')
             elif selected_option == "Export Spex Config":
                 self.export_config_dialog('spex')
-            elif selected_option == "Export File name Config":
+            elif selected_option == "Export All File name Profiles":
                 self.export_config_dialog('filename')
-            elif selected_option == "Export Signal flow Config":
+            elif selected_option == "Export All Signal flow Profiles":
                 self.export_config_dialog('signalflow')
             elif selected_option == "Export Spex and Checks Config":
                 self.export_config_dialog(['checks','spex'])
+            elif selected_option == "Export All Custom Checks Profiles":
+                self.export_config_dialog('profiles_checks')
+            elif selected_option == "Export All Exiftool Profiles":
+                self.export_config_dialog('exiftool')
+            elif selected_option == "Export All Config":
+                self.export_config_dialog(['checks', 'spex', 'filename', 
+                                           'signalflow', 'profiles_checks', 'exiftool'])
 
         def import_config(self):
             """Import configuration from a file."""
@@ -60,7 +68,7 @@ class ImportTab(ThemeableMixin):
                 try:
                     # Use the ConfigIO class to import config
                     config_io = ConfigIO(config_mgr)
-                    config_io.import_configs(file_path)
+                    import_results = config_io.import_configs(file_path)
                     
                     # Reload UI components to reflect new settings
                     self.main_window.config_widget.load_config_values()
@@ -72,8 +80,11 @@ class ImportTab(ThemeableMixin):
                     filename_config = config_mgr.get_config('filename', FilenameConfig)
 
                     # Checks Tab dropdowns 
-                    # Update the Checks profile dropdown
-                    if hasattr(self.main_window, 'checks_profile_dropdown'):
+                    # Refresh the checks profile dropdown (includes custom profiles)
+                    if hasattr(self.main_window, 'checks_tab') and hasattr(self.main_window.checks_tab, 'profile_handlers'):
+                        self.main_window.checks_tab.profile_handlers.refresh_profile_dropdown()
+                    elif hasattr(self.main_window, 'checks_profile_dropdown'):
+                        # Fallback: manually set the built-in profile selection
                         self.main_window.checks_profile_dropdown.blockSignals(True)
                         
                         # Set based on exiftool.run_tool value (using boolean now)
@@ -152,10 +163,76 @@ class ImportTab(ThemeableMixin):
                         # Re-enable signals
                         self.main_window.signalflow_profile_dropdown.blockSignals(False)
                     
-                    QMessageBox.information(self.main_window, "Success", f"Configuration imported successfully from {file_path}")
+                    # Show result to user — with rename notification if applicable
+                    renamed = import_results.get('renamed_profiles', [])
+                    errors = import_results.get('errors', [])
+                    
+                    if errors:
+                        error_text = "\n".join(f"• {e}" for e in errors)
+                        if renamed:
+                            # Partial success: some profiles imported, some errors
+                            QMessageBox.warning(
+                                self.main_window, "Import Partially Successful",
+                                f"Some items were imported from {file_path}, "
+                                f"but errors occurred:\n\n{error_text}"
+                            )
+                        else:
+                            QMessageBox.warning(
+                                self.main_window, "Import Errors",
+                                f"The file was read, but errors occurred during import:"
+                                f"\n\n{error_text}"
+                            )
+                    elif renamed:
+                        self._show_rename_notification(file_path, renamed)
+                    else:
+                        QMessageBox.information(
+                            self.main_window, "Success", 
+                            f"Configuration imported successfully from {file_path}"
+                        )
+
+                except json.JSONDecodeError:
+                    QMessageBox.critical(
+                        self.main_window, "Error",
+                        "The selected file is not valid JSON.\n"
+                        "Please select a valid AV Spex config export file."
+                    )
                 except Exception as e:
                     logger.error(f"Error importing config: {str(e)}")
                     QMessageBox.critical(self.main_window, "Error", f"Error importing configuration: {str(e)}")
+
+        def _show_rename_notification(self, file_path, renamed_profiles):
+            """
+            Show a notification dialog listing profiles that were renamed
+            during import due to name collisions.
+            
+            Args:
+                file_path: Path to the imported file (for the success message)
+                renamed_profiles: List of (original_name, new_name) tuples
+            """
+            rename_lines = []
+            for original, renamed in renamed_profiles:
+                rename_lines.append(f'  "{original}"  →  "{renamed}"')
+            
+            rename_text = "\n".join(rename_lines)
+            
+            msg = QMessageBox(self.main_window)
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setWindowTitle("Import Successful — Profiles Renamed")
+            msg.setText(
+                f"Configuration imported from {os.path.basename(file_path)}.\n\n"
+                "Some imported profiles were renamed to avoid "
+                "conflicts with existing profiles:"
+            )
+            msg.setInformativeText(rename_text)
+            msg.setDetailedText(
+                "When an imported profile has the same name as an existing profile, "
+                "AV Spex adds an '(imported)' suffix to the imported profile to "
+                "preserve both versions.\n\n"
+                "You can rename imported profiles through Manage Profiles "
+                "in the Checks tab."
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
 
         def export_config_dialog(self, config_type):
             """Export configuration to a file."""
@@ -208,8 +285,11 @@ class ImportTab(ThemeableMixin):
                     signalflow_config = config_mgr.get_config("signalflow", SignalflowConfig)
 
                     # Checks Tab dropdowns
-                    # Update the Checks profile dropdown
-                    if hasattr(self.main_window, 'checks_profile_dropdown'):
+                    # Refresh the checks profile dropdown (includes custom profiles)
+                    if hasattr(self.main_window, 'checks_tab') and hasattr(self.main_window.checks_tab, 'profile_handlers'):
+                        self.main_window.checks_tab.profile_handlers.refresh_profile_dropdown()
+                    elif hasattr(self.main_window, 'checks_profile_dropdown'):
+                        # Fallback: manually set the built-in profile selection
                         self.main_window.checks_profile_dropdown.blockSignals(True)
                         
                         # Set based on exiftool.run_tool value (using boolean now)
@@ -307,7 +387,10 @@ class ImportTab(ThemeableMixin):
             <p><b>Import Config</b><br>
             • Loads previously saved configuration settings from a JSON file<br>
             • Import file can be Checks Config, Spex Config, or All Config<br>
-            • Compatible with files created using the Export feature</p>
+            • Compatible with files created using the Export feature<br>
+            • Imported custom profiles are added alongside your existing profiles<br>
+            • If an imported profile has the same name as an existing one, it will be 
+              renamed with an "(imported)" suffix</p>
             
             <p><b>Export Config</b><br>
             • Saves your current configuration settings to a JSON file<br>
@@ -316,7 +399,11 @@ class ImportTab(ThemeableMixin):
                 which tools run/check, etc.)<br>
             - <i>Spex Config</i>: Exports only the expected values for file validation
                 (codecs, formats, naming conventions, etc.)<br>
-            - <i>Complete Config</i>: Exports all settings (both Checks Config and Soex Config)</p>
+            - <i>Custom Checks Profiles</i>: Exports your custom checks profiles for sharing 
+                with other users<br>
+            - <i>Exiftool Profiles</i>: Exports your custom exiftool profiles<br>
+            - <i>Spex and Checks Config</i>: Exports both Checks and Spex settings<br>
+            - <i>All Config</i>: Exports everything including custom profiles</p>
             
             <p><b>Reset to Default</b><br>
             • Restores all settings to the application's built-in defaults<br>
@@ -524,11 +611,14 @@ class ImportTab(ThemeableMixin):
 
         # Add the default placeholder option first
         self.main_window.export_config_dropdown.addItem("Export Config Type...")  
-        self.main_window.export_config_dropdown.addItem("Export File name Config")
-        self.main_window.export_config_dropdown.addItem("Export Signal flow Config")
+        self.main_window.export_config_dropdown.addItem("Export All File name Profiles")
+        self.main_window.export_config_dropdown.addItem("Export All Signal flow Profiles")
         self.main_window.export_config_dropdown.addItem("Export Checks Config")
         self.main_window.export_config_dropdown.addItem("Export Spex Config")
+        self.main_window.export_config_dropdown.addItem("Export All Custom Checks Profiles")
+        self.main_window.export_config_dropdown.addItem("Export All Exiftool Profiles")
         self.main_window.export_config_dropdown.addItem("Export Spex and Checks Config")
+        self.main_window.export_config_dropdown.addItem("Export All Config")
 
         # Connect the combobox signal to your function
         self.main_window.export_config_dropdown.currentIndexChanged.connect(self.config_handlers.export_selected_config)
@@ -701,7 +791,6 @@ class ImportTab(ThemeableMixin):
         
         # Check if any directories are selected
         if not self.main_window.source_directories:
-            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(
                 self.main_window,
                 "No Directories Selected",
