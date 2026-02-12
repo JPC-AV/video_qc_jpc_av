@@ -62,6 +62,8 @@ class BRNGAnalysisResult:
     thumbnails: List[str]
     requires_border_adjustment: bool
     refinement_recommendations: Dict = None
+    analysis_periods: List[Tuple[float, int]] = None
+    period_summaries: List[Dict] = None
 
 @dataclass
 class SignalstatsResult:
@@ -1029,6 +1031,7 @@ class DifferentialBRNGAnalyzer:
         if analysis_periods:
             # logger.debug(f"  Using {len(analysis_periods)} analysis periods from signalstats")
             all_violations = []
+            period_summaries = []
             
             for i, (start_time, duration) in enumerate(analysis_periods):
                 logger.info(f"  Analyzing period {i+1}: {start_time:.1f}s - {start_time+duration:.1f}s")
@@ -1056,10 +1059,22 @@ class DifferentialBRNGAnalyzer:
                 })
                 
                 # Analyze violations for this period
-                period_violations = self._analyze_differential_violations(
+                period_violations, period_stats = self._analyze_differential_violations(
                     highlighted_path, original_path, start_time,
                     qctools_violations=qctools_violations
                 )
+                
+                # Track per-period summary
+                period_summaries.append({
+                    'period_num': i + 1,
+                    'start_time': start_time,
+                    'end_time': start_time + duration,
+                    'qctools_frames_targeted': period_stats['qctools_frames_targeted'],
+                    'frames_mapped': period_stats['frames_mapped_to_period'],
+                    'total_samples': period_stats['total_samples_analyzed'],
+                    'frames_checked': period_stats['frames_checked'],
+                    'violations_found': period_stats['violations_found']
+                })
                 
                 all_violations.extend(period_violations)
             
@@ -1092,6 +1107,20 @@ class DifferentialBRNGAnalyzer:
                 highlighted_path, original_path, skip_start_seconds,
                 qctools_violations=qctools_violations
             )
+            # Handle both tuple (new) and list (legacy) returns
+            period_summaries = []
+            if isinstance(violations, tuple):
+                violations, single_stats = violations
+                period_summaries.append({
+                    'period_num': 1,
+                    'start_time': skip_start_seconds,
+                    'end_time': skip_start_seconds + duration_limit,
+                    'qctools_frames_targeted': single_stats['qctools_frames_targeted'],
+                    'frames_mapped': single_stats['frames_mapped_to_period'],
+                    'total_samples': single_stats['total_samples_analyzed'],
+                    'frames_checked': single_stats['frames_checked'],
+                    'violations_found': single_stats['violations_found']
+                })
         
         # Generate patterns and reports
         aggregate_patterns = self._analyze_aggregate_patterns(violations)
@@ -1143,7 +1172,9 @@ class DifferentialBRNGAnalyzer:
             actionable_report=actionable_report,
             thumbnails=thumbnails,
             requires_border_adjustment=aggregate_patterns.get('requires_border_adjustment', False),
-            refinement_recommendations=aggregate_patterns.get('expansion_recommendations')
+            refinement_recommendations=aggregate_patterns.get('expansion_recommendations'),
+            analysis_periods=analysis_periods if analysis_periods else None,
+            period_summaries=period_summaries if period_summaries else None
         )
     
     def _create_comparison_videos_for_period(self, highlighted_path: Path, original_path: Path,
@@ -1290,7 +1321,17 @@ class DifferentialBRNGAnalyzer:
         
         logger.debug(f"  Checked {frames_checked} frames, found {len(violations)} with violations above threshold\n")
         
-        return violations
+        # Return violations and analysis stats
+        analysis_stats = {
+            'qctools_frames_targeted': len(qctools_violations) if qctools_violations else 0,
+            'frames_mapped_to_period': len([v for v in (qctools_violations or []) 
+                                           if period_start_time <= v.timestamp < period_end_time]),
+            'total_samples_analyzed': len(sample_indices),
+            'frames_checked': frames_checked,
+            'violations_found': len(violations)
+        }
+        
+        return violations, analysis_stats
     
     def _detect_differential_violations_frame(self, highlighted: np.ndarray, 
                                      original: np.ndarray, 
