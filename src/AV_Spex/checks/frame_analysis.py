@@ -1542,7 +1542,7 @@ class DifferentialBRNGAnalyzer:
             
             if is_far_enough:
                 selected_violations.append(violation)
-                logger.info(f"  Selected thumbnail {len(selected_violations)}: Frame {violation.frame_num} at {violation.timestamp:.1f}s (score: {violation.violation_score:.4f})")
+                logger.info(f"  Selected thumbnail {len(selected_violations)}: Frame {violation.frame_num} at {violation.timestamp:.1f}s (score: {violation.violation_score:.4f})\n")
         
         # If we couldn't find enough diverse violations, fill in with the best remaining ones
         # (but log this situation)
@@ -3015,7 +3015,7 @@ class EnhancedFrameAnalysis:
                 
                 # CREATE COMPARISON VISUALIZATION (initial vs final)
                 if refinement_iterations > 0:
-                    logger.info("\nCreating before/after comparison visualization...")
+                    logger.info("\nCreating before/after comparison visualization...\n")
                     comparison_path = self.output_dir / f"{self.video_id}_border_refinement_comparison.jpg"
                     
                     try:
@@ -3736,7 +3736,7 @@ class EnhancedFrameAnalysis:
         
         # If we couldn't find 3 non-overlapping dense regions, fall back to even distribution
         if len(suggested_periods) < 3:
-            logger.debug(f"  Only found {len(suggested_periods)} dense violation regions")
+            logger.debug(f"  Only found {len(suggested_periods)} dense violation regions\n")
             # Add evenly distributed periods from the violation range
             violation_duration = timestamps[-1] - timestamps[0]
             if violation_duration > 180:  # If violations span > 3 minutes

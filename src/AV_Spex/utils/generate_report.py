@@ -247,6 +247,39 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
                 brng_data = enhanced_data.get('final_brng_analysis') or enhanced_data.get('brng_analysis')
                 if brng_data:
                     frame_outputs['brng_analysis'] = brng_data  # Store as dict directly
+            
+            # Extract border refinement data from enhanced JSON
+            if enhanced_data.get('refinement_iterations'):
+                frame_outputs['refinement_iterations'] = enhanced_data['refinement_iterations']
+                frame_outputs['refinement_history'] = enhanced_data.get('refinement_history', [])
+                frame_outputs['initial_borders'] = enhanced_data.get('initial_borders')
+                frame_outputs['final_borders'] = enhanced_data.get('final_borders')
+                
+                # Check for refinement comparison visualization
+                comparison_path = os.path.join(
+                    destination_directory, f"{video_id}_border_refinement_comparison.jpg"
+                )
+                if os.path.exists(comparison_path):
+                    frame_outputs['refinement_comparison'] = comparison_path
+                
+                # Check for per-iteration refined visualizations
+                frame_outputs['refinement_visualizations'] = []
+                for i in range(1, enhanced_data['refinement_iterations'] + 1):
+                    iter_path = os.path.join(
+                        destination_directory, f"{video_id}_border_detection_refined_iter{i}.jpg"
+                    )
+                    if os.path.exists(iter_path):
+                        frame_outputs['refinement_visualizations'].append(iter_path)
+            
+            # Extract initial borders (even without refinement) for methodology info
+            if not frame_outputs.get('initial_borders') and enhanced_data.get('initial_borders'):
+                frame_outputs['initial_borders'] = enhanced_data['initial_borders']
+            
+            # Extract QCTools violation info
+            if enhanced_data.get('qctools_violations_found'):
+                frame_outputs['qctools_violations_found'] = enhanced_data['qctools_violations_found']
+            if enhanced_data.get('color_bars_end_time'):
+                frame_outputs['color_bars_end_time'] = enhanced_data['color_bars_end_time']
                     
         except Exception as e:
             logger.warning(f"Could not read signalstats from enhanced frame analysis: {e}")
@@ -967,60 +1000,292 @@ def generate_frame_analysis_html(frame_outputs, video_id):
     if frame_outputs['border_visualization'] or frame_outputs['border_data']:
         html += "<h3 style='color: #bf971b;'>Border Detection</h3>"
         
+        # Methodology explanation (collapsible)
+        html += """
+        <a id="link_border_methodology" href="javascript:void(0);" 
+           onclick="toggleContent('border_methodology', 'What is border detection? ▼', 'What is border detection? ▲')" 
+           style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+           What is border detection? ▼</a>
+        <div id="border_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px; 
+             margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+            <p style="margin: 0 0 10px 0;">
+                <strong>Border detection</strong> identifies the active picture area within the video frame, 
+                excluding non-content regions such as blanking intervals, head switching noise, and 
+                pillarboxing/letterboxing borders. Accurately identifying borders is essential because 
+                pixels in these regions are often outside broadcast range but do not represent actual 
+                content violations.
+            </p>
+            <p style="margin: 0 0 10px 0; font-weight: bold;">Detection methods:</p>
+            <ul style="margin: 4px 0 10px 20px; padding: 0;">
+                <li style="margin-bottom: 4px;"><strong>Sophisticated (quality-based)</strong> — samples 
+                    multiple frames across the video, selecting high-quality frames with good contrast. 
+                    Analyzes luminance gradients at frame edges to find where active picture content begins. 
+                    Also detects head switching artifacts in the bottom rows of the frame.</li>
+                <li style="margin-bottom: 4px;"><strong>Simple (fixed)</strong> — applies a uniform border 
+                    crop (default 25 pixels) on all sides. Used as a fallback when sophisticated detection 
+                    is not possible.</li>
+            </ul>
+            <p style="margin: 0 0 10px 0; font-weight: bold;">Iterative refinement:</p>
+            <p style="margin: 0 0 10px 0;">
+                After initial border detection, AV Spex runs BRNG (broadcast range) analysis on the detected 
+                active area. If a high percentage of violations occur at the edges of the active area 
+                (suggesting the borders were not cropped aggressively enough), the borders are automatically 
+                expanded and analysis is re-run. This iterative refinement continues until edge violations 
+                are reduced or a maximum number of iterations is reached. The goal is to separate true 
+                content violations from border artifacts.
+            </p>
+        </div>
+        """
+        
+        # Determine border data source: prefer enhanced JSON, fall back to standalone file
+        border_data = None
+        enhanced_data = None
+        
+        # Try enhanced JSON first (has more complete data)
+        if frame_outputs.get('enhanced_frame_analysis'):
+            try:
+                with open(frame_outputs['enhanced_frame_analysis'], 'r') as f:
+                    enhanced_data = json.load(f)
+            except Exception:
+                pass
+        
+        # Try standalone border_data.json
         if frame_outputs['border_data']:
             try:
                 with open(frame_outputs['border_data'], 'r') as f:
                     border_data = json.load(f)
-                
-                # Display border detection method
-                detection_method = border_data.get('detection_method', 'unknown')
-                if detection_method == 'simple_fixed':
-                    border_size = border_data.get('border_size_used', 25)
-                    html += f"<p><strong>Method:</strong> Simple ({border_size}px borders)</p>"
-                else:
-                    html += f"<p><strong>Method:</strong> Sophisticated (quality-based detection)</p>"
-                
-                # Display active area
-                if border_data.get('active_area'):
-                    x, y, w, h = border_data['active_area']
-                    video_width = border_data['video_properties']['width']
-                    video_height = border_data['video_properties']['height']
-                    active_percentage = (w * h) / (video_width * video_height) * 100
-                    
-                    html += f"""
-                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0;">
-                        <p><strong>Active Picture Area:</strong> {w}x{h} pixels ({active_percentage:.1f}% of frame)</p>
-                        <p><strong>Position:</strong> ({x}, {y})</p>
-                        <p><strong>Borders:</strong> Left={x}px, Right={video_width-x-w}px, Top={y}px, Bottom={video_height-y-h}px</p>
-                    </div>
-                    """
-                
-                # Display head switching artifacts if detected
-                if border_data.get('head_switching_artifacts'):
-                    hs_data = border_data['head_switching_artifacts']
-                    if hs_data.get('severity') != 'none' and hs_data.get('severity') != 'error':
-                        html += f"""
-                        <div style="background-color: #ffbaba; padding: 10px; margin: 10px 0;">
-                            <p><strong>⚠️ Head Switching Artifacts Detected</strong></p>
-                            <p>Severity: {hs_data['severity']}</p>
-                            <p>Affected frames: {hs_data['artifact_percentage']:.1f}%</p>
-                        </div>
-                        """
-                        
             except Exception as e:
                 logger.error(f"Error reading border data: {e}")
         
-        # Display border visualization image
+        # Determine initial and final border data
+        initial_borders = frame_outputs.get('initial_borders') or (enhanced_data or {}).get('initial_borders')
+        final_borders = frame_outputs.get('final_borders') or (enhanced_data or {}).get('final_borders')
+        refinement_iterations = frame_outputs.get('refinement_iterations', 0) or (enhanced_data or {}).get('refinement_iterations', 0)
+        refinement_history = frame_outputs.get('refinement_history', []) or (enhanced_data or {}).get('refinement_history', [])
+        
+        # Use the best available border info for display
+        display_borders = final_borders or initial_borders or border_data
+        
+        if display_borders:
+            # Display detection method
+            detection_method = display_borders.get('detection_method', 'unknown')
+            method_label = "Simple (fixed borders)" if detection_method == 'simple_fixed' else "Sophisticated (quality-based detection)"
+            if 'refined' in detection_method:
+                method_label += " with iterative refinement"
+            
+            html += f"<p><strong>Method:</strong> {method_label}</p>"
+            
+            # Active area display
+            active_area = display_borders.get('active_area')
+            if active_area:
+                if isinstance(active_area, (list, tuple)) and len(active_area) == 4:
+                    x, y, w, h = active_area
+                else:
+                    x, y, w, h = 0, 0, 0, 0
+                
+                # Get video dimensions from border_data or enhanced data
+                video_width, video_height = 0, 0
+                if border_data and border_data.get('video_properties'):
+                    video_width = border_data['video_properties']['width']
+                    video_height = border_data['video_properties']['height']
+                elif initial_borders and initial_borders.get('active_area'):
+                    # Estimate from initial borders (initial area + borders = full frame)
+                    init_area = initial_borders['active_area']
+                    if isinstance(init_area, (list, tuple)) and len(init_area) == 4:
+                        # Use border_regions if available
+                        pass
+                
+                if video_width > 0 and video_height > 0:
+                    active_percentage = (w * h) / (video_width * video_height) * 100
+                    right_border = video_width - x - w
+                    bottom_border = video_height - y - h
+                    
+                    html += f"""
+                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                        <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
+                            <tr>
+                                <td style="padding: 4px 10px; font-weight: bold; width: 200px;">Active picture area</td>
+                                <td style="padding: 4px 10px;">{w}×{h} pixels ({active_percentage:.1f}% of {video_width}×{video_height} frame)</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 4px 10px; font-weight: bold;">Position</td>
+                                <td style="padding: 4px 10px;">({x}, {y})</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 4px 10px; font-weight: bold;">Borders</td>
+                                <td style="padding: 4px 10px;">Left={x}px, Right={right_border}px, Top={y}px, Bottom={bottom_border}px</td>
+                            </tr>
+                        </table>
+                    </div>
+                    """
+                else:
+                    html += f"""
+                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                        <p><strong>Active Picture Area:</strong> {w}×{h} pixels at ({x}, {y})</p>
+                    </div>
+                    """
+            
+            # Head switching artifacts
+            hs_data = display_borders.get('head_switching_artifacts')
+            if hs_data and isinstance(hs_data, dict):
+                severity = hs_data.get('severity', 'none')
+                if severity not in ('none', 'error', None):
+                    artifact_pct = hs_data.get('percentage', 0)
+                    html += f"""
+                    <div style="background-color: #ffbaba; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                        <p><strong>⚠️ Head Switching Artifacts Detected</strong></p>
+                        <p>Affected frames: {artifact_pct:.1f}%</p>
+                    </div>
+                    """
+        
+        # Display initial border visualization image
         if frame_outputs['border_visualization']:
-            with open(frame_outputs['border_visualization'], "rb") as img_file:
-                encoded_img = b64encode(img_file.read()).decode()
+            viz_label = "Initial border detection" if refinement_iterations > 0 else "Border detection"
+            try:
+                with open(frame_outputs['border_visualization'], "rb") as img_file:
+                    encoded_img = b64encode(img_file.read()).decode()
+                html += f"""
+                <div style="margin: 15px 0;">
+                    <p style="font-size: 13px; color: #666; margin-bottom: 6px;"><em>{viz_label}</em></p>
+                    <img src="data:image/jpeg;base64,{encoded_img}" 
+                         style="max-width: 100%; height: auto; border: 1px solid #4d2b12;"
+                         alt="{viz_label} visualization" />
+                </div>
+                """
+            except Exception as e:
+                logger.warning(f"Could not embed border visualization: {e}")
+        
+        # === Border Refinement Section ===
+        if refinement_iterations and refinement_iterations > 0:
             html += f"""
-            <div style="margin: 20px 0;">
-                <img src="data:image/jpeg;base64,{encoded_img}" 
-                     style="max-width: 100%; height: auto; border: 1px solid #4d2b12;"
-                     alt="Border detection visualization" />
-            </div>
+            <div style="margin-top: 20px; padding: 14px 16px; background-color: #fff3cd; border: 1px solid #bf971b; border-radius: 4px;">
+                <p style="margin: 0 0 10px 0; font-weight: bold; color: #856404;">
+                    ⚠️ Border Refinement Performed ({refinement_iterations} iteration{'s' if refinement_iterations > 1 else ''})
+                </p>
+                <p style="margin: 0 0 10px 0; font-size: 13px;">
+                    Initial BRNG analysis detected a high percentage of violations at the edges of the 
+                    active area, indicating the initial border crop was insufficient. Borders were 
+                    automatically expanded and analysis was re-run.
+                </p>
             """
+            
+            # Show initial → final comparison
+            if initial_borders and final_borders:
+                init_area = initial_borders.get('active_area', [0,0,0,0])
+                final_area = final_borders.get('active_area', [0,0,0,0])
+                
+                if isinstance(init_area, (list, tuple)) and len(init_area) == 4:
+                    init_w, init_h = init_area[2], init_area[3]
+                    final_w, final_h = final_area[2], final_area[3]
+                    width_change = final_w - init_w
+                    height_change = final_h - init_h
+                    
+                    html += f"""
+                <table style="border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 10px;">
+                    <tr style="background-color: rgba(255,255,255,0.5);">
+                        <th style="padding: 5px 10px; text-align: left; border-bottom: 1px solid #bf971b;"></th>
+                        <th style="padding: 5px 10px; text-align: left; border-bottom: 1px solid #bf971b;">Initial</th>
+                        <th style="padding: 5px 10px; text-align: left; border-bottom: 1px solid #bf971b;">Final</th>
+                        <th style="padding: 5px 10px; text-align: left; border-bottom: 1px solid #bf971b;">Change</th>
+                    </tr>
+                    <tr>
+                        <td style="padding: 4px 10px; font-weight: bold;">Active area</td>
+                        <td style="padding: 4px 10px;">{init_w}×{init_h}</td>
+                        <td style="padding: 4px 10px;">{final_w}×{final_h}</td>
+                        <td style="padding: 4px 10px;">{width_change:+d}×{height_change:+d} px</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 4px 10px; font-weight: bold;">Position</td>
+                        <td style="padding: 4px 10px;">({init_area[0]}, {init_area[1]})</td>
+                        <td style="padding: 4px 10px;">({final_area[0]}, {final_area[1]})</td>
+                        <td style="padding: 4px 10px;"></td>
+                    </tr>"""
+
+                    # Extract borders
+                    if video_width > 0 and video_height > 0:
+                        init_borders_str = f"L={init_area[0]} R={video_width-init_area[0]-init_w} T={init_area[1]} B={video_height-init_area[1]-init_h}"
+                        final_borders_str = f"L={final_area[0]} R={video_width-final_area[0]-final_w} T={final_area[1]} B={video_height-final_area[1]-final_h}"
+                        html += f"""
+                    <tr>
+                        <td style="padding: 4px 10px; font-weight: bold;">Borders (px)</td>
+                        <td style="padding: 4px 10px;">{init_borders_str}</td>
+                        <td style="padding: 4px 10px;">{final_borders_str}</td>
+                        <td style="padding: 4px 10px;"></td>
+                    </tr>"""
+                    
+                    html += "</table>"
+            
+            # Show per-iteration details
+            if refinement_history:
+                for iteration in refinement_history:
+                    iter_num = iteration.get('iteration', '?')
+                    iter_area = iteration.get('active_area', [0,0,0,0])
+                    area_change = iteration.get('area_change', {})
+                    violations_before = iteration.get('violations_before', 0)
+                    violations_after = iteration.get('violations_after', 0)
+                    edge_pct = iteration.get('edge_violation_pct', 0)
+                    
+                    violation_delta = violations_after - violations_before
+                    violation_delta_str = f"{violation_delta:+d}" if violation_delta != 0 else "no change"
+                    
+                    if isinstance(iter_area, (list, tuple)) and len(iter_area) == 4:
+                        html += f"""
+                <div style="background-color: rgba(255,255,255,0.4); padding: 6px 10px; margin: 6px 0; border-radius: 3px; font-size: 12px;">
+                    <strong>Iteration {iter_num}:</strong> 
+                    Active area → {iter_area[2]}×{iter_area[3]} 
+                    (width {area_change.get('width', 0):+d}px, height {area_change.get('height', 0):+d}px) — 
+                    Violation frames: {violations_before} → {violations_after} ({violation_delta_str}) — 
+                    Edge violations: {edge_pct:.1f}%
+                </div>"""
+            
+            html += "</div>"  # Close refinement container
+            
+            # Collect all refinement thumbnails for horizontal display
+            refinement_thumbs = []
+            
+            # Add each refinement iteration visualization
+            refinement_vizs = frame_outputs.get('refinement_visualizations', [])
+            if refinement_vizs:
+                for idx, viz_path in enumerate(refinement_vizs, 1):
+                    try:
+                        with open(viz_path, "rb") as img_file:
+                            encoded_img = b64encode(img_file.read()).decode()
+                        refinement_thumbs.append((f'Refinement iteration {idx}', encoded_img))
+                    except Exception as e:
+                        logger.warning(f"Could not embed refinement visualization {viz_path}: {e}")
+            
+            # Add before/after comparison
+            comparison_path = frame_outputs.get('refinement_comparison')
+            if comparison_path:
+                try:
+                    with open(comparison_path, "rb") as img_file:
+                        encoded_img = b64encode(img_file.read()).decode()
+                    refinement_thumbs.append(('Initial vs. final comparison', encoded_img))
+                except Exception as e:
+                    logger.warning(f"Could not embed refinement comparison: {e}")
+            
+            # Render horizontal thumbnail strip
+            if refinement_thumbs:
+                html += """
+                <div style="margin: 15px 0;">
+                    <p style="font-size: 13px; color: #666; margin-bottom: 8px;"><em>Border refinement visualizations</em> <span style="font-size: 11px;">(click to enlarge)</span></p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;">"""
+                
+                for caption, encoded_img in refinement_thumbs:
+                    html += f"""
+                        <div style="flex: 1 1 0; min-width: 180px; max-width: {max(100 // len(refinement_thumbs), 20)}%; text-align: center;">
+                            <img src="data:image/jpeg;base64,{encoded_img}" 
+                                 style="width: 100%; height: auto; border: 1px solid #4d2b12; cursor: pointer; transition: opacity 0.2s;"
+                                 onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'"
+                                 onclick="openImage('data:image/jpeg;base64,{encoded_img}', '{caption}')"
+                                 title="Click to enlarge"
+                                 alt="{caption}" />
+                            <p style="font-size: 11px; color: #888; margin: 4px 0 0 0;">{caption}</p>
+                        </div>"""
+                
+                html += """
+                    </div>
+                </div>"""
     
     # BRNG Analysis Section
     if frame_outputs['brng_analysis']:
