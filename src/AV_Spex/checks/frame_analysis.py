@@ -74,6 +74,7 @@ class SignalstatsResult:
     analysis_periods: List[Dict]
     diagnosis: str
     used_qctools: bool
+    comparison_results: List[Dict] = None
 
 
 class QCToolsParser:
@@ -2223,7 +2224,9 @@ class IntegratedSignalstatsAnalyzer:
                     period_comparison['qctools_full_frame'] = {
                         'violations_pct': (qctools_result['frames_with_violations'] / 
                                         qctools_result['frames_analyzed'] * 100) if qctools_result['frames_analyzed'] > 0 else 0,
-                        'max_brng': max(qctools_result['brng_values']) * 100 if qctools_result['brng_values'] else 0
+                        'max_brng': max(qctools_result['brng_values']) * 100 if qctools_result['brng_values'] else 0,
+                        'frames_analyzed': qctools_result['frames_analyzed'],
+                        'frames_with_violations': qctools_result['frames_with_violations']
                     }
                     logger.debug(f"    QCTools (full frame): {period_comparison['qctools_full_frame']['violations_pct']:.1f}% violations, "
                             f"max BRNG: {period_comparison['qctools_full_frame']['max_brng']:.4f}%")
@@ -2238,7 +2241,9 @@ class IntegratedSignalstatsAnalyzer:
                     period_comparison['ffprobe_active_area'] = {
                         'violations_pct': (ffprobe_result['frames_with_violations'] / 
                                         ffprobe_result['frames_analyzed'] * 100) if ffprobe_result['frames_analyzed'] > 0 else 0,
-                        'max_brng': max(ffprobe_result['brng_values']) * 100 if ffprobe_result['brng_values'] else 0
+                        'max_brng': max(ffprobe_result['brng_values']) * 100 if ffprobe_result['brng_values'] else 0,
+                        'frames_analyzed': ffprobe_result['frames_analyzed'],
+                        'frames_with_violations': ffprobe_result['frames_with_violations']
                     }
                     logger.debug(f"    FFprobe (active area): {period_comparison['ffprobe_active_area']['violations_pct']:.1f}% violations, "
                             f"max BRNG: {period_comparison['ffprobe_active_area']['max_brng']:.4f}%")
@@ -2319,7 +2324,8 @@ class IntegratedSignalstatsAnalyzer:
             avg_brng=avg_brng,
             analysis_periods=analysis_periods,
             diagnosis=diagnosis,
-            used_qctools=used_qctools
+            used_qctools=used_qctools,
+            comparison_results=comparison_results
         )
 
     def _generate_comprehensive_diagnosis(self, violation_pct: float, max_brng: float, 
