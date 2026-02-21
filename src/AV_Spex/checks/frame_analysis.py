@@ -2180,7 +2180,7 @@ class IntegratedSignalstatsAnalyzer:
             analysis_duration,
             num_periods,
             border_data.quality_frame_hints if border_data else None,
-            qctools_periods=qctools_periods  # NEW PARAMETER
+            qctools_periods=qctools_periods  
         )
         
         # Log analysis configuration
