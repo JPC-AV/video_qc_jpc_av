@@ -785,8 +785,6 @@ profile_step1 = {
             "run_tool": False,
             "barsDetection": False,
             "evaluateBars": False,
-            "contentFilter": [],
-            "profile": [],
             "thumbExport": False
         }
     },
@@ -839,8 +837,6 @@ profile_step2 = {
             "run_tool": True,
             "barsDetection": True,
             "evaluateBars": True,
-            "contentFilter": [],
-            "profile": [],
             "thumbExport": True
         }
     },
@@ -893,8 +889,6 @@ profile_allOff = {
             "run_tool": False,
             "barsDetection": False,
             "evaluateBars": False,
-            "contentFilter": [],
-            "profile": [],
             "thumbExport": False
         }
     },
