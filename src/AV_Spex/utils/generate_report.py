@@ -6,6 +6,8 @@ os.environ["NUMEXPR_MAX_THREADS"] = "11" # troubleshooting goofy numbpy related 
 
 import csv
 from base64 import b64encode
+import json
+
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.log_setup import logger
@@ -183,6 +185,112 @@ def find_qct_thumbs(report_directory):
         sorted_thumbs_dict[key] = thumbs_dict[key]
 
     return sorted_thumbs_dict
+
+def find_frame_analysis_outputs(source_directory, destination_directory, video_id):
+    """
+    Find frame analysis output files (border detection, BRNG analysis, signalstats).
+    
+    Args:
+        source_directory (str): Source directory for the video
+        destination_directory (str): Destination directory for outputs
+        video_id (str): Video identifier
+        
+    Returns:
+        dict: Paths to frame analysis output files
+    """
+    frame_outputs = {
+        'border_visualization': None,
+        'border_data': None,
+        'brng_analysis': None,
+        'brng_thumbnails': [],
+        'signalstats_analysis': None,
+        'enhanced_frame_analysis': None
+    }
+    
+    # Check for border detection outputs
+    border_viz = os.path.join(destination_directory, f"{video_id}_border_detection.jpg")
+    if os.path.exists(border_viz):
+        frame_outputs['border_visualization'] = border_viz
+    
+    border_data = os.path.join(destination_directory, f"{video_id}_border_data.json")
+    if os.path.exists(border_data):
+        frame_outputs['border_data'] = border_data
+    
+    # Check for BRNG analysis outputs
+    brng_analysis = os.path.join(destination_directory, f"{video_id}_active_brng_analysis.json")
+    if os.path.exists(brng_analysis):
+        frame_outputs['brng_analysis'] = brng_analysis
+    
+    # Check for BRNG diagnostic thumbnails
+    brng_thumbs_dir = os.path.join(destination_directory, "brng_thumbnails")
+    if os.path.exists(brng_thumbs_dir):
+        for file in os.listdir(brng_thumbs_dir):
+            if file.endswith('.jpg') or file.endswith('.png'):
+                frame_outputs['brng_thumbnails'].append(os.path.join(brng_thumbs_dir, file))
+    
+    # Check for enhanced frame analysis JSON (contains signalstats data)
+    enhanced_analysis = os.path.join(destination_directory, f"{video_id}_enhanced_frame_analysis.json")
+    if os.path.exists(enhanced_analysis):
+        frame_outputs['enhanced_frame_analysis'] = enhanced_analysis
+        # Extract signalstats data from enhanced frame analysis
+        try:
+            with open(enhanced_analysis, 'r') as f:
+                enhanced_data = json.load(f)
+            # Check for signalstats in main results or final_signalstats (from refinement)
+            if enhanced_data.get('final_signalstats'):
+                frame_outputs['signalstats_analysis'] = enhanced_data['final_signalstats']
+            elif enhanced_data.get('signalstats'):
+                frame_outputs['signalstats_analysis'] = enhanced_data['signalstats']
+            
+            # Extract BRNG analysis from enhanced JSON if standalone file doesn't exist
+            if not frame_outputs['brng_analysis']:
+                brng_data = enhanced_data.get('final_brng_analysis') or enhanced_data.get('brng_analysis')
+                if brng_data:
+                    frame_outputs['brng_analysis'] = brng_data  # Store as dict directly
+            
+            # Extract border refinement data from enhanced JSON
+            if enhanced_data.get('refinement_iterations'):
+                frame_outputs['refinement_iterations'] = enhanced_data['refinement_iterations']
+                frame_outputs['refinement_history'] = enhanced_data.get('refinement_history', [])
+                frame_outputs['initial_borders'] = enhanced_data.get('initial_borders')
+                frame_outputs['final_borders'] = enhanced_data.get('final_borders')
+                
+                # Check for refinement comparison visualization
+                comparison_path = os.path.join(
+                    destination_directory, f"{video_id}_border_refinement_comparison.jpg"
+                )
+                if os.path.exists(comparison_path):
+                    frame_outputs['refinement_comparison'] = comparison_path
+                
+                # Check for per-iteration refined visualizations
+                frame_outputs['refinement_visualizations'] = []
+                for i in range(1, enhanced_data['refinement_iterations'] + 1):
+                    iter_path = os.path.join(
+                        destination_directory, f"{video_id}_border_detection_refined_iter{i}.jpg"
+                    )
+                    if os.path.exists(iter_path):
+                        frame_outputs['refinement_visualizations'].append(iter_path)
+            
+            # Extract initial borders (even without refinement) for methodology info
+            if not frame_outputs.get('initial_borders') and enhanced_data.get('initial_borders'):
+                frame_outputs['initial_borders'] = enhanced_data['initial_borders']
+            
+            # Extract QCTools violation info
+            if enhanced_data.get('qctools_violations_found'):
+                frame_outputs['qctools_violations_found'] = enhanced_data['qctools_violations_found']
+            if enhanced_data.get('color_bars_end_time'):
+                frame_outputs['color_bars_end_time'] = enhanced_data['color_bars_end_time']
+                    
+        except Exception as e:
+            logger.warning(f"Could not read signalstats from enhanced frame analysis: {e}")
+    
+    # Also check for standalone signalstats file (legacy support)
+    if not frame_outputs['signalstats_analysis']:
+        signalstats = os.path.join(destination_directory, f"{video_id}_signalstats_analysis.json")
+        if os.path.exists(signalstats):
+            frame_outputs['signalstats_analysis'] = signalstats
+    
+    return frame_outputs
 
 def find_report_csvs(report_directory):
 
@@ -857,6 +965,1136 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
 
     return profile_summary_html
 
+def _seconds_to_display(seconds):
+    """Convert seconds to a human-readable timecode string (HH:MM:SS.s)"""
+    if seconds is None:
+        return "N/A"
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:04.1f}"
+    return f"{minutes}:{secs:04.1f}"
+
+
+def generate_frame_analysis_html(frame_outputs, video_id):
+    """
+    Generate HTML section for frame analysis results.
+    
+    Args:
+        frame_outputs (dict): Dictionary of frame analysis output paths
+        video_id (str): Video identifier
+        
+    Returns:
+        str: HTML string for frame analysis section
+    """
+    if not any(frame_outputs.values()):
+        return ""
+    
+    html = """
+    <div class="frame-analysis-section">
+        <h2 style="color: #0a5f1c; text-decoration: underline; margin-top: 30px;">Frame Analysis Results</h2>
+    """
+    
+    # Border Detection Section
+    if frame_outputs['border_visualization'] or frame_outputs['border_data']:
+        html += "<h3 style='color: #bf971b;'>Border Detection</h3>"
+        
+        # Methodology explanation (collapsible)
+        html += """
+        <a id="link_border_methodology" href="javascript:void(0);" 
+           onclick="toggleContent('border_methodology', 'What is border detection? ▼', 'What is border detection? ▲')" 
+           style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+           What is border detection? ▼</a>
+        <div id="border_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px; 
+             margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+            <p style="margin: 0 0 10px 0;">
+                <strong>Border detection</strong> identifies the active picture area within the video frame, 
+                excluding non-content regions such as blanking intervals, head switching noise, and 
+                pillarboxing/letterboxing borders. Accurately identifying borders is essential because 
+                pixels in these regions are often outside broadcast range but do not represent actual 
+                content violations.
+            </p>
+            <p style="margin: 0 0 10px 0; font-weight: bold;">Detection methods:</p>
+            <ul style="margin: 4px 0 10px 20px; padding: 0;">
+                <li style="margin-bottom: 4px;"><strong>Sophisticated (quality-based)</strong> — samples 
+                    multiple frames across the video, selecting high-quality frames with good contrast. 
+                    Analyzes luminance gradients at frame edges to find where active picture content begins. 
+                    Also detects head switching artifacts in the bottom rows of the frame.</li>
+                <li style="margin-bottom: 4px;"><strong>Simple (fixed)</strong> — applies a uniform border 
+                    crop (default 25 pixels) on all sides. Used as a fallback when sophisticated detection 
+                    is not possible.</li>
+            </ul>
+            <p style="margin: 0 0 10px 0; font-weight: bold;">Iterative refinement:</p>
+            <p style="margin: 0 0 10px 0;">
+                After initial border detection, AV Spex runs BRNG (broadcast range) analysis on the detected 
+                active area. If a high percentage of violations occur at the edges of the active area 
+                (suggesting the borders were not cropped aggressively enough), the borders are automatically 
+                expanded and analysis is re-run. This iterative refinement continues until edge violations 
+                are reduced or a maximum number of iterations is reached. The goal is to separate true 
+                content violations from border artifacts.
+            </p>
+        </div>
+        """
+        
+        # Determine border data source: prefer enhanced JSON, fall back to standalone file
+        border_data = None
+        enhanced_data = None
+        
+        # Try enhanced JSON first (has more complete data)
+        if frame_outputs.get('enhanced_frame_analysis'):
+            try:
+                with open(frame_outputs['enhanced_frame_analysis'], 'r') as f:
+                    enhanced_data = json.load(f)
+            except Exception:
+                pass
+        
+        # Try standalone border_data.json
+        if frame_outputs['border_data']:
+            try:
+                with open(frame_outputs['border_data'], 'r') as f:
+                    border_data = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading border data: {e}")
+        
+        # Determine initial and final border data
+        initial_borders = frame_outputs.get('initial_borders') or (enhanced_data or {}).get('initial_borders')
+        final_borders = frame_outputs.get('final_borders') or (enhanced_data or {}).get('final_borders')
+        refinement_iterations = frame_outputs.get('refinement_iterations', 0) or (enhanced_data or {}).get('refinement_iterations', 0)
+        refinement_history = frame_outputs.get('refinement_history', []) or (enhanced_data or {}).get('refinement_history', [])
+        
+        # Use the best available border info for display
+        display_borders = final_borders or initial_borders or border_data
+        
+        if display_borders:
+            # Display detection method
+            detection_method = display_borders.get('detection_method', 'unknown')
+            method_label = "Simple (fixed borders)" if detection_method == 'simple_fixed' else "Sophisticated (quality-based detection)"
+            if 'refined' in detection_method:
+                method_label += " with iterative refinement"
+            
+            html += f"<p><strong>Method:</strong> {method_label}</p>"
+            
+            # Active area display
+            active_area = display_borders.get('active_area')
+            if active_area:
+                if isinstance(active_area, (list, tuple)) and len(active_area) == 4:
+                    x, y, w, h = active_area
+                else:
+                    x, y, w, h = 0, 0, 0, 0
+                
+                # Get video dimensions from border_data or enhanced data
+                video_width, video_height = 0, 0
+                if border_data and border_data.get('video_properties'):
+                    video_width = border_data['video_properties']['width']
+                    video_height = border_data['video_properties']['height']
+                elif initial_borders and initial_borders.get('active_area'):
+                    # Estimate from initial borders (initial area + borders = full frame)
+                    init_area = initial_borders['active_area']
+                    if isinstance(init_area, (list, tuple)) and len(init_area) == 4:
+                        # Use border_regions if available
+                        pass
+                
+                if video_width > 0 and video_height > 0:
+                    active_percentage = (w * h) / (video_width * video_height) * 100
+                    right_border = video_width - x - w
+                    bottom_border = video_height - y - h
+                    
+                    html += f"""
+                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                        <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
+                            <tr>
+                                <td style="padding: 4px 10px; font-weight: bold; width: 200px;">Active picture area</td>
+                                <td style="padding: 4px 10px;">{w}×{h} pixels ({active_percentage:.1f}% of {video_width}×{video_height} frame)</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 4px 10px; font-weight: bold;">Position</td>
+                                <td style="padding: 4px 10px;">({x}, {y})</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 4px 10px; font-weight: bold;">Borders</td>
+                                <td style="padding: 4px 10px;">Left={x}px, Right={right_border}px, Top={y}px, Bottom={bottom_border}px</td>
+                            </tr>
+                        </table>
+                    </div>
+                    """
+                else:
+                    html += f"""
+                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                        <p><strong>Active Picture Area:</strong> {w}×{h} pixels at ({x}, {y})</p>
+                    </div>
+                    """
+            
+            # Head switching artifacts
+            hs_data = display_borders.get('head_switching_artifacts')
+            if hs_data and isinstance(hs_data, dict):
+                severity = hs_data.get('severity', 'none')
+                if severity not in ('none', 'error', None):
+                    artifact_pct = hs_data.get('percentage', 0)
+                    html += f"""
+                    <div style="background-color: #ffbaba; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                        <p><strong>⚠️ Head Switching Artifacts Detected</strong></p>
+                        <p>Affected frames: {artifact_pct:.1f}%</p>
+                    </div>
+                    """
+        
+        # Display initial border visualization image
+        if frame_outputs['border_visualization']:
+            viz_label = "Initial border detection" if refinement_iterations > 0 else "Border detection"
+            try:
+                with open(frame_outputs['border_visualization'], "rb") as img_file:
+                    encoded_img = b64encode(img_file.read()).decode()
+                html += f"""
+                <div style="margin: 15px 0;">
+                    <p style="font-size: 13px; color: #666; margin-bottom: 6px;"><em>{viz_label}</em></p>
+                    <img src="data:image/jpeg;base64,{encoded_img}" 
+                         style="max-width: 100%; height: auto; border: 1px solid #4d2b12;"
+                         alt="{viz_label} visualization" />
+                </div>
+                """
+            except Exception as e:
+                logger.warning(f"Could not embed border visualization: {e}")
+        
+        # === Border Refinement Section ===
+        if refinement_iterations and refinement_iterations > 0:
+            html += f"""
+            <div style="margin-top: 20px; padding: 14px 16px; background-color: #fff3cd; border: 1px solid #bf971b; border-radius: 4px;">
+                <p style="margin: 0 0 10px 0; font-weight: bold; color: #856404;">
+                    ⚠️ Border Refinement Performed ({refinement_iterations} iteration{'s' if refinement_iterations > 1 else ''})
+                </p>
+                <p style="margin: 0 0 10px 0; font-size: 13px;">
+                    Initial BRNG analysis detected a high percentage of violations at the edges of the 
+                    active area, indicating the initial border crop was insufficient. Borders were 
+                    automatically expanded and analysis was re-run.
+                </p>
+            """
+            
+            # Show initial → final comparison
+            if initial_borders and final_borders:
+                init_area = initial_borders.get('active_area', [0,0,0,0])
+                final_area = final_borders.get('active_area', [0,0,0,0])
+                
+                if isinstance(init_area, (list, tuple)) and len(init_area) == 4:
+                    init_w, init_h = init_area[2], init_area[3]
+                    final_w, final_h = final_area[2], final_area[3]
+                    width_change = final_w - init_w
+                    height_change = final_h - init_h
+                    
+                    html += f"""
+                <table style="border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 10px;">
+                    <tr style="background-color: rgba(255,255,255,0.5);">
+                        <th style="padding: 5px 10px; text-align: left; border-bottom: 1px solid #bf971b;"></th>
+                        <th style="padding: 5px 10px; text-align: left; border-bottom: 1px solid #bf971b;">Initial</th>
+                        <th style="padding: 5px 10px; text-align: left; border-bottom: 1px solid #bf971b;">Final</th>
+                        <th style="padding: 5px 10px; text-align: left; border-bottom: 1px solid #bf971b;">Change</th>
+                    </tr>
+                    <tr>
+                        <td style="padding: 4px 10px; font-weight: bold;">Active area</td>
+                        <td style="padding: 4px 10px;">{init_w}×{init_h}</td>
+                        <td style="padding: 4px 10px;">{final_w}×{final_h}</td>
+                        <td style="padding: 4px 10px;">{width_change:+d}×{height_change:+d} px</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 4px 10px; font-weight: bold;">Position</td>
+                        <td style="padding: 4px 10px;">({init_area[0]}, {init_area[1]})</td>
+                        <td style="padding: 4px 10px;">({final_area[0]}, {final_area[1]})</td>
+                        <td style="padding: 4px 10px;"></td>
+                    </tr>"""
+
+                    # Extract borders
+                    if video_width > 0 and video_height > 0:
+                        init_borders_str = f"L={init_area[0]} R={video_width-init_area[0]-init_w} T={init_area[1]} B={video_height-init_area[1]-init_h}"
+                        final_borders_str = f"L={final_area[0]} R={video_width-final_area[0]-final_w} T={final_area[1]} B={video_height-final_area[1]-final_h}"
+                        html += f"""
+                    <tr>
+                        <td style="padding: 4px 10px; font-weight: bold;">Borders (px)</td>
+                        <td style="padding: 4px 10px;">{init_borders_str}</td>
+                        <td style="padding: 4px 10px;">{final_borders_str}</td>
+                        <td style="padding: 4px 10px;"></td>
+                    </tr>"""
+                    
+                    html += "</table>"
+            
+            # Show per-iteration details
+            if refinement_history:
+                for iteration in refinement_history:
+                    iter_num = iteration.get('iteration', '?')
+                    iter_area = iteration.get('active_area', [0,0,0,0])
+                    area_change = iteration.get('area_change', {})
+                    violations_before = iteration.get('violations_before', 0)
+                    violations_after = iteration.get('violations_after', 0)
+                    edge_pct = iteration.get('edge_violation_pct', 0)
+                    
+                    violation_delta = violations_after - violations_before
+                    violation_delta_str = f"{violation_delta:+d}" if violation_delta != 0 else "no change"
+                    
+                    if isinstance(iter_area, (list, tuple)) and len(iter_area) == 4:
+                        html += f"""
+                <div style="background-color: rgba(255,255,255,0.4); padding: 6px 10px; margin: 6px 0; border-radius: 3px; font-size: 12px;">
+                    <strong>Iteration {iter_num}:</strong> 
+                    Active area → {iter_area[2]}×{iter_area[3]} 
+                    (width {area_change.get('width', 0):+d}px, height {area_change.get('height', 0):+d}px) — 
+                    Violation frames: {violations_before} → {violations_after} ({violation_delta_str}) — 
+                    Edge violations: {edge_pct:.1f}%
+                </div>"""
+            
+            html += "</div>"  # Close refinement container
+            
+            # Collect all refinement thumbnails for horizontal display
+            refinement_thumbs = []
+            
+            # Add each refinement iteration visualization
+            refinement_vizs = frame_outputs.get('refinement_visualizations', [])
+            if refinement_vizs:
+                for idx, viz_path in enumerate(refinement_vizs, 1):
+                    try:
+                        with open(viz_path, "rb") as img_file:
+                            encoded_img = b64encode(img_file.read()).decode()
+                        refinement_thumbs.append((f'Refinement iteration {idx}', encoded_img))
+                    except Exception as e:
+                        logger.warning(f"Could not embed refinement visualization {viz_path}: {e}")
+            
+            # Add before/after comparison
+            comparison_path = frame_outputs.get('refinement_comparison')
+            if comparison_path:
+                try:
+                    with open(comparison_path, "rb") as img_file:
+                        encoded_img = b64encode(img_file.read()).decode()
+                    refinement_thumbs.append(('Initial vs. final comparison', encoded_img))
+                except Exception as e:
+                    logger.warning(f"Could not embed refinement comparison: {e}")
+            
+            # Render horizontal thumbnail strip
+            if refinement_thumbs:
+                html += """
+                <div style="margin: 15px 0;">
+                    <p style="font-size: 13px; color: #666; margin-bottom: 8px;"><em>Border refinement visualizations</em> <span style="font-size: 11px;">(click to enlarge)</span></p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;">"""
+                
+                for caption, encoded_img in refinement_thumbs:
+                    html += f"""
+                        <div style="flex: 1 1 0; min-width: 180px; max-width: {max(100 // len(refinement_thumbs), 20)}%; text-align: center;">
+                            <img src="data:image/jpeg;base64,{encoded_img}" 
+                                 style="width: 100%; height: auto; border: 1px solid #4d2b12; cursor: pointer; transition: opacity 0.2s;"
+                                 onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'"
+                                 onclick="openImage('data:image/jpeg;base64,{encoded_img}', '{caption}')"
+                                 title="Click to enlarge"
+                                 alt="{caption}" />
+                            <p style="font-size: 11px; color: #888; margin: 4px 0 0 0;">{caption}</p>
+                        </div>"""
+                
+                html += """
+                    </div>
+                </div>"""
+    
+    # Signalstats Analysis Section
+    if frame_outputs['signalstats_analysis']:
+        html += "<h3 style='color: #bf971b;'>Signalstats Analysis</h3>"
+        
+        # Methodology explanation (collapsible)
+        html += """
+        <a id="link_signalstats_methodology" href="javascript:void(0);" 
+           onclick="toggleContent('signalstats_methodology', 'What is signalstats analysis? ▼', 'What is signalstats analysis? ▲')" 
+           style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+           What is signalstats analysis? ▼</a>
+        <div id="signalstats_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px; 
+             margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+            <p style="margin: 0 0 10px 0;">
+                <strong>Signalstats analysis</strong> evaluates broadcast range compliance across sampled 
+                time periods of the video. It reads the FFmpeg 
+                <code style="background: #eee; padding: 1px 4px; border-radius: 2px;">signalstats</code> 
+                BRNG metric, which counts the number of pixels in each frame that fall outside the 
+                broadcast-legal range (luma &lt; 16 or &gt; 235, chroma &lt; 16 or &gt; 240 for 8-bit video) 
+                and divides by the total pixel count to produce a ratio from 0.0 to 1.0. AV Spex 
+                converts this ratio to a percentage for display.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">Dual-source comparison:</p>
+            <p style="margin: 0 0 6px 0;">
+                When border detection has identified an active picture area, AV Spex runs two parallel 
+                analyses for each period to distinguish border artifacts from actual content violations:
+            </p>
+            <ol style="margin: 4px 0 10px 20px; padding: 0;">
+                <li style="margin-bottom: 4px;"><strong>QCTools (full frame)</strong> — BRNG values parsed 
+                    from the QCTools report for the time range, covering the entire frame including 
+                    borders and blanking areas</li>
+                <li style="margin-bottom: 4px;"><strong>FFprobe (active area only)</strong> — BRNG values 
+                    computed by FFprobe with a crop filter applied to analyze only the detected active 
+                    picture area, excluding borders</li>
+            </ol>
+            <p style="margin: 0 0 10px 0;">
+                Comparing these two results reveals whether violations originate from border/blanking 
+                regions or from the actual picture content. If the full frame shows significantly more 
+                violations (>5%) than the active area, violations are classified as <em>border violations</em>. 
+                If the active area itself shows >10% violations, they are classified as <em>content violations</em> 
+                that may require correction.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">Period selection priority:</p>
+            <ol style="margin: 4px 0 10px 20px; padding: 0;">
+                <li style="margin-bottom: 4px;"><strong>QCTools violation clusters</strong> — periods targeting 
+                    timestamps where QCTools detected the highest concentrations of BRNG activity</li>
+                <li style="margin-bottom: 4px;"><strong>Border detection quality hints</strong> — timestamps 
+                    flagged during border detection as having interesting signal characteristics</li>
+                <li style="margin-bottom: 4px;"><strong>Even distribution</strong> — fallback to evenly 
+                    spaced periods across the video content (after color bars)</li>
+            </ol>
+            <p style="margin: 0; color: #777;">
+                The final diagnosis is based on active area results, which reflect the actual picture 
+                content that would be seen in playback or broadcast.
+            </p>
+        </div>
+        """
+        
+        try:
+            # Handle both dict (from enhanced_frame_analysis.json) and file path (legacy)
+            if isinstance(frame_outputs['signalstats_analysis'], dict):
+                signalstats_data = frame_outputs['signalstats_analysis']
+            else:
+                with open(frame_outputs['signalstats_analysis'], 'r') as f:
+                    signalstats_data = json.load(f)
+            
+            diagnosis = signalstats_data.get('diagnosis', 'Analysis complete')
+            
+            # Determine assessment styling
+            if 'broadcast-compliant' in diagnosis.lower() or 'broadcast-safe' in diagnosis.lower():
+                assessment_bg = '#d2ffed'
+                assessment_border = '#378d6a'
+                assessment_icon = '✅'
+            elif 'acceptable' in diagnosis.lower() or 'minor' in diagnosis.lower():
+                assessment_bg = '#e3f0ff'
+                assessment_border = '#5c6bc0'
+                assessment_icon = 'ℹ️'
+            elif 'significant' in diagnosis.lower() or 'requires' in diagnosis.lower() or 'severe' in diagnosis.lower():
+                assessment_bg = '#ffbaba'
+                assessment_border = '#d32f2f'
+                assessment_icon = '⛔'
+            elif 'review' in diagnosis.lower() or 'detected' in diagnosis.lower():
+                assessment_bg = '#fff3cd'
+                assessment_border = '#bf971b'
+                assessment_icon = '⚠️'
+            else:
+                assessment_bg = '#f5e9e3'
+                assessment_border = '#bf971b'
+                assessment_icon = 'ℹ️'
+            
+            html += f"""
+            <div style="background-color: {assessment_bg}; padding: 12px 16px; margin: 10px 0; 
+                        border-left: 4px solid {assessment_border}; border-radius: 0 4px 4px 0;">
+                <p style="margin: 0; font-size: 14px;"><strong>{assessment_icon} Diagnosis:</strong> {diagnosis}</p>
+            </div>
+            """
+            
+            # Overall results
+            violation_pct = signalstats_data.get('violation_percentage')
+            max_brng = signalstats_data.get('max_brng')
+            avg_brng = signalstats_data.get('avg_brng')
+            used_qctools = signalstats_data.get('used_qctools', False)
+            
+            if violation_pct is not None or max_brng is not None:
+                html += """
+                <div style="margin: 16px 0;">
+                    <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Overall Results</p>
+                    <table style="border-collapse: collapse; width: auto; margin: 0;">
+                """
+                
+                stat_rows = []
+                if violation_pct is not None:
+                    stat_rows.append(("Frames with violations", f"{violation_pct:.1f}%"))
+                if avg_brng is not None:
+                    stat_rows.append(("Average BRNG", f"{avg_brng:.4f}%"))
+                if max_brng is not None:
+                    stat_rows.append(("Maximum BRNG", f"{max_brng:.4f}%"))
+                stat_rows.append(("Data source", "QCTools + FFprobe comparison" if used_qctools else "FFprobe signalstats"))
+                
+                for label, value in stat_rows:
+                    html += f"""
+                    <tr>
+                        <td style="padding: 4px 12px 4px 0; color: #555; font-size: 13px; border: none; white-space: nowrap;">{label}</td>
+                        <td style="padding: 4px 0; font-weight: bold; font-size: 13px; border: none;">{value}</td>
+                    </tr>
+                    """
+                
+                html += "</table></div>"
+            
+            # Display results for active area (legacy format)
+            if signalstats_data.get('results', {}).get('active_area'):
+                active_area = signalstats_data['results']['active_area']
+                html += f"""
+                <div style="margin: 16px 0;">
+                    <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Active Area Results</p>
+                    <table style="border-collapse: collapse; width: auto; margin: 0;">
+                        <tr>
+                            <td style="padding: 4px 12px 4px 0; color: #555; font-size: 13px; border: none;">Frames with violations</td>
+                            <td style="padding: 4px 0; font-weight: bold; font-size: 13px; border: none;">{active_area['frames_with_violations']}/{active_area['frames_analyzed']} ({active_area['violation_percentage']:.1f}%)</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 4px 12px 4px 0; color: #555; font-size: 13px; border: none;">Average BRNG</td>
+                            <td style="padding: 4px 0; font-weight: bold; font-size: 13px; border: none;">{active_area['avg_brng']:.4f}%</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 4px 12px 4px 0; color: #555; font-size: 13px; border: none;">Maximum BRNG</td>
+                            <td style="padding: 4px 0; font-weight: bold; font-size: 13px; border: none;">{active_area['max_brng']:.4f}%</td>
+                        </tr>
+                    </table>
+                </div>
+                """
+            
+            # Per-period comparison cards
+            comparison_results = signalstats_data.get('comparison_results', [])
+            analysis_periods = signalstats_data.get('analysis_periods', [])
+            
+            if comparison_results:
+                # Build time range display
+                all_starts = []
+                all_ends = []
+                for comp in comparison_results:
+                    tr = comp.get('time_range')
+                    if tr and len(tr) >= 2:
+                        all_starts.append(tr[0])
+                        all_ends.append(tr[1])
+                
+                coverage_label = ""
+                if all_starts and all_ends:
+                    coverage_label = f" ({_seconds_to_display(min(all_starts))} – {_seconds_to_display(max(all_ends))})"
+                
+                html += f"""
+                <div style="margin: 16px 0;">
+                    <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">
+                        Period Comparison: {len(comparison_results)} periods{coverage_label}
+                    </p>
+                """
+                
+                for comp in comparison_results:
+                    period_num = comp.get('period', '?')
+                    time_range = comp.get('time_range', [0, 0])
+                    start_display = _seconds_to_display(time_range[0]) if len(time_range) >= 1 else "?"
+                    end_display = _seconds_to_display(time_range[1]) if len(time_range) >= 2 else "?"
+                    
+                    qc_data = comp.get('qctools_full_frame', {})
+                    ff_data = comp.get('ffprobe_active_area', {})
+                    period_diag = comp.get('diagnosis', '')
+                    
+                    # Diagnosis badge
+                    if period_diag == 'border_violations':
+                        diag_label = 'Border violations'
+                        diag_color = '#bf971b'
+                        diag_bg = '#fff3cd'
+                    elif period_diag == 'content_violations':
+                        diag_label = 'Content violations'
+                        diag_color = '#d32f2f'
+                        diag_bg = '#ffbaba'
+                    elif period_diag == 'minimal_violations':
+                        diag_label = 'Minimal'
+                        diag_color = '#378d6a'
+                        diag_bg = '#d2ffed'
+                    else:
+                        diag_label = ''
+                        diag_color = ''
+                        diag_bg = ''
+                    
+                    html += f"""
+                    <div style="background-color: #f5e9e3; padding: 10px 14px; margin: 6px 0; 
+                                border-radius: 4px; border: 1px solid #e0d0c0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-weight: bold; color: #4d2b12;">
+                                Period {period_num}: {start_display} – {end_display}
+                            </span>
+                    """
+                    
+                    if diag_label:
+                        html += f"""
+                            <span style="background: {diag_bg}; color: {diag_color}; padding: 2px 8px; 
+                                        border-radius: 3px; font-size: 12px; font-weight: bold;">{diag_label}</span>
+                        """
+                    
+                    html += "</div>"
+                    
+                    # Comparison bars
+                    if qc_data or ff_data:
+                        qc_pct = qc_data.get('violations_pct', 0)
+                        ff_pct = ff_data.get('violations_pct', 0)
+                        qc_frames = qc_data.get('frames_analyzed', 0)
+                        qc_violations = qc_data.get('frames_with_violations', 0)
+                        ff_frames = ff_data.get('frames_analyzed', 0)
+                        ff_violations = ff_data.get('frames_with_violations', 0)
+                        qc_max = qc_data.get('max_brng', 0)
+                        ff_max = ff_data.get('max_brng', 0)
+                        
+                        # Scale bars to the larger value
+                        max_pct = max(qc_pct, ff_pct, 0.1)
+                        
+                        if qc_data:
+                            qc_bar_width = (qc_pct / max_pct * 100) if max_pct > 0 else 0
+                            qc_bar_color = '#bf971b' if qc_pct > 10 else '#607d8b'
+                            html += f"""
+                            <div style="margin-bottom: 6px;">
+                                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 2px;">
+                                    <span style="color: #555;">Full frame (QCTools)</span>
+                                    <span style="color: #666;">{qc_violations}/{qc_frames} frames ({qc_pct:.1f}%) · max {qc_max:.4f}%</span>
+                                </div>
+                                <div style="background-color: #e8ddd5; border-radius: 3px; height: 10px; overflow: hidden;">
+                                    <div style="background-color: {qc_bar_color}; height: 100%; width: {qc_bar_width:.1f}%; 
+                                                min-width: {('2px' if qc_pct > 0 else '0')}; border-radius: 3px;"></div>
+                                </div>
+                            </div>
+                            """
+                        
+                        if ff_data:
+                            ff_bar_width = (ff_pct / max_pct * 100) if max_pct > 0 else 0
+                            ff_bar_color = '#d32f2f' if ff_pct > 10 else '#378d6a'
+                            html += f"""
+                            <div style="margin-bottom: 4px;">
+                                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 2px;">
+                                    <span style="color: #555;">Active area (FFprobe)</span>
+                                    <span style="color: #666;">{ff_violations}/{ff_frames} frames ({ff_pct:.1f}%) · max {ff_max:.4f}%</span>
+                                </div>
+                                <div style="background-color: #e8ddd5; border-radius: 3px; height: 10px; overflow: hidden;">
+                                    <div style="background-color: {ff_bar_color}; height: 100%; width: {ff_bar_width:.1f}%; 
+                                                min-width: {('2px' if ff_pct > 0 else '0')}; border-radius: 3px;"></div>
+                                </div>
+                            </div>
+                            """
+                        
+                        # Show delta if both sources present
+                        if qc_data and ff_data:
+                            delta = qc_pct - ff_pct
+                            if abs(delta) > 0.5:
+                                delta_label = f"Full frame has {delta:.1f}% more violations than active area" if delta > 0 else f"Active area has {abs(delta):.1f}% more violations than full frame"
+                                html += f"""
+                                <div style="font-size: 11px; color: #888; margin-top: 2px;">
+                                    → {delta_label}
+                                </div>
+                                """
+                    
+                    html += "</div>"
+                
+                html += "</div>"
+            
+            elif analysis_periods:
+                # Fallback: display analysis periods without comparison data
+                periods = analysis_periods
+                
+                # Build time range display
+                all_starts = []
+                all_ends = []
+                for period in periods:
+                    if isinstance(period, (list, tuple)) and len(period) >= 2:
+                        all_starts.append(period[0])
+                        all_ends.append(period[0] + period[1])
+                    elif isinstance(period, dict):
+                        s = period.get('start_time', period.get('start', 0))
+                        d = period.get('duration', 60)
+                        all_starts.append(s)
+                        all_ends.append(s + d)
+                
+                coverage_label = ""
+                if all_starts and all_ends:
+                    coverage_label = f" ({_seconds_to_display(min(all_starts))} – {_seconds_to_display(max(all_ends))})"
+                
+                html += f"""
+                <div style="margin: 16px 0;">
+                    <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">
+                        Analysis Periods: {len(periods)} periods{coverage_label}
+                    </p>
+                """
+                
+                for i, period in enumerate(periods[:5]):
+                    if isinstance(period, (list, tuple)) and len(period) >= 2:
+                        start, duration = period[0], period[1]
+                    elif isinstance(period, dict):
+                        start = period.get('start_time', period.get('start', 0))
+                        duration = period.get('duration', 60)
+                    else:
+                        continue
+                    
+                    start_display = _seconds_to_display(start)
+                    end_display = _seconds_to_display(start + duration)
+                    
+                    html += f"""
+                    <div style="background-color: #f5e9e3; padding: 8px 14px; margin: 4px 0; 
+                                border-radius: 4px; border: 1px solid #e0d0c0; font-size: 13px;">
+                        <span style="font-weight: bold; color: #4d2b12;">Period {i+1}:</span> 
+                        {start_display} – {end_display} ({duration}s duration)
+                    </div>
+                    """
+                
+                html += "</div>"
+                
+        except Exception as e:
+            logger.error(f"Error reading signalstats analysis: {e}")
+    
+    # BRNG Analysis Section
+    if frame_outputs['brng_analysis']:
+        html += "<h3 style='color: #bf971b;'>BRNG Violation Analysis</h3>"
+        
+        # Methodology explanation (collapsible)
+        html += """
+        <a id="link_brng_methodology" href="javascript:void(0);" 
+           onclick="toggleContent('brng_methodology', 'What is BRNG analysis? ▼', 'What is BRNG analysis? ▲')" 
+           style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+           What is BRNG analysis? ▼</a>
+        <div id="brng_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px; 
+             margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+            <p style="margin: 0 0 10px 0;">
+                <strong>BRNG (Broadcast Range)</strong> measures whether pixel values fall outside the 
+                broadcast-legal range (16–235 for luma, 16–240 for chroma in 8-bit video). Pixels outside 
+                this range may be clipped during broadcast or indicate issues in the source material.
+            </p>
+            <p style="margin: 0 0 10px 0; font-weight: bold;">How violations are detected:</p>
+            <p style="margin: 0 0 6px 0;">
+                AV Spex uses <em>differential detection</em> to identify violations. For each analysis period, 
+                two temporary video segments are created from the active picture area:
+            </p>
+            <ol style="margin: 4px 0 10px 20px; padding: 0;">
+                <li style="margin-bottom: 4px;"><strong>Highlighted version</strong> — rendered with FFmpeg's 
+                    <code style="background: #eee; padding: 1px 4px; border-radius: 2px;">signalstats=out=brng:color=magenta</code>, 
+                    which overlays magenta on out-of-range pixels</li>
+                <li style="margin-bottom: 4px;"><strong>Original version</strong> — rendered without the filter 
+                    (cropped to active area only)</li>
+            </ol>
+            <p style="margin: 0 0 6px 0;">
+                Frames are then compared pixel-by-pixel using three independent detection methods that vote 
+                on whether a pixel is a genuine violation:
+            </p>
+            <ol style="margin: 4px 0 10px 20px; padding: 0;">
+                <li style="margin-bottom: 4px;"><strong>BGR threshold</strong> — checks for magenta color signature 
+                    (high red + blue, low green channel differences)</li>
+                <li style="margin-bottom: 4px;"><strong>Ratio-based</strong> — verifies that red and blue 
+                    channel increases are proportional (characteristic of magenta overlay)</li>
+                <li style="margin-bottom: 4px;"><strong>HSV analysis</strong> — confirms magenta hue range with 
+                    saturation increase in HSV color space</li>
+            </ol>
+            <p style="margin: 0 0 10px 0;">
+                A pixel is classified as a violation only when <strong>at least 2 of 3 methods agree</strong>. 
+                Small isolated pixel clusters (fewer than 10 connected pixels) are filtered out as noise.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">Violation classification:</p>
+            <p style="margin: 0 0 4px 0;">Each frame with detected violations is then classified by spatial pattern:</p>
+            <ul style="margin: 4px 0 10px 16px; padding: 0;">
+                <li style="margin-bottom: 3px;"><strong>Sub-black</strong> — violations concentrated in low-luma 
+                    zones (pixels below broadcast black level)</li>
+                <li style="margin-bottom: 3px;"><strong>Highlight clipping</strong> — violations in high-luma 
+                    zones (pixels above broadcast white level)</li>
+                <li style="margin-bottom: 3px;"><strong>Edge artifacts</strong> — violations concentrated within 
+                    15px of frame edges, suggesting border/blanking issues</li>
+                <li style="margin-bottom: 3px;"><strong>Linear blanking patterns</strong> — edge violations 
+                    forming continuous horizontal or vertical lines</li>
+                <li style="margin-bottom: 3px;"><strong>Border adjustment flags</strong> — edge violations severe 
+                    enough to suggest the detected active picture area should be expanded</li>
+                <li style="margin-bottom: 3px;"><strong>General broadcast range violations</strong> — violations 
+                    that don't match a specific spatial pattern</li>
+            </ul>
+            <p style="margin: 0; color: #777;">
+                Frames to analyze are selected by targeting timestamps where QCTools detected BRNG values, 
+                supplemented with evenly distributed samples to ensure coverage across each period.
+            </p>
+        </div>
+        """
+        
+        try:
+            # Handle both file path (string) and dict (from enhanced JSON)
+            if isinstance(frame_outputs['brng_analysis'], str):
+                with open(frame_outputs['brng_analysis'], 'r') as f:
+                    brng_data = json.load(f)
+            else:
+                brng_data = frame_outputs['brng_analysis']
+            
+            # Get actionable report
+            report = brng_data.get('actionable_report', {})
+            aggregate = brng_data.get('aggregate_patterns', {})
+            violations = brng_data.get('violations', [])
+            period_summaries = brng_data.get('period_summaries', [])
+            analysis_periods = brng_data.get('analysis_periods', [])
+            
+            # Overall assessment banner
+            assessment = report.get('overall_assessment', 'Analysis complete')
+            stats = report.get('summary_statistics', {})
+            
+            # Determine assessment styling
+            edge_pct = aggregate.get('edge_violation_percentage', 0)
+            avg_violation = stats.get('average_violation_percentage', 0)
+            max_violation = stats.get('max_violation_percentage', 0)
+            
+            if max_violation > 50 or avg_violation > 10:
+                assessment_bg = '#ffbaba'
+                assessment_border = '#d32f2f'
+                assessment_icon = '⛔'
+            elif edge_pct > 50 or avg_violation > 1:
+                assessment_bg = '#fff3cd'
+                assessment_border = '#bf971b'
+                assessment_icon = '⚠️'
+            elif len(violations) > 0:
+                assessment_bg = '#e8f4fd'
+                assessment_border = '#1976d2'
+                assessment_icon = 'ℹ️'
+            else:
+                assessment_bg = '#d2ffed'
+                assessment_border = '#2e7d32'
+                assessment_icon = '✅'
+            
+            html += f"""
+            <div style="background-color: {assessment_bg}; padding: 12px 16px; margin: 10px 0; 
+                        border-left: 4px solid {assessment_border}; border-radius: 0 4px 4px 0;">
+                <p style="margin: 0; font-size: 14px;"><strong>{assessment_icon} Assessment:</strong> {assessment}</p>
+            </div>
+            """
+            
+            # ── Period-by-Period Analysis ──
+            if period_summaries:
+                # Calculate overall time range
+                all_starts = [p.get('start_time', 0) for p in period_summaries]
+                all_ends = [p.get('end_time', 0) for p in period_summaries]
+                time_range_start = min(all_starts) if all_starts else 0
+                time_range_end = max(all_ends) if all_ends else 0
+                total_violations_across = sum(p.get('violations_found', 0) for p in period_summaries)
+                
+                html += f"""
+                <div style="margin: 16px 0;">
+                    <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">
+                        Analysis Coverage: {len(period_summaries)} periods 
+                        ({_seconds_to_display(time_range_start)} – {_seconds_to_display(time_range_end)})
+                    </p>
+                """
+                
+                for ps in period_summaries:
+                    p_num = ps.get('period_num', '?')
+                    p_start = ps.get('start_time', 0)
+                    p_end = ps.get('end_time', 0)
+                    qct_targeted = ps.get('qctools_frames_targeted', 0)
+                    frames_mapped = ps.get('frames_mapped', 0)
+                    total_samples = ps.get('total_samples', 0)
+                    checked = ps.get('frames_checked', 0)
+                    found = ps.get('violations_found', 0)
+                    
+                    # Bar width as proportion of violations found vs frames checked
+                    bar_pct = (found / checked * 100) if checked > 0 else 0
+                    bar_color = '#d32f2f' if bar_pct > 50 else '#bf971b' if bar_pct > 20 else '#1976d2'
+                    
+                    html += f"""
+                    <div style="background-color: #f5e9e3; padding: 10px 14px; margin: 6px 0; 
+                                border-radius: 4px; border: 1px solid #e0d0c0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-weight: bold; color: #4d2b12;">
+                                Period {p_num}: {_seconds_to_display(p_start)} – {_seconds_to_display(p_end)}
+                            </span>
+                            <span style="font-size: 13px; color: #666;">
+                                {found} violation{'s' if found != 1 else ''} / {checked} frames checked
+                            </span>
+                        </div>
+                        <div style="background-color: #e8ddd5; border-radius: 3px; height: 14px; overflow: hidden; margin-bottom: 6px;">
+                            <div style="background-color: {bar_color}; height: 100%; width: {bar_pct:.1f}%; 
+                                        min-width: {('2px' if found > 0 else '0')}; border-radius: 3px; 
+                                        transition: width 0.3s;"></div>
+                        </div>
+                        <div style="font-size: 12px; color: #777;">
+                            QCTools targeted {qct_targeted} frames → {frames_mapped} mapped to period → {total_samples} total samples analyzed
+                        </div>
+                    </div>
+                    """
+                
+                html += "</div>"
+            
+            elif analysis_periods:
+                # Fall back to showing period ranges without per-period stats
+                time_range_start = min(p[0] for p in analysis_periods)
+                time_range_end = max(p[0] + p[1] for p in analysis_periods)
+                html += f"""
+                <p style="color: #666; font-size: 13px;">
+                    Analyzed {len(analysis_periods)} periods spanning 
+                    {_seconds_to_display(time_range_start)} – {_seconds_to_display(time_range_end)}
+                </p>
+                """
+            
+            # ── Violation Types Breakdown ──
+            if violations:
+                diagnostic_counts = {}
+                edge_artifact_edges = set()
+                
+                for v in violations:
+                    diags = v.get('diagnostics', [])
+                    if diags:
+                        for diag in diags:
+                            if diag.startswith("Edge artifacts"):
+                                diagnostic_counts["Edge artifacts"] = diagnostic_counts.get("Edge artifacts", 0) + 1
+                                if "(" in diag and ")" in diag:
+                                    edges_str = diag[diag.find("(")+1:diag.find(")")]
+                                    for edge in edges_str.split(", "):
+                                        edge_artifact_edges.add(edge.strip())
+                            elif diag == "Border adjustment recommended":
+                                diagnostic_counts["Border adjustment flags"] = diagnostic_counts.get("Border adjustment flags", 0) + 1
+                            else:
+                                diagnostic_counts[diag] = diagnostic_counts.get(diag, 0) + 1
+                
+                if diagnostic_counts:
+                    total_v = len(violations)
+                    html += """
+                    <div style="margin: 16px 0;">
+                        <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Violation Types Detected</p>
+                    """
+                    
+                    # Sort by count (descending)
+                    priority_order = ["Sub-black detected", "Highlight clipping", "Edge artifacts", 
+                                     "Linear blanking patterns", "Border adjustment flags",
+                                     "General broadcast range violations"]
+                    
+                    sorted_diags = []
+                    for diag_type in priority_order:
+                        if diag_type in diagnostic_counts:
+                            sorted_diags.append((diag_type, diagnostic_counts[diag_type]))
+                    for diag_type, count in diagnostic_counts.items():
+                        if diag_type not in priority_order:
+                            sorted_diags.append((diag_type, count))
+                    
+                    # Type-specific colors
+                    type_colors = {
+                        "Sub-black detected": "#5c6bc0",
+                        "Highlight clipping": "#ef6c00",
+                        "Edge artifacts": "#bf971b",
+                        "Linear blanking patterns": "#7b1fa2",
+                        "Border adjustment flags": "#795548",
+                        "Continuous edge artifacts": "#bf971b",
+                        "General broadcast range violations": "#607d8b",
+                        "Border detection likely missed blanking": "#d32f2f",
+                        "Moderate blanking detected": "#f57c00"
+                    }
+                    
+                    for diag_type, count in sorted_diags:
+                        pct = (count / total_v) * 100
+                        bar_color = type_colors.get(diag_type, '#90a4ae')
+                        
+                        # Build label
+                        label = diag_type
+                        if diag_type == "Edge artifacts" and edge_artifact_edges:
+                            label = f"Edge artifacts ({', '.join(sorted(edge_artifact_edges))})"
+                        
+                        html += f"""
+                        <div style="margin: 4px 0;">
+                            <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 2px;">
+                                <span style="color: #333;">{label}</span>
+                                <span style="color: #666;">{count} frames ({pct:.1f}%)</span>
+                            </div>
+                            <div style="background-color: #e8ddd5; border-radius: 3px; height: 10px; overflow: hidden;">
+                                <div style="background-color: {bar_color}; height: 100%; width: {pct:.1f}%; 
+                                            min-width: 2px; border-radius: 3px;"></div>
+                            </div>
+                        </div>
+                        """
+                    
+                    # High edge percentage warning
+                    if edge_pct > 50:
+                        html += f"""
+                        <div style="background-color: #fff3cd; padding: 8px 12px; margin-top: 8px; 
+                                    border-left: 3px solid #bf971b; border-radius: 0 4px 4px 0; font-size: 13px;">
+                            ⚠ High edge percentage ({edge_pct:.1f}%) suggests border detection may need adjustment
+                        </div>
+                        """
+                    
+                    html += "</div>"
+            
+            # ── Violation Statistics ──
+            if stats or aggregate:
+                continuous_pct = aggregate.get('continuous_edge_percentage', 0)
+                linear_pct = aggregate.get('linear_pattern_percentage', 0)
+                
+                html += """
+                <div style="margin: 16px 0;">
+                    <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Violation Statistics</p>
+                    <table style="border-collapse: collapse; width: auto; margin: 0;">
+                """
+                
+                stat_rows = [
+                    ("Frames with violations", f"{stats.get('total_violations', 0)}"),
+                    ("Average BRNG", f"{avg_violation:.2f}%"),
+                    ("Maximum BRNG", f"{max_violation:.2f}%"),
+                    ("Edge violations (any)", f"{edge_pct:.1f}% of analyzed frames"),
+                    ("Edge violations (solid line)", f"{continuous_pct:.1f}% of analyzed frames"),
+                ]
+                
+                if linear_pct > 0:
+                    stat_rows.append(("Linear patterns", f"{linear_pct:.1f}% of analyzed frames"))
+                
+                # Add note about scattered vs solid edges
+                if continuous_pct == 0 and edge_pct > 95:
+                    stat_rows.append(("", "→ Violations are scattered rather than forming a solid line"))
+                
+                for label, value in stat_rows:
+                    if label:
+                        html += f"""
+                        <tr>
+                            <td style="padding: 4px 12px 4px 0; color: #555; font-size: 13px; border: none; white-space: nowrap;">{label}</td>
+                            <td style="padding: 4px 0; font-weight: bold; font-size: 13px; border: none;">{value}</td>
+                        </tr>
+                        """
+                    else:
+                        # Note row (spans both columns)
+                        html += f"""
+                        <tr>
+                            <td colspan="2" style="padding: 4px 0; font-size: 12px; color: #888; border: none; font-style: italic;">{value}</td>
+                        </tr>
+                        """
+                
+                html += """
+                    </table>
+                </div>
+                """
+            
+            # ── Content Start Detection ──
+            skip_info = brng_data.get('skip_info', {})
+            if skip_info and skip_info.get('total_skipped_seconds', 0) > 0:
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    <p style="margin: 0; font-size: 13px;"><strong>Content Start Detection:</strong> 
+                    Skipped first {skip_info['total_skipped_seconds']:.1f} seconds (test patterns/color bars)</p>
+                </div>
+                """
+            
+            # ── Recommendations ──
+            if report.get('recommendations'):
+                html += "<div style='margin: 16px 0;'><p style='font-weight: bold; margin-bottom: 8px; color: #4d2b12;'>Recommendations</p>"
+                for rec in report['recommendations']:
+                    severity = rec.get('severity', 'low')
+                    if severity == 'high':
+                        rec_bg = '#ffbaba'
+                        rec_border = '#d32f2f'
+                    elif severity == 'medium':
+                        rec_bg = '#fff3cd'
+                        rec_border = '#bf971b'
+                    else:
+                        rec_bg = '#e8f4fd'
+                        rec_border = '#1976d2'
+                    
+                    html += f"""
+                    <div style="background-color: {rec_bg}; padding: 8px 12px; margin: 4px 0; 
+                                border-left: 3px solid {rec_border}; border-radius: 0 4px 4px 0; font-size: 13px;">
+                        <strong>{rec.get('issue', 'Unknown issue')}</strong>
+                    """
+                    if rec.get('description'):
+                        html += f"<br><span style='color: #555;'>{rec['description']}</span>"
+                    html += "</div>"
+                html += "</div>"
+                
+        except Exception as e:
+            logger.error(f"Error reading BRNG analysis: {e}")
+    
+    # BRNG Diagnostic Thumbnails
+    if frame_outputs['brng_thumbnails']:
+        # Try to get violations data for thumbnail metadata
+        thumb_violations_data = []
+        try:
+            if isinstance(frame_outputs['brng_analysis'], str):
+                with open(frame_outputs['brng_analysis'], 'r') as f:
+                    _brng_data = json.load(f)
+            elif isinstance(frame_outputs['brng_analysis'], dict):
+                _brng_data = frame_outputs['brng_analysis']
+            else:
+                _brng_data = {}
+            thumb_violations_data = _brng_data.get('violations', [])
+        except Exception:
+            pass
+        
+        num_thumbs = len(frame_outputs['brng_thumbnails'])
+        
+        html += f"""
+        <h3 style='color: #bf971b;'>BRNG Diagnostic Thumbnails</h3>
+        <a id="link_brng_thumb_info" href="javascript:void(0);" 
+           onclick="toggleContent('brng_thumb_info', 'How are thumbnails selected? ▼', 'How are thumbnails selected? ▲')" 
+           style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+           How are thumbnails selected? ▼</a>
+        <div id="brng_thumb_info" style="display: none; background-color: #f8f6f3; padding: 12px 14px; margin: 0 0 12px 0; 
+                    border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+            <p style="margin: 0 0 6px 0;">
+                <strong>Thumbnail selection:</strong> Up to 5 diagnostic thumbnails are chosen from the 
+                frames with detected violations. The highest-scoring violation frame is always included. 
+                Additional frames are selected in descending order of violation score, subject to a 
+                <strong>minimum 10-second temporal separation</strong> from all previously selected frames. 
+                This ensures thumbnails represent different moments in the video rather than clustering 
+                around a single event. If fewer than 5 frames meet the separation requirement, remaining 
+                slots are filled by the next highest-scoring frames regardless of spacing.
+            </p>
+            <p style="margin: 0; color: #777;">
+                Each thumbnail is a 4-quadrant diagnostic image: <strong>Original</strong> (top-left), 
+                <strong>BRNG Highlighted</strong> (top-right, magenta = out-of-range pixels), 
+                <strong>Violations Only</strong> (bottom-left, yellow on black), and 
+                <strong>Analysis Data</strong> (bottom-right, frame number, timestamp, BRNG %, pixel count, 
+                and diagnostic classification).
+            </p>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0;">
+        """
+        
+        # Sort thumbnails by filename (which includes timecode)
+        sorted_thumbs = sorted(frame_outputs['brng_thumbnails'])
+        
+        for thumb_idx, thumb_path in enumerate(sorted_thumbs[:6]):  # Limit to 6 thumbnails in report
+            # Extract timecode from filename if possible
+            filename = os.path.basename(thumb_path)
+            parts = filename.split('_')
+            timecode = "Unknown"
+            timestamp_seconds = None
+            if len(parts) >= 3:
+                timecode = parts[-1].replace('.jpg', '').replace('.png', '').replace('-', ':')
+                # Try to parse as seconds for matching
+                try:
+                    timestamp_seconds = float(timecode.replace('s', ''))
+                except (ValueError, AttributeError):
+                    pass
+            
+            # Try to find matching violation data for this thumbnail
+            thumb_score = None
+            thumb_diags = None
+            thumb_brng_pct = None
+            if timestamp_seconds is not None and thumb_violations_data:
+                for v in thumb_violations_data:
+                    v_ts = v.get('timestamp', 0)
+                    if abs(v_ts - timestamp_seconds) < 0.2:  # Match within 0.2s
+                        thumb_score = v.get('violation_score')
+                        thumb_brng_pct = v.get('violation_percentage')
+                        thumb_diags = v.get('diagnostics', [])
+                        break
+            
+            with open(thumb_path, "rb") as img_file:
+                encoded_thumb = b64encode(img_file.read()).decode()
+            
+            # Build caption
+            caption_parts = [f"Frame at {timecode}"]
+            if thumb_score is not None:
+                caption_parts.append(f"score: {thumb_score:.4f}")
+            if thumb_brng_pct is not None:
+                caption_parts.append(f"BRNG: {thumb_brng_pct:.2f}%")
+            
+            caption_line1 = caption_parts[0]
+            caption_line2 = ", ".join(caption_parts[1:]) if len(caption_parts) > 1 else ""
+            
+            # Diagnostic badge
+            diag_html = ""
+            if thumb_diags:
+                diag_labels = [d for d in thumb_diags if d != "Border adjustment recommended"][:2]
+                if diag_labels:
+                    badges = ""
+                    for dl in diag_labels:
+                        badges += f'<span style="display: inline-block; background: #e8ddd5; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin: 1px 2px;">{dl}</span>'
+                    diag_html = f'<div style="margin-top: 3px;">{badges}</div>'
+            
+            html += f"""
+            <div style="text-align: center; margin: 5px;">
+                <img src="data:image/jpeg;base64,{encoded_thumb}" 
+                     style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
+                     onclick="openImage('data:image/jpeg;base64,{encoded_thumb}', 'BRNG Diagnostic - {caption_line1}')"
+                     title="Click to enlarge" />
+                <p style="font-size: 12px; margin: 4px 0 0 0;">{caption_line1}</p>
+            """
+            if caption_line2:
+                html += f'<p style="font-size: 11px; margin: 1px 0 0 0; color: #777;">{caption_line2}</p>'
+            html += diag_html
+            html += "</div>"
+        
+        html += "</div>"
+        
+        if num_thumbs > 6:
+            html += f"<p style='font-style: italic; font-size: 13px;'>Showing 6 of {num_thumbs} diagnostic thumbnails</p>"
+    
+    html += "</div>"
+    return html
+
 
 def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, paper_bgcolor='#f5e9e3'):
     with open(qctools_content_check_output, 'r') as file:
@@ -909,7 +2147,8 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
 
     return content_summary_html
 
-def generate_final_report(video_id, source_directory, report_directory, destination_directory, video_path=None, check_cancelled=None, signals=None):
+def generate_final_report(video_id, source_directory, report_directory, destination_directory, 
+                         video_path=None, check_cancelled=None, signals=None):
     """
     Generate final HTML report if configured.
     
@@ -919,6 +2158,8 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         report_directory (str): Directory containing report files
         destination_directory (str): Destination directory for output files
         video_path (str, optional): Path to the video file for thumbnail generation
+        check_cancelled (callable, optional): Function to check if cancelled
+        signals (object, optional): Signals for GUI updates
         
     Returns:
         str or None: Path to the generated HTML report, or None
@@ -932,7 +2173,7 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
     try:
         html_report_path = os.path.join(source_directory, f'{video_id}_avspex_report.html')
         
-        # Generate HTML report with video path
+        # Generate HTML report with video path (no frame_analysis parameter needed)
         write_html_report(video_id, report_directory, destination_directory, html_report_path, 
                          video_path=video_path, check_cancelled=check_cancelled)
         
@@ -1039,6 +2280,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if check_cancelled():
         return
+    
+    # Find frame analysis outputs
+    frame_outputs = find_frame_analysis_outputs(
+        os.path.dirname(html_report_path),  # source_directory
+        destination_directory,
+        video_id
+    )
+    
+    # Generate frame analysis HTML section
+    frame_analysis_html = generate_frame_analysis_html(frame_outputs, video_id) if frame_outputs else ""
 
     # Initialize and create html from 
     mc_csv_html, mediaconch_csv_filename = prepare_file_section(mediaconch_csv, lambda path: csv_to_html_table(path, style_mismatched=False, mismatch_color="#ffbaba", match_color="#d2ffed", check_fail=True))
@@ -1283,11 +2534,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <div id="mediaconch_policy" class="xml-content" style="display: none;">{mediaconch_policy_content}</div>
         """
 
-    if difference_csv:
-        html_template += f"""
-        <h3>{difference_csv_filename}</h3>
-        {diff_csv_html}
-        """
+    if frame_analysis_html:
+        html_template += frame_analysis_html
 
     # Rest of the HTML template remains the same...
     if no_qct_parse_files:
@@ -1316,6 +2564,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3>{eval_header}</h3>
         {colorbars_eval_html}
+        """
+
+    if difference_csv:
+        html_template += f"""
+        <h3>{difference_csv_filename}</h3>
+        {diff_csv_html}
         """
 
     if profile_summary_html:

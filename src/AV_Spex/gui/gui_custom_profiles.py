@@ -15,7 +15,8 @@ from AV_Spex.utils.config_io import ConfigIO
 from AV_Spex.utils import config_edit
 from AV_Spex.utils.config_setup import (
     ChecksProfile, OutputsConfig, FixityConfig, ToolsConfig,
-    BasicToolConfig, QCToolsConfig, MediaConchConfig, QCTParseToolConfig
+    BasicToolConfig, QCToolsConfig, MediaConchConfig, QCTParseToolConfig,
+    FrameAnalysisConfig
 )
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from AV_Spex.utils.log_setup import logger
@@ -139,6 +140,12 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.qctools_ext_input = QLineEdit()
         self.qctools_ext_input.setText("qctools.xml.gz")
         outputs_layout.addWidget(self.qctools_ext_input, 2, 1)
+        
+        # Frame Analysis border mode (only show basic option here)
+        outputs_layout.addWidget(QLabel("Border Detection:"), 3, 0)
+        self.border_detection_combo = QComboBox()
+        self.border_detection_combo.addItems(["simple", "sophisticated"])
+        outputs_layout.addWidget(self.border_detection_combo, 3, 1)
         
         outputs_group.setLayout(outputs_layout)
         self.config_layout.addWidget(outputs_group)
@@ -407,12 +414,16 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             self.report_check.setChecked(current_config.outputs.report)
             self.qctools_ext_input.setText(current_config.outputs.qctools_ext)
             
-            # Load fixity (now booleans)
-            self.fixity_checks['check_fixity'].setChecked(current_config.fixity.check_fixity)
-            self.fixity_checks['validate_stream_fixity'].setChecked(current_config.fixity.validate_stream_fixity)
-            self.fixity_checks['embed_stream_fixity'].setChecked(current_config.fixity.embed_stream_fixity)
-            self.fixity_checks['output_fixity'].setChecked(current_config.fixity.output_fixity)
-            self.fixity_checks['overwrite_stream_fixity'].setChecked(current_config.fixity.overwrite_stream_fixity)
+            # Load frame analysis settings (removed enabled field)
+            if hasattr(current_config.outputs, 'frame_analysis'):
+                self.border_detection_combo.setCurrentText(current_config.outputs.frame_analysis.border_detection_mode)
+                    
+            # Load fixity
+            self.fixity_combos['check_fixity'].setCurrentText(current_config.fixity.check_fixity)
+            self.fixity_combos['validate_stream_fixity'].setCurrentText(current_config.fixity.validate_stream_fixity)
+            self.fixity_combos['embed_stream_fixity'].setCurrentText(current_config.fixity.embed_stream_fixity)
+            self.fixity_combos['output_fixity'].setCurrentText(current_config.fixity.output_fixity)
+            self.fixity_combos['overwrite_stream_fixity'].setCurrentText(current_config.fixity.overwrite_stream_fixity)
             
             # Load checksum algorithms
             algorithm = getattr(current_config.fixity, 'checksum_algorithm', 'md5')
@@ -470,6 +481,11 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.access_file_check.setChecked(profile.outputs.access_file)
         self.report_check.setChecked(profile.outputs.report)
         self.qctools_ext_input.setText(profile.outputs.qctools_ext)
+
+        # Load frame analysis if it exists
+        if hasattr(profile.outputs, 'frame_analysis'):
+            self.frame_analysis_enabled_combo.setCurrentText(profile.outputs.frame_analysis.enabled)
+            self.border_detection_combo.setCurrentText(profile.outputs.frame_analysis.border_detection_mode)
         
         # Load fixity (now booleans)
         self.fixity_checks['check_fixity'].setChecked(profile.fixity.check_fixity)
@@ -526,6 +542,13 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             QMessageBox.warning(self, "Validation Error", "Profile name is required.")
             return None
         
+        # Create frame analysis config with default values
+        frame_analysis = FrameAnalysisConfig(
+            border_detection_mode=self.border_detection_combo.currentText()
+            # Using defaults for other parameters
+        )
+        
+        # Create outputs config
         # Create outputs config (now with booleans)
         outputs = OutputsConfig(
             access_file=self.access_file_check.isChecked(),

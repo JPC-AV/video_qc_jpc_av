@@ -14,8 +14,11 @@ JPC_AV_videoQC
     ├── checks
     │   ├── __init__.py
     │   ├── __pycache__
+    │   ├── active_area_brng_analyzer.py
+    │   ├── border_detector.py
     │   ├── embed_fixity.py
     │   ├── exiftool_check.py
+    │   ├── ffmpeg_signalstats_analyzer.py
     │   ├── ffprobe_check.py
     │   ├── fixity_check.py
     │   ├── make_access.py

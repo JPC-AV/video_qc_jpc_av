@@ -296,7 +296,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
                 self.update_status("Warning: Could not load checks configuration")
                 return
 
-            # Fixity Steps - now using boolean checks
+            # Fixity Steps 
             if checks_config.fixity.validate_stream_fixity:
                 self._add_step_item("Validate Stream Fixity")
             if checks_config.fixity.check_fixity:
@@ -310,7 +310,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             if checks_config.tools.mediaconch.run_mediaconch:
                 self._add_step_item("MediaConch Validation")
             
-            # Metadata tools - note consistent naming - now using boolean checks
+            # Metadata tools - note consistent naming 
             if checks_config.tools.exiftool.run_tool or checks_config.tools.exiftool.check_tool:
                 self._add_step_item("Exiftool")
             if checks_config.tools.ffprobe.run_tool or checks_config.tools.ffprobe.check_tool:
@@ -320,14 +320,26 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             if checks_config.tools.mediatrace.run_tool or checks_config.tools.mediatrace.check_tool:
                 self._add_step_item("Mediatrace")
             
-            # Output tools - now using boolean checks
+            # Output tools 
             if checks_config.tools.qctools.run_tool:
                 self._add_step_item("QCTools")
             if checks_config.tools.qct_parse.run_tool:
                 self._add_step_item("QCT Parse")
             
-            # Output files - now using boolean checks
-            if checks_config.outputs.access_file:
+            # Frame Analysis 
+            if hasattr(checks_config.outputs, 'frame_analysis'):
+                frame_config = checks_config.outputs.frame_analysis
+                if frame_config.enable_border_detection:
+                    self._add_step_item("Frame Analysis - Border Detection")
+                # Only add signalstats if enabled AND in sophisticated mode
+                if (frame_config.enable_signalstats and 
+                    frame_config.border_detection_mode == "sophisticated"):
+                    self._add_step_item("Frame Analysis - Signalstats")
+                if frame_config.enable_brng_analysis:
+                    self._add_step_item("Frame Analysis - BRNG Analysis")
+            
+            # Output files
+            if checks_config.outputs.access_file == "yes":
                 self._add_step_item("Generate Access File")
             if checks_config.outputs.report:
                 self._add_step_item("Generate Report")

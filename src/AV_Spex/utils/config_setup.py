@@ -233,14 +233,45 @@ class SpexConfig:
     qct_parse_values: QCTParseValues
     signalflow_profiles: Dict[str, Dict] = field(default_factory=dict)
 
+@dataclass
+class FrameAnalysisConfig:
+    '''Configuration for frame analysis (borders, BRNG violations, signalstats)'''
+    
+    # Individual sub-step enable flags (now using bool to match JSON config)
+    enable_border_detection: bool = True
+    enable_brng_analysis: bool = True
+    enable_signalstats: bool = True
+    
+    # Border detection settings
+    border_detection_mode: str = "simple"
+    simple_border_pixels: int = 25
+    
+    # Sophisticated border detection parameters
+    sophisticated_threshold: int = 10
+    sophisticated_edge_sample_width: int = 100
+    sophisticated_sample_frames: int = 30
+    sophisticated_padding: int = 5
+    auto_retry_borders: bool = True
+    max_border_retries: int = 3
+    
+    # BRNG analysis settings
+    brng_duration_limit: int = 300
+    brng_skip_color_bars: bool = True
+    
+    # Signalstats settings
+    signalstats_duration: int = 60
+    signalstats_periods: int = 3
+
 # Output configuration
 VALID_QCTOOLS_EXTENSIONS = ("qctools.xml.gz", "qctools.mkv")
 
+# Output configuration
 @dataclass
 class OutputsConfig:
-    access_file: bool
-    report: bool
-    qctools_ext: str  # Must be one of VALID_QCTOOLS_EXTENSIONS
+    access_file: str
+    report: str
+    qctools_ext: str # Must be one of VALID_QCTOOLS_EXTENSIONS
+    frame_analysis: FrameAnalysisConfig = field(default_factory=FrameAnalysisConfig)
 
 @dataclass
 class ChecksumAlgorithm(Enum):
@@ -280,6 +311,7 @@ class QCTParseToolConfig:
     barsDetection: bool
     evaluateBars: bool
     thumbExport: bool
+    tagname: str
 
 @dataclass
 class ToolsConfig:
@@ -353,7 +385,8 @@ class ChecksProfile:
             run_tool=False,
             barsDetection=False,
             evaluateBars=False,
-            thumbExport=False
+            thumbExport=False,
+            tagname=""
         )
     ))
 
@@ -361,8 +394,6 @@ class ChecksProfile:
 class ChecksProfilesConfig:
     """Container for custom checks profiles"""
     custom_profiles: Dict[str, ChecksProfile] = field(default_factory=dict)
-
-# Add these dataclasses to your config_setup.py file
 
 @dataclass
 class ExiftoolProfile:
