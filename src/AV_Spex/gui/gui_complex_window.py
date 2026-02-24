@@ -705,15 +705,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         updates = {'tools': {'qct_parse': {field: values}}}
         config_mgr.update_config('checks', updates)
 
-    def on_tagname_changed(self, text):
-        """Handle changes in tagname field"""
-        # Skip updates while loading
-        if self.is_loading:
-            return
-
-        updates = {'tools': {'qct_parse': {'tagname': text if text else None}}}
-        config_mgr.update_config('checks', updates)
-
     def on_qctools_ext_changed(self, ext):
         """Handle changes in QCTools file extension dropdown"""
         if self.is_loading:

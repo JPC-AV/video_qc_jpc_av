@@ -787,7 +787,6 @@ profile_step1 = {
             "evaluateBars": False,
             "contentFilter": [],
             "profile": [],
-            "tagname": None,
             "thumbExport": False
         }
     },
@@ -842,7 +841,6 @@ profile_step2 = {
             "evaluateBars": True,
             "contentFilter": [],
             "profile": [],
-            "tagname": None,
             "thumbExport": True
         }
     },
@@ -897,7 +895,6 @@ profile_allOff = {
             "evaluateBars": False,
             "contentFilter": [],
             "profile": [],
-            "tagname": None,
             "thumbExport": False
         }
     },

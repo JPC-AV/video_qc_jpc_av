@@ -923,6 +923,8 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
                 run_tool=self.qct_parse_run_check.isChecked(),
                 barsDetection=self.bars_detection_check.isChecked(),
                 evaluateBars=self.evaluate_bars_check.isChecked(),
+                contentFilter=[],
+                profile=[],
                 thumbExport=self.thumb_export_check.isChecked()
             )
         )
