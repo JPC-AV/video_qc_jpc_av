@@ -1,11 +1,6 @@
 from PyQt6.QtWidgets import (
-<<<<<<< HEAD
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox,
-    QLabel, QComboBox, QPushButton, QScrollArea, QFileDialog, QMessageBox
-=======
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, QLineEdit,
     QLabel, QComboBox, QPushButton, QScrollArea, QFileDialog, QMessageBox, QGridLayout
->>>>>>> feature/complex_tab
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
@@ -94,37 +89,11 @@ class ChecksWindow(QWidget, ThemeableMixin):
         report_desc = QLabel("Creates a .html report containing the results of Spex Checks")
         report_desc.setIndent(20)
         
-<<<<<<< HEAD
-        self.qctools_ext_label = QLabel("QCTools File Extension")
-        self.qctools_ext_label.setStyleSheet("font-weight: bold;")
-        qctools_ext_desc = QLabel("Set the extension for QCTools output")
-        self.qctools_ext_combo = QComboBox()
-        self.qctools_ext_combo.addItems(["qctools.xml.gz", "qctools.mkv"])
-        self.qctools_ext_combo.setMinimumWidth(160)
-
-        # Create a horizontal layout for the QCTools extension input
-        qctools_ext_layout = QHBoxLayout()
-        qctools_ext_layout.addWidget(self.qctools_ext_label)
-        qctools_ext_layout.addWidget(self.qctools_ext_combo)
-        
-=======
->>>>>>> feature/complex_tab
         # Add to layout
         outputs_layout.addWidget(self.access_file_cb)
         outputs_layout.addWidget(access_file_desc)
         outputs_layout.addWidget(self.report_cb)
         outputs_layout.addWidget(report_desc)
-<<<<<<< HEAD
-
-        # Create a vertical layout just for the QCTools section
-        qctools_section = QVBoxLayout()
-        qctools_section.addLayout(qctools_ext_layout)
-        #qctools_ext_desc.setIndent(150)
-        qctools_section.addWidget(qctools_ext_desc)
-        # Add the QCTools section to the main outputs layout
-        outputs_layout.addLayout(qctools_section)
-=======
->>>>>>> feature/complex_tab
         
         self.outputs_group.setLayout(outputs_layout)
         main_layout.addWidget(self.outputs_group)
@@ -431,10 +400,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.report_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'report'])
         )
-<<<<<<< HEAD
-        self.qctools_ext_combo.currentTextChanged.connect(self.on_qctools_ext_changed)
-=======
->>>>>>> feature/complex_tab
         
         # Fixity section - handle most checkboxes normally
         fixity_checkboxes = {
@@ -489,17 +454,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Outputs - now using booleans directly
         self.access_file_cb.setChecked(checks_config.outputs.access_file)
         self.report_cb.setChecked(checks_config.outputs.report)
-<<<<<<< HEAD
-        self.qctools_ext_combo.blockSignals(True)
-        qctools_ext = getattr(checks_config.outputs, 'qctools_ext', 'qctools.xml.gz')
-        ext_index = self.qctools_ext_combo.findText(qctools_ext)
-        if ext_index >= 0:
-            self.qctools_ext_combo.setCurrentIndex(ext_index)
-        else:
-            self.qctools_ext_combo.setCurrentText('qctools.xml.gz')
-        self.qctools_ext_combo.blockSignals(False)
-=======
->>>>>>> feature/complex_tab
         
         # Fixity - now using booleans directly
         self.check_fixity_cb.setChecked(checks_config.fixity.check_fixity)
@@ -630,15 +584,6 @@ class ChecksWindow(QWidget, ThemeableMixin):
             return
         
         updates = {'fixity': {'stream_hash_algorithm': algorithm}}
-        config_mgr.update_config('checks', updates)
-
-    def on_qctools_ext_changed(self, ext):
-        """Handle changes in QCTools file extension dropdown"""
-        # Skip updates while loading
-        if self.is_loading:
-            return
-        
-        updates = {'outputs': {'qctools_ext': ext}}
         config_mgr.update_config('checks', updates)
 
     def on_overwrite_stream_changed(self, state):

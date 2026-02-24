@@ -54,18 +54,19 @@ class ComplexWindow(QWidget, ThemeableMixin):
         run_qctools_desc = QLabel("Run QCTools on input video file")
         run_qctools_desc.setIndent(20)
 
-        # File Extension field
+        # File Extension dropdown
         qctools_ext_label = QLabel("QCTools File Extension")
         qctools_ext_label.setStyleSheet("font-weight: bold;")
         qctools_ext_desc = QLabel("Set the extension for QCTools output files")
         qctools_ext_desc.setIndent(20)
-        self.qctools_ext_input = QLineEdit()
-        self.qctools_ext_input.setPlaceholderText(".qctools.mkv.qctools.xml.gz")
+        self.qctools_ext_combo = QComboBox()
+        self.qctools_ext_combo.addItems(["qctools.xml.gz", "qctools.mkv"])
+        self.qctools_ext_combo.setMinimumWidth(160)
         
         # Create a horizontal layout for the extension input
         qctools_ext_layout = QHBoxLayout()
         qctools_ext_layout.addWidget(qctools_ext_label)
-        qctools_ext_layout.addWidget(self.qctools_ext_input)
+        qctools_ext_layout.addWidget(self.qctools_ext_combo)
         qctools_ext_layout.addStretch()
 
         # Add all widgets to the qctools layout
@@ -486,9 +487,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.run_qctools_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['tools', 'qctools', 'run_tool'])
         )
-        self.qctools_ext_input.textChanged.connect(
-            lambda text: self.on_text_changed('qctools_ext', text)
-        )
+        self.qctools_ext_combo.currentTextChanged.connect(self.on_qctools_ext_changed)
 
         # Sub-step enable checkboxes
         self.enable_border_detection_cb.stateChanged.connect(
@@ -572,7 +571,14 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # QCTools
         qctools = checks_config.tools.qctools
         self.run_qctools_cb.setChecked(bool(qctools.run_tool))
-        self.qctools_ext_input.setText(checks_config.outputs.qctools_ext)
+        self.qctools_ext_combo.blockSignals(True)
+        qctools_ext = getattr(checks_config.outputs, 'qctools_ext', 'qctools.xml.gz')
+        ext_index = self.qctools_ext_combo.findText(qctools_ext)
+        if ext_index >= 0:
+            self.qctools_ext_combo.setCurrentIndex(ext_index)
+        else:
+            self.qctools_ext_combo.setCurrentText('qctools.xml.gz')
+        self.qctools_ext_combo.blockSignals(False)
         
         # Frame Analysis
         if hasattr(checks_config.outputs, 'frame_analysis'):
@@ -713,12 +719,10 @@ class ComplexWindow(QWidget, ThemeableMixin):
         updates = {'tools': {'qct_parse': {'tagname': text if text else None}}}
         config_mgr.update_config('checks', updates)
 
-    def on_text_changed(self, field, text):
-        """Handle changes in text inputs"""
-        # Skip updates while loading
+    def on_qctools_ext_changed(self, ext):
+        """Handle changes in QCTools file extension dropdown"""
         if self.is_loading:
             return
         
-        if field == 'qctools_ext':
-            updates = {'outputs': {'qctools_ext': text}}
-            config_mgr.update_config('checks', updates)
+        updates = {'outputs': {'qctools_ext': ext}}
+        config_mgr.update_config('checks', updates)
