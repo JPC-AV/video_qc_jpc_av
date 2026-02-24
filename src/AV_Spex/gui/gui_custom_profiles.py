@@ -405,11 +405,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         
         qct_parse_group.setLayout(qct_parse_layout)
         parent_layout.addWidget(qct_parse_group)
-        
-        # Connect qct-parse dependency signals
-        self.qct_parse_run_check.stateChanged.connect(self.on_run_qctparse_changed)
-        self.bars_detection_check.stateChanged.connect(self.on_bars_detection_changed)
-        self.evaluate_bars_check.stateChanged.connect(self.on_evaluate_bars_changed)
     
     def setup_frame_analysis_section(self):
         """Setup the frame analysis configuration section with sub-groups
@@ -710,12 +705,12 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
                 self.signalstats_duration_input.setText(str(fa.signalstats_duration))
                 self.signalstats_periods_input.setText(str(getattr(fa, 'signalstats_periods', 3)))
                     
-            # Load fixity
-            self.fixity_combos['check_fixity'].setCurrentText(current_config.fixity.check_fixity)
-            self.fixity_combos['validate_stream_fixity'].setCurrentText(current_config.fixity.validate_stream_fixity)
-            self.fixity_combos['embed_stream_fixity'].setCurrentText(current_config.fixity.embed_stream_fixity)
-            self.fixity_combos['output_fixity'].setCurrentText(current_config.fixity.output_fixity)
-            self.fixity_combos['overwrite_stream_fixity'].setCurrentText(current_config.fixity.overwrite_stream_fixity)
+            # Load fixity (now booleans)
+            self.fixity_checks['check_fixity'].setChecked(current_config.fixity.check_fixity)
+            self.fixity_checks['validate_stream_fixity'].setChecked(current_config.fixity.validate_stream_fixity)
+            self.fixity_checks['embed_stream_fixity'].setChecked(current_config.fixity.embed_stream_fixity)
+            self.fixity_checks['output_fixity'].setChecked(current_config.fixity.output_fixity)
+            self.fixity_checks['overwrite_stream_fixity'].setChecked(current_config.fixity.overwrite_stream_fixity)
             
             # Load checksum algorithms
             algorithm = getattr(current_config.fixity, 'checksum_algorithm', 'md5')
@@ -756,9 +751,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             self.bars_detection_check.setChecked(qct_config.barsDetection)
             self.evaluate_bars_check.setChecked(qct_config.evaluateBars)
             self.thumb_export_check.setChecked(qct_config.thumbExport)
-            
-            # Apply qct-parse checkbox dependency states
-            self.apply_qct_parse_enabled_states()
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load current config: {str(e)}")
@@ -855,88 +847,7 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.bars_detection_check.setChecked(qct_config.barsDetection)
         self.evaluate_bars_check.setChecked(qct_config.evaluateBars)
         self.thumb_export_check.setChecked(qct_config.thumbExport)
-        
-        # Apply qct-parse checkbox dependency states
-        self.apply_qct_parse_enabled_states()
     
-    def on_run_qctparse_changed(self, state):
-        """Handle changes in run qct-parse checkbox with dependency logic."""
-        dependent_checkboxes = [
-            self.bars_detection_check,
-            self.evaluate_bars_check, 
-            self.thumb_export_check
-        ]
-        
-        if Qt.CheckState(state) == Qt.CheckState.Checked:
-            # If run_tool is checked, enable and check all dependent checkboxes
-            for checkbox in dependent_checkboxes:
-                checkbox.blockSignals(True)
-                checkbox.setEnabled(True)
-                checkbox.setChecked(True)
-                checkbox.blockSignals(False)
-        else:
-            # If run_tool is unchecked, disable (grey out) all dependent checkboxes
-            for checkbox in dependent_checkboxes:
-                checkbox.setEnabled(False)
-
-    def on_bars_detection_changed(self, state):
-        """Handle changes in bars detection checkbox with dependency logic."""
-        if Qt.CheckState(state) == Qt.CheckState.Checked:
-            # If bars detection is checked, enable evaluate bars and thumbnail export
-            self.evaluate_bars_check.setEnabled(True)
-            self.thumb_export_check.setEnabled(True)
-        else:
-            # If bars detection is unchecked, disable and uncheck evaluate bars and thumbnail export
-            self.evaluate_bars_check.blockSignals(True)
-            self.evaluate_bars_check.setChecked(False)
-            self.evaluate_bars_check.setEnabled(False)
-            self.evaluate_bars_check.blockSignals(False)
-            
-            self.thumb_export_check.blockSignals(True)
-            self.thumb_export_check.setChecked(False)
-            self.thumb_export_check.setEnabled(False)
-            self.thumb_export_check.blockSignals(False)
-        
-        # Check overall dependencies
-        self.check_qct_dependencies()
-
-    def on_evaluate_bars_changed(self, state):
-        """Handle changes in evaluate bars checkbox with dependency logic."""
-        self.check_qct_dependencies()
-
-    def check_qct_dependencies(self):
-        """Check and enforce QCT Parse dependencies."""
-        if not self.bars_detection_check.isChecked() and not self.evaluate_bars_check.isChecked():
-            # Uncheck run tool since no detection methods are active
-            self.qct_parse_run_check.blockSignals(True)
-            self.qct_parse_run_check.setChecked(False)
-            self.qct_parse_run_check.blockSignals(False)
-            
-            # Disable all dependent options since run tool is now off
-            self.bars_detection_check.setEnabled(False)
-            self.evaluate_bars_check.setEnabled(False)
-            self.thumb_export_check.setEnabled(False)
-
-    def apply_qct_parse_enabled_states(self):
-        """Set the correct enabled states for qct-parse checkboxes based on current values."""
-        run_tool = self.qct_parse_run_check.isChecked()
-        bars_detection = self.bars_detection_check.isChecked()
-        evaluate_bars = self.evaluate_bars_check.isChecked()
-        
-        dependent_checkboxes = [
-            self.bars_detection_check,
-            self.evaluate_bars_check, 
-            self.thumb_export_check
-        ]
-        
-        # Enable/disable dependent checkboxes based on run_tool state
-        for checkbox in dependent_checkboxes:
-            checkbox.setEnabled(run_tool)
-        
-        # Additional logic: thumbnail is only enabled if bars detection or evaluate bars is checked
-        if run_tool:
-            self.thumb_export_check.setEnabled(bars_detection or evaluate_bars)
-
     def get_profile_from_form(self):
         """Create a ChecksProfile from the form data."""
         # Validate required fields
