@@ -122,16 +122,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         qct_layout.addWidget(self.thumb_export_cb)
         qct_layout.addWidget(thumb_export_desc)
         
-        # Tagname
-        tagname_label = QLabel("Tag Name")
-        tagname_label.setStyleSheet("font-weight: bold;")
-        tagname_desc = QLabel("Input ad hoc tags using this format: YMIN, lt, 100 (tag name, lt or gt, number value)")
-        self.tagname_input = QLineEdit()
-        self.tagname_input.setPlaceholderText("None")
-        qct_layout.addWidget(tagname_label)
-        qct_layout.addWidget(tagname_desc)
-        qct_layout.addWidget(self.tagname_input)
-        
         self.qct_group.setLayout(qct_layout)
         main_layout.addWidget(self.qct_group)
 
@@ -557,9 +547,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.thumb_export_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'thumbExport'])
         )
-        self.tagname_input.textChanged.connect(
-            lambda text: self.on_tagname_changed(text)
-        )
 
     def load_config_values(self):
         """Load current config values into UI elements"""
@@ -618,9 +605,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.bars_detection_cb.setChecked(qct.barsDetection)
         self.evaluate_bars_cb.setChecked(qct.evaluateBars)
         self.thumb_export_cb.setChecked(qct.thumbExport)
-
-        if qct.tagname is not None:
-            self.tagname_input.setText(qct.tagname)
 
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
