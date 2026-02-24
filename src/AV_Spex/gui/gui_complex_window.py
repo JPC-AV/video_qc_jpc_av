@@ -534,16 +534,10 @@ class ComplexWindow(QWidget, ThemeableMixin):
             lambda text: self.on_frame_analysis_param_changed('signalstats_periods', text)
         )
         
-        # QCT Parse
-        self.run_qctparse_cb.stateChanged.connect(
-            lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'run_tool'])
-        )
-        self.bars_detection_cb.stateChanged.connect(
-            lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'barsDetection'])
-        )
-        self.evaluate_bars_cb.stateChanged.connect(
-            lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'evaluateBars'])
-        )
+        # QCT Parse - Run Tool turns all dependent checks on/off
+        self.run_qctparse_cb.stateChanged.connect(self.on_run_qctparse_changed)
+        self.bars_detection_cb.stateChanged.connect(self.on_bars_detection_changed)
+        self.evaluate_bars_cb.stateChanged.connect(self.on_evaluate_bars_changed)
         self.thumb_export_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'thumbExport'])
         )
@@ -605,6 +599,23 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.bars_detection_cb.setChecked(qct.barsDetection)
         self.evaluate_bars_cb.setChecked(qct.evaluateBars)
         self.thumb_export_cb.setChecked(qct.thumbExport)
+
+        # Set initial enabled state for QCT Parse dependent checkboxes
+        dependent_checkboxes = [
+            self.bars_detection_cb,
+            self.evaluate_bars_cb, 
+            self.thumb_export_cb
+        ]
+
+        # Enable/disable dependent checkboxes based on run_tool state
+        for checkbox in dependent_checkboxes:
+            checkbox.setEnabled(qct.run_tool)
+
+        # Additional logic for thumbnail dependency
+        if qct.run_tool:
+            # Thumbnail is only enabled if at least one of bars detection or evaluate bars is checked
+            thumbnail_should_be_enabled = qct.barsDetection or qct.evaluateBars
+            self.thumb_export_cb.setEnabled(thumbnail_should_be_enabled)
 
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
@@ -710,3 +721,134 @@ class ComplexWindow(QWidget, ThemeableMixin):
         
         updates = {'outputs': {'qctools_ext': ext}}
         config_mgr.update_config('checks', updates)
+
+    def on_run_qctparse_changed(self, state):
+        """Handle changes in run qct-parse checkbox with dependency logic"""
+        # Skip updates while loading to avoid issues during initialization
+        if self.is_loading:
+            return
+        
+        # Handle the normal config update for run_tool (using boolean)
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        updates = {'tools': {'qct_parse': {'run_tool': new_value}}}
+        config_mgr.update_config('checks', updates)
+        
+        # Get list of dependent checkboxes
+        dependent_checkboxes = [
+            self.bars_detection_cb,
+            self.evaluate_bars_cb, 
+            self.thumb_export_cb
+        ]
+        
+        if Qt.CheckState(state) == Qt.CheckState.Checked:
+            # If run_tool is checked, enable and check all dependent checkboxes
+            self.bars_detection_cb.setEnabled(True)
+            self.bars_detection_cb.blockSignals(True)
+            self.bars_detection_cb.setChecked(True)
+            self.bars_detection_cb.blockSignals(False)
+            
+            self.evaluate_bars_cb.setEnabled(True)
+            self.evaluate_bars_cb.blockSignals(True)
+            self.evaluate_bars_cb.setChecked(True)
+            self.evaluate_bars_cb.blockSignals(False)
+            
+            self.thumb_export_cb.setEnabled(True)
+            self.thumb_export_cb.blockSignals(True)
+            self.thumb_export_cb.setChecked(True)
+            self.thumb_export_cb.blockSignals(False)
+            
+            # Update the config for all dependent options
+            dependent_updates = {
+                'tools': {
+                    'qct_parse': {
+                        'barsDetection': True,
+                        'evaluateBars': True,
+                        'thumbExport': True
+                    }
+                }
+            }
+            config_mgr.update_config('checks', dependent_updates)
+        else:
+            # If run_tool is unchecked, disable (grey out) all dependent checkboxes
+            for checkbox in dependent_checkboxes:
+                checkbox.setEnabled(False)
+
+    def on_bars_detection_changed(self, state):
+        """Handle changes in bars detection checkbox with dependency logic"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
+        # Update the config normally
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        updates = {'tools': {'qct_parse': {'barsDetection': new_value}}}
+        config_mgr.update_config('checks', updates)
+        
+        if Qt.CheckState(state) == Qt.CheckState.Checked:
+            # If bars detection is checked, enable evaluate bars and thumbnail export
+            self.evaluate_bars_cb.setEnabled(True)
+            self.thumb_export_cb.setEnabled(True)
+        else:
+            # If bars detection is unchecked, disable and uncheck evaluate bars and thumbnail export
+            self.evaluate_bars_cb.blockSignals(True)
+            self.evaluate_bars_cb.setChecked(False)
+            self.evaluate_bars_cb.setEnabled(False)
+            self.evaluate_bars_cb.blockSignals(False)
+            
+            self.thumb_export_cb.blockSignals(True)
+            self.thumb_export_cb.setChecked(False)
+            self.thumb_export_cb.setEnabled(False)
+            self.thumb_export_cb.blockSignals(False)
+            
+            # Update config for the dependent options that got unchecked
+            dependent_updates = {
+                'tools': {
+                    'qct_parse': {
+                        'evaluateBars': False,
+                        'thumbExport': False
+                    }
+                }
+            }
+            config_mgr.update_config('checks', dependent_updates)
+        
+        # Check overall dependencies
+        self.check_qct_dependencies()
+
+    def on_evaluate_bars_changed(self, state):
+        """Handle changes in evaluate bars checkbox with dependency logic"""
+        # Skip updates while loading
+        if self.is_loading:
+            return
+        
+        # Update the config normally
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        updates = {'tools': {'qct_parse': {'evaluateBars': new_value}}}
+        config_mgr.update_config('checks', updates)
+        
+        # Check overall dependencies
+        self.check_qct_dependencies()
+
+    def check_qct_dependencies(self):
+        """Check and enforce QCT Parse dependencies"""
+        # If bars detection is off, then evaluate bars and thumbnail should already be disabled
+        # This check is for the case where both bars detection and evaluate bars are unchecked
+        if not self.bars_detection_cb.isChecked() and not self.evaluate_bars_cb.isChecked():
+            # Uncheck run tool since no detection methods are active
+            self.run_qctparse_cb.blockSignals(True)
+            self.run_qctparse_cb.setChecked(False)
+            self.run_qctparse_cb.blockSignals(False)
+            
+            # Disable all dependent options since run tool is now off
+            self.bars_detection_cb.setEnabled(False)
+            self.evaluate_bars_cb.setEnabled(False)
+            self.thumb_export_cb.setEnabled(False)
+            
+            # Update config for run_tool change
+            run_tool_updates = {
+                'tools': {
+                    'qct_parse': {
+                        'run_tool': False
+                    }
+                }
+            }
+            config_mgr.update_config('checks', run_tool_updates)
