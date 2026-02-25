@@ -130,8 +130,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
         """Set up the individual frame analysis sections"""
         self.setup_analysis_periods_section(main_layout)
         self.setup_border_detection_section(main_layout)
-        self.setup_brng_analysis_section(main_layout)
         self.setup_signalstats_section(main_layout)
+        self.setup_brng_analysis_section(main_layout)
 
     def setup_analysis_periods_section(self, main_layout):
         """Set up the analysis periods section (shared by signalstats and BRNG analysis)"""
@@ -356,6 +356,32 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.enable_border_detection_cb.stateChanged.connect(self.update_border_detection_visibility)
         self.border_mode_combo.currentIndexChanged.connect(self.update_border_detection_visibility)
 
+    def setup_signalstats_section(self, main_layout):
+        """Set up the signalstats section with enable checkbox"""
+        theme_manager = ThemeManager.instance()
+        
+        # Signalstats Group Box
+        self.signalstats_group = QGroupBox("Signalstats Settings")
+        theme_manager.style_groupbox(self.signalstats_group, "top left")
+        self.themed_group_boxes['signalstats'] = self.signalstats_group
+        
+        signalstats_layout = QVBoxLayout()
+        
+        # Enable Signalstats checkbox (moved from substeps)
+        self.enable_signalstats_cb = QCheckBox("Enable Signalstats Analysis")
+        self.enable_signalstats_cb.setStyleSheet("font-weight: bold;")
+        signalstats_desc = QLabel("Enhanced FFprobe signalstats")
+        signalstats_desc.setIndent(20)
+        
+        signalstats_layout.addWidget(self.enable_signalstats_cb)
+        signalstats_layout.addWidget(signalstats_desc)
+        
+        self.signalstats_group.setLayout(signalstats_layout)
+        main_layout.addWidget(self.signalstats_group)
+        
+        # Connect enable/disable logic
+        self.enable_signalstats_cb.stateChanged.connect(self.update_signalstats_visibility)
+
     def setup_brng_analysis_section(self, main_layout):
         """Set up the BRNG analysis section with enable checkbox"""
         theme_manager = ThemeManager.instance()
@@ -407,32 +433,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Connect enable/disable logic
         self.enable_brng_analysis_cb.stateChanged.connect(self.update_brng_analysis_visibility)
 
-    def setup_signalstats_section(self, main_layout):
-        """Set up the signalstats section with enable checkbox"""
-        theme_manager = ThemeManager.instance()
-        
-        # Signalstats Group Box
-        self.signalstats_group = QGroupBox("Signalstats Settings")
-        theme_manager.style_groupbox(self.signalstats_group, "top left")
-        self.themed_group_boxes['signalstats'] = self.signalstats_group
-        
-        signalstats_layout = QVBoxLayout()
-        
-        # Enable Signalstats checkbox (moved from substeps)
-        self.enable_signalstats_cb = QCheckBox("Enable Signalstats Analysis")
-        self.enable_signalstats_cb.setStyleSheet("font-weight: bold;")
-        signalstats_desc = QLabel("Enhanced FFprobe signalstats")
-        signalstats_desc.setIndent(20)
-        
-        signalstats_layout.addWidget(self.enable_signalstats_cb)
-        signalstats_layout.addWidget(signalstats_desc)
-        
-        self.signalstats_group.setLayout(signalstats_layout)
-        main_layout.addWidget(self.signalstats_group)
-        
-        # Connect enable/disable logic
-        self.enable_signalstats_cb.stateChanged.connect(self.update_signalstats_visibility)
-
     def update_border_detection_visibility(self):
         """Update visibility of border detection components"""
         enabled = self.enable_border_detection_cb.isChecked()
@@ -459,6 +459,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         border_enabled = self.enable_border_detection_cb.isChecked()
         
         if not border_enabled:
+            self.enable_signalstats_cb.setChecked(False)
             self.enable_signalstats_cb.setToolTip("Requires border detection to be enabled")
             self.enable_signalstats_cb.setEnabled(False)
         else:
