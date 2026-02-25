@@ -2374,39 +2374,10 @@ class IntegratedSignalstatsAnalyzer:
         
         logger.debug(f"  Content starts at {effective_start:.1f}s (after color bars at {color_bars_end:.1f}s)\n")
         
-        # PRIORITY 1: Use QCTools-based periods if available (these target actual violations)
+        # PRIORITY 1: Use QCTools-based periods if available (already validated upstream)
         if qctools_periods:
-            valid_periods = []
-            for start_time, period_duration in qctools_periods:
-                # Ensure period is after color bars
-                adjusted_start = max(effective_start, start_time)
-                if adjusted_start + period_duration <= self.duration - 10:
-                    valid_periods.append((adjusted_start, period_duration))
-            
-            if len(valid_periods) >= num_periods:
-                logger.info(f"  Using {num_periods} QCTools-based analysis periods (targeting violation clusters)")
-                return valid_periods[:num_periods]
-            elif valid_periods:
-                # Use available QCTools periods and supplement with distributed periods
-                logger.info(f"  Using {len(valid_periods)} QCTools-based periods, adding {num_periods - len(valid_periods)} distributed periods")
-                
-                # Calculate distributed periods for remaining slots
-                available_duration = self.duration - effective_start - 30
-                needed = num_periods - len(valid_periods)
-                spacing = available_duration / (needed + 1)
-                
-                for i in range(needed):
-                    candidate_start = effective_start + spacing * (i + 1)
-                    # Avoid overlap with existing QCTools periods
-                    overlaps = False
-                    for existing_start, existing_dur in valid_periods:
-                        if not (candidate_start + duration < existing_start or candidate_start > existing_start + existing_dur):
-                            overlaps = True
-                            break
-                    if not overlaps:
-                        valid_periods.append((candidate_start, duration))
-                
-                return valid_periods[:num_periods]
+            logger.info(f"  Using {len(qctools_periods)} QCTools-based analysis periods (targeting violation clusters)")
+            return qctools_periods
         
         # PRIORITY 2: Use quality hints if available (from border detection)
         if quality_hints:
@@ -2721,7 +2692,11 @@ class EnhancedFrameAnalysis:
         # Analyze QCTools violation distribution to find optimal analysis periods
         qctools_suggested_periods = []
         if violations:
-            qctools_suggested_periods = self._analyze_qctools_violation_distribution(violations)
+            qctools_suggested_periods = self._analyze_qctools_violation_distribution(
+                violations, 
+                num_periods=frame_config.analysis_period_count,
+                period_duration=frame_config.analysis_period_duration
+            )
             logger.info(f"Identified {len(qctools_suggested_periods)} periods with highest violation density\n")
         
         # Step 3: Border detection (conditional)
@@ -2786,8 +2761,8 @@ class EnhancedFrameAnalysis:
                 border_data=border_results,
                 content_start_time=color_bars_end_time + 10 if color_bars_end_time else 10,
                 color_bars_end_time=color_bars_end_time,
-                analysis_duration=frame_config.signalstats_duration,
-                num_periods=frame_config.signalstats_periods,
+                analysis_duration=frame_config.analysis_period_duration,
+                num_periods=frame_config.analysis_period_count,
                 qctools_periods=qctools_suggested_periods
             )
             results['signalstats'] = asdict(signalstats_results)
@@ -2846,22 +2821,25 @@ class EnhancedFrameAnalysis:
         # Step 5: BRNG analysis (conditional)
         brng_results = None
         if brng_analysis_enabled:
-            # If signalstats wasn't run, create default analysis periods
+            # If signalstats wasn't run, use QCTools periods directly or fall back to even distribution
             if not analysis_periods:
-                logger.info(f"Creating default analysis periods for BRNG highlights (signalstats was disabled)\n")
-                # Create evenly distributed periods across the video
-                video_duration = self._get_video_duration()
-                if video_duration:
-                    content_start = color_bars_end_time + 10  # Start 10s after color bars
-                    content_duration = video_duration - content_start - 10  # Leave 10s at end
-                    if content_duration > 0:
-                        period_duration = frame_config.signalstats_duration
-                        num_periods = min(frame_config.signalstats_periods, 3)
-                        spacing = content_duration / (num_periods + 1)
-                        for i in range(num_periods):
-                            start_time = content_start + spacing * (i + 1)
-                            analysis_periods.append((start_time, period_duration))
-                        logger.debug(f"Created {len(analysis_periods)} default BRNG analysis periods\n")
+                if qctools_suggested_periods:
+                    analysis_periods = qctools_suggested_periods
+                    logger.info(f"Using {len(analysis_periods)} QCTools-based analysis periods for BRNG analysis\n")
+                else:
+                    logger.info(f"Creating evenly distributed analysis periods (no QCTools violations found)\n")
+                    video_duration = self._get_video_duration()
+                    if video_duration:
+                        content_start = color_bars_end_time + 10  # Start 10s after color bars
+                        content_duration = video_duration - content_start - 10  # Leave 10s at end
+                        if content_duration > 0:
+                            period_duration = frame_config.analysis_period_duration
+                            num_periods = frame_config.analysis_period_count
+                            spacing = content_duration / (num_periods + 1)
+                            for i in range(num_periods):
+                                start_time = content_start + spacing * (i + 1)
+                                analysis_periods.append((start_time, period_duration))
+                            logger.debug(f"Created {len(analysis_periods)} evenly distributed analysis periods\n")
             
             logger.info("\nAnalyzing BRNG violations in identified periods...")
             self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
@@ -2959,8 +2937,8 @@ class EnhancedFrameAnalysis:
                             border_data=border_results,
                             content_start_time=0,
                             color_bars_end_time=color_bars_end_time,
-                            analysis_duration=frame_config.signalstats_duration,
-                            num_periods=frame_config.signalstats_periods,
+                            analysis_duration=frame_config.analysis_period_duration,
+                            num_periods=frame_config.analysis_period_count,
                             qctools_periods=qctools_suggested_periods
                         )
                         analysis_periods = signalstats_results.analysis_periods
@@ -3670,9 +3648,16 @@ class EnhancedFrameAnalysis:
         
         logger.info(f"Results saved to: {output_file}\n")
 
-    def _analyze_qctools_violation_distribution(self, violations: List[FrameViolation]) -> List[Tuple[float, int]]:
+    def _analyze_qctools_violation_distribution(self, violations: List[FrameViolation],
+                                                num_periods: int = 3,
+                                                period_duration: int = 60) -> List[Tuple[float, int]]:
         """
         Analyze the temporal distribution of QCTools violations and suggest analysis periods.
+        
+        Args:
+            violations: List of frame violations to analyze
+            num_periods: Number of analysis periods to generate
+            period_duration: Duration of each period in seconds
         
         Returns:
             List of (start_time, duration) tuples for suggested periods
@@ -3715,7 +3700,7 @@ class EnhancedFrameAnalysis:
         for i, (start_time, count) in enumerate(bin_scores[:10]):
             logger.debug(f"    {i+1}. {start_time:.1f}s - {start_time+bin_size:.1f}s: {count} violations")
         
-        # Select 3 periods based on violation density
+        # Select up to num_periods non-overlapping periods, ranked by violation density
         suggested_periods = []
         used_ranges = []
         
@@ -3723,29 +3708,18 @@ class EnhancedFrameAnalysis:
             # Check if this period overlaps with any already selected
             overlaps = False
             for used_start, used_end in used_ranges:
-                if not (start_time + 60 < used_start or start_time > used_end):
+                if not (start_time + period_duration < used_start or start_time > used_end):
                     overlaps = True
                     break
             
             if not overlaps:
-                suggested_periods.append((start_time, 60))  # 60-second periods
-                used_ranges.append((start_time, start_time + 60))
+                suggested_periods.append((start_time, period_duration))
+                used_ranges.append((start_time, start_time + period_duration))
                 
-                if len(suggested_periods) >= 3:
+                if len(suggested_periods) >= num_periods:
                     break
         
-        # If we couldn't find 3 non-overlapping dense regions, fall back to even distribution
-        if len(suggested_periods) < 3:
-            logger.debug(f"  Only found {len(suggested_periods)} dense violation regions\n")
-            # Add evenly distributed periods from the violation range
-            violation_duration = timestamps[-1] - timestamps[0]
-            if violation_duration > 180:  # If violations span > 3 minutes
-                spacing = violation_duration / 3
-                for i in range(3 - len(suggested_periods)):
-                    start = timestamps[0] + (i + len(suggested_periods)) * spacing
-                    suggested_periods.append((start, 60))
-        
-        logger.debug(f"\n  QCTools-based suggested analysis periods:")
+        logger.debug(f"\n  QCTools-based analysis periods ({len(suggested_periods)} of {num_periods} requested):")
         for i, (start, duration) in enumerate(suggested_periods):
             logger.debug(f"    Period {i+1}: {start:.1f}s - {start+duration:.1f}s")
         

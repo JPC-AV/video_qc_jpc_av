@@ -128,9 +128,60 @@ class ComplexWindow(QWidget, ThemeableMixin):
     # Frame Analysis Sections (restructured)
     def setup_frame_analysis_sections(self, main_layout):
         """Set up the individual frame analysis sections"""
+        self.setup_analysis_periods_section(main_layout)
         self.setup_border_detection_section(main_layout)
         self.setup_brng_analysis_section(main_layout)
         self.setup_signalstats_section(main_layout)
+
+    def setup_analysis_periods_section(self, main_layout):
+        """Set up the analysis periods section (shared by signalstats and BRNG analysis)"""
+        theme_manager = ThemeManager.instance()
+
+        self.analysis_periods_group = QGroupBox("Frame Analysis Periods")
+        theme_manager.style_groupbox(self.analysis_periods_group, "top left")
+        self.themed_group_boxes['analysis_periods'] = self.analysis_periods_group
+
+        periods_main_layout = QVBoxLayout()
+
+        periods_overview = QLabel("Controls how many time windows are sampled across the video for signalstats and BRNG analysis")
+        periods_overview.setWordWrap(True)
+        periods_overview.setIndent(5)
+        periods_main_layout.addWidget(periods_overview)
+        periods_main_layout.addSpacing(10)
+
+        # Number of periods
+        count_layout = QHBoxLayout()
+        count_label = QLabel("Number of Periods:")
+        count_label.setStyleSheet("font-weight: bold;")
+        self.analysis_period_count_input = QLineEdit("3")
+        self.analysis_period_count_input.setMaximumWidth(60)
+        count_layout.addWidget(count_label)
+        count_layout.addWidget(self.analysis_period_count_input)
+        count_layout.addStretch()
+
+        count_desc = QLabel("Number of analysis periods to spread across video")
+        count_desc.setIndent(20)
+
+        # Period duration
+        duration_layout = QHBoxLayout()
+        duration_label = QLabel("Period Duration (s):")
+        duration_label.setStyleSheet("font-weight: bold;")
+        self.analysis_period_duration_input = QLineEdit("60")
+        self.analysis_period_duration_input.setMaximumWidth(60)
+        duration_layout.addWidget(duration_label)
+        duration_layout.addWidget(self.analysis_period_duration_input)
+        duration_layout.addStretch()
+
+        duration_desc = QLabel("Length of each analysis period in seconds")
+        duration_desc.setIndent(20)
+
+        periods_main_layout.addLayout(count_layout)
+        periods_main_layout.addWidget(count_desc)
+        periods_main_layout.addLayout(duration_layout)
+        periods_main_layout.addWidget(duration_desc)
+
+        self.analysis_periods_group.setLayout(periods_main_layout)
+        main_layout.addWidget(self.analysis_periods_group)
 
     def setup_border_detection_section(self, main_layout):
         """Set up the border detection section with enable checkbox"""
@@ -375,42 +426,6 @@ class ComplexWindow(QWidget, ThemeableMixin):
         
         signalstats_layout.addWidget(self.enable_signalstats_cb)
         signalstats_layout.addWidget(signalstats_desc)
-        signalstats_layout.addSpacing(10)
-        
-        start_time_desc = QLabel("When to begin signalstats analysis")
-        start_time_desc.setIndent(20)
-        
-        # Duration
-        stats_duration_layout = QHBoxLayout()
-        stats_duration_label = QLabel("Duration (s):")
-        stats_duration_label.setStyleSheet("font-weight: bold;")
-        self.signalstats_duration_input = QLineEdit("60")
-        self.signalstats_duration_input.setMaximumWidth(60)
-        stats_duration_layout.addWidget(stats_duration_label)
-        stats_duration_layout.addWidget(self.signalstats_duration_input)
-        stats_duration_layout.addStretch()
-        
-        stats_duration_desc = QLabel("How long to run signalstats analysis")
-        stats_duration_desc.setIndent(20)
-        
-        # Analysis Periods
-        periods_layout = QHBoxLayout()
-        periods_label = QLabel("Analysis Periods:")
-        periods_label.setStyleSheet("font-weight: bold;")
-        self.signalstats_periods_input = QLineEdit("3")
-        self.signalstats_periods_input.setMaximumWidth(60)
-        periods_layout.addWidget(periods_label)
-        periods_layout.addWidget(self.signalstats_periods_input)
-        periods_layout.addStretch()
-        
-        periods_desc = QLabel("Number of analysis periods to spread across video")
-        periods_desc.setIndent(20)
-        
-        signalstats_layout.addWidget(start_time_desc)
-        signalstats_layout.addLayout(stats_duration_layout)
-        signalstats_layout.addWidget(stats_duration_desc)
-        signalstats_layout.addLayout(periods_layout)
-        signalstats_layout.addWidget(periods_desc)
         
         self.signalstats_group.setLayout(signalstats_layout)
         main_layout.addWidget(self.signalstats_group)
@@ -526,12 +541,12 @@ class ComplexWindow(QWidget, ThemeableMixin):
             lambda text: self.on_frame_analysis_param_changed('max_border_retries', text)
         )
 
-        # Signalstats parameters
-        self.signalstats_duration_input.textChanged.connect(
-            lambda text: self.on_frame_analysis_param_changed('signalstats_duration', text)
+        # Analysis period parameters
+        self.analysis_period_duration_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('analysis_period_duration', text)
         )
-        self.signalstats_periods_input.textChanged.connect(
-            lambda text: self.on_frame_analysis_param_changed('signalstats_periods', text)
+        self.analysis_period_count_input.textChanged.connect(
+            lambda text: self.on_frame_analysis_param_changed('analysis_period_count', text)
         )
         
         # QCT Parse - Run Tool turns all dependent checks on/off
@@ -585,8 +600,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.brng_duration_input.setText(str(frame_config.brng_duration_limit))
             self.brng_skip_colorbars_cb.setChecked(bool(frame_config.brng_skip_color_bars))
             self.max_border_retries_input.setText(str(getattr(frame_config, 'max_border_retries', 3)))
-            self.signalstats_duration_input.setText(str(frame_config.signalstats_duration))
-            self.signalstats_periods_input.setText(str(getattr(frame_config, 'signalstats_periods', 3)))
+            self.analysis_period_duration_input.setText(str(frame_config.analysis_period_duration))
+            self.analysis_period_count_input.setText(str(getattr(frame_config, 'analysis_period_count', 3)))
             
             # Update visibility based on loaded state
             self.update_border_detection_visibility()
@@ -684,8 +699,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Convert to appropriate type
         if param_name in ['simple_border_pixels', 'sophisticated_threshold', 'sophisticated_edge_sample_width',
                         'sophisticated_sample_frames', 'sophisticated_padding', 'sophisticated_viz_time',
-                        'sophisticated_search_window', 'brng_duration_limit', 'signalstats_start_time',
-                        'signalstats_duration', 'signalstats_periods', 'max_border_retries']:
+                        'sophisticated_search_window', 'brng_duration_limit',
+                        'analysis_period_duration', 'analysis_period_count', 'max_border_retries']:
             try:
                 # Handle empty string case
                 value = int(value) if value.strip() else 0

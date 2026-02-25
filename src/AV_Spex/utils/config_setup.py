@@ -258,9 +258,9 @@ class FrameAnalysisConfig:
     brng_duration_limit: int = 300
     brng_skip_color_bars: bool = True
     
-    # Signalstats settings
-    signalstats_duration: int = 60
-    signalstats_periods: int = 3
+    # Analysis period settings (used by signalstats and BRNG analysis)
+    analysis_period_duration: int = 60
+    analysis_period_count: int = 3
 
 # Output configuration
 VALID_QCTOOLS_EXTENSIONS = ("qctools.xml.gz", "qctools.mkv")
