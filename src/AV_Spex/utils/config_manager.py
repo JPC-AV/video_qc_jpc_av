@@ -238,10 +238,11 @@ class ConfigManager:
                 
                 # QCT Parse
                 if 'qct_parse' in tools:
-                    if 'run_tool' in tools['qct_parse']:
-                        tools['qct_parse']['run_tool'] = self._migrate_yes_no_to_bool(
-                            tools['qct_parse']['run_tool']
-                        )
+                    for key in ['run_tool', 'barsDetection', 'evaluateBars', 'thumbExport']:
+                        if key in tools['qct_parse']:
+                            tools['qct_parse'][key] = self._migrate_yes_no_to_bool(
+                                tools['qct_parse'][key]
+                            )
         
         return config_data
 
