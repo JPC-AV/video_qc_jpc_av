@@ -504,7 +504,7 @@ class DryRunAnalyzer:
             signalstats_reason = "Border detection is disabled (signalstats requires border data for region-based analysis)"
             signalstats_met = False
         else:
-            signalstats_reason = f"Periods: {frame_config.signalstats_periods}, duration: {frame_config.signalstats_duration}s each"
+            signalstats_reason = f"Periods: {frame_config.analysis_period_count}, duration: {frame_config.analysis_period_duration}s each"
         
         analyses.append(self._analyze_step(
             step_name="Frame Analysis: Signalstats",
