@@ -15,7 +15,8 @@ from AV_Spex.utils.config_io import ConfigIO
 from AV_Spex.utils import config_edit
 from AV_Spex.utils.config_setup import (
     ChecksProfile, OutputsConfig, FixityConfig, ToolsConfig,
-    BasicToolConfig, QCToolsConfig, MediaConchConfig, QCTParseToolConfig
+    BasicToolConfig, QCToolsConfig, MediaConchConfig, QCTParseToolConfig,
+    FrameAnalysisConfig
 )
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from AV_Spex.utils.log_setup import logger
@@ -134,12 +135,6 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.report_check = QCheckBox()
         outputs_layout.addWidget(self.report_check, 1, 1)
         
-        # QCTools extension (remains as text input)
-        outputs_layout.addWidget(QLabel("QCTools Extension:"), 2, 0)
-        self.qctools_ext_input = QLineEdit()
-        self.qctools_ext_input.setText("qctools.xml.gz")
-        outputs_layout.addWidget(self.qctools_ext_input, 2, 1)
-        
         outputs_group.setLayout(outputs_layout)
         self.config_layout.addWidget(outputs_group)
     
@@ -247,6 +242,9 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         
         tools_group.setLayout(tools_layout)
         self.config_layout.addWidget(tools_group)
+        
+        # Frame Analysis (own top-level section)
+        self.setup_frame_analysis_section()
     
     def setup_mediaconch_section(self, parent_layout):
         """Setup MediaConch specific settings."""
@@ -332,45 +330,313 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             self.mediaconch_policy_combo.setCurrentIndex(index)
     
     def setup_qctools_section(self, parent_layout):
-        """Setup QCTools specific settings."""
+        """Setup QCTools specific settings, aligned with ComplexWindow layout."""
         qctools_group = QGroupBox("QCTools")
-        qctools_layout = QGridLayout()
+        qctools_layout = QVBoxLayout()
         
-        # Run tool (now using checkbox for boolean)
-        qctools_layout.addWidget(QLabel("Run Tool:"), 0, 0)
-        self.qctools_run_check = QCheckBox()
-        qctools_layout.addWidget(self.qctools_run_check, 0, 1)
+        # Run Tool checkbox
+        self.qctools_run_check = QCheckBox("Run Tool")
+        self.qctools_run_check.setStyleSheet("font-weight: bold;")
+        run_qctools_desc = QLabel("Run QCTools on input video file")
+        run_qctools_desc.setIndent(20)
+        
+        # File Extension dropdown
+        qctools_ext_label = QLabel("QCTools File Extension")
+        qctools_ext_label.setStyleSheet("font-weight: bold;")
+        qctools_ext_desc = QLabel("Set the extension for QCTools output files")
+        qctools_ext_desc.setIndent(20)
+        self.qctools_ext_combo = QComboBox()
+        self.qctools_ext_combo.addItems(["qctools.xml.gz", "qctools.mkv"])
+        self.qctools_ext_combo.setMinimumWidth(160)
+        
+        qctools_ext_row = QHBoxLayout()
+        qctools_ext_row.addWidget(qctools_ext_label)
+        qctools_ext_row.addWidget(self.qctools_ext_combo)
+        qctools_ext_row.addStretch()
+        
+        # Add all widgets
+        qctools_layout.addWidget(self.qctools_run_check)
+        qctools_layout.addWidget(run_qctools_desc)
+        qctools_layout.addSpacing(10)
+        qctools_layout.addLayout(qctools_ext_row)
+        qctools_layout.addWidget(qctools_ext_desc)
         
         qctools_group.setLayout(qctools_layout)
         parent_layout.addWidget(qctools_group)
     
     def setup_qct_parse_section(self, parent_layout):
-        """Setup QCT Parse specific settings."""
-        qct_parse_group = QGroupBox("QCT Parse")
-        qct_parse_layout = QGridLayout()
+        """Setup QCT Parse specific settings, aligned with ComplexWindow layout."""
+        qct_parse_group = QGroupBox("qct-parse")
+        qct_parse_layout = QVBoxLayout()
         
-        # Run tool (now using checkbox for boolean)
-        qct_parse_layout.addWidget(QLabel("Run Tool:"), 0, 0)
-        self.qct_parse_run_check = QCheckBox()
-        qct_parse_layout.addWidget(self.qct_parse_run_check, 0, 1)
+        # Run Tool
+        self.qct_parse_run_check = QCheckBox("Run Tool")
+        self.qct_parse_run_check.setStyleSheet("font-weight: bold;")
+        run_qctparse_desc = QLabel("Run qct-parse tool on input video file")
+        run_qctparse_desc.setIndent(20)
         
-        # Bars Detection (already boolean)
-        qct_parse_layout.addWidget(QLabel("Bars Detection:"), 1, 0)
-        self.bars_detection_check = QCheckBox()
-        qct_parse_layout.addWidget(self.bars_detection_check, 1, 1)
+        # Bars Detection
+        self.bars_detection_check = QCheckBox("Detect Color Bars")
+        self.bars_detection_check.setStyleSheet("font-weight: bold;")
+        bars_detection_desc = QLabel("Detect color bars in the video content")
+        bars_detection_desc.setIndent(20)
         
-        # Evaluate Bars (already boolean)
-        qct_parse_layout.addWidget(QLabel("Evaluate Bars:"), 2, 0)
-        self.evaluate_bars_check = QCheckBox()
-        qct_parse_layout.addWidget(self.evaluate_bars_check, 2, 1)
+        # Evaluate Bars
+        self.evaluate_bars_check = QCheckBox("Evaluate Color Bars")
+        self.evaluate_bars_check.setStyleSheet("font-weight: bold;")
+        evaluate_bars_desc = QLabel("Compare content to color bars for validation")
+        evaluate_bars_desc.setIndent(20)
         
-        # Thumb Export (already boolean)
-        qct_parse_layout.addWidget(QLabel("Thumb Export:"), 3, 0)
-        self.thumb_export_check = QCheckBox()
-        qct_parse_layout.addWidget(self.thumb_export_check, 3, 1)
+        # Thumb Export
+        self.thumb_export_check = QCheckBox("Thumbnail Export")
+        self.thumb_export_check.setStyleSheet("font-weight: bold;")
+        thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
+        thumb_export_desc.setIndent(20)
+        
+        # Add all widgets
+        qct_parse_layout.addWidget(self.qct_parse_run_check)
+        qct_parse_layout.addWidget(run_qctparse_desc)
+        qct_parse_layout.addWidget(self.bars_detection_check)
+        qct_parse_layout.addWidget(bars_detection_desc)
+        qct_parse_layout.addWidget(self.evaluate_bars_check)
+        qct_parse_layout.addWidget(evaluate_bars_desc)
+        qct_parse_layout.addWidget(self.thumb_export_check)
+        qct_parse_layout.addWidget(thumb_export_desc)
         
         qct_parse_group.setLayout(qct_parse_layout)
         parent_layout.addWidget(qct_parse_group)
+    
+    def setup_frame_analysis_section(self):
+        """Setup the frame analysis configuration section with sub-groups
+        matching the ComplexWindow layout."""
+        frame_group = QGroupBox("Frame Analysis Settings")
+        frame_layout = QVBoxLayout()
+        
+        # --- Border Detection Settings ---
+        self.setup_border_detection_profile_section(frame_layout)
+        
+        # --- BRNG Analysis Settings ---
+        self.setup_brng_profile_section(frame_layout)
+        
+        # --- Signalstats Settings ---
+        self.setup_signalstats_profile_section(frame_layout)
+        
+        frame_group.setLayout(frame_layout)
+        self.config_layout.addWidget(frame_group)
+    
+    def setup_border_detection_profile_section(self, parent_layout):
+        """Setup the border detection sub-section."""
+        border_group = QGroupBox("Border Detection Settings")
+        border_layout = QVBoxLayout()
+        
+        # Enable Border Detection
+        self.enable_border_detection_check = QCheckBox("Enable Border Detection")
+        self.enable_border_detection_check.setStyleSheet("font-weight: bold;")
+        border_det_desc = QLabel("Detect and crop blanking borders from the video")
+        border_det_desc.setIndent(20)
+        
+        border_layout.addWidget(self.enable_border_detection_check)
+        border_layout.addWidget(border_det_desc)
+        border_layout.addSpacing(10)
+        
+        # Border Detection Mode
+        border_mode_row = QHBoxLayout()
+        border_mode_label = QLabel("Detection Mode:")
+        border_mode_label.setStyleSheet("font-weight: bold;")
+        self.border_detection_combo = QComboBox()
+        self.border_detection_combo.addItem("Simple", "simple")
+        self.border_detection_combo.addItem("Sophisticated", "sophisticated")
+        border_mode_row.addWidget(border_mode_label)
+        border_mode_row.addWidget(self.border_detection_combo)
+        border_mode_row.addStretch()
+        border_layout.addLayout(border_mode_row)
+        border_layout.addSpacing(10)
+        
+        # Simple Border Parameters
+        simple_border_row = QHBoxLayout()
+        simple_border_label = QLabel("Border Pixels:")
+        simple_border_label.setStyleSheet("font-weight: bold;")
+        self.simple_border_pixels_input = QLineEdit("25")
+        self.simple_border_pixels_input.setMaximumWidth(60)
+        simple_border_row.addWidget(simple_border_label)
+        simple_border_row.addWidget(self.simple_border_pixels_input)
+        simple_border_row.addStretch()
+        border_layout.addLayout(simple_border_row)
+        simple_desc = QLabel("Fixed number of pixels to crop from each edge")
+        simple_desc.setIndent(20)
+        border_layout.addWidget(simple_desc)
+        border_layout.addSpacing(5)
+        
+        # Sophisticated Border Parameters
+        soph_header = QLabel("Sophisticated Mode Parameters")
+        soph_header.setStyleSheet("font-weight: bold;")
+        border_layout.addWidget(soph_header)
+        
+        # Brightness Threshold
+        threshold_row = QHBoxLayout()
+        threshold_label = QLabel("Brightness Threshold:")
+        self.soph_threshold_input = QLineEdit("10")
+        self.soph_threshold_input.setMaximumWidth(60)
+        threshold_row.addWidget(threshold_label)
+        threshold_row.addWidget(self.soph_threshold_input)
+        threshold_row.addStretch()
+        border_layout.addLayout(threshold_row)
+        threshold_desc = QLabel("0 = pure black, 255 = pure white")
+        threshold_desc.setIndent(20)
+        border_layout.addWidget(threshold_desc)
+        
+        # Edge Sample Width
+        edge_row = QHBoxLayout()
+        edge_label = QLabel("Edge Sample Width:")
+        self.soph_edge_width_input = QLineEdit("100")
+        self.soph_edge_width_input.setMaximumWidth(60)
+        edge_row.addWidget(edge_label)
+        edge_row.addWidget(self.soph_edge_width_input)
+        edge_row.addStretch()
+        border_layout.addLayout(edge_row)
+        edge_desc = QLabel("Pixels to examine from each edge")
+        edge_desc.setIndent(20)
+        border_layout.addWidget(edge_desc)
+        
+        # Sample Frames
+        frames_row = QHBoxLayout()
+        frames_label = QLabel("Sample Frames:")
+        self.soph_sample_frames_input = QLineEdit("30")
+        self.soph_sample_frames_input.setMaximumWidth(60)
+        frames_row.addWidget(frames_label)
+        frames_row.addWidget(self.soph_sample_frames_input)
+        frames_row.addStretch()
+        border_layout.addLayout(frames_row)
+        frames_desc = QLabel("Number of frames to sample across the video")
+        frames_desc.setIndent(20)
+        border_layout.addWidget(frames_desc)
+        
+        # Padding
+        padding_row = QHBoxLayout()
+        padding_label = QLabel("Padding:")
+        self.soph_padding_input = QLineEdit("5")
+        self.soph_padding_input.setMaximumWidth(60)
+        padding_row.addWidget(padding_label)
+        padding_row.addWidget(self.soph_padding_input)
+        padding_row.addStretch()
+        border_layout.addLayout(padding_row)
+        padding_desc = QLabel("Extra margin around detected borders")
+        padding_desc.setIndent(20)
+        border_layout.addWidget(padding_desc)
+        border_layout.addSpacing(5)
+        
+        # Auto Retry
+        self.auto_retry_borders_check = QCheckBox(
+            "Auto-retry border detection if BRNG detects edge artifacts"
+        )
+        self.auto_retry_borders_check.setStyleSheet("font-weight: bold;")
+        auto_retry_desc = QLabel("Automatically adjusts borders if edge artifacts are found")
+        auto_retry_desc.setIndent(20)
+        border_layout.addWidget(self.auto_retry_borders_check)
+        border_layout.addWidget(auto_retry_desc)
+        
+        # Max Retries
+        max_retries_row = QHBoxLayout()
+        max_retries_label = QLabel("Max Retries:")
+        max_retries_label.setStyleSheet("font-weight: bold;")
+        self.max_border_retries_input = QLineEdit("5")
+        self.max_border_retries_input.setMaximumWidth(60)
+        max_retries_row.addWidget(max_retries_label)
+        max_retries_row.addWidget(self.max_border_retries_input)
+        max_retries_row.addStretch()
+        border_layout.addLayout(max_retries_row)
+        max_retries_desc = QLabel("Maximum number of border adjustment attempts")
+        max_retries_desc.setIndent(20)
+        border_layout.addWidget(max_retries_desc)
+        
+        border_group.setLayout(border_layout)
+        parent_layout.addWidget(border_group)
+    
+    def setup_brng_profile_section(self, parent_layout):
+        """Setup the BRNG analysis sub-section."""
+        brng_group = QGroupBox("BRNG Analysis Settings")
+        brng_layout = QVBoxLayout()
+        
+        # Enable BRNG Analysis
+        self.enable_brng_analysis_check = QCheckBox("Enable BRNG Analysis")
+        self.enable_brng_analysis_check.setStyleSheet("font-weight: bold;")
+        brng_desc = QLabel("Analyze broadcast range violations in the active area")
+        brng_desc.setIndent(20)
+        
+        brng_layout.addWidget(self.enable_brng_analysis_check)
+        brng_layout.addWidget(brng_desc)
+        brng_layout.addSpacing(10)
+        
+        # Duration Limit
+        duration_row = QHBoxLayout()
+        duration_label = QLabel("Duration Limit (s):")
+        duration_label.setStyleSheet("font-weight: bold;")
+        self.brng_duration_input = QLineEdit("300")
+        self.brng_duration_input.setMaximumWidth(60)
+        duration_row.addWidget(duration_label)
+        duration_row.addWidget(self.brng_duration_input)
+        duration_row.addStretch()
+        brng_layout.addLayout(duration_row)
+        duration_desc = QLabel("Maximum duration to analyze for BRNG violations")
+        duration_desc.setIndent(20)
+        brng_layout.addWidget(duration_desc)
+        
+        # Skip Color Bars
+        self.brng_skip_colorbars_check = QCheckBox("Skip Color Bars")
+        self.brng_skip_colorbars_check.setStyleSheet("font-weight: bold;")
+        skip_bars_desc = QLabel("Exclude color bar sections from BRNG analysis")
+        skip_bars_desc.setIndent(20)
+        brng_layout.addWidget(self.brng_skip_colorbars_check)
+        brng_layout.addWidget(skip_bars_desc)
+        
+        brng_group.setLayout(brng_layout)
+        parent_layout.addWidget(brng_group)
+    
+    def setup_signalstats_profile_section(self, parent_layout):
+        """Setup the signalstats sub-section."""
+        signalstats_group = QGroupBox("Signalstats Settings")
+        signalstats_layout = QVBoxLayout()
+        
+        # Enable Signalstats
+        self.enable_signalstats_check = QCheckBox("Enable Signalstats Analysis")
+        self.enable_signalstats_check.setStyleSheet("font-weight: bold;")
+        signalstats_desc = QLabel("Enhanced FFprobe signalstats")
+        signalstats_desc.setIndent(20)
+        
+        signalstats_layout.addWidget(self.enable_signalstats_check)
+        signalstats_layout.addWidget(signalstats_desc)
+        signalstats_layout.addSpacing(10)
+        
+        # Duration
+        duration_row = QHBoxLayout()
+        duration_label = QLabel("Duration (s):")
+        duration_label.setStyleSheet("font-weight: bold;")
+        self.signalstats_duration_input = QLineEdit("60")
+        self.signalstats_duration_input.setMaximumWidth(60)
+        duration_row.addWidget(duration_label)
+        duration_row.addWidget(self.signalstats_duration_input)
+        duration_row.addStretch()
+        signalstats_layout.addLayout(duration_row)
+        duration_desc = QLabel("How long to run signalstats analysis")
+        duration_desc.setIndent(20)
+        signalstats_layout.addWidget(duration_desc)
+        
+        # Analysis Periods
+        periods_row = QHBoxLayout()
+        periods_label = QLabel("Analysis Periods:")
+        periods_label.setStyleSheet("font-weight: bold;")
+        self.signalstats_periods_input = QLineEdit("3")
+        self.signalstats_periods_input.setMaximumWidth(60)
+        periods_row.addWidget(periods_label)
+        periods_row.addWidget(self.signalstats_periods_input)
+        periods_row.addStretch()
+        signalstats_layout.addLayout(periods_row)
+        periods_desc = QLabel("Number of analysis periods to spread across video")
+        periods_desc.setIndent(20)
+        signalstats_layout.addWidget(periods_desc)
+        
+        signalstats_group.setLayout(signalstats_layout)
+        parent_layout.addWidget(signalstats_group)
     
     def setup_dialog_buttons(self, layout):
         """Setup dialog action buttons."""
@@ -405,8 +671,40 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             # Load outputs (now booleans)
             self.access_file_check.setChecked(current_config.outputs.access_file)
             self.report_check.setChecked(current_config.outputs.report)
-            self.qctools_ext_input.setText(current_config.outputs.qctools_ext)
             
+            # Load QCTools extension into the combo box
+            qctools_ext = getattr(current_config.outputs, 'qctools_ext', 'qctools.xml.gz')
+            ext_index = self.qctools_ext_combo.findText(qctools_ext)
+            if ext_index >= 0:
+                self.qctools_ext_combo.setCurrentIndex(ext_index)
+            
+            # Load frame analysis settings
+            if hasattr(current_config.outputs, 'frame_analysis'):
+                fa = current_config.outputs.frame_analysis
+                
+                # Border detection
+                self.enable_border_detection_check.setChecked(bool(fa.enable_border_detection))
+                mode_index = self.border_detection_combo.findData(fa.border_detection_mode)
+                if mode_index >= 0:
+                    self.border_detection_combo.setCurrentIndex(mode_index)
+                self.simple_border_pixels_input.setText(str(fa.simple_border_pixels))
+                self.soph_threshold_input.setText(str(fa.sophisticated_threshold))
+                self.soph_edge_width_input.setText(str(fa.sophisticated_edge_sample_width))
+                self.soph_sample_frames_input.setText(str(fa.sophisticated_sample_frames))
+                self.soph_padding_input.setText(str(fa.sophisticated_padding))
+                self.auto_retry_borders_check.setChecked(bool(fa.auto_retry_borders))
+                self.max_border_retries_input.setText(str(getattr(fa, 'max_border_retries', 3)))
+                
+                # BRNG analysis
+                self.enable_brng_analysis_check.setChecked(bool(fa.enable_brng_analysis))
+                self.brng_duration_input.setText(str(fa.brng_duration_limit))
+                self.brng_skip_colorbars_check.setChecked(bool(fa.brng_skip_color_bars))
+                
+                # Signalstats
+                self.enable_signalstats_check.setChecked(bool(fa.enable_signalstats))
+                self.signalstats_duration_input.setText(str(fa.signalstats_duration))
+                self.signalstats_periods_input.setText(str(getattr(fa, 'signalstats_periods', 3)))
+                    
             # Load fixity (now booleans)
             self.fixity_checks['check_fixity'].setChecked(current_config.fixity.check_fixity)
             self.fixity_checks['validate_stream_fixity'].setChecked(current_config.fixity.validate_stream_fixity)
@@ -469,7 +767,39 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         # Load outputs (now booleans)
         self.access_file_check.setChecked(profile.outputs.access_file)
         self.report_check.setChecked(profile.outputs.report)
-        self.qctools_ext_input.setText(profile.outputs.qctools_ext)
+        
+        # Load QCTools extension into the combo box
+        qctools_ext = getattr(profile.outputs, 'qctools_ext', 'qctools.xml.gz')
+        ext_index = self.qctools_ext_combo.findText(qctools_ext)
+        if ext_index >= 0:
+            self.qctools_ext_combo.setCurrentIndex(ext_index)
+
+        # Load frame analysis if it exists
+        if hasattr(profile.outputs, 'frame_analysis'):
+            fa = profile.outputs.frame_analysis
+            
+            # Border detection
+            self.enable_border_detection_check.setChecked(bool(getattr(fa, 'enable_border_detection', False)))
+            mode_index = self.border_detection_combo.findData(getattr(fa, 'border_detection_mode', 'simple'))
+            if mode_index >= 0:
+                self.border_detection_combo.setCurrentIndex(mode_index)
+            self.simple_border_pixels_input.setText(str(getattr(fa, 'simple_border_pixels', 25)))
+            self.soph_threshold_input.setText(str(getattr(fa, 'sophisticated_threshold', 10)))
+            self.soph_edge_width_input.setText(str(getattr(fa, 'sophisticated_edge_sample_width', 100)))
+            self.soph_sample_frames_input.setText(str(getattr(fa, 'sophisticated_sample_frames', 30)))
+            self.soph_padding_input.setText(str(getattr(fa, 'sophisticated_padding', 5)))
+            self.auto_retry_borders_check.setChecked(bool(getattr(fa, 'auto_retry_borders', False)))
+            self.max_border_retries_input.setText(str(getattr(fa, 'max_border_retries', 3)))
+            
+            # BRNG analysis
+            self.enable_brng_analysis_check.setChecked(bool(getattr(fa, 'enable_brng_analysis', False)))
+            self.brng_duration_input.setText(str(getattr(fa, 'brng_duration_limit', 300)))
+            self.brng_skip_colorbars_check.setChecked(bool(getattr(fa, 'brng_skip_color_bars', False)))
+            
+            # Signalstats
+            self.enable_signalstats_check.setChecked(bool(getattr(fa, 'enable_signalstats', False)))
+            self.signalstats_duration_input.setText(str(getattr(fa, 'signalstats_duration', 60)))
+            self.signalstats_periods_input.setText(str(getattr(fa, 'signalstats_periods', 3)))
         
         # Load fixity (now booleans)
         self.fixity_checks['check_fixity'].setChecked(profile.fixity.check_fixity)
@@ -526,11 +856,31 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             QMessageBox.warning(self, "Validation Error", "Profile name is required.")
             return None
         
+        # Create frame analysis config with all parameters
+        frame_analysis = FrameAnalysisConfig(
+            enable_border_detection=self.enable_border_detection_check.isChecked(),
+            enable_brng_analysis=self.enable_brng_analysis_check.isChecked(),
+            enable_signalstats=self.enable_signalstats_check.isChecked(),
+            border_detection_mode=self.border_detection_combo.currentData() or "simple",
+            simple_border_pixels=int(self.simple_border_pixels_input.text() or 25),
+            sophisticated_threshold=int(self.soph_threshold_input.text() or 10),
+            sophisticated_edge_sample_width=int(self.soph_edge_width_input.text() or 100),
+            sophisticated_sample_frames=int(self.soph_sample_frames_input.text() or 30),
+            sophisticated_padding=int(self.soph_padding_input.text() or 5),
+            auto_retry_borders=self.auto_retry_borders_check.isChecked(),
+            max_border_retries=int(self.max_border_retries_input.text() or 3),
+            brng_duration_limit=int(self.brng_duration_input.text() or 300),
+            brng_skip_color_bars=self.brng_skip_colorbars_check.isChecked(),
+            signalstats_duration=int(self.signalstats_duration_input.text() or 60),
+            signalstats_periods=int(self.signalstats_periods_input.text() or 3)
+        )
+        
         # Create outputs config (now with booleans)
         outputs = OutputsConfig(
             access_file=self.access_file_check.isChecked(),
             report=self.report_check.isChecked(),
-            qctools_ext=self.qctools_ext_input.text()
+            qctools_ext=self.qctools_ext_combo.currentText(),
+            frame_analysis=frame_analysis
         )
         
         # Create fixity config (now with booleans)

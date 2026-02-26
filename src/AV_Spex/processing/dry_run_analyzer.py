@@ -121,6 +121,9 @@ class DryRunAnalyzer:
         analyses.extend(self._analyze_output_steps(
             video_path, source_directory, destination_directory, video_id, access_file_found
         ))
+        analyses.extend(self._analyze_frame_analysis(
+            video_path, source_directory, destination_directory, video_id
+        ))
         
         return analyses
     
@@ -451,6 +454,68 @@ class DryRunAnalyzer:
         return None
     
     # -------------------------------------------------------------------------
+    # Frame Analysis
+    # -------------------------------------------------------------------------
+    
+    def _analyze_frame_analysis(self, video_path: str, source_directory: str,
+                                 destination_directory: str, 
+                                 video_id: str) -> List[StepAnalysis]:
+        """Analyze frame analysis steps (border detection, BRNG analysis, signalstats)."""
+        analyses = []
+        frame_config = self.checks_config.outputs.frame_analysis
+        qctools_config = self.checks_config.tools.qctools
+        qct_parse_config = self.checks_config.tools.qct_parse
+        
+        # Check for existing QCTools report (needed for BRNG and signalstats)
+        existing_qctools = self._find_qctools_report(source_directory, video_id)
+        has_qctools = existing_qctools is not None or qctools_config.run_tool
+        
+        # Border Detection
+        analyses.append(self._analyze_step(
+            step_name="Frame Analysis: Border Detection",
+            enabled=frame_config.enable_border_detection,
+            precondition_met=True,
+            precondition_reason=f"Mode: {frame_config.border_detection_mode}"
+        ))
+        
+        # BRNG Analysis
+        brng_reason = None
+        if not has_qctools:
+            brng_reason = "No QCTools report available and QCTools run is disabled (needed for QCTools-based BRNG analysis)"
+        else:
+            details = []
+            details.append(f"Duration limit: {frame_config.brng_duration_limit}s")
+            if frame_config.brng_skip_color_bars:
+                details.append("Will skip color bars region")
+            brng_reason = ", ".join(details)
+        
+        analyses.append(self._analyze_step(
+            step_name="Frame Analysis: BRNG Violation Analysis",
+            enabled=frame_config.enable_brng_analysis,
+            precondition_met=True,  # Can run with or without QCTools (uses FFmpeg fallback)
+            precondition_reason=brng_reason
+        ))
+        
+        # Signalstats
+        signalstats_reason = None
+        signalstats_met = True
+        
+        if not frame_config.enable_border_detection:
+            signalstats_reason = "Border detection is disabled (signalstats requires border data for region-based analysis)"
+            signalstats_met = False
+        else:
+            signalstats_reason = f"Periods: {frame_config.analysis_period_count}, duration: {frame_config.analysis_period_duration}s each"
+        
+        analyses.append(self._analyze_step(
+            step_name="Frame Analysis: Signalstats",
+            enabled=frame_config.enable_signalstats,
+            precondition_met=signalstats_met,
+            precondition_reason=signalstats_reason
+        ))
+        
+        return analyses
+    
+    # -------------------------------------------------------------------------
     # Helper Methods
     # -------------------------------------------------------------------------
     
@@ -525,6 +590,13 @@ class DryRunAnalyzer:
         logger.info(f"  Outputs:")
         logger.info(f"    - Access File: {out.access_file}")
         logger.info(f"    - Report: {out.report}")
+        
+        # Frame Analysis
+        fa = self.checks_config.outputs.frame_analysis
+        logger.info(f"  Frame Analysis:")
+        logger.info(f"    - Border Detection: {fa.enable_border_detection} (mode: {fa.border_detection_mode})")
+        logger.info(f"    - BRNG Analysis: {fa.enable_brng_analysis}")
+        logger.info(f"    - Signalstats: {fa.enable_signalstats}")
         logger.info("")
     
     def _log_analysis_summary(self, analyses: List[StepAnalysis]):

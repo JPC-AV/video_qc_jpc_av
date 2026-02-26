@@ -75,6 +75,13 @@ def get_log_directory():
 # Much of this script is taken from the AMIA open source project loglog. More information here: https://github.com/amiaopensource/loglog
 
 def setup_logger(): 
+    # Suppress matplotlib verbose output before any matplotlib imports
+    # This prevents matplotlib configuration messages from appearing
+    logging.getLogger('matplotlib').setLevel(logging.WARNING)
+    logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+    logging.getLogger('matplotlib.colorbar').setLevel(logging.WARNING)
+    logging.getLogger('PIL').setLevel(logging.WARNING)  # Also suppress PIL/Pillow messages
+    
     # Assigns getLogger function from imported module, creates logger 
     logger = logging.getLogger()
     # Sets 'lowest' log level

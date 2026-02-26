@@ -199,6 +199,16 @@ class ConfigManager:
                     if config_data['outputs']['qctools_ext'] not in valid_extensions:
                         logger.info(f"Invalid qctools_ext '{config_data['outputs']['qctools_ext']}', resetting to 'qctools.xml.gz'")
                         config_data['outputs']['qctools_ext'] = "qctools.xml.gz"
+                
+                # Migrate renamed frame_analysis period fields
+                if 'frame_analysis' in config_data['outputs']:
+                    fa = config_data['outputs']['frame_analysis']
+                    if 'signalstats_duration' in fa and 'analysis_period_duration' not in fa:
+                        fa['analysis_period_duration'] = fa.pop('signalstats_duration')
+                        logger.info("Migrated 'signalstats_duration' → 'analysis_period_duration'")
+                    if 'signalstats_periods' in fa and 'analysis_period_count' not in fa:
+                        fa['analysis_period_count'] = fa.pop('signalstats_periods')
+                        logger.info("Migrated 'signalstats_periods' → 'analysis_period_count'")
             
             # Migrate fixity section
             if 'fixity' in config_data:
@@ -238,10 +248,11 @@ class ConfigManager:
                 
                 # QCT Parse
                 if 'qct_parse' in tools:
-                    if 'run_tool' in tools['qct_parse']:
-                        tools['qct_parse']['run_tool'] = self._migrate_yes_no_to_bool(
-                            tools['qct_parse']['run_tool']
-                        )
+                    for key in ['run_tool', 'barsDetection', 'evaluateBars', 'thumbExport']:
+                        if key in tools['qct_parse']:
+                            tools['qct_parse'][key] = self._migrate_yes_no_to_bool(
+                                tools['qct_parse'][key]
+                            )
         
         return config_data
 

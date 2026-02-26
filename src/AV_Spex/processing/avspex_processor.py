@@ -241,11 +241,16 @@ class AVSpexProcessor:
 
         # Process output tools (QCTools, report generation, etc.)
         # Now using boolean checks
+        # Also check if any frame analysis sub-steps are enabled
+        frame_config = self.checks_config.outputs.frame_analysis
         outputs_enabled = (
             self.checks_config.outputs.access_file or
             self.checks_config.outputs.report or
             self.checks_config.tools.qctools.run_tool or
-            self.checks_config.tools.qct_parse.run_tool
+            self.checks_config.tools.qct_parse.run_tool or
+            frame_config.enable_border_detection or
+            frame_config.enable_brng_analysis or
+            frame_config.enable_signalstats
         )
         
         if outputs_enabled:
