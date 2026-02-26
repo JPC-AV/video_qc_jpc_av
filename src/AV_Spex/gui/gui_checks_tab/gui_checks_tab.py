@@ -51,7 +51,17 @@ class ChecksTab(ThemeableMixin):
 
             try:
                 logger.debug(f"Profile '{selected_profile}' applied successfully.")
+                
+                # Update Checks tab configuration
                 self.main_window.config_widget.load_config_values()
+                
+                # Update Complex tab configuration if it exists
+                if hasattr(self.main_window, 'complex_widget') and self.main_window.complex_widget:
+                    if hasattr(self.main_window.complex_widget, 'load_config_values'):
+                        self.main_window.complex_widget.load_config_values()
+                    else:
+                        logger.warning("Complex widget exists but doesn't have load_config_values method")
+                        
             except Exception as e:
                 logger.critical(f"Error applying profile: {e}")
 
@@ -61,8 +71,14 @@ class ChecksTab(ThemeableMixin):
             if dialog.exec():
                 # Refresh the dropdown after dialog closes
                 self.refresh_profile_dropdown()
+                
                 # Reload config values in case a profile was applied
                 self.main_window.config_widget.load_config_values()
+                
+                # Also reload Complex tab configuration if it exists
+                if hasattr(self.main_window, 'complex_widget') and self.main_window.complex_widget:
+                    if hasattr(self.main_window.complex_widget, 'load_config_values'):
+                        self.main_window.complex_widget.load_config_values()
 
         def on_create_profile_clicked(self):
             """Create a new profile from current configuration."""

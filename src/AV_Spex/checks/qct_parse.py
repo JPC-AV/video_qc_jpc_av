@@ -286,16 +286,22 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
     if bit_depth_10:
         YMAX_thresh = 800
         YMIN_thresh = 10
-        YDIF_thresh = 8
-        SATMAX_thresh = 300
+        YDIF_thresh = 8.0     # Allow up to 8.0 for 10-bit (your real bars have ~6.5)
+        SATMAX_thresh = 250   # Key discriminator - real color bars have high saturation
+        URANGE_min = 500      # Real color bars have large chroma ranges
+        VRANGE_min = 500
     else:
-        YMAX_thresh = 199
-        YMIN_thresh = 3
-        YDIF_thresh = 2
-        SATMAX_thresh = 75
+        YMAX_thresh = 210
+        YMIN_thresh = 10
+        YDIF_thresh = 3.0
+        SATMAX_thresh = 100   # Scaled for 8-bit
+        URANGE_min = 150
+        VRANGE_min = 150
 
     barsStartString = None
     barsEndString = None
+    consecutive_non_bar_frames = 0
+    max_consecutive_non_bar_frames = 10  # Allow up to 10 consecutive bad frames before ending
     
     # Add time limit for searching (5 minutes = 300 seconds)
     search_time_limit = 300.0

@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import time
 import re
+import cv2
 from pathlib import Path
 
 from AV_Spex.processing import run_tools
@@ -20,6 +21,7 @@ from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_
 from AV_Spex.checks.make_access import process_access_file
 from AV_Spex.checks.qct_parse import run_qctparse
 from AV_Spex.checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
+from AV_Spex.checks.frame_analysis import analyze_frame_quality
 
 
 class ProcessingManager:
@@ -200,76 +202,217 @@ class ProcessingManager:
     def process_video_outputs(self, video_path, source_directory, destination_directory, video_id, metadata_differences):
         """
         Coordinate the entire output processing workflow.
-        
-        Args:
-            video_path (str): Path to the input video file
-            source_directory (str): Source directory for the video
-            destination_directory (str): Destination directory for output files
-            video_id (str): Unique identifier for the video
-            metadata_differences (dict): Differences found in metadata checks
-            
-        Returns:
-            dict: Processing results and file paths
         """
-
-        # Collect processing results
+        
         processing_results = {
             'metadata_diff_report': None,
             'qctools_output': None,
             'access_file': None,
-            'html_report': None
+            'html_report': None,
+            'frame_analysis': None  # Add this
         }
-
+        
         if self.check_cancelled():
             return None
-       
+        
         # Create report directory if report is enabled
         report_directory = None
         if self.checks_config.outputs.report:
             report_directory = dir_setup.make_report_dir(source_directory, video_id)
             # Process metadata differences report
             processing_results['metadata_diff_report'] = create_metadata_difference_report(
-                    metadata_differences, report_directory, video_id
-                )
+                metadata_differences, report_directory, video_id
+            )
         else:
-            processing_results['metadata_diff_report'] =  None
+            processing_results['metadata_diff_report'] = None
         
         if self.signals:
             self.signals.output_progress.emit("Running QCTools and qct-parse...")
         if self.check_cancelled():
             return None
-
-        # Process QCTools output
-        process_qctools_output(
-            video_path, source_directory, destination_directory, video_id, report_directory=report_directory,
+        
+        # Process QCTools output and capture color bars detection
+        qctools_results = process_qctools_output(
+            video_path, source_directory, destination_directory, video_id, 
+            report_directory=report_directory,
             check_cancelled=self.check_cancelled, signals=self.signals
         )
-
+        color_bars_end_time = qctools_results.get('color_bars_end_time') if qctools_results else None
+        
         if self.signals:
             self.signals.output_progress.emit("Creating access file...")
         if self.check_cancelled():
             return None
-
+        
         # Generate access file
         processing_results['access_file'] = process_access_file(
             video_path, source_directory, video_id, 
             check_cancelled=self.check_cancelled,
             signals=self.signals
         )
-
+        
+        # Check if frame analysis is enabled
+        frame_config = self.checks_config.outputs.frame_analysis
+        if any([
+            frame_config.enable_border_detection,
+            frame_config.enable_brng_analysis,
+            frame_config.enable_signalstats
+        ]):
+            if self.signals:
+                self.signals.output_progress.emit("Performing enhanced frame analysis...")
+            
+            # Run the new unified frame analysis, passing color bars info from qct-parse
+            frame_analysis_results = self.process_frame_analysis(
+                video_path, source_directory, destination_directory, video_id,
+                color_bars_end_time=color_bars_end_time
+            )
+            
+            processing_results['frame_analysis'] = frame_analysis_results
+        
         if self.signals:
             self.signals.output_progress.emit("Preparing report...")
         if self.check_cancelled():
             return None
-
+        
         # Generate final HTML report
         processing_results['html_report'] = generate_final_report(
             video_id, source_directory, report_directory, destination_directory,
             video_path=video_path,
-            check_cancelled=self.check_cancelled, signals=self.signals
+            check_cancelled=self.check_cancelled, 
+            signals=self.signals
         )
-
+        
         return processing_results
+        
+    def process_frame_analysis(self, video_path, source_directory, destination_directory, video_id, color_bars_end_time=None):
+        """
+        Process comprehensive frame analysis including border detection,
+        BRNG violations, and optionally signalstats using the enhanced unified module.
+        
+        Args:
+            video_path: Path to video file
+            source_directory: Source directory containing video
+            destination_directory: Output directory for results
+            video_id: Video identifier
+            color_bars_end_time: End time of color bars (from qct-parse), None if not detected
+        """
+        
+        if self.check_cancelled():
+            return None
+        
+        # Get frame analysis config
+        frame_config = self.checks_config.outputs.frame_analysis
+        
+        # Check if any frame analysis sub-steps are enabled
+        if not any([
+            frame_config.enable_border_detection,
+            frame_config.enable_brng_analysis, 
+            frame_config.enable_signalstats
+        ]):
+            logger.info("No frame analysis sub-steps enabled")
+            return None
+        
+        if self.signals:
+            self.signals.output_progress.emit("Performing enhanced frame analysis...")
+        
+        # Run the enhanced frame analysis - color_bars_end_time passed from qct-parse
+        try:
+            analysis_results = analyze_frame_quality(
+                video_path=video_path,
+                output_dir=destination_directory,
+                frame_config=frame_config,
+                color_bars_end_time=color_bars_end_time,
+                signals=self.signals  # Pass signals to emit step completion as each step finishes
+            )
+        except Exception as e:
+            logger.error(f"Error during frame analysis: {e}")
+            return None
+        
+        if self.check_cancelled():
+            return None
+        
+        # Process results
+        if analysis_results:
+            # Step completion signals are now emitted inside analyze_frame_quality
+            # as each step completes, so we don't need to emit them here
+            
+            # Log summary
+            if 'summary' in analysis_results:
+                logger.debug(analysis_results['summary'] + "\n")
+            
+            # Format results for compatibility with existing code
+            formatted_results = self._format_frame_analysis_results(analysis_results)
+            
+            return formatted_results
+        
+        return None
+    
+    def _format_frame_analysis_results(self, analysis_results):
+        """
+        Format the enhanced frame analysis results to match the expected structure
+        for the rest of the processing pipeline.
+        """
+        formatted = {
+            'border_results': None,
+            'brng_results': None,
+            'signalstats_results': None,
+            'analysis_decisions': []
+        }
+        
+        # Extract border results
+        if 'final_borders' in analysis_results:
+            borders = analysis_results['final_borders']
+        elif 'initial_borders' in analysis_results:
+            borders = analysis_results['initial_borders']
+        else:
+            borders = None
+        
+        if borders:
+            formatted['border_results'] = {
+                'active_area': borders.get('active_area'),
+                'border_regions': borders.get('border_regions'),
+                'detection_method': borders.get('detection_method'),
+                'head_switching_artifacts': borders.get('head_switching_artifacts'),
+                'quality_frame_hints': borders.get('quality_frame_hints', [])
+            }
+        
+        # Extract BRNG results
+        if 'final_brng_analysis' in analysis_results:
+            brng = analysis_results['final_brng_analysis']
+        elif 'brng_analysis' in analysis_results:
+            brng = analysis_results['brng_analysis']
+        else:
+            brng = None
+        
+        if brng:
+            formatted['brng_results'] = {
+                'aggregate_patterns': brng.get('aggregate_patterns', {}),
+                'actionable_report': brng.get('actionable_report', {}),
+                'worst_frames': [v for v in brng.get('violations', [])[:5]],  # Top 5 violations
+                'video_info': {
+                    'content_start_time': analysis_results.get('color_bars_end_time', 0)
+                }
+            }
+        
+        # Extract signalstats results
+        if 'signalstats' in analysis_results:
+            stats = analysis_results['signalstats']
+            formatted['signalstats_results'] = {
+                'violation_percentage': stats.get('violation_percentage', 0),
+                'max_brng': stats.get('max_brng', 0),
+                'avg_brng': stats.get('avg_brng', 0),
+                'diagnosis': stats.get('diagnosis', ''),
+                'used_qctools': stats.get('used_qctools', False)
+            }
+        
+        # Add any analysis decisions
+        if 'refinement_iterations' in analysis_results:
+            formatted['analysis_decisions'].append(
+                f"Performed {analysis_results['refinement_iterations']} border refinement iterations"
+            )
+        
+        return formatted
+
     
 
 def find_qctools_report(source_directory, video_id):
@@ -330,7 +473,8 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     
     results = {
         'qctools_output_path': None,
-        'qctools_check_output': None
+        'qctools_check_output': None,
+        'color_bars_end_time': None
     }
 
     if check_cancelled and check_cancelled():
@@ -390,6 +534,13 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             run_qctparse(video_path, results['qctools_output_path'], report_directory, check_cancelled=check_cancelled)
             if signals:
                 signals.step_completed.emit("QCT Parse")
+             # After qct-parse completes, check for color bars results
+            colorbars_csv = Path(report_directory) / "qct-parse_colorbars_durations.csv"
+            if colorbars_csv.exists():
+                start_seconds, end_seconds = parse_colorbars_duration_csv(str(colorbars_csv))
+                if end_seconds:
+                    results['color_bars_end_time'] = end_seconds
+                    logger.debug(f"Color bars detected, ending at {end_seconds:.1f}s\n")
 
     return results
 
@@ -494,7 +645,6 @@ def extract_percentage(output_line, signals=None):
             except (ValueError, IndexError):
                 pass
 
-
 def check_tool_metadata(tool_name, output_path):
     """
     Check metadata for a specific tool if configured.
@@ -580,3 +730,82 @@ def setup_mediaconch_policy(user_policy_path: str = None) -> str:
     except Exception as e:
         logger.critical(f"Error setting up MediaConch policy: {str(e)}")
         return None
+    
+def parse_colorbars_duration_csv(csv_path):
+    """
+    Parse the qct-parse color bars duration CSV to extract start and end times.
+    
+    Args:
+        csv_path (str): Path to qct-parse_colorbars_durations.csv
+        
+    Returns:
+        tuple: (start_time_seconds, end_time_seconds) or (None, None) if no bars found
+    """
+    import csv
+    
+    if not os.path.exists(csv_path):
+        return None, None
+    
+    try:
+        with open(csv_path, 'r') as csvfile:
+            reader = csv.reader(csvfile)
+            rows = list(reader)
+            
+            if len(rows) >= 2 and "color bars found" in rows[0][0]:
+                # Color bars were found - parse the timestamps
+                # Format is HH:MM:SS.ssss
+                start_str = rows[1][0]
+                end_str = rows[1][1] if len(rows[1]) > 1 else None
+                
+                # Convert timestamp string to seconds
+                def timestamp_to_seconds(ts_str):
+                    parts = ts_str.split(':')
+                    if len(parts) == 3:
+                        hours = int(parts[0])
+                        minutes = int(parts[1])
+                        seconds = float(parts[2])
+                        return hours * 3600 + minutes * 60 + seconds
+                    return 0
+                
+                start_seconds = timestamp_to_seconds(start_str)
+                end_seconds = timestamp_to_seconds(end_str) if end_str else start_seconds
+                
+                return start_seconds, end_seconds
+                
+    except Exception as e:
+        logger.warning(f"Could not parse color bars duration CSV: {e}")
+        
+    return None, None
+
+
+def calculate_border_regions(x, y, w, h, video_width, video_height):
+    """Helper function to calculate border regions"""
+    regions = {}
+    
+    left_border_width = x
+    if left_border_width > 0:
+        regions['left_border'] = (0, 0, left_border_width, video_height)
+    else:
+        regions['left_border'] = None
+    
+    right_border_start = x + w
+    right_border_width = video_width - right_border_start
+    if right_border_width > 0:
+        regions['right_border'] = (right_border_start, 0, right_border_width, video_height)
+    else:
+        regions['right_border'] = None
+    
+    top_border_height = y
+    if top_border_height > 0:
+        regions['top_border'] = (0, 0, video_width, top_border_height)
+    else:
+        regions['top_border'] = None
+    
+    bottom_border_start = y + h
+    bottom_border_height = video_height - bottom_border_start
+    if bottom_border_height > 0:
+        regions['bottom_border'] = (0, bottom_border_start, video_width, bottom_border_height)
+    else:
+        regions['bottom_border'] = None
+    
+    return regions

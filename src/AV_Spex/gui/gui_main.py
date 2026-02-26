@@ -27,6 +27,7 @@ from AV_Spex.gui.gui_main_window.gui_main_window_theme import MainWindowTheme
 from AV_Spex.gui.gui_import_tab import ImportTab
 from AV_Spex.gui.gui_checks_tab.gui_checks_tab import ChecksTab
 from AV_Spex.gui.gui_spex_tab import SpexTab
+from AV_Spex.gui.gui_complex_tab import ComplexTab
 
 # Get configuration manager
 config_mgr = ConfigManager()
@@ -47,6 +48,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.import_tab_group_boxes = [] 
         self.spex_tab_group_boxes = []
         self.checks_tab_group_boxes = []
+        self.complex_tab_group_boxes = [] 
         
         # Initialize settings
         self.settings = QSettings('NMAAHC', 'AVSpex')
@@ -64,6 +66,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
         self.checks_tab = ChecksTab(self)
         self.spex_tab = SpexTab(self)
         self.import_tab = ImportTab(self)
+        self.complex_tab = ComplexTab(self)
 
         # Connect all signals
         self.signals_handler.setup_signal_connections()
@@ -89,7 +92,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
     def closeEvent(self, event):
         """Handle application shutdown and clean up resources."""
         # Clean up any child windows first
-        for child_name in ['config_widget', 'processing_window', 'new_window']:
+        for child_name in ['config_widget', 'processing_window', 'new_window', 'complex_widget']:
             child = getattr(self, child_name, None)
             if child and isinstance(child, QWidget):
                 # If it has theme handling, clean it up
@@ -98,7 +101,7 @@ class MainWindow(QMainWindow, ThemeableMixin):
                 child.close()
         
         # Clean up tab theme connections
-        for tab_name in ['import_tab', 'checks_tab', 'spex_tab']:
+        for tab_name in ['import_tab', 'checks_tab', 'spex_tab', 'complex_tab']:
             tab = getattr(self, tab_name, None)
             if tab and hasattr(tab, 'cleanup_theme_handling'):
                 tab.cleanup_theme_handling()

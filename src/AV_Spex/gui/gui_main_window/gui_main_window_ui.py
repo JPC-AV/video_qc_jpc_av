@@ -111,6 +111,7 @@ class MainWindowUI:
         self.main_window.import_tab.setup_import_tab()
         self.main_window.checks_tab.setup_checks_tab()
         self.main_window.spex_tab.setup_spex_tab()
+        self.main_window.complex_tab.setup_complex_tab()
 
         
     def setup_profiles_menu(self):
