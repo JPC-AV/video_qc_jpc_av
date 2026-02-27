@@ -205,14 +205,14 @@ jobs:
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "plotly==5.23.0"
         
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "lxml==5.3.1"
+            
+            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "numpy==2.2.6"
 
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "scipy==1.15.3"
 
-            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "numpy==2.2.6"
+            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "opencv-python-headless==4.11.0.86"
 
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "matplotlib==3.10.3"
-
-            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "opencv-python-headless==4.11.0.86"
 
             system libexec/"bin/python", "-m", "pip", "install", "--only-binary", ":all:", "PyQt6==6.9.1", "PyQt6-Qt6==6.9.1"
         
