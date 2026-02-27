@@ -206,6 +206,8 @@ jobs:
         
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "lxml==5.3.1"
 
+            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "scipy==1.15.3"
+
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "numpy==2.2.6"
 
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "opencv-python-headless==4.11.0.86"
