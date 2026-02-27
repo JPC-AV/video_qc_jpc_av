@@ -201,6 +201,8 @@ jobs:
             venv = virtualenv_create(libexec, "python3.13")
             
             venv.pip_install resources.reject { |r| r.name == "plotly" || r.name == "lxml" || r.name == "PyQt6" }
+
+            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "opencv-python-headless==4.11.0.86"
         
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "plotly==5.23.0"
         
