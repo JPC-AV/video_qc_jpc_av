@@ -22,7 +22,11 @@ dependencies = [
     "lxml>=5.2.0",
     "plotly==5.23.0",
     "toml==0.10.2",
-    "PyQt6>=6.7.1"
+    "PyQt6>=6.7.1",
+    "numpy>=2.0.0",
+    "opencv-python-headless>=4.10.0",
+    "scipy>=1.14.0",
+    "matplotlib>=3.9.0",
 ]
 
 [project.urls]
