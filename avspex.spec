@@ -15,16 +15,24 @@ if not os.path.exists(icon_path):
     print(f"Warning: Icon not found at {icon_path}")
     icon_path = None
 
-block_cipher = None
+# Read version from pyproject.toml so the spec never goes stale
+import re
+_pyproject = os.path.join(root_dir, 'pyproject.toml')
+_version = '0.0.0'
+if os.path.exists(_pyproject):
+    with open(_pyproject) as _f:
+        _m = re.search(r'^version\s*=\s*"([^"]+)"', _f.read(), re.MULTILINE)
+        if _m:
+            _version = _m.group(1)
+print(f"Building AV-Spex version {_version}")
 
-a = Analysis(['av_spex_launcher.py'],  # Your launcher file
+a = Analysis(['av_spex_launcher.py'],
     pathex=[
-        root_dir,  # Add root to the Python path
-        src_dir    # Add source dir to the Python path
+        root_dir,
+        src_dir
     ],
     binaries=[],
     datas=[
-        # Update paths to be relative to the repository structure
         (os.path.join(src_dir, 'AV_Spex/config'), 'AV_Spex/config'),
         (os.path.join(src_dir, 'AV_Spex/logo_image_files'), 'AV_Spex/logo_image_files'),
         (os.path.join(root_dir, 'pyproject.toml'), '.'),
@@ -59,6 +67,23 @@ a = Analysis(['av_spex_launcher.py'],  # Your launcher file
         'PyQt6.QtCore',
         'PyQt6.QtGui',
         
+        # scipy 
+        'scipy',
+        'scipy.ndimage',
+        'scipy.signal',
+        
+        # matplotlib 
+        'matplotlib',
+        'matplotlib.pyplot',
+        'matplotlib.patches',
+        'matplotlib.backends.backend_agg',
+        
+        # opencv 
+        'cv2',
+        
+        # numpy
+        'numpy',
+        
         # System modules
         'AppKit',
         'pkg_resources',
@@ -68,22 +93,20 @@ a = Analysis(['av_spex_launcher.py'],  # Your launcher file
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Only exclude what you originally excluded
+        # Qt modules not needed
         'PyQt6.QtDBus', 'PyQt6.QtPdf', 'PyQt6.QtSvg', 'PyQt6.QtNetwork',
+        # Plotly sub-packages not needed
         'plotly.matplotlylib', 'plotly.figure_factory',
-        # Additional excludes to reduce bundle size
+        # Test/dev frameworks
         'tkinter',
-        'matplotlib',
-        'scipy',
         'numpy.testing',
         'test',
         'tests',
     ],
-    noarchive=False,  # CRITICAL: Keep this False to allow proper symlink structure
-    cipher=block_cipher
+    noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz,
@@ -96,10 +119,10 @@ exe = EXE(
     strip=False,
     upx=True,
     runtime_tmpdir=None,
-    console=False,  # Set to False for production
-    codesign_identity=None,  # Will be handled by GitHub Actions
-    entitlements_file=None,  # Will be handled by GitHub Actions
-    target_arch=None,  # Let each runner build for its native architecture
+    console=False,
+    codesign_identity=None,
+    entitlements_file=None,
+    target_arch=None,
     icon=icon_path
 )
 
@@ -118,18 +141,16 @@ app = BUNDLE(coll,
     name='AV-Spex.app',
     icon=icon_path,
     bundle_identifier='com.jpc.avspex',
-    version='0.7.8.7',  # Updated to match your current version
+    version=_version,
     info_plist={
         'CFBundleName': 'AV-Spex',
         'CFBundleDisplayName': 'AV-Spex',
         'CFBundleIdentifier': 'com.jpc.avspex',
-        'CFBundleVersion': '0.7.8.7',
-        'CFBundleShortVersionString': '0.7.8.7',
+        'CFBundleVersion': _version,
+        'CFBundleShortVersionString': _version,
         'NSHighResolutionCapable': True,
-        'LSMinimumSystemVersion': '10.12',  # Minimum macOS version
+        'LSMinimumSystemVersion': '14.0',
         'NSAppleEventsUsageDescription': 'AV-Spex needs access to Apple Events for automation features.',
-        'NSCameraUsageDescription': 'AV-Spex may access camera for video processing.',
-        'NSMicrophoneUsageDescription': 'AV-Spex may access microphone for audio processing.',
         'NSRequiresAquaSystemAppearance': False,
     }
 )
