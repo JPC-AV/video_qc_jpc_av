@@ -154,7 +154,7 @@ def start_file_log(output_directory, video_id, log_level=logging.DEBUG):
     stop_file_log()
     
     # Create the log file path
-    log_filename = f"{video_id}_processing.log"
+    log_filename = f"{video_id}_avspex_processing.log"
     log_path = os.path.join(output_directory, log_filename)
     
     # Create file handler for this specific file
