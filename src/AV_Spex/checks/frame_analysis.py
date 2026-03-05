@@ -373,6 +373,106 @@ class QCToolsParser:
         """Process buffer of violations"""
         return [v for v in buffer if v is not None]
 
+    def detect_black_segments(self, min_duration: float = 2.0) -> List[Tuple[float, float]]:
+        """
+        Scan QCTools report for contiguous segments of all-black frames.
+        
+        Uses the same luma thresholds as _extract_frame_violations to identify
+        black frames (YMAX < 300, YHIGH < 115, YLOW < 97, YMIN < 6.5),
+        then merges contiguous black frames into segments.
+        
+        Args:
+            min_duration: Minimum duration in seconds for a segment to be reported.
+                          Short black flashes (< min_duration) are ignored.
+        
+        Returns:
+            List of (start_time, end_time) tuples for each black segment.
+        """
+        black_segments = []
+        current_black_start = None
+        last_black_time = None
+        # Allow small gaps (e.g., a single non-black frame in the middle of a black segment)
+        gap_tolerance = 0.5  # seconds
+        
+        try:
+            if self.report_path.endswith('.gz'):
+                file_handle = gzip.open(self.report_path, 'rt')
+            else:
+                file_handle = open(self.report_path, 'r')
+            
+            parser = ET.iterparse(file_handle, events=['start', 'end'])
+            parser = iter(parser)
+            event, root = next(parser)
+            
+            for event, elem in parser:
+                if event == 'end' and elem.tag == 'frame':
+                    timestamp_str = elem.get('pkt_pts_time')
+                    if not timestamp_str:
+                        elem.clear()
+                        root.clear()
+                        continue
+                    
+                    timestamp = float(timestamp_str)
+                    
+                    # Check black frame using same thresholds as _extract_frame_violations
+                    ymax_tag = elem.find('.//tag[@key="lavfi.signalstats.YMAX"]')
+                    yhigh_tag = elem.find('.//tag[@key="lavfi.signalstats.YHIGH"]')
+                    ylow_tag = elem.find('.//tag[@key="lavfi.signalstats.YLOW"]')
+                    ymin_tag = elem.find('.//tag[@key="lavfi.signalstats.YMIN"]')
+                    
+                    is_black = False
+                    if (ymax_tag is not None and yhigh_tag is not None and 
+                        ylow_tag is not None and ymin_tag is not None):
+                        ymax = float(ymax_tag.get('value', '1000'))
+                        yhigh = float(yhigh_tag.get('value', '1000'))
+                        ylow = float(ylow_tag.get('value', '1000'))
+                        ymin = float(ymin_tag.get('value', '1000'))
+                        
+                        if ymax < 300.0 and yhigh < 115.0 and ylow < 97.0 and ymin < 6.5:
+                            is_black = True
+                    
+                    if is_black:
+                        if current_black_start is None:
+                            current_black_start = timestamp
+                        last_black_time = timestamp
+                    else:
+                        # Non-black frame: close current segment if gap exceeds tolerance
+                        if current_black_start is not None:
+                            if last_black_time is not None and (timestamp - last_black_time) > gap_tolerance:
+                                duration = last_black_time - current_black_start
+                                if duration >= min_duration:
+                                    black_segments.append((current_black_start, last_black_time))
+                                current_black_start = None
+                                last_black_time = None
+                    
+                    elem.clear()
+                    root.clear()
+            
+            # Close any remaining segment at end of file
+            if current_black_start is not None and last_black_time is not None:
+                duration = last_black_time - current_black_start
+                if duration >= min_duration:
+                    black_segments.append((current_black_start, last_black_time))
+            
+            file_handle.close()
+            
+        except Exception as e:
+            logger.error(f"Error detecting black segments: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        if black_segments:
+            logger.info(f"  Detected {len(black_segments)} black segment(s):")
+            for start, end in black_segments:
+                dur = end - start
+                start_tc = f"{int(start // 60):02d}:{start % 60:05.2f}"
+                end_tc = f"{int(end // 60):02d}:{end % 60:05.2f}"
+                logger.info(f"    {start_tc} – {end_tc} ({dur:.1f}s)")
+        else:
+            logger.debug(f"  No black segments detected (min duration: {min_duration}s)")
+        
+        return black_segments
+
 
 class SophisticatedBorderDetector:
     """Advanced border detection with quality assessment and refinement capabilities"""
@@ -2166,12 +2266,14 @@ class IntegratedSignalstatsAnalyzer:
                         color_bars_end_time: float = None,
                         analysis_duration: int = 60,
                         num_periods: int = 3,
-                        qctools_periods: List[Tuple[float, int]] = None) -> SignalstatsResult:
+                        qctools_periods: List[Tuple[float, int]] = None,
+                        black_segments: List[Tuple[float, float]] = None) -> SignalstatsResult:
         """
         Analyze using signalstats, comparing full frame (QCTools) vs active area (FFprobe).
         
         Args:
             qctools_periods: Pre-computed periods from QCTools violation distribution analysis
+            black_segments: Known all-black segments to avoid when selecting periods
         """
         # Determine analysis periods - now with QCTools priority
         analysis_periods = self._find_analysis_periods(
@@ -2180,7 +2282,8 @@ class IntegratedSignalstatsAnalyzer:
             analysis_duration,
             num_periods,
             border_data.quality_frame_hints if border_data else None,
-            qctools_periods=qctools_periods  
+            qctools_periods=qctools_periods,
+            black_segments=black_segments
         )
         
         # Log analysis configuration
@@ -2366,8 +2469,13 @@ class IntegratedSignalstatsAnalyzer:
     def _find_analysis_periods(self, content_start: float, color_bars_end: float,
                       duration: int, num_periods: int,
                       quality_hints: List[Tuple[float, float]] = None,
-                      qctools_periods: List[Tuple[float, int]] = None) -> List[Tuple[float, int]]:
-        """Find good analysis periods, preferring QCTools violation clusters when available"""
+                      qctools_periods: List[Tuple[float, int]] = None,
+                      black_segments: List[Tuple[float, float]] = None) -> List[Tuple[float, int]]:
+        """Find good analysis periods, preferring QCTools violation clusters when available.
+        
+        Validates all candidate periods against known black segments and shifts
+        or replaces any that overlap significantly with all-black content.
+        """
         
         # Start after color bars with a safety margin
         effective_start = max(content_start, color_bars_end or 0) + 10
@@ -2377,10 +2485,10 @@ class IntegratedSignalstatsAnalyzer:
         # PRIORITY 1: Use QCTools-based periods if available (already validated upstream)
         if qctools_periods:
             logger.info(f"  Using {len(qctools_periods)} QCTools-based analysis periods (targeting violation clusters)")
-            return qctools_periods
+            periods = list(qctools_periods)
         
         # PRIORITY 2: Use quality hints if available (from border detection)
-        if quality_hints:
+        elif quality_hints:
             valid_hints = [(t, q) for t, q in quality_hints if t >= effective_start]
             if len(valid_hints) >= num_periods:
                 periods = []
@@ -2390,30 +2498,154 @@ class IntegratedSignalstatsAnalyzer:
                         periods.append((period_start, duration))
                 if len(periods) >= num_periods:
                     logger.info(f"  Using {len(periods)} quality hint-based analysis periods")
-                    return periods
+                else:
+                    periods = None  # Fall through to even distribution
+            else:
+                periods = None
+        else:
+            periods = None
         
         # PRIORITY 3: Fall back to even distribution
-        logger.info(f"  Using evenly distributed analysis periods (no violation clusters found)")
-        available_duration = self.duration - effective_start - 30
-        if available_duration < duration * num_periods:
-            if available_duration >= duration:
+        if periods is None:
+            logger.info(f"  Using evenly distributed analysis periods (no violation clusters found)")
+            available_duration = self.duration - effective_start - 30
+            if available_duration < duration * num_periods:
+                if available_duration >= duration:
+                    periods = []
+                    actual_periods = min(num_periods, int(available_duration / duration))
+                    spacing = (available_duration - duration) / max(1, actual_periods - 1)
+                    for i in range(actual_periods):
+                        start = effective_start + i * spacing
+                        periods.append((start, duration))
+                else:
+                    periods = [(effective_start, min(duration, available_duration))]
+            else:
                 periods = []
-                actual_periods = min(num_periods, int(available_duration / duration))
-                spacing = (available_duration - duration) / max(1, actual_periods - 1)
-                for i in range(actual_periods):
+                spacing = (available_duration - duration) / max(1, num_periods - 1)
+                for i in range(num_periods):
                     start = effective_start + i * spacing
                     periods.append((start, duration))
-                return periods
-            else:
-                return [(effective_start, min(duration, available_duration))]
         
-        periods = []
-        spacing = (available_duration - duration) / max(1, num_periods - 1)
-        for i in range(num_periods):
-            start = effective_start + i * spacing
-            periods.append((start, duration))
+        # Validate all periods against black segments
+        if black_segments and periods:
+            periods = self._validate_periods_against_black_segments(
+                periods, black_segments, effective_start, duration
+            )
         
         return periods
+
+    def _validate_periods_against_black_segments(
+            self, 
+            periods: List[Tuple[float, int]],
+            black_segments: List[Tuple[float, float]],
+            effective_start: float,
+            period_duration: int) -> List[Tuple[float, int]]:
+        """
+        Check each candidate period for overlap with black segments.
+        
+        If a period overlaps with a black segment by more than 25% of its duration,
+        attempt to shift it to a nearby non-black region. If no valid shift is found,
+        the period is dropped.
+        
+        Args:
+            periods: Candidate (start_time, duration) tuples
+            black_segments: Known (start_time, end_time) black segment tuples
+            effective_start: Earliest valid start time for any period
+            period_duration: Desired period duration in seconds
+            
+        Returns:
+            Validated list of periods with black-overlapping ones shifted or removed.
+        """
+        validated = []
+        
+        for start, dur in periods:
+            end = start + dur
+            
+            # Calculate total overlap with all black segments
+            total_overlap = 0.0
+            for black_start, black_end in black_segments:
+                overlap_start = max(start, black_start)
+                overlap_end = min(end, black_end)
+                if overlap_start < overlap_end:
+                    total_overlap += (overlap_end - overlap_start)
+            
+            overlap_pct = (total_overlap / dur) * 100 if dur > 0 else 0
+            
+            if overlap_pct <= 25:
+                # Period is fine, keep it
+                validated.append((start, dur))
+            else:
+                # Period overlaps significantly with black content
+                start_tc = f"{int(start // 60):02d}:{start % 60:05.2f}"
+                logger.info(f"  Period at {start_tc} overlaps {overlap_pct:.0f}% with black segment, attempting to shift...")
+                
+                shifted = self._shift_period_away_from_black(
+                    start, dur, black_segments, effective_start,
+                    [s for s, d in validated]  # Already-used start times
+                )
+                
+                if shifted is not None:
+                    shifted_tc = f"{int(shifted // 60):02d}:{shifted % 60:05.2f}"
+                    logger.info(f"    → Shifted to {shifted_tc}")
+                    validated.append((shifted, dur))
+                else:
+                    logger.warning(f"    → Could not find valid non-black replacement, dropping period")
+        
+        return validated
+
+    def _shift_period_away_from_black(
+            self,
+            original_start: float,
+            duration: int,
+            black_segments: List[Tuple[float, float]],
+            effective_start: float,
+            used_starts: List[float]) -> Optional[float]:
+        """
+        Find a new start time for a period that avoids black segments.
+        
+        Searches outward from the original position in both directions,
+        checking candidate positions for overlap with black segments and
+        already-selected periods.
+        
+        Returns:
+            New start time, or None if no valid position found.
+        """
+        max_shift = self.duration * 0.5  # Don't search more than half the video
+        step = 5.0  # Search in 5-second increments
+        
+        for offset in np.arange(step, max_shift, step):
+            # Try shifting forward, then backward
+            for candidate_start in [original_start + offset, original_start - offset]:
+                candidate_end = candidate_start + duration
+                
+                # Check bounds
+                if candidate_start < effective_start:
+                    continue
+                if candidate_end > self.duration - 10:
+                    continue
+                
+                # Check overlap with black segments
+                total_overlap = 0.0
+                for black_start, black_end in black_segments:
+                    overlap_start = max(candidate_start, black_start)
+                    overlap_end = min(candidate_end, black_end)
+                    if overlap_start < overlap_end:
+                        total_overlap += (overlap_end - overlap_start)
+                
+                if (total_overlap / duration) > 0.1:
+                    continue  # Still too much overlap (>10%)
+                
+                # Check overlap with already-selected periods
+                too_close = False
+                for used_start in used_starts:
+                    if abs(candidate_start - used_start) < duration:
+                        too_close = True
+                        break
+                
+                if not too_close:
+                    return candidate_start
+        
+        return None
     
     def _parse_qctools_brng_period(self, start_time: float, end_time: float, period_num: int) -> Optional[Dict]:
         """Parse BRNG values from QCTools report for specific time period"""
@@ -2699,6 +2931,18 @@ class EnhancedFrameAnalysis:
             )
             logger.info(f"Identified {len(qctools_suggested_periods)} periods with highest violation density\n")
         
+        # Detect black segments from QCTools data to avoid selecting them as analysis periods
+        black_segments = []
+        if self.qctools_report:
+            logger.info("Scanning for black segments...")
+            parser = QCToolsParser(self.qctools_report)
+            black_segments = parser.detect_black_segments(min_duration=2.0)
+            if black_segments:
+                results['black_segments'] = [
+                    {'start': s, 'end': e, 'duration': e - s} for s, e in black_segments
+                ]
+                logger.info("")  # Blank line after black segment log output
+        
         # Step 3: Border detection (conditional)
         border_results = None
         if border_detection_enabled:
@@ -2763,7 +3007,8 @@ class EnhancedFrameAnalysis:
                 color_bars_end_time=color_bars_end_time,
                 analysis_duration=frame_config.analysis_period_duration,
                 num_periods=frame_config.analysis_period_count,
-                qctools_periods=qctools_suggested_periods
+                qctools_periods=qctools_suggested_periods,
+                black_segments=black_segments
             )
             results['signalstats'] = asdict(signalstats_results)
 
@@ -2840,6 +3085,14 @@ class EnhancedFrameAnalysis:
                                 start_time = content_start + spacing * (i + 1)
                                 analysis_periods.append((start_time, period_duration))
                             logger.debug(f"Created {len(analysis_periods)} evenly distributed analysis periods\n")
+                
+                # Validate fallback periods against black segments
+                if black_segments and analysis_periods:
+                    analysis_periods = self.signalstats_analyzer._validate_periods_against_black_segments(
+                        analysis_periods, black_segments,
+                        effective_start=(color_bars_end_time or 0) + 10,
+                        period_duration=frame_config.analysis_period_duration
+                    )
             
             logger.info("\nAnalyzing BRNG violations in identified periods...")
             self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
@@ -2939,7 +3192,8 @@ class EnhancedFrameAnalysis:
                             color_bars_end_time=color_bars_end_time,
                             analysis_duration=frame_config.analysis_period_duration,
                             num_periods=frame_config.analysis_period_count,
-                            qctools_periods=qctools_suggested_periods
+                            qctools_periods=qctools_suggested_periods,
+                            black_segments=black_segments
                         )
                         analysis_periods = signalstats_results.analysis_periods
                     
