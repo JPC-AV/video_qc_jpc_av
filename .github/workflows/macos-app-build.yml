@@ -63,7 +63,12 @@ jobs:
       shell: bash -el {0}
       id: get_version
       run: |
-        VERSION=$(grep -m 1 "version" pyproject.toml | grep -o '"[^"]*"' | sed 's/"//g')
+        VERSION=$(python -c "
+        import tomllib
+        with open('pyproject.toml', 'rb') as f:
+            data = tomllib.load(f)
+        print(data['project']['version'])
+        ")
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "Building AV-Spex version $VERSION for ${{ matrix.name }} (${{ matrix.arch }})"
         
@@ -71,6 +76,20 @@ jobs:
       shell: bash -el {0}
       run: |
         rm -rf dist/ build/
+
+    - name: Write version fallback for PyInstaller
+      shell: bash -el {0}
+      run: |
+        VERSION=$(python -c "
+        import tomllib
+        with open('pyproject.toml', 'rb') as f:
+            data = tomllib.load(f)
+        print(data['project']['version'])
+        ")
+        # Find the AV_Spex package directory and write _version.txt there
+        PACKAGE_DIR=$(python -c "import AV_Spex; import os; print(os.path.dirname(AV_Spex.__file__))")
+        echo "$VERSION" > "$PACKAGE_DIR/_version.txt"
+        echo "Wrote version $VERSION to $PACKAGE_DIR/_version.txt"
         
     - name: Build with PyInstaller
       shell: bash -el {0}
