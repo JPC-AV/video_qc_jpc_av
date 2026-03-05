@@ -35,6 +35,7 @@ a = Analysis(['av_spex_launcher.py'],
     datas=[
         (os.path.join(src_dir, 'AV_Spex/config'), 'AV_Spex/config'),
         (os.path.join(src_dir, 'AV_Spex/logo_image_files'), 'AV_Spex/logo_image_files'),
+        (os.path.join(src_dir, 'AV_Spex/_version.txt'), 'AV_Spex'),
         (os.path.join(root_dir, 'pyproject.toml'), '.'),
     ],
     hiddenimports=[
