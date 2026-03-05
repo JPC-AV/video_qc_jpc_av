@@ -99,7 +99,6 @@ a = Analysis(['av_spex_launcher.py'],
         'plotly.matplotlylib', 'plotly.figure_factory',
         # Test/dev frameworks
         'tkinter',
-        'numpy.testing',
         'test',
         'tests',
     ],
