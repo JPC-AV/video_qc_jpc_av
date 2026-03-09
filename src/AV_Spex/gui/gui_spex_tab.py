@@ -14,12 +14,14 @@ from dataclasses import asdict
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from AV_Spex.gui.gui_custom_filename import CustomFilenameDialog
 from AV_Spex.gui.gui_custom_signalflow import CustomSignalflowDialog
-from AV_Spex.gui.gui_custom_exiftool import CustomExiftoolDialog 
+from AV_Spex.gui.gui_custom_exiftool import CustomExiftoolDialog
+from AV_Spex.gui.gui_custom_mediainfo import CustomMediainfoDialog
 
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import (
     SpexConfig, ChecksConfig, FilenameConfig, 
-    SignalflowConfig, SignalflowProfile, ExiftoolConfig, ExiftoolProfile 
+    SignalflowConfig, SignalflowProfile, ExiftoolConfig, ExiftoolProfile,
+    MediainfoConfig, MediainfoProfile
 )
 from AV_Spex.utils.log_setup import logger
 
@@ -133,23 +135,8 @@ class SpexTab(ThemeableMixin):
         vertical_layout.addWidget(self.filename_section_group)
         
         # 2. MediaInfo section
-        self.mediainfo_group = QGroupBox("MediaInfo Values")
-        theme_manager.style_groupbox(self.mediainfo_group, "top center")
-        self.main_window.spex_tab_group_boxes.append(self.mediainfo_group)
-        
-        mediainfo_layout = QVBoxLayout()
-        
-        mediainfo_button = QPushButton("Open Section")
-        mediainfo_button.clicked.connect(
-            lambda: self.open_new_window('MediaInfo Values', 'mediainfo_values')
-        )
-        
-        mediainfo_layout.addWidget(mediainfo_button)
-        self.mediainfo_group.setLayout(mediainfo_layout)
+        self.mediainfo_group = self.setup_mediainfo_section()
         vertical_layout.addWidget(self.mediainfo_group)
-        
-        # Style the button
-        theme_manager.style_buttons(mediainfo_button)
         
         # 3. Exiftool section
         self.exiftool_group = self.setup_exiftool_section()
@@ -418,6 +405,246 @@ class SpexTab(ThemeableMixin):
                 config_edit.apply_exiftool_profile(profile)
                 config_mgr.save_config('spex', is_last_used=True)
                 logger.debug(f"Applied exiftool profile: {selected_option}")
+
+    # ── MediaInfo section ──────────────────────────────────────────────
+    
+    def setup_mediainfo_section(self):
+        """Setup the MediaInfo section with profiles — mirrors setup_exiftool_section()"""
+        # Load mediainfo config
+        try:
+            self.mediainfo_config = config_mgr.get_config("mediainfo", MediainfoConfig)
+        except:
+            # If config doesn't exist yet, create a default one
+            self.mediainfo_config = MediainfoConfig()
+        
+        # Create and style the group box
+        mediainfo_group = QGroupBox("MediaInfo Values")
+        theme_manager = ThemeManager.instance()
+        theme_manager.style_groupbox(mediainfo_group, "top center")
+        self.main_window.spex_tab_group_boxes.append(mediainfo_group)
+        
+        # Create layout
+        mediainfo_layout = QVBoxLayout()
+        
+        # Add a dropdown menu for mediainfo profiles
+        mediainfo_profile_label = QLabel("Expected MediaInfo profiles:")
+        mediainfo_profile_label.setStyleSheet("font-weight: bold;")
+        mediainfo_layout.addWidget(mediainfo_profile_label)
+        
+        self.mediainfo_profile_dropdown = QComboBox()
+        self.mediainfo_profile_dropdown.addItem("Select a profile...")
+        
+        # Add any existing mediainfo profiles from config
+        if hasattr(self.mediainfo_config, 'mediainfo_profiles') and self.mediainfo_config.mediainfo_profiles:
+            for profile_name in self.mediainfo_config.mediainfo_profiles.keys():
+                self.mediainfo_profile_dropdown.addItem(profile_name)
+        
+        # Set initial state based on current config
+        matched_profile = self._find_matching_mediainfo_profile()
+        if matched_profile:
+            self.mediainfo_profile_dropdown.setCurrentText(matched_profile)
+        else:
+            self.mediainfo_profile_dropdown.setCurrentText("Select a profile...")
+        
+        self.mediainfo_profile_dropdown.currentIndexChanged.connect(self.on_mediainfo_profile_changed)
+        mediainfo_layout.addWidget(self.mediainfo_profile_dropdown)
+        
+        # Store the layout as instance variable
+        self.mediainfo_section_layout = mediainfo_layout
+        
+        # Add custom mediainfo buttons
+        self.add_custom_mediainfo_button()
+        self.add_edit_mediainfo_button()
+        
+        # Open section button
+        mediainfo_button = QPushButton("Open Section")
+        mediainfo_button.clicked.connect(
+            lambda: self.open_new_window('MediaInfo Values', 'mediainfo_values')
+        )
+        mediainfo_layout.addWidget(mediainfo_button)
+        
+        # Set the layout for the group
+        mediainfo_group.setLayout(mediainfo_layout)
+        mediainfo_group.setMinimumHeight(225)
+        
+        # Style the buttons
+        theme_manager.style_buttons(mediainfo_layout)
+        
+        return mediainfo_group
+
+    def _find_matching_mediainfo_profile(self):
+        """Find which profile matches the current mediainfo values"""
+        if not hasattr(self.mediainfo_config, 'mediainfo_profiles') or not self.mediainfo_config.mediainfo_profiles:
+            return None
+        
+        current_values = spex_config.mediainfo_values
+        
+        # Compare current values with each profile
+        for profile_name, profile in self.mediainfo_config.mediainfo_profiles.items():
+            if self._compare_mediainfo_values(current_values, profile):
+                return profile_name
+        
+        return None
+
+    def _compare_mediainfo_values(self, current, profile):
+        """
+        Compare current spex mediainfo values with a saved profile.
+        
+        current is a dict with 'expected_general', 'expected_video', 'expected_audio'
+        (plain dicts from SpexConfig due to Union type handling in ConfigManager).
+        
+        profile is a MediainfoProfile dataclass with .general, .video, .audio.
+        """
+        from dataclasses import asdict
+        
+        profile_dict = asdict(profile) if hasattr(profile, '__dataclass_fields__') else profile
+        
+        # Map profile keys to spex config keys
+        section_mapping = {
+            'general': 'expected_general',
+            'video': 'expected_video',
+            'audio': 'expected_audio'
+        }
+        
+        for profile_key, spex_key in section_mapping.items():
+            profile_section = profile_dict.get(profile_key, {})
+            current_section = current.get(spex_key, {}) if isinstance(current, dict) else {}
+            
+            # If current_section is a dataclass, convert
+            if hasattr(current_section, '__dataclass_fields__'):
+                current_section = asdict(current_section)
+            
+            for field_name, profile_value in profile_section.items():
+                if field_name in current_section:
+                    if current_section[field_name] != profile_value:
+                        return False
+        
+        return True
+
+    def add_custom_mediainfo_button(self):
+        """Add a button to create custom MediaInfo profiles"""
+        custom_button = QPushButton("Create Custom Profile...")
+        custom_button.clicked.connect(self.show_custom_mediainfo_dialog)
+        self.mediainfo_section_layout.addWidget(custom_button)
+
+    def add_edit_mediainfo_button(self):
+        """Add a button to edit existing MediaInfo profiles"""
+        edit_button = QPushButton("Edit Selected Profile...")
+        edit_button.clicked.connect(self.show_edit_mediainfo_dialog)
+        self.mediainfo_section_layout.addWidget(edit_button)
+
+    def show_custom_mediainfo_dialog(self, edit_mode=False, profile_name=None):
+        """Show the custom MediaInfo dialog — mirrors show_custom_exiftool_dialog()"""
+        from AV_Spex.gui.gui_custom_mediainfo import CustomMediainfoDialog
+        
+        dialog = CustomMediainfoDialog(self.main_window, edit_mode=edit_mode, profile_name=profile_name)
+        
+        if edit_mode and profile_name:
+            # Load the existing profile data
+            try:
+                mediainfo_config = config_mgr.get_config("mediainfo", MediainfoConfig)
+                if profile_name in mediainfo_config.mediainfo_profiles:
+                    profile_data = mediainfo_config.mediainfo_profiles[profile_name]
+                    dialog.load_profile_data(profile_data)
+            except Exception as e:
+                QMessageBox.warning(self.main_window, "Error", 
+                                f"Error loading profile: {str(e)}")
+                return
+        else:
+            # Load current mediainfo values as defaults for new profile
+            dialog.load_profile_data(spex_config.mediainfo_values)
+        
+        result = dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted:
+            profile_info = dialog.get_profile()
+            if profile_info:
+                try:
+                    profile_name = profile_info['name']
+                    profile_data = profile_info['data']
+                    is_edit = profile_info.get('is_edit', False)
+                    
+                    # Get the ConfigManager instance
+                    config_manager = ConfigManager()
+                    config_manager.refresh_configs()
+                    
+                    # Get the mediainfo configuration
+                    try:
+                        mediainfo_config = config_manager.get_config('mediainfo', MediainfoConfig)
+                    except:
+                        mediainfo_config = MediainfoConfig()
+                    
+                    # Update the profiles
+                    if not hasattr(mediainfo_config, 'mediainfo_profiles'):
+                        mediainfo_config.mediainfo_profiles = {}
+                    
+                    # Add or update the profile
+                    mediainfo_config.mediainfo_profiles[profile_name] = profile_data
+                    
+                    # Update the cached config
+                    config_manager._configs['mediainfo'] = mediainfo_config
+                    
+                    # Save the updated config
+                    config_manager.save_config('mediainfo', is_last_used=True)
+                    
+                    # Update dropdown if it's a new profile
+                    if not is_edit:
+                        # Check if profile already exists in dropdown
+                        found = False
+                        for i in range(self.mediainfo_profile_dropdown.count()):
+                            if self.mediainfo_profile_dropdown.itemText(i) == profile_name:
+                                found = True
+                                break
+                        
+                        if not found:
+                            self.mediainfo_profile_dropdown.addItem(profile_name)
+                    
+                    # Set as current selection
+                    self.mediainfo_profile_dropdown.setCurrentText(profile_name)
+                    
+                    # Apply the profile
+                    from AV_Spex.utils import config_edit
+                    config_edit.apply_mediainfo_profile(profile_data)
+                    config_manager.save_config('spex', is_last_used=True)
+                    
+                    action = "updated" if is_edit else "added"
+                    logger.debug(f"Successfully {action} mediainfo profile '{profile_name}'")
+                    QMessageBox.information(self.main_window, "Success", 
+                                        f"Profile '{profile_name}' {action} successfully!")
+                    
+                except Exception as e:
+                    QMessageBox.warning(self.main_window, "Error", 
+                                    f"Error saving profile: {str(e)}")
+
+    def show_edit_mediainfo_dialog(self):
+        """Show the dialog to edit the currently selected MediaInfo profile"""
+        selected_profile = self.mediainfo_profile_dropdown.currentText()
+        
+        if selected_profile == "Select a profile...":
+            QMessageBox.information(self.main_window, "No Profile Selected", 
+                                "Please select a profile to edit from the dropdown.")
+            return
+        
+        # Show the dialog in edit mode
+        self.show_custom_mediainfo_dialog(edit_mode=True, profile_name=selected_profile)
+    
+    def on_mediainfo_profile_changed(self, index):
+        """Handle MediaInfo profile selection change"""
+        try:
+            mediainfo_config = config_mgr.get_config("mediainfo", MediainfoConfig)
+        except:
+            # If config doesn't exist, return
+            return
+        
+        selected_option = self.mediainfo_profile_dropdown.itemText(index)
+        
+        if selected_option != "Select a profile..." and hasattr(mediainfo_config, 'mediainfo_profiles'):
+            if selected_option in mediainfo_config.mediainfo_profiles:
+                profile = mediainfo_config.mediainfo_profiles[selected_option]
+                from AV_Spex.utils import config_edit
+                config_edit.apply_mediainfo_profile(profile)
+                config_mgr.save_config('spex', is_last_used=True)
+                logger.debug(f"Applied mediainfo profile: {selected_option}")
 
     def open_new_window(self, title, config_attribute_name):
         """Open a new window to display configuration details."""
@@ -838,4 +1065,3 @@ class SpexTab(ThemeableMixin):
             theme_manager.style_buttons(self.qct_group)
         if hasattr(self, 'exiftool_group'):
             theme_manager.style_buttons(self.exiftool_group)
-    
