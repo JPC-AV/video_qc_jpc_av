@@ -10,10 +10,6 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
-
 
 def parse_mediainfo(file_path):
     section_data = parse_mediainfo_json(file_path)
@@ -187,9 +183,11 @@ def check_mediainfo_spex(section_data):
     Returns:
         Dictionary of differences between actual and expected values
     """
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+    
     mediainfo_differences = {}
-    
-    
 
     expected_general = spex_config.mediainfo_values.get("expected_general", {})
     expected_video = spex_config.mediainfo_values.get("expected_video", {})
