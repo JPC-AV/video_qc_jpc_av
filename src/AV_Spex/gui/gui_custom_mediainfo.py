@@ -24,6 +24,22 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
     of field inputs with +/- buttons for multi-value fields.
     """
     
+    # Fields with constrained value sets get editable combo boxes.
+    # Values sourced from MediaInfoLib (Mpegv_* tables, Fill() calls).
+    # Combo boxes remain editable so users can type custom values if needed.
+    DROPDOWN_OPTIONS = {
+        "ScanType": ["Interlaced", "Progressive", "MBAFF"],
+        "ScanOrder": ["TFF", "BFF", "Top Field First", "Bottom Field First"],
+        "Compression_Mode": ["Lossless", "Lossy"],
+        "ChromaSubsampling": ["4:2:2", "4:2:0", "4:4:4", "4:1:1", "4:4:4:4"],
+        "Standard": ["NTSC", "PAL"],
+        "FrameRate_Mode_String": ["Constant", "Variable"],
+        "OverallBitRate_Mode": ["VBR", "CBR"],
+        # Video BitDepth and Audio BitDepth share the same field name,
+        # so we use a single entry covering both common sets.
+        "BitDepth": ["8", "10", "12", "16", "24", "32"],
+    }
+    
     def __init__(self, parent=None, edit_mode=False, profile_name=None):
         super().__init__(parent)
         self.profile = None
@@ -187,15 +203,46 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
     
     # ── Tab creation ───────────────────────────────────────────────────
     
+    def _create_input_widget(self, field_name, value=""):
+        """
+        Create the appropriate input widget for a field.
+        
+        Fields listed in DROPDOWN_OPTIONS get an editable QComboBox
+        pre-populated with known values.  All other fields get a plain
+        QLineEdit.  Both widget types expose a compatible text()/setText()
+        interface (QComboBox via currentText/setCurrentText and its
+        lineEdit()).
+        
+        Returns:
+            QComboBox or QLineEdit
+        """
+        if field_name in self.DROPDOWN_OPTIONS:
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.addItem("")  # blank first item so empty is easy
+            combo.addItems(self.DROPDOWN_OPTIONS[field_name])
+            combo.setCurrentText(str(value))
+            combo.lineEdit().setPlaceholderText(f"Select or enter {field_name}...")
+            combo.currentTextChanged.connect(self.update_preview)
+            return combo
+        else:
+            line_edit = QLineEdit()
+            line_edit.setText(str(value))
+            line_edit.setPlaceholderText(f"Enter {field_name} value...")
+            line_edit.textChanged.connect(self.update_preview)
+            return line_edit
+
     def _create_section_tab(self, section_name, field_inputs, field_containers, fields):
         """
         Create a scrollable tab widget for one MediaInfo section.
         
         Uses the same +/- multi-value pattern as CustomExiftoolDialog.
+        Fields in DROPDOWN_OPTIONS use editable combo boxes; all others
+        use plain line edits.
         
         Args:
             section_name: 'general', 'video', or 'audio'
-            field_inputs: dict to store lists of QLineEdit per field
+            field_inputs: dict to store lists of input widgets per field
             field_containers: dict to store QVBoxLayout per field
             fields: list of (field_name, label, defaults, tooltip) tuples
         """
@@ -223,7 +270,7 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
             label.setMinimumWidth(150)
             field_layout.addWidget(label)
             
-            # Vertical layout for multiple line edits
+            # Vertical layout for multiple input widgets
             inputs_layout = QVBoxLayout()
             inputs_layout.setContentsMargins(0, 0, 0, 0)
             inputs_layout.setSpacing(5)
@@ -231,23 +278,17 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
             field_inputs[field_name] = []
             field_containers[field_name] = inputs_layout
             
-            # Add first line edit with default value
+            # Add first widget with default value
             first_value = default_values[0] if default_values else ""
-            line_edit = QLineEdit()
-            line_edit.setText(first_value)
-            line_edit.setPlaceholderText(f"Enter {field_name} value...")
-            line_edit.textChanged.connect(self.update_preview)
-            inputs_layout.addWidget(line_edit)
-            field_inputs[field_name].append(line_edit)
+            widget = self._create_input_widget(field_name, first_value)
+            inputs_layout.addWidget(widget)
+            field_inputs[field_name].append(widget)
             
             # For fields with multiple defaults (e.g., Audio Format), add them
             for extra_value in default_values[1:]:
-                extra_edit = QLineEdit()
-                extra_edit.setText(extra_value)
-                extra_edit.setPlaceholderText(f"Enter {field_name} value...")
-                extra_edit.textChanged.connect(self.update_preview)
-                inputs_layout.addWidget(extra_edit)
-                field_inputs[field_name].append(extra_edit)
+                extra_widget = self._create_input_widget(field_name, extra_value)
+                inputs_layout.addWidget(extra_widget)
+                field_inputs[field_name].append(extra_widget)
             
             field_layout.addLayout(inputs_layout, 1)
             
@@ -289,25 +330,21 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
     # ── Row add/remove ─────────────────────────────────────────────────
     
     def add_textbox_row(self, field_name, field_inputs, field_containers, value=""):
-        """Add a new text box row for a field"""
+        """Add a new input widget row for a field (combo box or line edit)"""
         container_layout = field_containers[field_name]
         
-        line_edit = QLineEdit()
-        line_edit.setText(value)
-        line_edit.setPlaceholderText(f"Enter {field_name} value...")
-        line_edit.textChanged.connect(self.update_preview)
-        
-        container_layout.addWidget(line_edit)
-        field_inputs[field_name].append(line_edit)
+        widget = self._create_input_widget(field_name, value)
+        container_layout.addWidget(widget)
+        field_inputs[field_name].append(widget)
         
         if hasattr(self, 'preview_text'):
             self.update_preview()
 
     def remove_textbox_row(self, field_name, field_inputs):
-        """Remove the last text box row for a field"""
+        """Remove the last input widget row for a field"""
         if len(field_inputs[field_name]) > 1:
-            line_edit = field_inputs[field_name].pop()
-            line_edit.deleteLater()
+            widget = field_inputs[field_name].pop()
+            widget.deleteLater()
             if hasattr(self, 'preview_text'):
                 self.update_preview()
     
@@ -530,7 +567,7 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
         Clears existing inputs and creates new ones based on values.
         Handles both single values and lists.
         """
-        for field_name, line_edits in field_inputs.items():
+        for field_name, widgets in field_inputs.items():
             container_layout = field_containers[field_name]
             
             # Remove all existing widgets
@@ -553,34 +590,32 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
                     values = [""]
                 
                 for val in values:
-                    line_edit = QLineEdit()
-                    line_edit.setText(str(val))
-                    line_edit.setPlaceholderText(f"Enter {field_name} value...")
-                    line_edit.textChanged.connect(self.update_preview)
-                    container_layout.addWidget(line_edit)
-                    field_inputs[field_name].append(line_edit)
+                    widget = self._create_input_widget(field_name, str(val))
+                    container_layout.addWidget(widget)
+                    field_inputs[field_name].append(widget)
             else:
-                # Field not in data, add one empty text box
-                line_edit = QLineEdit()
-                line_edit.setText("")
-                line_edit.setPlaceholderText(f"Enter {field_name} value...")
-                line_edit.textChanged.connect(self.update_preview)
-                container_layout.addWidget(line_edit)
-                field_inputs[field_name].append(line_edit)
+                # Field not in data, add one empty widget
+                widget = self._create_input_widget(field_name, "")
+                container_layout.addWidget(widget)
+                field_inputs[field_name].append(widget)
     
     def _collect_section_values(self, field_inputs):
         """
         Collect values from one section's field inputs.
         
-        Returns a dict. Multi-value fields become lists;
-        single-value fields become strings; empty fields become "".
+        Handles both QLineEdit (.text()) and QComboBox (.currentText()).
+        Multi-value fields become lists; single-value fields become strings;
+        empty fields become "".
         """
         section_data = {}
         
-        for field_name, line_edits in field_inputs.items():
+        for field_name, widgets in field_inputs.items():
             values = []
-            for line_edit in line_edits:
-                text = line_edit.text().strip()
+            for widget in widgets:
+                if isinstance(widget, QComboBox):
+                    text = widget.currentText().strip()
+                else:
+                    text = widget.text().strip()
                 if text:
                     values.append(text)
             
@@ -595,6 +630,12 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
     
     # ── Preview ────────────────────────────────────────────────────────
     
+    def _get_widget_text(self, widget):
+        """Get text from either a QLineEdit or QComboBox."""
+        if isinstance(widget, QComboBox):
+            return widget.currentText()
+        return widget.text()
+    
     def update_preview(self):
         """Update the profile preview"""
         profile_name = self.profile_name_input.text() or "Unnamed Profile"
@@ -602,25 +643,25 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
         # Get representative values for preview
         format_val = "N/A"
         if "Format" in self.video_inputs and self.video_inputs["Format"]:
-            text = self.video_inputs["Format"][0].text()
+            text = self._get_widget_text(self.video_inputs["Format"][0])
             if text:
                 format_val = text
         
         width_val = "N/A"
         if "Width" in self.video_inputs and self.video_inputs["Width"]:
-            text = self.video_inputs["Width"][0].text()
+            text = self._get_widget_text(self.video_inputs["Width"][0])
             if text:
                 width_val = text
         
         height_val = "N/A"
         if "Height" in self.video_inputs and self.video_inputs["Height"]:
-            text = self.video_inputs["Height"][0].text()
+            text = self._get_widget_text(self.video_inputs["Height"][0])
             if text:
                 height_val = text
         
         container_val = "N/A"
         if "Format" in self.general_inputs and self.general_inputs["Format"]:
-            text = self.general_inputs["Format"][0].text()
+            text = self._get_widget_text(self.general_inputs["Format"][0])
             if text:
                 container_val = text
         
