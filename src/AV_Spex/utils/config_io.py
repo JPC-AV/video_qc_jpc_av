@@ -8,7 +8,7 @@ from AV_Spex.utils.log_setup import logger
 
 from AV_Spex.utils.config_setup import (
     SpexConfig, ChecksConfig, FilenameConfig, SignalflowConfig,
-    ChecksProfilesConfig, ChecksProfile, ExiftoolConfig
+    ChecksProfilesConfig, ChecksProfile, ExiftoolConfig, MediainfoConfig
 )
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -37,6 +37,8 @@ class ConfigIO:
                 config = self.config_mgr.get_config('profiles_checks', ChecksProfilesConfig, use_last_used=True)
             elif config_type == 'exiftool':
                 config = self.config_mgr.get_config('exiftool', ExiftoolConfig)
+            elif config_type == 'mediainfo':
+                config = self.config_mgr.get_config('mediainfo', MediainfoConfig)
             else:
                 continue
             export_data[config_type] = asdict(config)
@@ -96,6 +98,27 @@ class ConfigIO:
             return {
                 'exiftool': {
                     'exiftool_profiles': {
+                        profile_name: profile_data
+                    }
+                }
+            }
+        
+        elif profile_type == 'mediainfo':
+            try:
+                mediainfo_config = self.config_mgr.get_config('mediainfo', MediainfoConfig)
+            except Exception as e:
+                logger.error(f"Could not load mediainfo config: {e}")
+                return None
+            
+            if profile_name not in mediainfo_config.mediainfo_profiles:
+                logger.warning(f"MediaInfo profile '{profile_name}' not found for export")
+                return None
+            
+            profile = mediainfo_config.mediainfo_profiles[profile_name]
+            profile_data = asdict(profile) if hasattr(profile, '__dataclass_fields__') else profile
+            return {
+                'mediainfo': {
+                    'mediainfo_profiles': {
                         profile_name: profile_data
                     }
                 }
@@ -299,6 +322,14 @@ class ConfigIO:
                 logger.error(f"Error importing exiftool profiles: {str(e)}")
                 import_results['errors'].append(f"Exiftool profiles: {str(e)}")
 
+        if 'mediainfo' in config_data and 'mediainfo_profiles' in config_data['mediainfo']:
+            try:
+                renamed = self._import_mediainfo_profiles(config_data['mediainfo']['mediainfo_profiles'])
+                import_results['renamed_profiles'].extend(renamed)
+            except Exception as e:
+                logger.error(f"Error importing mediainfo profiles: {str(e)}")
+                import_results['errors'].append(f"MediaInfo profiles: {str(e)}")
+
         return import_results
 
     def _import_checks_profiles(self, incoming_profiles: dict) -> List[Tuple[str, str]]:
@@ -421,6 +452,62 @@ class ConfigIO:
         )
         
         return renamed
+    
+    def _import_mediainfo_profiles(self, incoming_profiles: dict) -> List[Tuple[str, str]]:
+        """
+        Merge incoming MediaInfo profiles alongside existing ones.
+        
+        Follows the same collision-resolution pattern as _import_exiftool_profiles().
+        
+        Args:
+            incoming_profiles: Dict of profile_name -> profile_data from the import file
+            
+        Returns:
+            List of (original_name, renamed_name) tuples for any collisions
+        """
+        # Load current profiles (or create empty config if none exists yet)
+        try:
+            mediainfo_config = self.config_mgr.get_config('mediainfo', MediainfoConfig)
+        except Exception:
+            # No mediainfo config exists yet — create a default empty one
+            logger.info("No existing mediainfo config found, creating empty config for import")
+            mediainfo_config = MediainfoConfig()
+            self.config_mgr._configs['mediainfo'] = mediainfo_config
+        
+        existing_names = set(mediainfo_config.mediainfo_profiles.keys())
+        
+        # Build the merged profiles dict starting from existing profiles
+        merged_profiles = {}
+        for name, profile in mediainfo_config.mediainfo_profiles.items():
+            merged_profiles[name] = asdict(profile) if hasattr(profile, '__dataclass_fields__') else profile
+        
+        renamed = []
+        
+        for original_name, profile_data in incoming_profiles.items():
+            # Resolve any name collision
+            final_name, was_renamed = self._resolve_profile_name_collision(
+                original_name, existing_names
+            )
+            
+            if was_renamed:
+                renamed.append((original_name, final_name))
+                logger.info(
+                    f"MediaInfo profile '{original_name}' renamed to '{final_name}' "
+                    f"to avoid collision with existing profile"
+                )
+            
+            merged_profiles[final_name] = profile_data
+            existing_names.add(final_name)
+        
+        # Write the merged set back
+        self.config_mgr.replace_config_section('mediainfo', 'mediainfo_profiles', merged_profiles)
+        logger.info(
+            f"Imported {len(incoming_profiles)} mediainfo profile(s) "
+            f"({len(renamed)} renamed due to collisions)"
+        )
+        
+        return renamed
+
 
 
 def handle_config_io(args, config_mgr: ConfigManager):
@@ -429,7 +516,7 @@ def handle_config_io(args, config_mgr: ConfigManager):
     
     if args.export_config:
         if args.export_config == 'all':
-            config_types = ['spex', 'checks', 'profiles_checks', 'exiftool']
+            config_types = ['spex', 'checks', 'profiles_checks', 'exiftool', 'mediainfo']
         else:
             config_types = [args.export_config]
         filename = config_io.save_config_files(args.export_file, config_types)
@@ -443,7 +530,8 @@ def handle_config_io(args, config_mgr: ConfigManager):
             type_map = {
                 'checks': 'profiles_checks',
                 'profiles_checks': 'profiles_checks',
-                'exiftool': 'exiftool'
+                'exiftool': 'exiftool',
+                'mediainfo': 'mediainfo'
             }
             resolved_type = type_map.get(profile_type)
             if not resolved_type:

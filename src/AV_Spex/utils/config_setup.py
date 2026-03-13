@@ -415,3 +415,37 @@ class ExiftoolProfile:
 class ExiftoolConfig:
     """Container for exiftool profiles"""
     exiftool_profiles: Dict[str, ExiftoolProfile] = field(default_factory=dict)
+
+@dataclass
+class MediainfoProfile:
+    """
+    Profile for MediaInfo expected values configuration.
+    
+    Uses nested structure matching MediaInfo's General/Video/Audio sections.
+    Reuses the existing MediainfoGeneralValues, MediainfoVideoValues, and
+    MediainfoAudioValues dataclasses.
+    
+    ConfigManager compatibility:
+        - MediainfoProfile has __dataclass_fields__, so _handle_dict will
+          deserialize it from Dict[str, MediainfoProfile].
+        - The nested general/video/audio fields are also dataclasses, so
+          _process_field will recursively deserialize them.
+    """
+    general: MediainfoGeneralValues
+    video: MediainfoVideoValues
+    audio: MediainfoAudioValues
+
+
+@dataclass
+class MediainfoConfig:
+    """
+    Container for MediaInfo profiles.
+    
+    Loaded via: config_mgr.get_config('mediainfo', MediainfoConfig)
+    Requires bundled file: config/mediainfo_config.json
+    
+    ConfigManager compatibility:
+        - Dict[str, MediainfoProfile] value type has __dataclass_fields__,
+          so _handle_dict will auto-deserialize each profile entry.
+    """
+    mediainfo_profiles: Dict[str, MediainfoProfile] = field(default_factory=dict)
