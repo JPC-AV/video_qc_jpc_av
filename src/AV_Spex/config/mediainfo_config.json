@@ -1,0 +1,43 @@
+{
+  "mediainfo_profiles": {
+    "Standard MKV Profile": {
+      "general": {
+        "FileExtension": "mkv",
+        "Format": "Matroska",
+        "OverallBitRate_Mode": "VBR"
+      },
+      "video": {
+        "Format": "FFV1",
+        "Format_Settings_GOP": "N=1",
+        "CodecID": "V_MS/VFW/FOURCC / FFV1",
+        "Width": "720",
+        "Height": "486",
+        "PixelAspectRatio": "0.909",
+        "DisplayAspectRatio": "1.347",
+        "FrameRate_Mode_String": "Constant",
+        "FrameRate": "29.970",
+        "Standard": "NTSC",
+        "ColorSpace": "YUV",
+        "ChromaSubsampling": "4:2:2",
+        "BitDepth": "10",
+        "ScanType": "Interlaced",
+        "ScanOrder": "BFF",
+        "Compression_Mode": "Lossless",
+        "colour_primaries": "BT.601 NTSC",
+        "colour_primaries_Source": "Container",
+        "transfer_characteristics": "BT.709",
+        "transfer_characteristics_Source": "Container",
+        "matrix_coefficients": "BT.601",
+        "MaxSlicesCount": "24",
+        "ErrorDetectionType": "Per slice"
+      },
+      "audio": {
+        "Format": ["FLAC", "PCM"],
+        "Channels": "2",
+        "SamplingRate": "48000",
+        "BitDepth": "24",
+        "Compression_Mode": "Lossless"
+      }
+    }
+  }
+}

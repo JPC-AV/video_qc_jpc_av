@@ -10,10 +10,6 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
-
 
 def parse_mediainfo(file_path):
     section_data = parse_mediainfo_json(file_path)
@@ -187,9 +183,11 @@ def check_mediainfo_spex(section_data):
     Returns:
         Dictionary of differences between actual and expected values
     """
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+    
     mediainfo_differences = {}
-    
-    
 
     expected_general = spex_config.mediainfo_values.get("expected_general", {})
     expected_video = spex_config.mediainfo_values.get("expected_video", {})
@@ -202,6 +200,9 @@ def check_mediainfo_spex(section_data):
     # Check General section
     if "General" in section_data and hasattr(expected_general, "items"):
         for expected_key, expected_value in expected_general.items():
+            # Skip fields with no expected value (e.g., imported as "")
+            if not expected_value or expected_value == "" or expected_value == []:
+                continue
             if expected_key in section_data["General"]:
                 actual_value = section_data["General"][expected_key]
                 # Ensure expected_value is always a list for comparison
@@ -212,6 +213,9 @@ def check_mediainfo_spex(section_data):
     # Check Video section
     if "Video" in section_data:
         for expected_key, expected_value in expected_video.items():
+            # Skip fields with no expected value (e.g., imported as "")
+            if not expected_value or expected_value == "" or expected_value == []:
+                continue
             if expected_key in section_data["Video"]:
                 actual_value = section_data["Video"][expected_key]
                 # Ensure expected_value is always a list for comparison
@@ -222,6 +226,9 @@ def check_mediainfo_spex(section_data):
     # Check Audio section
     if "Audio" in section_data:
         for expected_key, expected_value in expected_audio.items():
+            # Skip fields with no expected value (e.g., imported as "")
+            if not expected_value or expected_value == "" or expected_value == []:
+                continue
             if expected_key in section_data["Audio"]:
                 actual_value = section_data["Audio"][expected_key]
                 # Ensure expected_value is always a list for comparison
@@ -236,7 +243,11 @@ def check_mediainfo_spex(section_data):
         logger.critical("Some specified MediaInfo fields or values are missing or don't match:")
         for mi_key, values in mediainfo_differences.items():
             actual_value, expected_value = values
-            logger.critical(f"Metadata field {mi_key} has a value of: {actual_value}\nThe expected value is: {expected_value}")
+            if isinstance(expected_value, list):
+                expected_display = ", ".join(str(v) for v in expected_value)
+            else:
+                expected_display = expected_value
+            logger.critical(f"Metadata field {mi_key} has a value of: {actual_value}\nThe expected value is: {expected_display}")
         logger.debug("")  # adding a space after results if there are failures
 
     return mediainfo_differences
