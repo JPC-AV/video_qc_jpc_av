@@ -1,10 +1,14 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, 
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, 
     QScrollArea, QPushButton, QComboBox, 
     QMessageBox, QDialog, QGridLayout, QListWidget,
     QFileDialog, QInputDialog, QTextEdit, QTabWidget
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPalette
+
+import os
+import tempfile
 
 from AV_Spex.utils import config_edit
 from AV_Spex.utils.config_setup import (
@@ -39,6 +43,36 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
         # so we use a single entry covering both common sets.
         "BitDepth": ["8", "10", "12", "16", "24", "32"],
     }
+    
+    # Cached path to the dropdown arrow SVG (created once, shared by all instances)
+    _arrow_svg_path = None
+    
+    @classmethod
+    def _get_arrow_svg_path(cls):
+        """
+        Return the file path to a blue chevron SVG for QComboBox arrows.
+        
+        The SVG is written to a temp file on first call and the path is
+        cached as a class variable so subsequent calls (and new dialog
+        instances) reuse the same file.
+        """
+        if cls._arrow_svg_path and os.path.exists(cls._arrow_svg_path):
+            return cls._arrow_svg_path
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="12" height="12" viewBox="0 0 12 12">'
+            '<path d="M2.5 4 L6 7.5 L9.5 4" stroke="#007AFF" '
+            'stroke-width="1.75" fill="none" '
+            'stroke-linecap="round" stroke-linejoin="round"/>'
+            '</svg>'
+        )
+        f = tempfile.NamedTemporaryFile(
+            suffix='.svg', delete=False, mode='w', prefix='avspex_arrow_'
+        )
+        f.write(svg)
+        f.close()
+        cls._arrow_svg_path = f.name
+        return cls._arrow_svg_path
     
     def __init__(self, parent=None, edit_mode=False, profile_name=None):
         super().__init__(parent)
@@ -151,6 +185,7 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
         
         self.setLayout(layout)
         self.update_preview()
+        self.debug_widget_colors()
     
     # ── Field definitions ──────────────────────────────────────────────
     # Each tuple: (field_name, label_text, default_values, tooltip)
@@ -203,6 +238,78 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
     
     # ── Tab creation ───────────────────────────────────────────────────
     
+    def _get_field_colors(self):
+        """
+        Return a dict of palette colors used for field widget styling.
+        
+        Centralises the color lookup so both _field_lineedit_style() and
+        _field_combobox_style() stay in sync.
+        """
+        palette = QApplication.palette()
+        return {
+            'bg':        palette.color(QPalette.ColorRole.Base).name(),
+            'text':      palette.color(QPalette.ColorRole.Text).name(),
+            'border':    palette.color(QPalette.ColorRole.Mid).name(),
+            'highlight': palette.color(QPalette.ColorRole.Highlight).name(),
+            'hi_text':   palette.color(QPalette.ColorRole.HighlightedText).name(),
+        }
+
+    def _field_lineedit_style(self, colors=None):
+        """Stylesheet for standalone QLineEdit field inputs."""
+        c = colors or self._get_field_colors()
+        return (
+            f"QLineEdit {{"
+            f" background-color: {c['bg']};"
+            f" color: {c['text']};"
+            f" border: 1px solid {c['border']};"
+            f" border-radius: 3px;"
+            f" padding: 2px 4px;"
+            f"}}"
+        )
+
+    def _field_combobox_style(self, colors=None):
+        """
+        Stylesheet for editable QComboBox field inputs.
+        
+        Applies the same Base background as standalone QLineEdits and
+        includes complete ``::drop-down`` and ``::down-arrow`` styling
+        so Qt draws a blue chevron arrow in stylesheet mode.  The arrow
+        is a small SVG written to a temp file on first use.
+        """
+        c = colors or self._get_field_colors()
+        arrow_path = self._get_arrow_svg_path()
+        return (
+            f"QComboBox {{"
+            f" background-color: {c['bg']};"
+            f" color: {c['text']};"
+            f" border: 1px solid {c['border']};"
+            f" border-radius: 3px;"
+            f" padding: 2px 4px;"
+            f"}}"
+            f"QComboBox:hover {{"
+            f" border: 1px solid {c['highlight']};"
+            f"}}"
+            f"QComboBox::drop-down {{"
+            f" subcontrol-origin: padding;"
+            f" subcontrol-position: right;"
+            f" width: 18px;"
+            f" border-left: 1px solid {c['border']};"
+            f" border-top-right-radius: 3px;"
+            f" border-bottom-right-radius: 3px;"
+            f"}}"
+            f"QComboBox::down-arrow {{"
+            f" image: url({arrow_path});"
+            f" width: 12px;"
+            f" height: 12px;"
+            f"}}"
+            f"QComboBox QAbstractItemView {{"
+            f" background-color: {c['bg']};"
+            f" color: {c['text']};"
+            f" selection-background-color: {c['highlight']};"
+            f" selection-color: {c['hi_text']};"
+            f"}}"
+        )
+
     def _create_input_widget(self, field_name, value=""):
         """
         Create the appropriate input widget for a field.
@@ -216,6 +323,8 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
         Returns:
             QComboBox or QLineEdit
         """
+        colors = self._get_field_colors()
+        
         if field_name in self.DROPDOWN_OPTIONS:
             combo = QComboBox()
             combo.setEditable(True)
@@ -224,12 +333,25 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
             combo.setCurrentText(str(value))
             combo.lineEdit().setPlaceholderText(f"Select or enter {field_name}...")
             combo.currentTextChanged.connect(self.update_preview)
+            # Style the QComboBox frame AND its internal QLineEdit to
+            # the same explicit Base color.  This overrides macOS native
+            # rendering for both layers so there is no visible seam
+            # between the combo frame and the edit area.  The complete
+            # ::drop-down block ensures Qt draws the dropdown arrow in
+            # stylesheet mode.
+            combo.setStyleSheet(self._field_combobox_style(colors))
+            combo.lineEdit().setStyleSheet("background: transparent;")
+            combo.setProperty("field_input", True)
             return combo
         else:
             line_edit = QLineEdit()
             line_edit.setText(str(value))
             line_edit.setPlaceholderText(f"Enter {field_name} value...")
             line_edit.textChanged.connect(self.update_preview)
+            # Apply the same explicit Base background so macOS native
+            # rendering can't cause a mismatch with the combo boxes.
+            line_edit.setStyleSheet(self._field_lineedit_style(colors))
+            line_edit.setProperty("field_input", True)
             return line_edit
 
     def _create_section_tab(self, section_name, field_inputs, field_containers, fields):
@@ -239,6 +361,10 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
         Uses the same +/- multi-value pattern as CustomExiftoolDialog.
         Fields in DROPDOWN_OPTIONS use editable combo boxes; all others
         use plain line edits.
+        
+        Uses QGridLayout columns directly so that labels, input widgets,
+        and buttons each occupy their own column.  This prevents combo
+        boxes from overlapping labels.
         
         Args:
             section_name: 'general', 'video', or 'audio'
@@ -251,27 +377,29 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
         scroll_widget = QWidget()
         scroll_widget.setAutoFillBackground(False)
         scroll_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
-        scroll_widget.setStyleSheet("QWidget { background-color: transparent; }")
         grid_layout = QGridLayout(scroll_widget)
         grid_layout.setSpacing(5)
         grid_layout.setContentsMargins(5, 5, 5, 5)
+        # Column 0 = labels (fixed), column 1 = inputs (stretch)
+        grid_layout.setColumnStretch(0, 0)
+        grid_layout.setColumnStretch(1, 1)
+        grid_layout.setColumnStretch(2, 0)
+        grid_layout.setColumnStretch(3, 0)
         scroll.setWidget(scroll_widget)
         
         row = 0
         for field_name, label_text, default_values, tooltip in fields:
-            # Horizontal layout for label + inputs + buttons
-            field_layout = QHBoxLayout()
-            field_layout.setContentsMargins(0, 0, 0, 0)
-            field_layout.setSpacing(5)
-            
-            # Label
+            # Column 0: Label
             label = QLabel(f"{label_text}:")
             label.setToolTip(tooltip)
             label.setMinimumWidth(150)
-            field_layout.addWidget(label)
+            grid_layout.addWidget(label, row, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
             
-            # Vertical layout for multiple input widgets
-            inputs_layout = QVBoxLayout()
+            # Column 1: Vertical layout for multiple input widgets
+            inputs_container = QWidget()
+            inputs_container.setAutoFillBackground(False)
+            inputs_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+            inputs_layout = QVBoxLayout(inputs_container)
             inputs_layout.setContentsMargins(0, 0, 0, 0)
             inputs_layout.setSpacing(5)
             
@@ -290,9 +418,9 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
                 inputs_layout.addWidget(extra_widget)
                 field_inputs[field_name].append(extra_widget)
             
-            field_layout.addLayout(inputs_layout, 1)
+            grid_layout.addWidget(inputs_container, row, 1)
             
-            # +/- buttons
+            # Column 2: + button
             add_btn = QPushButton("+")
             add_btn.setMaximumWidth(30)
             add_btn.setMaximumHeight(25)
@@ -302,7 +430,9 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
                 lambda checked, fn=field_name, fi=field_inputs, fc=field_containers: 
                     self.add_textbox_row(fn, fi, fc)
             )
+            grid_layout.addWidget(add_btn, row, 2, Qt.AlignmentFlag.AlignTop)
             
+            # Column 3: - button
             remove_btn = QPushButton("-")
             remove_btn.setMaximumWidth(30)
             remove_btn.setMaximumHeight(25)
@@ -312,20 +442,106 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
                 lambda checked, fn=field_name, fi=field_inputs: 
                     self.remove_textbox_row(fn, fi)
             )
+            grid_layout.addWidget(remove_btn, row, 3, Qt.AlignmentFlag.AlignTop)
             
-            field_layout.addWidget(add_btn)
-            field_layout.addWidget(remove_btn)
-            
-            # Wrap in a widget for the grid
-            field_widget = QWidget()
-            field_widget.setLayout(field_layout)
-            field_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
-            field_widget.setAutoFillBackground(False)
-            
-            grid_layout.addWidget(field_widget, row, 0, 1, 2)
             row += 1
         
         return scroll
+    
+
+    def debug_widget_colors(self):
+        """Print actual palette/style info for field QLineEdit vs field QComboBox."""
+        from PyQt6.QtWidgets import QApplication, QLineEdit, QComboBox, QWidget
+        from PyQt6.QtGui import QPalette
+
+        # ── Find tagged field widgets ──
+        field_line_edit = None
+        field_combo = None
+
+        for widget in self.findChildren(QLineEdit):
+            if widget.property("field_input"):
+                field_line_edit = widget
+                break
+
+        for widget in self.findChildren(QComboBox):
+            if widget.property("field_input"):
+                field_combo = widget
+                break
+
+        # ── Also find the profile_name_input for comparison ──
+        untagged_line_edit = None
+        for widget in self.findChildren(QLineEdit):
+            if not widget.property("field_input") and not isinstance(widget.parent(), QComboBox):
+                untagged_line_edit = widget
+                break
+
+        roles = [
+            ("Base",   QPalette.ColorRole.Base),
+            ("Button", QPalette.ColorRole.Button),
+            ("Window", QPalette.ColorRole.Window),
+        ]
+
+        print("\n" + "=" * 70)
+
+        if untagged_line_edit:
+            print(f"UNTAGGED QLineEdit (e.g. profile_name_input)")
+            print(f"  styleSheet = {untagged_line_edit.styleSheet()!r}")
+            p = untagged_line_edit.palette()
+            for name, role in roles:
+                c = p.color(role)
+                print(f"  {name:8s} → {c.name()}")
+            print()
+
+        if field_line_edit:
+            print(f"FIELD QLineEdit (field_input=True)")
+            print(f"  styleSheet = {field_line_edit.styleSheet()!r}")
+            p = field_line_edit.palette()
+            for name, role in roles:
+                c = p.color(role)
+                print(f"  {name:8s} → {c.name()}")
+            # Walk up the parent chain looking for stylesheets
+            print(f"  ── parent chain stylesheets ──")
+            parent = field_line_edit.parent()
+            depth = 0
+            while parent and depth < 10:
+                ss = parent.styleSheet() if hasattr(parent, 'styleSheet') else None
+                if ss:
+                    # Truncate long stylesheets
+                    display = ss.strip()[:120] + ("..." if len(ss.strip()) > 120 else "")
+                    print(f"    [{depth}] {type(parent).__name__}: {display!r}")
+                else:
+                    print(f"    [{depth}] {type(parent).__name__}: (none)")
+                parent = parent.parent() if hasattr(parent, 'parent') else None
+                depth += 1
+            print()
+
+        if field_combo:
+            print(f"FIELD QComboBox (field_input=True)")
+            print(f"  comboBox styleSheet = {field_combo.styleSheet()!r}")
+            if field_combo.isEditable() and field_combo.lineEdit():
+                inner = field_combo.lineEdit()
+                print(f"  lineEdit styleSheet = {inner.styleSheet()!r}")
+                p = inner.palette()
+                for name, role in roles:
+                    c = p.color(role)
+                    print(f"  lineEdit {name:8s} → {c.name()}")
+            # Walk up the parent chain looking for stylesheets
+            print(f"  ── parent chain stylesheets ──")
+            parent = field_combo.parent()
+            depth = 0
+            while parent and depth < 10:
+                ss = parent.styleSheet() if hasattr(parent, 'styleSheet') else None
+                if ss:
+                    display = ss.strip()[:120] + ("..." if len(ss.strip()) > 120 else "")
+                    print(f"    [{depth}] {type(parent).__name__}: {display!r}")
+                else:
+                    print(f"    [{depth}] {type(parent).__name__}: (none)")
+                parent = parent.parent() if hasattr(parent, 'parent') else None
+                depth += 1
+        else:
+            print("(no field_input QComboBox found)")
+
+        print("=" * 70 + "\n")
     
     # ── Row add/remove ─────────────────────────────────────────────────
     
@@ -574,6 +790,7 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
             while container_layout.count():
                 item = container_layout.takeAt(0)
                 if item.widget():
+                    item.widget().setParent(None)
                     item.widget().deleteLater()
             
             field_inputs[field_name].clear()
@@ -759,6 +976,19 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
     def on_theme_changed(self, palette):
         """Apply theme changes to this dialog"""
         self.setPalette(palette)
+        # Refresh explicit styling on all field input widgets so they
+        # track palette colors after a theme switch.
+        colors = self._get_field_colors()
+        combo_style = self._field_combobox_style(colors)
+        line_style = self._field_lineedit_style(colors)
+        for combo in self.findChildren(QComboBox):
+            if combo.property("field_input"):
+                combo.setStyleSheet(combo_style)
+                if combo.isEditable() and combo.lineEdit():
+                    combo.lineEdit().setStyleSheet("background: transparent;")
+        for line_edit in self.findChildren(QLineEdit):
+            if line_edit.property("field_input"):
+                line_edit.setStyleSheet(line_style)
         
     def closeEvent(self, event):
         """Clean up theme connections before closing"""
