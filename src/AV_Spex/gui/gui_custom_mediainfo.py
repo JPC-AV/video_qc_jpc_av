@@ -61,7 +61,7 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
         svg = (
             '<svg xmlns="http://www.w3.org/2000/svg" '
             'width="12" height="12" viewBox="0 0 12 12">'
-            '<path d="M2.5 4 L6 7.5 L9.5 4" stroke="#007AFF" '
+            '<path d="M2.5 4 L6 7.5 L9.5 4" stroke="#ffffff" '
             'stroke-width="1.75" fill="none" '
             'stroke-linecap="round" stroke-linejoin="round"/>'
             '</svg>'
@@ -185,7 +185,6 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
         
         self.setLayout(layout)
         self.update_preview()
-        self.debug_widget_colors()
     
     # ── Field definitions ──────────────────────────────────────────────
     # Each tuple: (field_name, label_text, default_values, tooltip)
@@ -447,101 +446,6 @@ class CustomMediainfoDialog(QDialog, ThemeableMixin):
             row += 1
         
         return scroll
-    
-
-    def debug_widget_colors(self):
-        """Print actual palette/style info for field QLineEdit vs field QComboBox."""
-        from PyQt6.QtWidgets import QApplication, QLineEdit, QComboBox, QWidget
-        from PyQt6.QtGui import QPalette
-
-        # ── Find tagged field widgets ──
-        field_line_edit = None
-        field_combo = None
-
-        for widget in self.findChildren(QLineEdit):
-            if widget.property("field_input"):
-                field_line_edit = widget
-                break
-
-        for widget in self.findChildren(QComboBox):
-            if widget.property("field_input"):
-                field_combo = widget
-                break
-
-        # ── Also find the profile_name_input for comparison ──
-        untagged_line_edit = None
-        for widget in self.findChildren(QLineEdit):
-            if not widget.property("field_input") and not isinstance(widget.parent(), QComboBox):
-                untagged_line_edit = widget
-                break
-
-        roles = [
-            ("Base",   QPalette.ColorRole.Base),
-            ("Button", QPalette.ColorRole.Button),
-            ("Window", QPalette.ColorRole.Window),
-        ]
-
-        print("\n" + "=" * 70)
-
-        if untagged_line_edit:
-            print(f"UNTAGGED QLineEdit (e.g. profile_name_input)")
-            print(f"  styleSheet = {untagged_line_edit.styleSheet()!r}")
-            p = untagged_line_edit.palette()
-            for name, role in roles:
-                c = p.color(role)
-                print(f"  {name:8s} → {c.name()}")
-            print()
-
-        if field_line_edit:
-            print(f"FIELD QLineEdit (field_input=True)")
-            print(f"  styleSheet = {field_line_edit.styleSheet()!r}")
-            p = field_line_edit.palette()
-            for name, role in roles:
-                c = p.color(role)
-                print(f"  {name:8s} → {c.name()}")
-            # Walk up the parent chain looking for stylesheets
-            print(f"  ── parent chain stylesheets ──")
-            parent = field_line_edit.parent()
-            depth = 0
-            while parent and depth < 10:
-                ss = parent.styleSheet() if hasattr(parent, 'styleSheet') else None
-                if ss:
-                    # Truncate long stylesheets
-                    display = ss.strip()[:120] + ("..." if len(ss.strip()) > 120 else "")
-                    print(f"    [{depth}] {type(parent).__name__}: {display!r}")
-                else:
-                    print(f"    [{depth}] {type(parent).__name__}: (none)")
-                parent = parent.parent() if hasattr(parent, 'parent') else None
-                depth += 1
-            print()
-
-        if field_combo:
-            print(f"FIELD QComboBox (field_input=True)")
-            print(f"  comboBox styleSheet = {field_combo.styleSheet()!r}")
-            if field_combo.isEditable() and field_combo.lineEdit():
-                inner = field_combo.lineEdit()
-                print(f"  lineEdit styleSheet = {inner.styleSheet()!r}")
-                p = inner.palette()
-                for name, role in roles:
-                    c = p.color(role)
-                    print(f"  lineEdit {name:8s} → {c.name()}")
-            # Walk up the parent chain looking for stylesheets
-            print(f"  ── parent chain stylesheets ──")
-            parent = field_combo.parent()
-            depth = 0
-            while parent and depth < 10:
-                ss = parent.styleSheet() if hasattr(parent, 'styleSheet') else None
-                if ss:
-                    display = ss.strip()[:120] + ("..." if len(ss.strip()) > 120 else "")
-                    print(f"    [{depth}] {type(parent).__name__}: {display!r}")
-                else:
-                    print(f"    [{depth}] {type(parent).__name__}: (none)")
-                parent = parent.parent() if hasattr(parent, 'parent') else None
-                depth += 1
-        else:
-            print("(no field_input QComboBox found)")
-
-        print("=" * 70 + "\n")
     
     # ── Row add/remove ─────────────────────────────────────────────────
     
