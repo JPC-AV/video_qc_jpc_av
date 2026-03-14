@@ -392,6 +392,7 @@ class ConfigIO:
         
         # Write the merged set back
         self.config_mgr.replace_config_section('profiles_checks', 'custom_profiles', merged_profiles)
+        self.config_mgr.save_config('profiles_checks', is_last_used=True)
         logger.info(
             f"Imported {len(incoming_profiles)} checks profile(s) "
             f"({len(renamed)} renamed due to collisions)"
@@ -446,6 +447,7 @@ class ConfigIO:
         
         # Write the merged set back
         self.config_mgr.replace_config_section('exiftool', 'exiftool_profiles', merged_profiles)
+        self.config_mgr.save_config('exiftool', is_last_used=True)
         logger.info(
             f"Imported {len(incoming_profiles)} exiftool profile(s) "
             f"({len(renamed)} renamed due to collisions)"
@@ -501,6 +503,7 @@ class ConfigIO:
         
         # Write the merged set back
         self.config_mgr.replace_config_section('mediainfo', 'mediainfo_profiles', merged_profiles)
+        self.config_mgr.save_config('mediainfo', is_last_used=True)
         logger.info(
             f"Imported {len(incoming_profiles)} mediainfo profile(s) "
             f"({len(renamed)} renamed due to collisions)"
