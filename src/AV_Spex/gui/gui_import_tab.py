@@ -53,9 +53,12 @@ class ImportTab(ThemeableMixin):
                 self.export_config_dialog('profiles_checks')
             elif selected_option == "Export All Exiftool Profiles":
                 self.export_config_dialog('exiftool')
+            elif selected_option == "Export All MediaInfo Profiles":
+                self.export_config_dialog('mediainfo')
             elif selected_option == "Export All Config":
                 self.export_config_dialog(['checks', 'spex', 'filename', 
-                                           'signalflow', 'profiles_checks', 'exiftool'])
+                               'signalflow', 'profiles_checks', 'exiftool',
+                               'mediainfo'])
 
         def import_config(self):
             """Import configuration from a file."""
@@ -402,6 +405,7 @@ class ImportTab(ThemeableMixin):
             - <i>Custom Checks Profiles</i>: Exports your custom checks profiles for sharing 
                 with other users<br>
             - <i>Exiftool Profiles</i>: Exports your custom exiftool profiles<br>
+            - <i>MediaInfo Profiles</i>: Exports your custom MediaInfo profiles<br>
             - <i>Spex and Checks Config</i>: Exports both Checks and Spex settings<br>
             - <i>All Config</i>: Exports everything including custom profiles</p>
             
@@ -617,6 +621,7 @@ class ImportTab(ThemeableMixin):
         self.main_window.export_config_dropdown.addItem("Export Spex Config")
         self.main_window.export_config_dropdown.addItem("Export All Custom Checks Profiles")
         self.main_window.export_config_dropdown.addItem("Export All Exiftool Profiles")
+        self.main_window.export_config_dropdown.addItem("Export All MediaInfo Profiles")
         self.main_window.export_config_dropdown.addItem("Export Spex and Checks Config")
         self.main_window.export_config_dropdown.addItem("Export All Config")
 
