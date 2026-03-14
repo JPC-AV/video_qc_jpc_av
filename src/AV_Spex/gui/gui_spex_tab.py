@@ -165,25 +165,6 @@ class SpexTab(ThemeableMixin):
         self.mediatrace_group = self.setup_mediatrace_section()
         vertical_layout.addWidget(self.mediatrace_group)
         
-        # 6. QCT section
-        self.qct_group = QGroupBox("qct-parse Values")
-        theme_manager.style_groupbox(self.qct_group, "top center")
-        self.main_window.spex_tab_group_boxes.append(self.qct_group)
-        
-        qct_layout = QVBoxLayout()
-        
-        qct_button = QPushButton("Open Section")
-        qct_button.clicked.connect(
-            lambda: self.open_new_window('Expected qct-parse options', 'qct_parse_values')
-        )
-        
-        qct_layout.addWidget(qct_button)
-        self.qct_group.setLayout(qct_layout)
-        vertical_layout.addWidget(self.qct_group)
-        
-        # Style the button
-        theme_manager.style_buttons(qct_button)
-        
         # Add scroll area to main layout
         spex_layout.addWidget(main_scroll_area)
 
@@ -1061,7 +1042,5 @@ class SpexTab(ThemeableMixin):
             theme_manager.style_buttons(self.ffprobe_group)
         if hasattr(self, 'mediatrace_group'):
             theme_manager.style_buttons(self.mediatrace_group)
-        if hasattr(self, 'qct_group'):
-            theme_manager.style_buttons(self.qct_group)
         if hasattr(self, 'exiftool_group'):
             theme_manager.style_buttons(self.exiftool_group)
