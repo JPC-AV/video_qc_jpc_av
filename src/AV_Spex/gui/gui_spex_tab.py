@@ -1022,6 +1022,63 @@ class SpexTab(ThemeableMixin):
                 except Exception as e:
                     QMessageBox.warning(self.main_window, "Error", f"Error adding custom profile to dropdown: {str(e)}")
     
+    def refresh_profile_dropdowns(self):
+        """Refresh the exiftool and mediainfo profile dropdowns after config import."""
+        
+        # ── Exiftool dropdown ──
+        if hasattr(self, 'exiftool_profile_dropdown'):
+            self.exiftool_profile_dropdown.blockSignals(True)
+            
+            # Reload config
+            try:
+                self.exiftool_config = config_mgr.get_config("exiftool", ExiftoolConfig)
+            except:
+                self.exiftool_config = ExiftoolConfig()
+            
+            # Rebuild dropdown items
+            self.exiftool_profile_dropdown.clear()
+            self.exiftool_profile_dropdown.addItem("Select a profile...")
+            
+            if hasattr(self.exiftool_config, 'exiftool_profiles') and self.exiftool_config.exiftool_profiles:
+                for profile_name in self.exiftool_config.exiftool_profiles.keys():
+                    self.exiftool_profile_dropdown.addItem(profile_name)
+            
+            # Try to match current values
+            matched = self._find_matching_exiftool_profile()
+            if matched:
+                self.exiftool_profile_dropdown.setCurrentText(matched)
+            else:
+                self.exiftool_profile_dropdown.setCurrentText("Select a profile...")
+            
+            self.exiftool_profile_dropdown.blockSignals(False)
+        
+        # ── MediaInfo dropdown ──
+        if hasattr(self, 'mediainfo_profile_dropdown'):
+            self.mediainfo_profile_dropdown.blockSignals(True)
+            
+            # Reload config
+            try:
+                self.mediainfo_config = config_mgr.get_config("mediainfo", MediainfoConfig)
+            except:
+                self.mediainfo_config = MediainfoConfig()
+            
+            # Rebuild dropdown items
+            self.mediainfo_profile_dropdown.clear()
+            self.mediainfo_profile_dropdown.addItem("Select a profile...")
+            
+            if hasattr(self.mediainfo_config, 'mediainfo_profiles') and self.mediainfo_config.mediainfo_profiles:
+                for profile_name in self.mediainfo_config.mediainfo_profiles.keys():
+                    self.mediainfo_profile_dropdown.addItem(profile_name)
+            
+            # Try to match current values
+            matched = self._find_matching_mediainfo_profile()
+            if matched:
+                self.mediainfo_profile_dropdown.setCurrentText(matched)
+            else:
+                self.mediainfo_profile_dropdown.setCurrentText("Select a profile...")
+            
+            self.mediainfo_profile_dropdown.blockSignals(False)
+    
     def on_theme_changed(self, palette):
         """Handle theme changes for this tab"""
         theme_manager = ThemeManager.instance()

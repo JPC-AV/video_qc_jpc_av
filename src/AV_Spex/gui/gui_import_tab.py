@@ -165,6 +165,10 @@ class ImportTab(ThemeableMixin):
                         
                         # Re-enable signals
                         self.main_window.signalflow_profile_dropdown.blockSignals(False)
+
+                        # Spex Tab — refresh exiftool and mediainfo profile dropdowns
+                        if hasattr(self.spex_tab, 'refresh_profile_dropdowns'):
+                            self.spex_tab.refresh_profile_dropdowns()
                     
                     # Show result to user — with rename notification if applicable
                     renamed = import_results.get('renamed_profiles', [])
