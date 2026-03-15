@@ -1,0 +1,46 @@
+{
+  "ffprobe_profiles": {
+    "Standard MKV Profile": {
+      "video_stream": {
+        "codec_name": "ffv1",
+        "codec_long_name": "FFmpeg video codec #1",
+        "codec_type": "video",
+        "codec_tag_string": "FFV1",
+        "codec_tag": "0x31564646",
+        "width": "720",
+        "height": "486",
+        "display_aspect_ratio": "400:297",
+        "pix_fmt": "yuv422p10le",
+        "color_space": "smpte170m",
+        "color_transfer": "bt709",
+        "color_primaries": "smpte170m",
+        "field_order": "bt",
+        "bits_per_raw_sample": "10"
+      },
+      "audio_stream": {
+        "codec_name": ["flac", "pcm_s24le"],
+        "codec_long_name": ["FLAC (Free Lossless Audio Codec)", "PCM signed 24-bit little-endian"],
+        "codec_type": "audio",
+        "codec_tag": "0x0000",
+        "sample_fmt": "s32",
+        "sample_rate": "48000",
+        "channels": "2",
+        "channel_layout": "stereo",
+        "bits_per_raw_sample": "24"
+      },
+      "format": {
+        "format_name": "matroska webm",
+        "format_long_name": "Matroska / WebM",
+        "tags": {
+          "creation_time": null,
+          "ENCODER": null,
+          "TITLE": null,
+          "ENCODER_SETTINGS": null,
+          "DESCRIPTION": null,
+          "ORIGINAL MEDIA TYPE": null,
+          "ENCODED_BY": null
+        }
+      }
+    }
+  }
+}

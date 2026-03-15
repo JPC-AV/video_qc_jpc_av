@@ -8,7 +8,8 @@ from AV_Spex.utils.log_setup import logger
 
 from AV_Spex.utils.config_setup import (
     SpexConfig, ChecksConfig, FilenameConfig, SignalflowConfig,
-    ChecksProfilesConfig, ChecksProfile, ExiftoolConfig, MediainfoConfig
+    ChecksProfilesConfig, ChecksProfile, ExiftoolConfig, MediainfoConfig,
+    FfprobeConfig
 )
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -39,6 +40,8 @@ class ConfigIO:
                 config = self.config_mgr.get_config('exiftool', ExiftoolConfig)
             elif config_type == 'mediainfo':
                 config = self.config_mgr.get_config('mediainfo', MediainfoConfig)
+            elif config_type == 'ffprobe':
+                config = self.config_mgr.get_config('ffprobe', FfprobeConfig)
             else:
                 continue
             export_data[config_type] = asdict(config)
@@ -119,6 +122,27 @@ class ConfigIO:
             return {
                 'mediainfo': {
                     'mediainfo_profiles': {
+                        profile_name: profile_data
+                    }
+                }
+            }
+        
+        elif profile_type == 'ffprobe':
+            try:
+                ffprobe_config = self.config_mgr.get_config('ffprobe', FfprobeConfig)
+            except Exception as e:
+                logger.error(f"Could not load ffprobe config: {e}")
+                return None
+            
+            if profile_name not in ffprobe_config.ffprobe_profiles:
+                logger.warning(f"FFprobe profile '{profile_name}' not found for export")
+                return None
+            
+            profile = ffprobe_config.ffprobe_profiles[profile_name]
+            profile_data = asdict(profile) if hasattr(profile, '__dataclass_fields__') else profile
+            return {
+                'ffprobe': {
+                    'ffprobe_profiles': {
                         profile_name: profile_data
                     }
                 }
@@ -330,6 +354,14 @@ class ConfigIO:
                 logger.error(f"Error importing mediainfo profiles: {str(e)}")
                 import_results['errors'].append(f"MediaInfo profiles: {str(e)}")
 
+        if 'ffprobe' in config_data and 'ffprobe_profiles' in config_data['ffprobe']:
+            try:
+                renamed = self._import_ffprobe_profiles(config_data['ffprobe']['ffprobe_profiles'])
+                import_results['renamed_profiles'].extend(renamed)
+            except Exception as e:
+                logger.error(f"Error importing ffprobe profiles: {str(e)}")
+                import_results['errors'].append(f"FFprobe profiles: {str(e)}")
+
         return import_results
 
     def _import_checks_profiles(self, incoming_profiles: dict) -> List[Tuple[str, str]]:
@@ -511,6 +543,62 @@ class ConfigIO:
         
         return renamed
 
+    def _import_ffprobe_profiles(self, incoming_profiles: dict) -> List[Tuple[str, str]]:
+        """
+        Merge incoming FFprobe profiles alongside existing ones.
+        
+        Follows the same collision-resolution pattern as _import_mediainfo_profiles().
+        
+        Args:
+            incoming_profiles: Dict of profile_name -> profile_data from the import file
+            
+        Returns:
+            List of (original_name, renamed_name) tuples for any collisions
+        """
+        # Load current profiles (or create empty config if none exists yet)
+        try:
+            ffprobe_config = self.config_mgr.get_config('ffprobe', FfprobeConfig)
+        except Exception:
+            # No ffprobe config exists yet — create a default empty one
+            logger.info("No existing ffprobe config found, creating empty config for import")
+            ffprobe_config = FfprobeConfig()
+            self.config_mgr._configs['ffprobe'] = ffprobe_config
+        
+        existing_names = set(ffprobe_config.ffprobe_profiles.keys())
+        
+        # Build the merged profiles dict starting from existing profiles
+        merged_profiles = {}
+        for name, profile in ffprobe_config.ffprobe_profiles.items():
+            merged_profiles[name] = asdict(profile) if hasattr(profile, '__dataclass_fields__') else profile
+        
+        renamed = []
+        
+        for original_name, profile_data in incoming_profiles.items():
+            # Resolve any name collision
+            final_name, was_renamed = self._resolve_profile_name_collision(
+                original_name, existing_names
+            )
+            
+            if was_renamed:
+                renamed.append((original_name, final_name))
+                logger.info(
+                    f"FFprobe profile '{original_name}' renamed to '{final_name}' "
+                    f"to avoid collision with existing profile"
+                )
+            
+            merged_profiles[final_name] = profile_data
+            existing_names.add(final_name)
+        
+        # Write the merged set back
+        self.config_mgr.replace_config_section('ffprobe', 'ffprobe_profiles', merged_profiles)
+        self.config_mgr.save_config('ffprobe', is_last_used=True)
+        logger.info(
+            f"Imported {len(incoming_profiles)} ffprobe profile(s) "
+            f"({len(renamed)} renamed due to collisions)"
+        )
+        
+        return renamed
+
 
 
 def handle_config_io(args, config_mgr: ConfigManager):
@@ -519,7 +607,7 @@ def handle_config_io(args, config_mgr: ConfigManager):
     
     if args.export_config:
         if args.export_config == 'all':
-            config_types = ['spex', 'checks', 'profiles_checks', 'exiftool', 'mediainfo']
+            config_types = ['spex', 'checks', 'profiles_checks', 'exiftool', 'mediainfo', 'ffprobe']
         else:
             config_types = [args.export_config]
         filename = config_io.save_config_files(args.export_file, config_types)
@@ -534,13 +622,14 @@ def handle_config_io(args, config_mgr: ConfigManager):
                 'checks': 'profiles_checks',
                 'profiles_checks': 'profiles_checks',
                 'exiftool': 'exiftool',
-                'mediainfo': 'mediainfo'
+                'mediainfo': 'mediainfo',
+                'ffprobe': 'ffprobe'
             }
             resolved_type = type_map.get(profile_type)
             if not resolved_type:
                 logger.error(
                     f"Unknown profile type '{profile_type}'. "
-                    f"Use 'checks' or 'exiftool'."
+                    f"Use 'checks', 'exiftool', 'mediainfo', or 'ffprobe'."
                 )
             else:
                 out_file = getattr(args, 'export_file', None)
