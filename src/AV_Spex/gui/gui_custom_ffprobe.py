@@ -34,30 +34,36 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
         "codec_type": ["video", "audio"],
         "pix_fmt": [
             "yuv422p10le", "yuv422p", "yuv420p", "yuv420p10le",
-            "yuv444p", "yuv444p10le", "rgb24", "bgr24"
+            "yuv444p", "yuv444p10le", "uyvy422", "v210",
+            "rgb24", "bgr24", "gbrp", "gbrp10le",
+            "yuyv422", "gray", "nv12"
         ],
         "color_space": [
-            "bt470bg", "smpte170m", "bt709", "bt2020nc",
-            "unknown"
+            "bt709", "bt470bg", "smpte170m", "smpte240m",
+            "bt2020nc", "bt2020c", "fcc", "ycgco",
+            "chroma-derived-nc", "ictcp", "rgb", "unknown"
         ],
         "color_transfer": [
-            "bt709", "smpte170m", "bt470bg", "bt2020-10",
-            "arib-std-b67", "unknown"
+            "bt709", "smpte170m", "gamma22", "gamma28",
+            "smpte240m", "linear", "bt2020-10", "bt2020-12",
+            "smpte2084", "arib-std-b67", "iec61966-2-1",
+            "iec61966-2-4", "unknown"
         ],
         "color_primaries": [
-            "bt709", "smpte170m", "bt470bg", "bt2020",
-            "unknown"
+            "bt709", "smpte170m", "bt470bg", "bt470m",
+            "smpte240m", "film", "bt2020",
+            "smpte431", "smpte432", "jedec-p22", "unknown"
         ],
         "field_order": [
-            "bb", "bt", "tt", "tb", "progressive", "unknown"
+            "progressive", "tt", "bb", "tb", "bt", "unknown"
         ],
         "sample_fmt": [
             "s16", "s32", "s16p", "s32p", "fltp", "flt",
-            "dblp", "dbl"
+            "dblp", "dbl", "s64", "s64p", "u8", "u8p"
         ],
         "channel_layout": [
-            "stereo", "mono", "5.1", "5.1(side)",
-            "7.1", "surround"
+            "mono", "stereo", "2.1", "3.0", "4.0",
+            "5.1", "5.1(side)", "7.1", "7.1(wide)"
         ],
         "bits_per_raw_sample": [
             "8", "10", "12", "16", "24", "32"
