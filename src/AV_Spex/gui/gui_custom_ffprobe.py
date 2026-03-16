@@ -68,6 +68,30 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
         "bits_per_raw_sample": [
             "8", "10", "12", "16", "24", "32"
         ],
+        "sample_rate": [
+            "48000", "96000", "44100", "88200",
+            "176400", "192000", "32000", "22050"
+        ],
+        "channels": [
+            "1", "2", "4", "6", "8"
+        ],
+    }
+    
+    # Codec name suggestions per section — keyed by (section, field_name).
+    # These are kept separate from DROPDOWN_OPTIONS because the same
+    # field name "codec_name" appears in both video and audio tabs with
+    # different value sets.
+    CODEC_NAME_OPTIONS = {
+        "video_stream": [
+            "ffv1", "v210", "prores", "rawvideo", "mpeg2video",
+            "dvvideo", "h264", "hevc", "jpeg2000",
+            "huffyuv", "mjpeg"
+        ],
+        "audio_stream": [
+            "pcm_s16le", "pcm_s24le", "pcm_s32le",
+            "pcm_s16be", "pcm_s24be",
+            "flac", "aac", "ac3", "mp3", "opus", "vorbis"
+        ],
     }
     
     # Cached path to the dropdown arrow SVG
@@ -320,20 +344,27 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
             f"}}"
         )
 
-    def _create_input_widget(self, field_name, value=""):
+    def _create_input_widget(self, field_name, value="", section_name=None):
         """
         Create the appropriate input widget for a field.
         
         Fields listed in DROPDOWN_OPTIONS get an editable QComboBox.
-        All others get a plain QLineEdit.
+        codec_name fields get section-specific options from
+        CODEC_NAME_OPTIONS.  All others get a plain QLineEdit.
         """
         colors = self._get_field_colors()
         
-        if field_name in self.DROPDOWN_OPTIONS:
+        # Determine dropdown options: global lookup first, then
+        # section-specific codec_name suggestions.
+        options = self.DROPDOWN_OPTIONS.get(field_name)
+        if options is None and field_name == "codec_name" and section_name:
+            options = self.CODEC_NAME_OPTIONS.get(section_name)
+        
+        if options is not None:
             combo = QComboBox()
             combo.setEditable(True)
             combo.addItem("")  # blank first item
-            combo.addItems(self.DROPDOWN_OPTIONS[field_name])
+            combo.addItems(options)
             combo.setCurrentText(str(value))
             combo.lineEdit().setPlaceholderText(f"Select or enter {field_name}...")
             combo.currentTextChanged.connect(self.update_preview)
@@ -392,13 +423,13 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
             
             # Add first widget with default value
             first_value = default_values[0] if default_values else ""
-            widget = self._create_input_widget(field_name, first_value)
+            widget = self._create_input_widget(field_name, first_value, section_name)
             inputs_layout.addWidget(widget)
             field_inputs[field_name].append(widget)
             
             # For fields with multiple defaults (e.g., Audio codec_name), add them
             for extra_value in default_values[1:]:
-                extra_widget = self._create_input_widget(field_name, extra_value)
+                extra_widget = self._create_input_widget(field_name, extra_value, section_name)
                 inputs_layout.addWidget(extra_widget)
                 field_inputs[field_name].append(extra_widget)
             
@@ -411,8 +442,8 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
             add_btn.setToolTip(f"Add {label_text}")
             add_btn.setStyleSheet("QPushButton { background-color: transparent; }")
             add_btn.clicked.connect(
-                lambda checked, fn=field_name, fi=field_inputs, fc=field_containers: 
-                    self.add_textbox_row(fn, fi, fc)
+                lambda checked, fn=field_name, fi=field_inputs, fc=field_containers, sn=section_name: 
+                    self.add_textbox_row(fn, fi, fc, "", sn)
             )
             grid_layout.addWidget(add_btn, row, 2, Qt.AlignmentFlag.AlignTop)
             
@@ -434,11 +465,11 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
     
     # ── Row add/remove ─────────────────────────────────────────────────
     
-    def add_textbox_row(self, field_name, field_inputs, field_containers, value=""):
+    def add_textbox_row(self, field_name, field_inputs, field_containers, value="", section_name=None):
         """Add a new input widget row for a field (combo box or line edit)"""
         container_layout = field_containers[field_name]
         
-        widget = self._create_input_widget(field_name, value)
+        widget = self._create_input_widget(field_name, value, section_name)
         container_layout.addWidget(widget)
         field_inputs[field_name].append(widget)
         
@@ -456,12 +487,12 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
     # ── Import / Compare ───────────────────────────────────────────────
     
     def import_from_file(self):
-        """Import FFprobe data from a JSON file"""
+        """Import FFprobe data from a JSON output file (.txt or .json)"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select FFprobe JSON File",
+            "Select FFprobe Output File",
             "",
-            "FFprobe Files (*.json);;All Files (*.*)"
+            "FFprobe Output Files (*.txt *.json);;Text Files (*.txt);;JSON Files (*.json);;All Files (*.*)"
         )
         
         if file_path:
@@ -484,7 +515,8 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
                     QMessageBox.warning(
                         self, "Import Failed",
                         f"Could not import FFprobe data from:\n{file_path}\n\n"
-                        "Please check the file is a valid FFprobe JSON output."
+                        "Please check the file contains valid FFprobe JSON output\n"
+                        "(e.g., from: ffprobe -print_format json)."
                     )
                     
             except Exception as e:
@@ -494,16 +526,16 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
                 )
     
     def compare_with_file(self):
-        """Compare current profile with an FFprobe JSON output file"""
+        """Compare current profile with an FFprobe output file"""
         profile = self.get_ffprobe_profile()
         if not profile:
             return
             
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select FFprobe JSON File to Compare",
+            "Select FFprobe Output File to Compare",
             "",
-            "FFprobe Files (*.json);;All Files (*.*)"
+            "FFprobe Output Files (*.txt *.json);;Text Files (*.txt);;JSON Files (*.json);;All Files (*.*)"
         )
         
         if file_path:
@@ -652,14 +684,14 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
             format_dict = {}
         
         # Load into each section's fields
-        self._load_section_data(self.video_inputs, self.video_containers, video_dict)
-        self._load_section_data(self.audio_inputs, self.audio_containers, audio_dict)
-        self._load_section_data(self.format_inputs, self.format_containers, format_dict)
+        self._load_section_data(self.video_inputs, self.video_containers, video_dict, 'video_stream')
+        self._load_section_data(self.audio_inputs, self.audio_containers, audio_dict, 'audio_stream')
+        self._load_section_data(self.format_inputs, self.format_containers, format_dict, 'format')
         
         if hasattr(self, 'preview_text'):
             self.update_preview()
     
-    def _load_section_data(self, field_inputs, field_containers, data_dict):
+    def _load_section_data(self, field_inputs, field_containers, data_dict, section_name=None):
         """
         Load data into one section's field inputs.
         
@@ -689,12 +721,12 @@ class CustomFfprobeDialog(QDialog, ThemeableMixin):
                     values = [""]
                 
                 for val in values:
-                    widget = self._create_input_widget(field_name, str(val))
+                    widget = self._create_input_widget(field_name, str(val), section_name)
                     container_layout.addWidget(widget)
                     field_inputs[field_name].append(widget)
             else:
                 # Field not in data, add one empty widget
-                widget = self._create_input_widget(field_name, "")
+                widget = self._create_input_widget(field_name, "", section_name)
                 container_layout.addWidget(widget)
                 field_inputs[field_name].append(widget)
     
