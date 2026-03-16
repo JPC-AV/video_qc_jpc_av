@@ -82,7 +82,9 @@ def parse_ffprobe(file_path):
 
     # Check format_name and format_long_name specifically
     if expected_format_values.get('format_name') and expected_format_values['format_name'] != "":
-        if expected_format_values['format_name'] not in str(ffmpeg_output['format']['format_name']).replace(',', ' '):
+        actual_fmt = str(ffmpeg_output['format']['format_name']).replace(',', ' ')
+        expected_fmt = str(expected_format_values['format_name']).replace(',', ' ')
+        if expected_fmt not in actual_fmt:
             ffprobe_differences["Encoder setting 'format_name'"] = [ffmpeg_output['format']['format_name'], expected_format_values['format_name']]
     
     if expected_format_values.get('format_long_name') and expected_format_values['format_long_name'] != "":
