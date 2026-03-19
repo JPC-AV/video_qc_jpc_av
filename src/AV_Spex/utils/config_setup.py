@@ -449,3 +449,37 @@ class MediainfoConfig:
           so _handle_dict will auto-deserialize each profile entry.
     """
     mediainfo_profiles: Dict[str, MediainfoProfile] = field(default_factory=dict)
+
+@dataclass
+class FfprobeProfile:
+    """
+    Profile for FFprobe expected values configuration.
+    
+    Uses nested structure matching FFprobe's video_stream/audio_stream/format
+    sections. Reuses the existing FFmpegVideoStream, FFmpegAudioStream, and
+    FFmpegFormat dataclasses.
+    
+    ConfigManager compatibility:
+        - FfprobeProfile has __dataclass_fields__, so _handle_dict will
+          deserialize it from Dict[str, FfprobeProfile].
+        - The nested video_stream/audio_stream/format fields are also
+          dataclasses, so _process_field will recursively deserialize them.
+    """
+    video_stream: FFmpegVideoStream
+    audio_stream: FFmpegAudioStream
+    format: FFmpegFormat
+
+
+@dataclass
+class FfprobeConfig:
+    """
+    Container for FFprobe profiles.
+    
+    Loaded via: config_mgr.get_config('ffprobe', FfprobeConfig)
+    Requires bundled file: config/ffprobe_config.json
+    
+    ConfigManager compatibility:
+        - Dict[str, FfprobeProfile] value type has __dataclass_fields__,
+          so _handle_dict will auto-deserialize each profile entry.
+    """
+    ffprobe_profiles: Dict[str, FfprobeProfile] = field(default_factory=dict)
