@@ -8,7 +8,8 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import (
     ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, 
     FilenameSection, SignalflowConfig, ChecksProfile, ChecksProfilesConfig,
-    ExiftoolConfig, ExiftoolProfile, MediainfoConfig, MediainfoProfile
+    ExiftoolConfig, ExiftoolProfile, MediainfoConfig, MediainfoProfile,
+    FfprobeConfig, FfprobeProfile
 )
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -975,6 +976,219 @@ def delete_mediainfo_profile(profile_name: str) -> bool:
         
     except Exception as e:
         logger.error(f"Error deleting mediainfo profile '{profile_name}': {str(e)}")
+        return False
+
+
+def apply_ffprobe_profile(profile_data):
+    """
+    Apply an FFprobe profile to the current spex configuration.
+    
+    Replaces the existing ffmpeg_values section in spex config.
+    
+    IMPORTANT - ConfigManager compatibility note:
+        SpexConfig.ffmpeg_values is typed as Dict[str, Union[...]].
+        ConfigManager._handle_dict does NOT auto-deserialize Union values,
+        so ffmpeg_values entries are plain dicts (not dataclass instances).
+        Therefore, this function must write plain dicts via asdict().
+    
+    Args:
+        profile_data: FfprobeProfile dataclass instance or dict with
+                     nested 'video_stream', 'audio_stream', 'format' sections
+    """
+    from dataclasses import asdict
+    
+    logger.debug(f"==== APPLYING FFPROBE PROFILE ====")
+
+    # Ensure spex config is loaded into cache
+    config_mgr.get_config('spex', SpexConfig)
+    
+    # Convert profile data to dictionary if it's a dataclass
+    if hasattr(profile_data, '__dataclass_fields__'):
+        profile_dict = asdict(profile_data)
+        logger.debug("Converting FfprobeProfile dataclass to dict")
+    else:
+        profile_dict = profile_data
+        logger.debug("Using profile data as dict directly")
+    
+    # Build the ffmpeg_values structure matching SpexConfig format.
+    ffmpeg_values = {
+        'video_stream': profile_dict.get('video_stream', {}),
+        'audio_stream': profile_dict.get('audio_stream', {}),
+        'format': profile_dict.get('format', {})
+    }
+    
+    logger.debug(f"Video stream fields: {len(ffmpeg_values['video_stream'])}")
+    logger.debug(f"Audio stream fields: {len(ffmpeg_values['audio_stream'])}")
+    logger.debug(f"Format fields: {len(ffmpeg_values['format'])}")
+    
+    # Replace the entire ffmpeg_values section
+    config_mgr.replace_config_section('spex', 'ffmpeg_values', ffmpeg_values)
+    
+    # Force a refresh to ensure changes are persisted
+    config_mgr.refresh_configs()
+    
+    # Verify changes persisted
+    final_config = config_mgr.get_config('spex', SpexConfig)
+    logger.debug("Final verification after refresh: FFprobe values updated")
+    
+    # Verify we can read the sections back
+    ff_values = final_config.ffmpeg_values
+    if isinstance(ff_values, dict) and 'video_stream' in ff_values:
+        logger.debug(f"Verified video_stream has {len(ff_values['video_stream'])} fields")
+    
+    return True
+
+
+def get_ffprobe_profile(profile_name: str):
+    """
+    Get an FFprobe profile by name from the configuration.
+    
+    Args:
+        profile_name (str): The name of the profile to retrieve
+        
+    Returns:
+        FfprobeProfile or None: The requested profile or None if not found
+    """
+    try:
+        config_mgr_instance = ConfigManager()
+        ffprobe_config = config_mgr_instance.get_config('ffprobe', FfprobeConfig)
+        
+        if profile_name in ffprobe_config.ffprobe_profiles:
+            return ffprobe_config.ffprobe_profiles[profile_name]
+    except Exception as e:
+        logger.warning(f"Could not retrieve ffprobe profile '{profile_name}': {str(e)}")
+    
+    return None
+
+
+def get_available_ffprobe_profiles() -> List[str]:
+    """
+    Get a list of all available FFprobe profile names.
+    
+    Returns:
+        List[str]: List of profile names
+    """
+    try:
+        config_mgr_instance = ConfigManager()
+        ffprobe_config = config_mgr_instance.get_config('ffprobe', FfprobeConfig)
+        
+        if hasattr(ffprobe_config, 'ffprobe_profiles'):
+            return list(ffprobe_config.ffprobe_profiles.keys())
+    except Exception as e:
+        logger.warning(f"Could not retrieve ffprobe profiles: {str(e)}")
+    
+    return []
+
+
+def save_ffprobe_profile(profile_name: str, profile_data) -> bool:
+    """
+    Save an FFprobe profile to the configuration.
+    
+    Follows the same pattern as save_mediainfo_profile().
+    
+    Args:
+        profile_name (str): Name for the profile
+        profile_data: FfprobeProfile dataclass or dict with profile data
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    from dataclasses import asdict
+    
+    logger.debug(f"=== SAVING FFPROBE PROFILE ===")
+    logger.debug(f"Profile name: {profile_name}")
+    
+    try:
+        # Get current ffprobe config or create new one
+        try:
+            ffprobe_config = config_mgr.get_config('ffprobe', FfprobeConfig)
+            logger.debug(f"Current profiles before save: {list(ffprobe_config.ffprobe_profiles.keys())}")
+        except:
+            # Config doesn't exist yet, create it
+            ffprobe_config = FfprobeConfig()
+            # Place in cache so replace_config_section can operate on it
+            config_mgr._configs['ffprobe'] = ffprobe_config
+            logger.debug("Creating new ffprobe config")
+        
+        # Ensure ffprobe_profiles dict exists
+        if not hasattr(ffprobe_config, 'ffprobe_profiles'):
+            ffprobe_config.ffprobe_profiles = {}
+        
+        # Create updated profiles dict
+        updated_profiles = {}
+        
+        # Add existing profiles
+        for name, existing_profile in ffprobe_config.ffprobe_profiles.items():
+            if hasattr(existing_profile, '__dataclass_fields__'):
+                updated_profiles[name] = asdict(existing_profile)
+            else:
+                updated_profiles[name] = existing_profile
+        
+        # Add the new profile
+        if hasattr(profile_data, '__dataclass_fields__'):
+            updated_profiles[profile_name] = asdict(profile_data)
+        else:
+            updated_profiles[profile_name] = profile_data
+        
+        logger.debug(f"Updated profiles dict will have: {list(updated_profiles.keys())}")
+        
+        # Use replace_config_section to replace the entire ffprobe_profiles dict
+        config_mgr.replace_config_section('ffprobe', 'ffprobe_profiles', updated_profiles)
+        
+        logger.info(f"Successfully saved ffprobe profile: {profile_name}")
+        
+        # Verify the save worked
+        verification_config = config_mgr.get_config('ffprobe', FfprobeConfig)
+        if profile_name in verification_config.ffprobe_profiles:
+            logger.debug(f"Verification: Profile '{profile_name}' confirmed saved")
+            return True
+        else:
+            logger.error(f"Verification failed: Profile '{profile_name}' not found after save")
+            return False
+        
+    except Exception as e:
+        logger.error(f"Error saving ffprobe profile '{profile_name}': {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def delete_ffprobe_profile(profile_name: str) -> bool:
+    """
+    Delete an FFprobe profile from the configuration.
+    
+    Args:
+        profile_name (str): Name of the profile to delete
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    from dataclasses import asdict
+    
+    try:
+        ffprobe_config = config_mgr.get_config('ffprobe', FfprobeConfig)
+        
+        if profile_name not in ffprobe_config.ffprobe_profiles:
+            logger.warning(f"Profile '{profile_name}' not found, cannot delete")
+            return False
+        
+        # Create updated profiles dict without the deleted profile
+        updated_profiles = {}
+        for k, v in ffprobe_config.ffprobe_profiles.items():
+            if k != profile_name:
+                if hasattr(v, '__dataclass_fields__'):
+                    updated_profiles[k] = asdict(v)
+                else:
+                    updated_profiles[k] = v
+        
+        # Use replace_config_section to replace the entire ffprobe_profiles dict
+        config_mgr.replace_config_section('ffprobe', 'ffprobe_profiles', updated_profiles)
+        
+        logger.info(f"Deleted ffprobe profile: {profile_name}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error deleting ffprobe profile '{profile_name}': {str(e)}")
         return False
 
 

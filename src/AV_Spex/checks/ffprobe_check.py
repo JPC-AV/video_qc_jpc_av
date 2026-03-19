@@ -9,19 +9,23 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
-config_mgr = ConfigManager()
-checks_config = config_mgr.get_config('checks', ChecksConfig)
-spex_config = config_mgr.get_config('spex', SpexConfig)
 
-
-## creates the function 'parse_exiftool' which takes the argument 'file_path' 
-# the majority of this script is defining this function. But the function is not run until the last line fo the script
 def parse_ffprobe(file_path):
+    """
+    Parse an FFprobe JSON file and compare against expected specifications.
+    
+    Loads expected values from the current spex configuration, which may
+    have been set by a custom FFprobe profile.
+    """
+    # Load config fresh each time to pick up any profile changes
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    spex_config = config_mgr.get_config('spex', SpexConfig)
+
     # creates a dictionary of expected keys and values
     expected_video_values = spex_config.ffmpeg_values['video_stream']
     expected_audio_values = spex_config.ffmpeg_values['audio_stream']
     expected_format_values = spex_config.ffmpeg_values['format']
-    expected_settings_values = spex_config.ffmpeg_values['format']['tags']['ENCODER_SETTINGS']
 
     if not os.path.exists(file_path):
         logger.critical(f"Cannot perform ffprobe check! No such file: {file_path}")
@@ -38,62 +42,80 @@ def parse_ffprobe(file_path):
     ffmpeg_output['format'] = ffmpeg_data['format']
 
     ffprobe_differences = {}
-    # Create empty list, "ffprobe_differences"
+    
+    # Check video stream fields
     for expected_key, expected_value in expected_video_values.items():
-        # defines variables "expected_key" and "expected_value" to the dictionary "expected_general"
+        # Skip fields with no expected value (e.g., imported as "")
+        if not expected_value or expected_value == "" or expected_value == []:
+            continue
         if expected_key in ffmpeg_output['ffmpeg_video']:
-            # if the key in the dictionary "General"
             actual_value = str(ffmpeg_output['ffmpeg_video'][expected_key]).strip()
-            # assigns the variable "actual_value" to the value that matches the key in the dictionary "General"
-            # I'm not sure if this should be "key" or "expected_key" honestly. Perhaps there should be an additional line for if key = expected_key or something?
-            if actual_value not in expected_value:
-                # if variable "actual_value" does not match "expected value" defined in first line as the values from the dictionary expected_general, then
+            # Ensure expected_value is always a list for comparison
+            expected_list = expected_value if isinstance(expected_value, list) else [expected_value]
+            if actual_value not in expected_list:
                 ffprobe_differences[expected_key] = [actual_value, expected_value]
 
+    # Check audio stream fields
     for expected_key, expected_value in expected_audio_values.items():
-        # defines variables "expected_key" and "expected_value" to the dictionary "expected_video"
+        # Skip fields with no expected value (e.g., imported as "")
+        if not expected_value or expected_value == "" or expected_value == []:
+            continue
         if expected_key in ffmpeg_output['ffmpeg_audio']:
-            # if the key in the dictionary "Video"
             actual_value = str(ffmpeg_output['ffmpeg_audio'][expected_key]).strip()
-            # assigns the variable "actual_value" to the value that matches the key in the dictionary "Video"
-            # I'm not sure if this should be "key" or "expected_key" honestly. Perhaps there should be an additional line for if key = expected_key or something?
-            if actual_value not in expected_value:
-                # if variable "actual_value" does not match "expected value" defined in first line as the values from the dictionary expected_video, then
+            # Ensure expected_value is always a list for comparison
+            expected_list = expected_value if isinstance(expected_value, list) else [expected_value]
+            if actual_value not in expected_list:
                 ffprobe_differences[expected_key] = [actual_value, expected_value]
 
+    # Check format fields
     for expected_key, expected_value in expected_format_values.items():
-        # defines variables "expected_key" and "expected_value" to the dictionary "expected_audio"
+        # Skip tags - handled separately for encoder settings
+        if expected_key == 'tags':
+            continue
+        # Skip fields with no expected value
+        if not expected_value or expected_value == "" or expected_value == []:
+            continue
         if expected_key not in (ffmpeg_output['format']):
             ffprobe_differences[expected_key] = ['metadata field not found', '']
         elif len(ffmpeg_output['format'][expected_key]) == 0:
-            # count the values in the nested dictionary "format" with 'len', if the values are zero, then:
             ffprobe_differences[expected_key] = ['no metadata value found', '']
 
-    if expected_format_values['format_name'] not in str(ffmpeg_output['format']['format_name']).replace(',', ' '):
-        ffprobe_differences["Encoder setting 'format_name'"] = [ffmpeg_output['format']['format_name'], expected_format_values['format_name']]
-    if expected_format_values['format_long_name'] not in ffmpeg_output['format']['format_long_name']:
-        ffprobe_differences["Encoder setting 'format_long_name'"] = [ffmpeg_output['format']['format_long_name'], expected_format_values['format_long_name']]
+    # Check format_name and format_long_name specifically
+    if expected_format_values.get('format_name') and expected_format_values['format_name'] != "":
+        actual_fmt = str(ffmpeg_output['format']['format_name']).replace(',', ' ')
+        expected_fmt = str(expected_format_values['format_name']).replace(',', ' ')
+        if expected_fmt not in actual_fmt:
+            ffprobe_differences["Encoder setting 'format_name'"] = [ffmpeg_output['format']['format_name'], expected_format_values['format_name']]
+    
+    if expected_format_values.get('format_long_name') and expected_format_values['format_long_name'] != "":
+        if expected_format_values['format_long_name'] not in ffmpeg_output['format']['format_long_name']:
+            ffprobe_differences["Encoder setting 'format_long_name'"] = [ffmpeg_output['format']['format_long_name'], expected_format_values['format_long_name']]
 
-    if 'ENCODER_SETTINGS' not in ffmpeg_output['format']['tags']:
+    # Check for ENCODER_SETTINGS in format tags
+    # This is handled by the signal flow profile system, but we still
+    # check for its presence as a basic validation
+    if 'ENCODER_SETTINGS' not in ffmpeg_output['format'].get('tags', {}):
         ffprobe_differences["Encoder Settings"] = ['No Encoder Settings found, No Signal Flow data embedded', '']
 
     if not ffprobe_differences:
-        # if the list "ffprobe_differences" is empty, then
         logger.info("All specified fields and values found in the ffprobe output.\n")
     else:
-        # if the list "ffprobe_differences" is not empty, then
         logger.critical(f"Some specified ffprobe fields or values are missing or don't match:")
         for ffprobe_key, values in ffprobe_differences.items():
             actual_value, expected_value = values
             if ffprobe_key == 'ENCODER_SETTINGS':
-                # This exception is for if there are no encoder settings embedded (cleaner output)
                 logger.critical(f"{actual_value}")
             elif expected_value == "":
-                # This exception is for if there are missing subfields inside encoder settings (cleaner output)
                 logger.critical(f"{ffprobe_key} {actual_value}")
-            else:    
-                logger.critical(f"Metadata field {ffprobe_key} has a value of: {actual_value}\nThe expected value is: {expected_value}")
+            else:
+                if isinstance(expected_value, list):
+                    expected_display = ", ".join(str(v) for v in expected_value)
+                else:
+                    expected_display = expected_value
+                logger.critical(f"Metadata field {ffprobe_key} has a value of: {actual_value}\nThe expected value is: {expected_display}")
         logger.debug('')
+
+    return ffprobe_differences
 
 
 # Only execute if this file is run directly, not imported

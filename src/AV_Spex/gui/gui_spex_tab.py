@@ -16,12 +16,13 @@ from AV_Spex.gui.gui_custom_filename import CustomFilenameDialog
 from AV_Spex.gui.gui_custom_signalflow import CustomSignalflowDialog
 from AV_Spex.gui.gui_custom_exiftool import CustomExiftoolDialog
 from AV_Spex.gui.gui_custom_mediainfo import CustomMediainfoDialog
+from AV_Spex.gui.gui_custom_ffprobe import CustomFfprobeDialog
 
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import (
     SpexConfig, ChecksConfig, FilenameConfig, 
     SignalflowConfig, SignalflowProfile, ExiftoolConfig, ExiftoolProfile,
-    MediainfoConfig, MediainfoProfile
+    MediainfoConfig, MediainfoProfile, FfprobeConfig, FfprobeProfile
 )
 from AV_Spex.utils.log_setup import logger
 
@@ -143,23 +144,8 @@ class SpexTab(ThemeableMixin):
         vertical_layout.addWidget(self.exiftool_group)
         
         # 4. FFprobe section
-        self.ffprobe_group = QGroupBox("FFprobe Values")
-        theme_manager.style_groupbox(self.ffprobe_group, "top center")
-        self.main_window.spex_tab_group_boxes.append(self.ffprobe_group)
-        
-        ffprobe_layout = QVBoxLayout()
-        
-        ffprobe_button = QPushButton("Open Section")
-        ffprobe_button.clicked.connect(
-            lambda: self.open_new_window('FFprobe Values', 'ffmpeg_values')
-        )
-        
-        ffprobe_layout.addWidget(ffprobe_button)
-        self.ffprobe_group.setLayout(ffprobe_layout)
+        self.ffprobe_group = self.setup_ffprobe_section()
         vertical_layout.addWidget(self.ffprobe_group)
-        
-        # Style the button
-        theme_manager.style_buttons(ffprobe_button)
         
          # 5. Mediatrace section
         self.mediatrace_group = self.setup_mediatrace_section()
@@ -627,6 +613,242 @@ class SpexTab(ThemeableMixin):
                 config_mgr.save_config('spex', is_last_used=True)
                 logger.debug(f"Applied mediainfo profile: {selected_option}")
 
+    # ── FFprobe section ──────────────────────────────────────────────
+
+    def setup_ffprobe_section(self):
+        """Setup the FFprobe section with profiles — mirrors setup_mediainfo_section()"""
+        # Load ffprobe config
+        try:
+            self.ffprobe_config = config_mgr.get_config("ffprobe", FfprobeConfig)
+        except:
+            # If config doesn't exist yet, create a default one
+            self.ffprobe_config = FfprobeConfig()
+        
+        # Create and style the group box
+        ffprobe_group = QGroupBox("FFprobe Values")
+        theme_manager = ThemeManager.instance()
+        theme_manager.style_groupbox(ffprobe_group, "top center")
+        self.main_window.spex_tab_group_boxes.append(ffprobe_group)
+        
+        # Create layout
+        ffprobe_layout = QVBoxLayout()
+        
+        # Add a dropdown menu for ffprobe profiles
+        ffprobe_profile_label = QLabel("Expected FFprobe profiles:")
+        ffprobe_profile_label.setStyleSheet("font-weight: bold;")
+        ffprobe_layout.addWidget(ffprobe_profile_label)
+        
+        self.ffprobe_profile_dropdown = QComboBox()
+        self.ffprobe_profile_dropdown.addItem("Select a profile...")
+        
+        # Add any existing ffprobe profiles from config
+        if hasattr(self.ffprobe_config, 'ffprobe_profiles') and self.ffprobe_config.ffprobe_profiles:
+            for profile_name in self.ffprobe_config.ffprobe_profiles.keys():
+                self.ffprobe_profile_dropdown.addItem(profile_name)
+        
+        # Set initial state based on current config
+        matched_profile = self._find_matching_ffprobe_profile()
+        if matched_profile:
+            self.ffprobe_profile_dropdown.setCurrentText(matched_profile)
+        else:
+            self.ffprobe_profile_dropdown.setCurrentText("Select a profile...")
+        
+        self.ffprobe_profile_dropdown.currentIndexChanged.connect(self.on_ffprobe_profile_changed)
+        ffprobe_layout.addWidget(self.ffprobe_profile_dropdown)
+        
+        # Store the layout as instance variable
+        self.ffprobe_section_layout = ffprobe_layout
+        
+        # Add custom ffprobe buttons
+        self.add_custom_ffprobe_button()
+        self.add_edit_ffprobe_button()
+        
+        # Open section button
+        ffprobe_button = QPushButton("Open Section")
+        ffprobe_button.clicked.connect(
+            lambda: self.open_new_window('FFprobe Values', 'ffmpeg_values')
+        )
+        ffprobe_layout.addWidget(ffprobe_button)
+        
+        # Set the layout for the group
+        ffprobe_group.setLayout(ffprobe_layout)
+        ffprobe_group.setMinimumHeight(225)
+        
+        # Style the buttons
+        theme_manager.style_buttons(ffprobe_layout)
+        
+        return ffprobe_group
+
+    def _find_matching_ffprobe_profile(self):
+        """Find which profile matches the current ffprobe values"""
+        if not hasattr(self.ffprobe_config, 'ffprobe_profiles') or not self.ffprobe_config.ffprobe_profiles:
+            return None
+        
+        current_values = spex_config.ffmpeg_values
+        
+        # Compare current values with each profile
+        for profile_name, profile in self.ffprobe_config.ffprobe_profiles.items():
+            if self._compare_ffprobe_values(current_values, profile):
+                return profile_name
+        
+        return None
+
+    def _compare_ffprobe_values(self, current, profile):
+        """
+        Compare current spex ffmpeg values with a saved profile.
+        
+        current is a dict with 'video_stream', 'audio_stream', 'format'
+        (plain dicts from SpexConfig due to Union type handling in ConfigManager).
+        
+        profile is a FfprobeProfile dataclass with .video_stream, .audio_stream, .format.
+        """
+        from dataclasses import asdict
+        
+        profile_dict = asdict(profile) if hasattr(profile, '__dataclass_fields__') else profile
+        
+        for section_key in ('video_stream', 'audio_stream', 'format'):
+            profile_section = profile_dict.get(section_key, {})
+            current_section = current.get(section_key, {}) if isinstance(current, dict) else {}
+            
+            # If current_section is a dataclass, convert
+            if hasattr(current_section, '__dataclass_fields__'):
+                current_section = asdict(current_section)
+            
+            for field_name, profile_value in profile_section.items():
+                # Skip tags comparison (handled by signal flow system)
+                if field_name == 'tags':
+                    continue
+                if field_name in current_section:
+                    if current_section[field_name] != profile_value:
+                        return False
+        
+        return True
+
+    def add_custom_ffprobe_button(self):
+        """Add a button to create custom FFprobe profiles"""
+        custom_button = QPushButton("Create Custom Profile...")
+        custom_button.clicked.connect(self.show_custom_ffprobe_dialog)
+        self.ffprobe_section_layout.addWidget(custom_button)
+
+    def add_edit_ffprobe_button(self):
+        """Add a button to edit existing FFprobe profiles"""
+        edit_button = QPushButton("Edit Selected Profile...")
+        edit_button.clicked.connect(self.show_edit_ffprobe_dialog)
+        self.ffprobe_section_layout.addWidget(edit_button)
+
+    def show_custom_ffprobe_dialog(self, edit_mode=False, profile_name=None):
+        """Show the custom FFprobe dialog — mirrors show_custom_mediainfo_dialog()"""
+        from AV_Spex.gui.gui_custom_ffprobe import CustomFfprobeDialog
+        
+        dialog = CustomFfprobeDialog(self.main_window, edit_mode=edit_mode, profile_name=profile_name)
+        
+        if edit_mode and profile_name:
+            # Load the existing profile data
+            try:
+                ffprobe_config = config_mgr.get_config("ffprobe", FfprobeConfig)
+                if profile_name in ffprobe_config.ffprobe_profiles:
+                    profile_data = ffprobe_config.ffprobe_profiles[profile_name]
+                    dialog.load_profile_data(profile_data)
+            except Exception as e:
+                QMessageBox.warning(self.main_window, "Error", 
+                                f"Error loading profile: {str(e)}")
+                return
+        else:
+            # Load current ffmpeg values as defaults for new profile
+            dialog.load_profile_data(spex_config.ffmpeg_values)
+        
+        result = dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted:
+            profile_info = dialog.get_profile()
+            if profile_info:
+                try:
+                    profile_name = profile_info['name']
+                    profile_data = profile_info['data']
+                    is_edit = profile_info.get('is_edit', False)
+                    
+                    # Get the ConfigManager instance
+                    config_manager = ConfigManager()
+                    config_manager.refresh_configs()
+                    
+                    # Get the ffprobe configuration
+                    try:
+                        ffprobe_config = config_manager.get_config('ffprobe', FfprobeConfig)
+                    except:
+                        ffprobe_config = FfprobeConfig()
+                    
+                    # Update the profiles
+                    if not hasattr(ffprobe_config, 'ffprobe_profiles'):
+                        ffprobe_config.ffprobe_profiles = {}
+                    
+                    # Add or update the profile
+                    ffprobe_config.ffprobe_profiles[profile_name] = profile_data
+                    
+                    # Update the cached config
+                    config_manager._configs['ffprobe'] = ffprobe_config
+                    
+                    # Save the updated config
+                    config_manager.save_config('ffprobe', is_last_used=True)
+                    
+                    # Update dropdown if it's a new profile
+                    if not is_edit:
+                        # Check if profile already exists in dropdown
+                        found = False
+                        for i in range(self.ffprobe_profile_dropdown.count()):
+                            if self.ffprobe_profile_dropdown.itemText(i) == profile_name:
+                                found = True
+                                break
+                        
+                        if not found:
+                            self.ffprobe_profile_dropdown.addItem(profile_name)
+                    
+                    # Set as current selection
+                    self.ffprobe_profile_dropdown.setCurrentText(profile_name)
+                    
+                    # Apply the profile
+                    from AV_Spex.utils import config_edit
+                    config_edit.apply_ffprobe_profile(profile_data)
+                    config_manager.save_config('spex', is_last_used=True)
+                    
+                    action = "updated" if is_edit else "added"
+                    logger.debug(f"Successfully {action} ffprobe profile '{profile_name}'")
+                    QMessageBox.information(self.main_window, "Success", 
+                                        f"Profile '{profile_name}' {action} successfully!")
+                    
+                except Exception as e:
+                    QMessageBox.warning(self.main_window, "Error", 
+                                    f"Error saving profile: {str(e)}")
+
+    def show_edit_ffprobe_dialog(self):
+        """Show the dialog to edit the currently selected FFprobe profile"""
+        selected_profile = self.ffprobe_profile_dropdown.currentText()
+        
+        if selected_profile == "Select a profile...":
+            QMessageBox.information(self.main_window, "No Profile Selected", 
+                                "Please select a profile to edit from the dropdown.")
+            return
+        
+        # Show the dialog in edit mode
+        self.show_custom_ffprobe_dialog(edit_mode=True, profile_name=selected_profile)
+    
+    def on_ffprobe_profile_changed(self, index):
+        """Handle FFprobe profile selection change"""
+        try:
+            ffprobe_config = config_mgr.get_config("ffprobe", FfprobeConfig)
+        except:
+            # If config doesn't exist, return
+            return
+        
+        selected_option = self.ffprobe_profile_dropdown.itemText(index)
+        
+        if selected_option != "Select a profile..." and hasattr(ffprobe_config, 'ffprobe_profiles'):
+            if selected_option in ffprobe_config.ffprobe_profiles:
+                profile = ffprobe_config.ffprobe_profiles[selected_option]
+                from AV_Spex.utils import config_edit
+                config_edit.apply_ffprobe_profile(profile)
+                config_mgr.save_config('spex', is_last_used=True)
+                logger.debug(f"Applied ffprobe profile: {selected_option}")
+
     def open_new_window(self, title, config_attribute_name):
         """Open a new window to display configuration details."""
         checks_config = config_mgr.get_config('checks', ChecksConfig)
@@ -1078,6 +1300,33 @@ class SpexTab(ThemeableMixin):
                 self.mediainfo_profile_dropdown.setCurrentText("Select a profile...")
             
             self.mediainfo_profile_dropdown.blockSignals(False)
+        
+        # ── FFprobe dropdown ──
+        if hasattr(self, 'ffprobe_profile_dropdown'):
+            self.ffprobe_profile_dropdown.blockSignals(True)
+            
+            # Reload config
+            try:
+                self.ffprobe_config = config_mgr.get_config("ffprobe", FfprobeConfig)
+            except:
+                self.ffprobe_config = FfprobeConfig()
+            
+            # Rebuild dropdown items
+            self.ffprobe_profile_dropdown.clear()
+            self.ffprobe_profile_dropdown.addItem("Select a profile...")
+            
+            if hasattr(self.ffprobe_config, 'ffprobe_profiles') and self.ffprobe_config.ffprobe_profiles:
+                for profile_name in self.ffprobe_config.ffprobe_profiles.keys():
+                    self.ffprobe_profile_dropdown.addItem(profile_name)
+            
+            # Try to match current values
+            matched = self._find_matching_ffprobe_profile()
+            if matched:
+                self.ffprobe_profile_dropdown.setCurrentText(matched)
+            else:
+                self.ffprobe_profile_dropdown.setCurrentText("Select a profile...")
+            
+            self.ffprobe_profile_dropdown.blockSignals(False)
     
     def on_theme_changed(self, palette):
         """Handle theme changes for this tab"""
