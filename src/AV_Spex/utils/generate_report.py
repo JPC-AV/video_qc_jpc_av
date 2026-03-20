@@ -1683,9 +1683,28 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 <li style="margin-bottom: 3px;"><strong>General broadcast range violations</strong> — violations 
                     that don't match a specific spatial pattern</li>
             </ul>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">How frames are sampled:</p>
+            <p style="margin: 0 0 6px 0;">
+                Each analysis period reports a sampling summary in the format:<br>
+                <code style="background: #eee; padding: 1px 4px; border-radius: 2px;">QCTools targeted N frames → M mapped to period → T total samples analyzed</code>
+            </p>
+            <ul style="margin: 4px 0 10px 16px; padding: 0;">
+                <li style="margin-bottom: 3px;"><strong>QCTools targeted</strong> — the number of BRNG violations 
+                    found in the initial scan of the full QCTools report (capped at 100). These are the frames 
+                    QCTools flagged as having out-of-range pixels anywhere in the video.</li>
+                <li style="margin-bottom: 3px;"><strong>Mapped to period</strong> — how many of those violations 
+                    have timestamps that fall within this specific analysis period's time window. Violations 
+                    from other parts of the video are not relevant to this period.</li>
+                <li style="margin-bottom: 3px;"><strong>Total samples analyzed</strong> — the actual number of 
+                    frames examined by the differential detector. If the mapped violations alone provide 50 or 
+                    more frames, only those frames are analyzed. If fewer than 50 map to the period, 
+                    evenly distributed samples are added across the segment to ensure adequate coverage, 
+                    bringing the total up to approximately 100 frames (after deduplication).</li>
+            </ul>
             <p style="margin: 0; color: #777;">
-                Frames to analyze are selected by targeting timestamps where QCTools detected BRNG values, 
-                supplemented with evenly distributed samples to ensure coverage across each period.
+                Because the differential detector compares two decoded video frames and runs multi-method 
+                computer vision analysis on every sample, this targeted approach keeps processing time 
+                manageable while concentrating analysis on the frames most likely to contain violations.
             </p>
         </div>
         """
