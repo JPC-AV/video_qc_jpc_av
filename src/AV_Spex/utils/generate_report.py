@@ -253,6 +253,7 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
                 frame_outputs['refinement_iterations'] = enhanced_data['refinement_iterations']
                 frame_outputs['refinement_history'] = enhanced_data.get('refinement_history', [])
                 frame_outputs['initial_borders'] = enhanced_data.get('initial_borders')
+                frame_outputs['initial_brng_analysis'] = enhanced_data.get('initial_brng_analysis')
                 frame_outputs['final_borders'] = enhanced_data.get('final_borders')
                 
                 # Check for refinement comparison visualization
@@ -1845,6 +1846,19 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 
                 if diagnostic_counts:
                     total_v = len(violations)
+                    refinement_iters = frame_outputs.get('refinement_iterations', 0)
+                    
+                    # Build initial-run diagnostics for comparison if refinement occurred
+                    initial_diag_counts = {}
+                    if refinement_iters > 0 and frame_outputs.get('initial_brng_analysis'):
+                        initial_violations = frame_outputs['initial_brng_analysis'].get('violations', [])
+                        for v in initial_violations:
+                            for diag in v.get('diagnostics', []):
+                                key = "Edge artifacts" if diag.startswith("Edge artifacts") else diag
+                                if key == "Border adjustment recommended":
+                                    key = "Border adjustment flags"
+                                initial_diag_counts[key] = initial_diag_counts.get(key, 0) + 1
+
                     html += """
                     <div style="margin: 16px 0;">
                         <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Violation Types Detected</p>
@@ -1880,6 +1894,18 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                         pct = (count / total_v) * 100
                         bar_color = type_colors.get(diag_type, '#90a4ae')
                         
+                        # Show before → after if refinement happened
+                        initial_count = initial_diag_counts.get(diag_type)
+                        count_display = f"{count} frames ({pct:.1f}%)"
+                        if initial_count is not None and refinement_iters > 0:
+                            initial_total = len(initial_violations) if initial_violations else 1
+                            initial_pct = (initial_count / initial_total) * 100
+                            count_display = (
+                                f'<span style="color: #999; text-decoration: line-through;">'
+                                f'{initial_count} ({initial_pct:.1f}%)</span>'
+                                f' → {count} frames ({pct:.1f}%)'
+                            )
+                        
                         # Build label
                         label = diag_type
                         if diag_type == "Edge artifacts" and edge_artifact_edges:
@@ -1889,7 +1915,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                         <div style="margin: 4px 0;">
                             <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 2px;">
                                 <span style="color: #333;">{label}</span>
-                                <span style="color: #666;">{count} frames ({pct:.1f}%)</span>
+                                <span style="color: #666;">{count_display}</span>
                             </div>
                             <div style="background-color: #e8ddd5; border-radius: 3px; height: 10px; overflow: hidden;">
                                 <div style="background-color: {bar_color}; height: 100%; width: {pct:.1f}%; 

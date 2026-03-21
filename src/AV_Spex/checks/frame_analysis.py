@@ -3242,6 +3242,7 @@ class EnhancedFrameAnalysis:
                 results['refinement_history'] = refinement_history
                 results['final_borders'] = asdict(border_results)
                 results['final_brng_analysis'] = asdict(brng_results) if brng_results else None
+                results['initial_brng_analysis'] = asdict(initial_brng) if initial_brng else None
                 if signalstats_enabled:
                     results['final_signalstats'] = asdict(signalstats_results)
                 
