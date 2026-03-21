@@ -3232,10 +3232,11 @@ class EnhancedFrameAnalysis:
                         logger.info(f"  Violations: {iteration_data['violations_after']} (no reduction)")
                     
                     # Check for improvement
-                    improved = self._is_meaningful_improvement(previous_brng, brng_results)
-                    if not improved:
-                        logger.info("  Stopping refinement - further adjustments unlikely to help")
-                        break
+                    improved = self._is_meaningful_improvement(
+                        previous_brng, brng_results,
+                        previous_area=previous_area,
+                        current_area=new_area
+                    )
                 
                 # After refinement loop completes
                 results['refinement_iterations'] = refinement_iterations
@@ -3354,21 +3355,50 @@ class EnhancedFrameAnalysis:
         return 0
     
     def _is_meaningful_improvement(self, previous: BRNGAnalysisResult, 
-                                  current: BRNGAnalysisResult) -> bool:
-        """Check if refinement produced meaningful improvement"""
+                              current: BRNGAnalysisResult,
+                              previous_area: Tuple = None,
+                              current_area: Tuple = None) -> bool:
+        """Check if refinement produced meaningful improvement or if further refinement is still warranted."""
         if not previous or not current:
             return False
         
         prev_violations = len(previous.violations)
         curr_violations = len(current.violations)
         
-        if curr_violations < prev_violations * 0.8:  # 20% improvement
+        # Original check: violation count dropped by 20%+
+        if curr_violations < prev_violations * 0.8:
             return True
         
+        # Original check: worst-case severity dropped by 20%+
         prev_worst = previous.violations[0].violation_percentage if previous.violations else 0
         curr_worst = current.violations[0].violation_percentage if current.violations else 0
+        if curr_worst < prev_worst * 0.8:
+            return True
         
-        if curr_worst < prev_worst * 0.8:  # 20% improvement in worst case
+        # even if violation count didn't drop (or increased).
+        # A high edge % means the border is still cutting through violation regions.
+        curr_edge_pct = current.aggregate_patterns.get('edge_violation_percentage', 0)
+        prev_edge_pct = previous.aggregate_patterns.get('edge_violation_percentage', 0)
+        
+        if curr_edge_pct > 50:
+            # Edge % still dominant — only stop if borders didn't actually move
+            if previous_area and current_area:
+                width_change = abs(current_area[2] - previous_area[2])
+                height_change = abs(current_area[3] - previous_area[3])
+                border_moved = (width_change > 0 or height_change > 0)
+                if border_moved:
+                    logger.debug(f"  Edge violations still high ({curr_edge_pct:.1f}%) "
+                            f"and border moved — continuing refinement")
+                    return True
+                else:
+                    logger.debug(f"  Edge violations high ({curr_edge_pct:.1f}%) "
+                            f"but border didn't move — stopping refinement")
+                    return False
+            # No area info available, but edge % is very high — keep trying
+            return True
+        
+        if prev_edge_pct > 0 and curr_edge_pct < prev_edge_pct * 0.7:
+            logger.debug(f"  Edge violation % dropped: {prev_edge_pct:.1f}% → {curr_edge_pct:.1f}%")
             return True
         
         return False
