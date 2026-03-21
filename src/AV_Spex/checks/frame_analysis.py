@@ -1701,8 +1701,14 @@ class DifferentialBRNGAnalyzer:
 
     def _detect_edge_violations_enhanced(self, violation_mask, edge_width=15):
         """
-        Enhanced edge violation detection that better identifies blanking patterns.
-        Detects linear patterns even when pixels aren't directly adjacent.
+        Enhanced edge violation detection that identifies blanking patterns
+        by comparing edge violation density against interior density.
+        
+        Without this comparison, frames with violations spread throughout
+        the frame (content-level BRNG issues) get misclassified as having
+        edge artifacts, because the edge strips naturally contain violations
+        too. The interior baseline distinguishes true edge-specific patterns
+        (blanking, border artifacts) from general broadcast range violations.
         """
         h, w = violation_mask.shape
         edge_info = {
@@ -1713,8 +1719,15 @@ class DifferentialBRNGAnalyzer:
             'linear_patterns': {},
             'blanking_depth': {},
             'severity': 'none',
-            'expansion_recommendations': {}
+            'expansion_recommendations': {},
+            'interior_density': 0.0
         }
+        
+        # Calculate interior violation density as baseline for comparison.
+        # This is the region inset by edge_width on all sides.
+        interior = violation_mask[edge_width:-edge_width, edge_width:-edge_width]
+        interior_density = (np.sum(interior > 0) / interior.size * 100) if interior.size > 0 else 0
+        edge_info['interior_density'] = interior_density
         
         # Define edges with increased scan depth
         edges_to_check = [
@@ -1728,7 +1741,7 @@ class DifferentialBRNGAnalyzer:
             if edge_region.size == 0:
                 continue
             
-            # Basic violation percentage
+            # Basic violation percentage in this edge strip
             violation_pixels = np.sum(edge_region > 0)
             total_pixels = edge_region.size
             violation_percentage = (violation_pixels / total_pixels) * 100 if total_pixels > 0 else 0
@@ -1790,28 +1803,43 @@ class DifferentialBRNGAnalyzer:
                 
                 edge_info['blanking_depth'][edge_name] = max_depth
             
-            # Determine if this edge has significant violations
-            if violation_percentage > 15 or linear_percentage > 50:  # Was 5% and 30%
+            # Compare edge density to interior density to determine if violations
+            # are edge-specific or just part of a frame-wide distribution.
+            if interior_density > 0:
+                density_ratio = violation_percentage / interior_density
+                excess_density = violation_percentage - interior_density
+            else:
+                # No interior violations — any edge violations are edge-specific
+                density_ratio = float('inf') if violation_percentage > 0 else 0
+                excess_density = violation_percentage
+            
+            # Flag as edge violation only if:
+            #   - Strong linear patterns (true blanking), OR
+            #   - Edge density is meaningfully higher than interior
+            is_edge_specific = (
+                linear_percentage > 50 or
+                (violation_percentage > 15 and (density_ratio >= 2.0 or excess_density >= 15))
+            )
+            
+            if is_edge_specific:
                 edge_info['edges_affected'].append(edge_name)
                 edge_info['has_edge_violations'] = True
                 
-                # CHANGE 6: Higher threshold for continuous edges
-                if linear_percentage > 70:  # Was 50%
+                if linear_percentage > 70:
                     edge_info['continuous_edges'].append(edge_name)
                 
-                # CHANGE 7: Less aggressive expansion
                 if edge_name in edge_info['blanking_depth']:
                     recommended_expansion = edge_info['blanking_depth'][edge_name] + 2
                     edge_info['expansion_recommendations'][edge_name] = recommended_expansion
         
         # Refine severity assessment
-        if len(edge_info['continuous_edges']) >= 3:  # Was 2
+        if len(edge_info['continuous_edges']) >= 3:
             edge_info['severity'] = 'high'
-        elif len(edge_info['continuous_edges']) >= 2:  # Was 1
+        elif len(edge_info['continuous_edges']) >= 2:
             edge_info['severity'] = 'medium'
-        elif len(edge_info['edges_affected']) >= 3:  # Was 2
+        elif len(edge_info['edges_affected']) >= 3:
             edge_info['severity'] = 'low'
-        elif len(edge_info['edges_affected']) >= 2 and max(edge_info['linear_patterns'].values(), default=0) > 60:  # Was 1 edge and 30%
+        elif len(edge_info['edges_affected']) >= 2 and max(edge_info['linear_patterns'].values(), default=0) > 60:
             edge_info['severity'] = 'low'
         
         return edge_info
@@ -2415,7 +2443,7 @@ class IntegratedSignalstatsAnalyzer:
         
         # Log final comparison summary
         logger.info(f"\n  === Signalstats Analysis Summary ===")
-        logger.info(f"  Active area results (what matters for QC):")
+        logger.info(f"  Active area results:")
         logger.info(f"    Frames with violations: {total_violations:,} / {total_frames:,} ({violation_pct:.1f}%)")
         logger.info(f"    Max BRNG value: {max_brng:.4f}%")
         logger.info(f"    Average BRNG value: {avg_brng:.4f}%")
