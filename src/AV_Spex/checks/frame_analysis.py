@@ -1927,13 +1927,43 @@ class DifferentialBRNGAnalyzer:
                 expansion_recs[edge] = 10 if edge_count > len(violations) * 0.5 else 5
         
         # Determine if border adjustment is needed with more nuanced logic
+        # Log the values feeding into the decision for diagnostic visibility
+        max_linear_score = max(avg_linear_patterns.values(), default=0)
+        logger.debug(f"  Border adjustment decision inputs:")
+        logger.debug(f"    edge_violation_pct: {edge_violation_pct:.1f}%")
+        logger.debug(f"    continuous_edge_pct: {continuous_edge_pct:.1f}%")
+        logger.debug(f"    linear_pattern_pct: {linear_pattern_pct:.1f}%")
+        logger.debug(f"    max avg linear score: {max_linear_score:.1f}")
+        logger.debug(f"    unique edges affected: {unique_edges}")
+        
         requires_adjustment = (
             linear_pattern_pct > 20 or  # Strong linear patterns
             continuous_edge_pct > 15 or  # Many continuous edges
-            edge_violation_pct > 30 or  # Many edge violations
+            (edge_violation_pct > 30 and continuous_edge_pct > 0) or  # Edge violations with SOME linear evidence
+            (edge_violation_pct > 60 and continuous_edge_pct == 0) or  # Overwhelming edge concentration even without lines
             (continuous_edge_pct > 10 and len(unique_edges) >= 2) or  # Multiple edges affected
             any(score > 40 for score in avg_linear_patterns.values())  # High linear scores
         )
+        
+        if requires_adjustment:
+            # Log which condition(s) triggered
+            triggers = []
+            if linear_pattern_pct > 20:
+                triggers.append(f"linear_pattern_pct ({linear_pattern_pct:.1f}%) > 20%")
+            if continuous_edge_pct > 15:
+                triggers.append(f"continuous_edge_pct ({continuous_edge_pct:.1f}%) > 15%")
+            if edge_violation_pct > 30 and continuous_edge_pct > 0:
+                triggers.append(f"edge_violation_pct ({edge_violation_pct:.1f}%) > 30% with continuous edges")
+            if edge_violation_pct > 60 and continuous_edge_pct == 0:
+                triggers.append(f"edge_violation_pct ({edge_violation_pct:.1f}%) > 60% (no continuous edges)")
+            if continuous_edge_pct > 10 and len(unique_edges) >= 2:
+                triggers.append(f"continuous_edge_pct ({continuous_edge_pct:.1f}%) > 10% on {len(unique_edges)} edges")
+            if any(score > 40 for score in avg_linear_patterns.values()):
+                high_scores = {e: s for e, s in avg_linear_patterns.items() if s > 40}
+                triggers.append(f"high avg linear scores: {high_scores}")
+            logger.debug(f"    → Requires adjustment, triggered by: {'; '.join(triggers)}")
+        else:
+            logger.debug(f"    → No border adjustment needed")
         
         return {
             'requires_border_adjustment': requires_adjustment,
