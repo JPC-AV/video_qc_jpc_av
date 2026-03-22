@@ -3818,7 +3818,7 @@ class EnhancedFrameAnalysis:
                             for edge in edges_str.split(", "):
                                 edge_artifact_edges.add(edge.strip())
                     elif diag == "Border adjustment recommended":
-                        diagnostic_counts["Border adjustment flags"] = diagnostic_counts.get("Border adjustment flags", 0) + 1
+                        continue
                     else:
                         diagnostic_counts[diag] = diagnostic_counts.get(diag, 0) + 1
         
@@ -3828,7 +3828,7 @@ class EnhancedFrameAnalysis:
         
         # Order diagnostics by relevance
         priority_order = ["Sub-black detected", "Highlight clipping", "Edge artifacts", 
-                        "Linear blanking patterns", "Border adjustment flags", 
+                        "Linear blanking patterns", 
                         "General broadcast range violations"]
         
         logged_any = False
