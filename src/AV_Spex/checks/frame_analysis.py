@@ -1451,19 +1451,19 @@ class DifferentialBRNGAnalyzer:
         if sensitivity == 'strict':
             magenta_threshold = 12
             min_change = 10
-            voting_threshold = 2  # Require 2/3 methods
+            voting_threshold = 2  # Require 2/4 methods
             min_component_size = 15
             morph_iterations = 2
         elif sensitivity == 'visualization':
             magenta_threshold = 6
             min_change = 5
-            voting_threshold = 1  # Require only 1/3 methods
+            voting_threshold = 1  # Require only 1/4 methods
             min_component_size = 3
             morph_iterations = 1
         else:  # normal
             magenta_threshold = 10
             min_change = 8
-            voting_threshold = 2
+            voting_threshold = 2  # Require 2/4 methods
             min_component_size = 10
             morph_iterations = 2
         
@@ -1516,12 +1516,27 @@ class DifferentialBRNGAnalyzer:
         value_stable = (h_v.astype(np.float32) - o_v.astype(np.float32)) > -10
         hsv_magenta = is_magenta_hue & sat_increase & value_stable
         
-        # Combine methods with voting
+        # Method 4: Green-channel-drop detection for above-broadcast pixels
+        # When bright/super-white pixels (e.g. blown-out sky) are replaced with
+        # magenta by signalstats, R and B stay high (already near 255) but G drops
+        # dramatically. Methods 1-2 miss this because they require R/B to *increase*.
+        green_drop_threshold = magenta_threshold * 2  # Require significant green loss
+        green_drop = (
+            (green_diff < -green_drop_threshold) &          # Green dropped significantly
+            (h_r.astype(np.float32) > 150) &                # Highlighted R is high (magenta)
+            (h_b.astype(np.float32) > 150) &                # Highlighted B is high (magenta)
+            (h_g.astype(np.float32) < 100) &                # Highlighted G is low (magenta)
+            (np.abs(blue_diff) < green_drop_threshold) &    # B didn't change much
+            (np.abs(red_diff) < green_drop_threshold)       # R didn't change much
+        )
+        
+        # Combine methods with voting (4 methods, threshold still requires 2)
         method1 = strict_magenta.astype(np.uint8)
         method2 = ratio_based.astype(np.uint8)
         method3 = hsv_magenta.astype(np.uint8)
+        method4 = green_drop.astype(np.uint8)
         
-        vote_sum = method1 + method2 + method3
+        vote_sum = method1 + method2 + method3 + method4
         combined_mask = (vote_sum >= voting_threshold).astype(np.uint8) * 255
         
         # Morphological operations (less aggressive for visualization)
