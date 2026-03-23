@@ -1679,8 +1679,6 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     15px of frame edges, suggesting border/blanking issues</li>
                 <li style="margin-bottom: 3px;"><strong>Linear blanking patterns</strong> — edge violations 
                     forming continuous horizontal or vertical lines</li>
-                <li style="margin-bottom: 3px;"><strong>Border adjustment flags</strong> — edge violations severe 
-                    enough to suggest the detected active picture area should be expanded</li>
                 <li style="margin-bottom: 3px;"><strong>General broadcast range violations</strong> — violations 
                     that don't match a specific spatial pattern</li>
             </ul>
@@ -1840,7 +1838,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                                     for edge in edges_str.split(", "):
                                         edge_artifact_edges.add(edge.strip())
                             elif diag == "Border adjustment recommended":
-                                diagnostic_counts["Border adjustment flags"] = diagnostic_counts.get("Border adjustment flags", 0) + 1
+                                continue
                             else:
                                 diagnostic_counts[diag] = diagnostic_counts.get(diag, 0) + 1
                 
@@ -1856,7 +1854,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                             for diag in v.get('diagnostics', []):
                                 key = "Edge artifacts" if diag.startswith("Edge artifacts") else diag
                                 if key == "Border adjustment recommended":
-                                    key = "Border adjustment flags"
+                                    continue
                                 initial_diag_counts[key] = initial_diag_counts.get(key, 0) + 1
 
                     html += """
@@ -1866,7 +1864,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     
                     # Sort by count (descending)
                     priority_order = ["Sub-black detected", "Highlight clipping", "Edge artifacts", 
-                                     "Linear blanking patterns", "Border adjustment flags",
+                                     "Linear blanking patterns",
                                      "General broadcast range violations"]
                     
                     sorted_diags = []
@@ -1883,7 +1881,6 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                         "Highlight clipping": "#ef6c00",
                         "Edge artifacts": "#bf971b",
                         "Linear blanking patterns": "#7b1fa2",
-                        "Border adjustment flags": "#795548",
                         "Continuous edge artifacts": "#bf971b",
                         "General broadcast range violations": "#607d8b",
                         "Border detection likely missed blanking": "#d32f2f",

@@ -1701,8 +1701,14 @@ class DifferentialBRNGAnalyzer:
 
     def _detect_edge_violations_enhanced(self, violation_mask, edge_width=15):
         """
-        Enhanced edge violation detection that better identifies blanking patterns.
-        Detects linear patterns even when pixels aren't directly adjacent.
+        Enhanced edge violation detection that identifies blanking patterns
+        by comparing edge violation density against interior density.
+        
+        Without this comparison, frames with violations spread throughout
+        the frame (content-level BRNG issues) get misclassified as having
+        edge artifacts, because the edge strips naturally contain violations
+        too. The interior baseline distinguishes true edge-specific patterns
+        (blanking, border artifacts) from general broadcast range violations.
         """
         h, w = violation_mask.shape
         edge_info = {
@@ -1713,8 +1719,15 @@ class DifferentialBRNGAnalyzer:
             'linear_patterns': {},
             'blanking_depth': {},
             'severity': 'none',
-            'expansion_recommendations': {}
+            'expansion_recommendations': {},
+            'interior_density': 0.0
         }
+        
+        # Calculate interior violation density as baseline for comparison.
+        # This is the region inset by edge_width on all sides.
+        interior = violation_mask[edge_width:-edge_width, edge_width:-edge_width]
+        interior_density = (np.sum(interior > 0) / interior.size * 100) if interior.size > 0 else 0
+        edge_info['interior_density'] = interior_density
         
         # Define edges with increased scan depth
         edges_to_check = [
@@ -1728,7 +1741,7 @@ class DifferentialBRNGAnalyzer:
             if edge_region.size == 0:
                 continue
             
-            # Basic violation percentage
+            # Basic violation percentage in this edge strip
             violation_pixels = np.sum(edge_region > 0)
             total_pixels = edge_region.size
             violation_percentage = (violation_pixels / total_pixels) * 100 if total_pixels > 0 else 0
@@ -1790,28 +1803,43 @@ class DifferentialBRNGAnalyzer:
                 
                 edge_info['blanking_depth'][edge_name] = max_depth
             
-            # Determine if this edge has significant violations
-            if violation_percentage > 15 or linear_percentage > 50:  # Was 5% and 30%
+            # Compare edge density to interior density to determine if violations
+            # are edge-specific or just part of a frame-wide distribution.
+            if interior_density > 0:
+                density_ratio = violation_percentage / interior_density
+                excess_density = violation_percentage - interior_density
+            else:
+                # No interior violations — any edge violations are edge-specific
+                density_ratio = float('inf') if violation_percentage > 0 else 0
+                excess_density = violation_percentage
+            
+            # Flag as edge violation only if:
+            #   - Strong linear patterns (true blanking), OR
+            #   - Edge density is meaningfully higher than interior
+            is_edge_specific = (
+                linear_percentage > 50 or
+                (violation_percentage > 15 and (density_ratio >= 2.0 or excess_density >= 15))
+            )
+            
+            if is_edge_specific:
                 edge_info['edges_affected'].append(edge_name)
                 edge_info['has_edge_violations'] = True
                 
-                # CHANGE 6: Higher threshold for continuous edges
-                if linear_percentage > 70:  # Was 50%
+                if linear_percentage > 70:
                     edge_info['continuous_edges'].append(edge_name)
                 
-                # CHANGE 7: Less aggressive expansion
                 if edge_name in edge_info['blanking_depth']:
                     recommended_expansion = edge_info['blanking_depth'][edge_name] + 2
                     edge_info['expansion_recommendations'][edge_name] = recommended_expansion
         
         # Refine severity assessment
-        if len(edge_info['continuous_edges']) >= 3:  # Was 2
+        if len(edge_info['continuous_edges']) >= 3:
             edge_info['severity'] = 'high'
-        elif len(edge_info['continuous_edges']) >= 2:  # Was 1
+        elif len(edge_info['continuous_edges']) >= 2:
             edge_info['severity'] = 'medium'
-        elif len(edge_info['edges_affected']) >= 3:  # Was 2
+        elif len(edge_info['edges_affected']) >= 3:
             edge_info['severity'] = 'low'
-        elif len(edge_info['edges_affected']) >= 2 and max(edge_info['linear_patterns'].values(), default=0) > 60:  # Was 1 edge and 30%
+        elif len(edge_info['edges_affected']) >= 2 and max(edge_info['linear_patterns'].values(), default=0) > 60:
             edge_info['severity'] = 'low'
         
         return edge_info
@@ -1899,13 +1927,43 @@ class DifferentialBRNGAnalyzer:
                 expansion_recs[edge] = 10 if edge_count > len(violations) * 0.5 else 5
         
         # Determine if border adjustment is needed with more nuanced logic
+        # Log the values feeding into the decision for diagnostic visibility
+        max_linear_score = max(avg_linear_patterns.values(), default=0)
+        logger.debug(f"  Border adjustment decision inputs:")
+        logger.debug(f"    edge_violation_pct: {edge_violation_pct:.1f}%")
+        logger.debug(f"    continuous_edge_pct: {continuous_edge_pct:.1f}%")
+        logger.debug(f"    linear_pattern_pct: {linear_pattern_pct:.1f}%")
+        logger.debug(f"    max avg linear score: {max_linear_score:.1f}")
+        logger.debug(f"    unique edges affected: {unique_edges}")
+        
         requires_adjustment = (
             linear_pattern_pct > 20 or  # Strong linear patterns
             continuous_edge_pct > 15 or  # Many continuous edges
-            edge_violation_pct > 30 or  # Many edge violations
+            (edge_violation_pct > 30 and continuous_edge_pct > 0) or  # Edge violations with SOME linear evidence
+            (edge_violation_pct > 60 and continuous_edge_pct == 0) or  # Overwhelming edge concentration even without lines
             (continuous_edge_pct > 10 and len(unique_edges) >= 2) or  # Multiple edges affected
             any(score > 40 for score in avg_linear_patterns.values())  # High linear scores
         )
+        
+        if requires_adjustment:
+            # Log which condition(s) triggered
+            triggers = []
+            if linear_pattern_pct > 20:
+                triggers.append(f"linear_pattern_pct ({linear_pattern_pct:.1f}%) > 20%")
+            if continuous_edge_pct > 15:
+                triggers.append(f"continuous_edge_pct ({continuous_edge_pct:.1f}%) > 15%")
+            if edge_violation_pct > 30 and continuous_edge_pct > 0:
+                triggers.append(f"edge_violation_pct ({edge_violation_pct:.1f}%) > 30% with continuous edges")
+            if edge_violation_pct > 60 and continuous_edge_pct == 0:
+                triggers.append(f"edge_violation_pct ({edge_violation_pct:.1f}%) > 60% (no continuous edges)")
+            if continuous_edge_pct > 10 and len(unique_edges) >= 2:
+                triggers.append(f"continuous_edge_pct ({continuous_edge_pct:.1f}%) > 10% on {len(unique_edges)} edges")
+            if any(score > 40 for score in avg_linear_patterns.values()):
+                high_scores = {e: s for e, s in avg_linear_patterns.items() if s > 40}
+                triggers.append(f"high avg linear scores: {high_scores}")
+            logger.debug(f"    → Requires adjustment, triggered by: {'; '.join(triggers)}")
+        else:
+            logger.debug(f"    → No border adjustment needed")
         
         return {
             'requires_border_adjustment': requires_adjustment,
@@ -2415,7 +2473,7 @@ class IntegratedSignalstatsAnalyzer:
         
         # Log final comparison summary
         logger.info(f"\n  === Signalstats Analysis Summary ===")
-        logger.info(f"  Active area results (what matters for QC):")
+        logger.info(f"  Active area results:")
         logger.info(f"    Frames with violations: {total_violations:,} / {total_frames:,} ({violation_pct:.1f}%)")
         logger.info(f"    Max BRNG value: {max_brng:.4f}%")
         logger.info(f"    Average BRNG value: {avg_brng:.4f}%")
@@ -3232,10 +3290,11 @@ class EnhancedFrameAnalysis:
                         logger.info(f"  Violations: {iteration_data['violations_after']} (no reduction)")
                     
                     # Check for improvement
-                    improved = self._is_meaningful_improvement(previous_brng, brng_results)
-                    if not improved:
-                        logger.info("  Stopping refinement - further adjustments unlikely to help")
-                        break
+                    improved = self._is_meaningful_improvement(
+                        previous_brng, brng_results,
+                        previous_area=previous_area,
+                        current_area=new_area
+                    )
                 
                 # After refinement loop completes
                 results['refinement_iterations'] = refinement_iterations
@@ -3354,21 +3413,50 @@ class EnhancedFrameAnalysis:
         return 0
     
     def _is_meaningful_improvement(self, previous: BRNGAnalysisResult, 
-                                  current: BRNGAnalysisResult) -> bool:
-        """Check if refinement produced meaningful improvement"""
+                              current: BRNGAnalysisResult,
+                              previous_area: Tuple = None,
+                              current_area: Tuple = None) -> bool:
+        """Check if refinement produced meaningful improvement or if further refinement is still warranted."""
         if not previous or not current:
             return False
         
         prev_violations = len(previous.violations)
         curr_violations = len(current.violations)
         
-        if curr_violations < prev_violations * 0.8:  # 20% improvement
+        # Original check: violation count dropped by 20%+
+        if curr_violations < prev_violations * 0.8:
             return True
         
+        # Original check: worst-case severity dropped by 20%+
         prev_worst = previous.violations[0].violation_percentage if previous.violations else 0
         curr_worst = current.violations[0].violation_percentage if current.violations else 0
+        if curr_worst < prev_worst * 0.8:
+            return True
         
-        if curr_worst < prev_worst * 0.8:  # 20% improvement in worst case
+        # even if violation count didn't drop (or increased).
+        # A high edge % means the border is still cutting through violation regions.
+        curr_edge_pct = current.aggregate_patterns.get('edge_violation_percentage', 0)
+        prev_edge_pct = previous.aggregate_patterns.get('edge_violation_percentage', 0)
+        
+        if curr_edge_pct > 50:
+            # Edge % still dominant — only stop if borders didn't actually move
+            if previous_area and current_area:
+                width_change = abs(current_area[2] - previous_area[2])
+                height_change = abs(current_area[3] - previous_area[3])
+                border_moved = (width_change > 0 or height_change > 0)
+                if border_moved:
+                    logger.debug(f"  Edge violations still high ({curr_edge_pct:.1f}%) "
+                            f"and border moved — continuing refinement")
+                    return True
+                else:
+                    logger.debug(f"  Edge violations high ({curr_edge_pct:.1f}%) "
+                            f"but border didn't move — stopping refinement")
+                    return False
+            # No area info available, but edge % is very high — keep trying
+            return True
+        
+        if prev_edge_pct > 0 and curr_edge_pct < prev_edge_pct * 0.7:
+            logger.debug(f"  Edge violation % dropped: {prev_edge_pct:.1f}% → {curr_edge_pct:.1f}%")
             return True
         
         return False
@@ -3730,7 +3818,7 @@ class EnhancedFrameAnalysis:
                             for edge in edges_str.split(", "):
                                 edge_artifact_edges.add(edge.strip())
                     elif diag == "Border adjustment recommended":
-                        diagnostic_counts["Border adjustment flags"] = diagnostic_counts.get("Border adjustment flags", 0) + 1
+                        continue
                     else:
                         diagnostic_counts[diag] = diagnostic_counts.get(diag, 0) + 1
         
@@ -3740,7 +3828,7 @@ class EnhancedFrameAnalysis:
         
         # Order diagnostics by relevance
         priority_order = ["Sub-black detected", "Highlight clipping", "Edge artifacts", 
-                        "Linear blanking patterns", "Border adjustment flags", 
+                        "Linear blanking patterns", 
                         "General broadcast range violations"]
         
         logged_any = False
