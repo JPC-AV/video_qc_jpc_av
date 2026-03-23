@@ -477,10 +477,17 @@ class QCToolsParser:
 class SophisticatedBorderDetector:
     """Advanced border detection with quality assessment and refinement capabilities"""
     
-    def __init__(self, video_path: str):
+    def __init__(self, video_path: str, signals=None):
         self.video_path = str(video_path)
+        self.signals = signals
         self._init_video_properties()
-        
+
+    def _emit_progress(self, percent: int):
+        """Emit border detection progress as a percentage (0-100)."""
+        if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+            safe_percent = min(100, max(0, int(percent)))
+            self.signals.frame_analysis_progress.emit(safe_percent)
+
     def _init_video_properties(self):
         """Initialize video properties"""
         cap = cv2.VideoCapture(self.video_path)
@@ -538,18 +545,26 @@ class SophisticatedBorderDetector:
         cap = cv2.VideoCapture(self.video_path)
         
         # Select quality frames for analysis
+        self._emit_progress(0)
         quality_frames = self._select_quality_frames(cap, violations)
         
         if len(quality_frames) < 5:
             logger.warning("Insufficient quality frames, falling back to simple detection")
             cap.release()
+            self._emit_progress(100)
             return self._detect_simple_borders()
+        
+        self._emit_progress(25)
         
         # Detect borders using quality frames
         borders = self._analyze_borders_from_frames(cap, quality_frames)
         
+        self._emit_progress(50)
+        
         # Detect head switching artifacts
         head_switching = self._detect_head_switching(cap, borders)
+        
+        self._emit_progress(70)
         
         # Check for vertical blanking lines
         vertical_blanking = self._detect_vertical_blanking(cap, quality_frames)
@@ -557,6 +572,8 @@ class SophisticatedBorderDetector:
         # Adjust borders based on blanking lines
         if vertical_blanking:
             borders = self._adjust_for_blanking(borders, vertical_blanking)
+        
+        self._emit_progress(85)
         
         cap.release()
         
@@ -584,6 +601,8 @@ class SophisticatedBorderDetector:
         
         # Generate quality hints for signalstats
         quality_hints = [(f['timestamp'], f['quality']) for f in quality_frames[:10]]
+        
+        self._emit_progress(100)
         
         return BorderDetectionResult(
             active_area=(active_x, active_y, active_width, active_height),
@@ -1096,13 +1115,20 @@ class DifferentialBRNGAnalyzer:
     """
     
     def __init__(self, video_path: str, border_data: BorderDetectionResult = None,
-                 check_cancelled_fn=None):
+                 check_cancelled_fn=None, signals=None):
         self.video_path = Path(video_path)
         self.border_data = border_data
         self.active_area = border_data.active_area if border_data else None
         self.check_cancelled = check_cancelled_fn or (lambda: False)
+        self.signals = signals
         self._init_video_properties()
-        
+
+    def _emit_progress(self, percent: int):
+        """Emit BRNG analysis progress as a percentage (0-100)."""
+        if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+            safe_percent = min(100, max(0, int(percent)))
+            self.signals.frame_analysis_progress.emit(safe_percent)
+
     def _init_video_properties(self):
         """Initialize video properties"""
         cap = cv2.VideoCapture(str(self.video_path))
@@ -1130,11 +1156,14 @@ class DifferentialBRNGAnalyzer:
         # Store paths to temporary videos for thumbnail creation
         temp_video_paths = []
 
+        self._emit_progress(0)
+
         # Use analysis periods if provided, otherwise fall back to original behavior
         if analysis_periods:
             # logger.debug(f"  Using {len(analysis_periods)} analysis periods from signalstats")
             all_violations = []
             period_summaries = []
+            total_periods = len(analysis_periods)
             
             for i, (start_time, duration) in enumerate(analysis_periods):
                 if self.check_cancelled():
@@ -1153,6 +1182,9 @@ class DifferentialBRNGAnalyzer:
                     highlighted_path, original_path, start_time, duration):
                     logger.error(f"Failed to create comparison videos for period {i+1}")
                     continue
+                
+                # Emit progress after comparison videos are created (heaviest part)
+                self._emit_progress(int((i * 2 + 1) / (total_periods * 2) * 80))
                 
                 # Store paths for later thumbnail creation
                 temp_video_paths.append({
@@ -1182,6 +1214,9 @@ class DifferentialBRNGAnalyzer:
                 })
                 
                 all_violations.extend(period_violations)
+                
+                # Emit progress after period analysis completes
+                self._emit_progress(int((i + 1) / total_periods * 80))
             
             violations = all_violations
             logger.info(f"  Analyzed {len(violations)} frames with potential violations across all periods\n")
@@ -1199,6 +1234,8 @@ class DifferentialBRNGAnalyzer:
                                                 duration_limit, skip_start_seconds):
                 logger.error("Failed to create comparison videos")
                 return None
+            
+            self._emit_progress(40)
             
             temp_video_paths.append({
                 'highlighted': highlighted_path,
@@ -1226,6 +1263,10 @@ class DifferentialBRNGAnalyzer:
                     'frames_checked': single_stats['frames_checked'],
                     'violations_found': single_stats['violations_found']
                 })
+            
+            self._emit_progress(80)
+        
+        self._emit_progress(85)
         
         # Generate patterns and reports
         aggregate_patterns = self._analyze_aggregate_patterns(violations)
@@ -1262,6 +1303,8 @@ class DifferentialBRNGAnalyzer:
             thumbnails = self._create_diagnostic_thumbnails(selected_violations, temp_video_paths, thumb_dir)
             logger.info(f"Saved {len(thumbnails)} thumbnails to {thumb_dir}")
         
+        self._emit_progress(95)
+        
         # Clean up all temporary files
         for video_info in temp_video_paths:
             try:
@@ -1270,6 +1313,8 @@ class DifferentialBRNGAnalyzer:
                 video_info['temp_dir'].rmdir()
             except:
                 pass
+        
+        self._emit_progress(100)
         
         return BRNGAnalysisResult(
             violations=violations,
@@ -2323,14 +2368,21 @@ class IntegratedSignalstatsAnalyzer:
     """Signalstats analyzer with QCTools integration"""
     
     def __init__(self, video_path: str, qctools_report: str = None,
-                 check_cancelled_fn=None):
+                 check_cancelled_fn=None, signals=None):
         self.video_path = str(video_path)
         self.qctools_report = qctools_report if qctools_report else self._find_qctools_report(log_result=False)
         self.check_cancelled = check_cancelled_fn or (lambda: False)
+        self.signals = signals
         self._init_video_properties()
         self._brng_cache = None
         self._brng_cache_active_area = None
-        
+
+    def _emit_progress(self, percent: int):
+        """Emit signalstats analysis progress as a percentage (0-100)."""
+        if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+            safe_percent = min(100, max(0, int(percent)))
+            self.signals.frame_analysis_progress.emit(safe_percent)
+
     def _init_video_properties(self):
         """Initialize video properties"""
         cap = cv2.VideoCapture(self.video_path)
@@ -2415,6 +2467,9 @@ class IntegratedSignalstatsAnalyzer:
         all_results = []
         used_qctools = False
         comparison_results = []
+        total_periods = len(analysis_periods)
+        
+        self._emit_progress(0)
         
         for i, (start_time, duration) in enumerate(analysis_periods):
             if self.check_cancelled():
@@ -2493,9 +2548,13 @@ class IntegratedSignalstatsAnalyzer:
                         all_results.append(ffprobe_result)
             
             comparison_results.append(period_comparison)
+            
+            # Emit per-period progress (scale to 0-90 range, leave room for aggregation)
+            self._emit_progress(int((i + 1) / total_periods * 90))
         
         # Aggregate results
         if not all_results:
+            self._emit_progress(100)
             return SignalstatsResult(
                 violation_percentage=0,
                 max_brng=0,
@@ -2528,6 +2587,8 @@ class IntegratedSignalstatsAnalyzer:
         logger.info(f"    Max BRNG value: {max_brng:.4f}%")
         logger.info(f"    Average BRNG value: {avg_brng:.4f}%")
         logger.info(f"  Diagnosis: {diagnosis}\n")
+        
+        self._emit_progress(100)
         
         return SignalstatsResult(
             violation_percentage=violation_pct,
@@ -2886,9 +2947,9 @@ class EnhancedFrameAnalysis:
             logger.warning(f"No QCTools report found for {self.video_path.name}")
         
         # Initialize components (pass qctools_report to avoid duplicate search)
-        self.border_detector = SophisticatedBorderDetector(video_path)
+        self.border_detector = SophisticatedBorderDetector(video_path, signals=signals)
         self.brng_analyzer = None  # Will be initialized with border data
-        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path, qctools_report=self.qctools_report, check_cancelled_fn=self.check_cancelled)
+        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path, qctools_report=self.qctools_report, check_cancelled_fn=self.check_cancelled, signals=signals)
         
         # Initialize QCTools parser if report exists
         self.qctools_parser = None
@@ -3216,7 +3277,8 @@ class EnhancedFrameAnalysis:
             
             logger.info("\nAnalyzing BRNG violations in identified periods...")
             self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results,
-                                                          check_cancelled_fn=self.check_cancelled)
+                                                          check_cancelled_fn=self.check_cancelled,
+                                                          signals=self.signals)
             
             brng_results = self.brng_analyzer.analyze_with_differential_detection(
                 output_dir=self.output_dir, 
@@ -3324,7 +3386,8 @@ class EnhancedFrameAnalysis:
                     # Re-analyze BRNG with new borders and periods
                     logger.debug("  Re-analyzing BRNG violations with refined borders...\n")
                     self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results,
-                                                                  check_cancelled_fn=self.check_cancelled)
+                                                                  check_cancelled_fn=self.check_cancelled,
+                                                                  signals=self.signals)
                     
                     brng_results = self.brng_analyzer.analyze_with_differential_detection(
                         output_dir=self.output_dir,
