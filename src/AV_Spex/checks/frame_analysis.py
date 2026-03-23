@@ -1095,10 +1095,12 @@ class DifferentialBRNGAnalyzer:
     Compares highlighted vs original frames to eliminate false positives.
     """
     
-    def __init__(self, video_path: str, border_data: BorderDetectionResult = None):
+    def __init__(self, video_path: str, border_data: BorderDetectionResult = None,
+                 check_cancelled_fn=None):
         self.video_path = Path(video_path)
         self.border_data = border_data
         self.active_area = border_data.active_area if border_data else None
+        self.check_cancelled = check_cancelled_fn or (lambda: False)
         self._init_video_properties()
         
     def _init_video_properties(self):
@@ -1135,6 +1137,8 @@ class DifferentialBRNGAnalyzer:
             period_summaries = []
             
             for i, (start_time, duration) in enumerate(analysis_periods):
+                if self.check_cancelled():
+                    break
                 logger.info(f"  Analyzing period {i+1}: {start_time:.1f}s - {start_time+duration:.1f}s")
                 
                 # Create temporary directory for this period
@@ -1375,6 +1379,8 @@ class DifferentialBRNGAnalyzer:
         
         frames_checked = 0
         for idx in sample_indices:
+            if self.check_cancelled():
+                break
             cap_h.set(cv2.CAP_PROP_POS_FRAMES, idx)
             cap_o.set(cv2.CAP_PROP_POS_FRAMES, idx)
             
@@ -2316,9 +2322,11 @@ class DifferentialBRNGAnalyzer:
 class IntegratedSignalstatsAnalyzer:
     """Signalstats analyzer with QCTools integration"""
     
-    def __init__(self, video_path: str, qctools_report: str = None):
+    def __init__(self, video_path: str, qctools_report: str = None,
+                 check_cancelled_fn=None):
         self.video_path = str(video_path)
         self.qctools_report = qctools_report if qctools_report else self._find_qctools_report(log_result=False)
+        self.check_cancelled = check_cancelled_fn or (lambda: False)
         self._init_video_properties()
         self._brng_cache = None
         self._brng_cache_active_area = None
@@ -2409,6 +2417,8 @@ class IntegratedSignalstatsAnalyzer:
         comparison_results = []
         
         for i, (start_time, duration) in enumerate(analysis_periods):
+            if self.check_cancelled():
+                break
             logger.debug(f"  Analyzing period {i+1} ({self._seconds_to_timecode(start_time)} - {self._seconds_to_timecode(start_time + duration)}):")
             
             period_comparison = {
@@ -2856,12 +2866,14 @@ class EnhancedFrameAnalysis:
     Combines efficiency of refactored version with sophistication of original.
     """
     
-    def __init__(self, video_path: str, output_dir: str = None, signals=None):
+    def __init__(self, video_path: str, output_dir: str = None, signals=None,
+                 check_cancelled_fn=None):
         self.video_path = Path(video_path)
         self.video_id = self.video_path.stem
         self.output_dir = Path(output_dir) if output_dir else self.video_path.parent
         self.output_dir.mkdir(exist_ok=True)
         self.signals = signals  # Store signals for emitting step completion
+        self.check_cancelled = check_cancelled_fn or (lambda: False)
 
         # Store config manager as an instance attribute
         self.config_mgr = ConfigManager()
@@ -2876,7 +2888,7 @@ class EnhancedFrameAnalysis:
         # Initialize components (pass qctools_report to avoid duplicate search)
         self.border_detector = SophisticatedBorderDetector(video_path)
         self.brng_analyzer = None  # Will be initialized with border data
-        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path, qctools_report=self.qctools_report)
+        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path, qctools_report=self.qctools_report, check_cancelled_fn=self.check_cancelled)
         
         # Initialize QCTools parser if report exists
         self.qctools_parser = None
@@ -3000,6 +3012,8 @@ class EnhancedFrameAnalysis:
 
         # Step 2: Parse QCTools for initial violations (needed for BRNG analysis or border detection)
         violations = []
+        if self.check_cancelled():
+            return results
         if self.qctools_report :
             logger.info("Parsing QCTools report for violations...")
             parser = QCToolsParser(self.qctools_report )
@@ -3031,6 +3045,8 @@ class EnhancedFrameAnalysis:
         
         # Detect black segments from QCTools data to avoid selecting them as analysis periods
         black_segments = []
+        if self.check_cancelled():
+            return results
         if self.qctools_report:
             logger.info("Scanning for black segments...")
             parser = QCToolsParser(self.qctools_report)
@@ -3043,6 +3059,8 @@ class EnhancedFrameAnalysis:
         
         # Step 3: Border detection (conditional)
         border_results = None
+        if self.check_cancelled():
+            return results
         if border_detection_enabled:
             logger.info(f"Detecting borders using {method} method...")
             border_results = self.border_detector.detect_borders_with_quality_assessment(
@@ -3097,6 +3115,8 @@ class EnhancedFrameAnalysis:
         # Step 4: Signalstats analysis (conditional)
         signalstats_results = None
         analysis_periods = []
+        if self.check_cancelled():
+            return results
         if signalstats_enabled:
             logger.info("Running signalstats analysis on active picture area to identify key analysis periods...")
             signalstats_results = self.signalstats_analyzer.analyze_with_signalstats(
@@ -3163,6 +3183,8 @@ class EnhancedFrameAnalysis:
         
         # Step 5: BRNG analysis (conditional)
         brng_results = None
+        if self.check_cancelled():
+            return results
         if brng_analysis_enabled:
             # If signalstats wasn't run, use QCTools periods directly or fall back to even distribution
             if not analysis_periods:
@@ -3193,7 +3215,8 @@ class EnhancedFrameAnalysis:
                     )
             
             logger.info("\nAnalyzing BRNG violations in identified periods...")
-            self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
+            self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results,
+                                                          check_cancelled_fn=self.check_cancelled)
             
             brng_results = self.brng_analyzer.analyze_with_differential_detection(
                 output_dir=self.output_dir, 
@@ -3243,6 +3266,9 @@ class EnhancedFrameAnalysis:
                 
                 while (refinement_iterations < max_refinement_iterations and 
                     brng_results.requires_border_adjustment):
+                    
+                    if self.check_cancelled():
+                        break
                     
                     refinement_iterations += 1
                     logger.debug(f"Refinement iteration {refinement_iterations}/{max_refinement_iterations}:")
@@ -3297,7 +3323,8 @@ class EnhancedFrameAnalysis:
                     
                     # Re-analyze BRNG with new borders and periods
                     logger.debug("  Re-analyzing BRNG violations with refined borders...\n")
-                    self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
+                    self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results,
+                                                                  check_cancelled_fn=self.check_cancelled)
                     
                     brng_results = self.brng_analyzer.analyze_with_differential_detection(
                         output_dir=self.output_dir,
@@ -3415,6 +3442,8 @@ class EnhancedFrameAnalysis:
                 logger.debug(f"{'='*60}\n")
         
         # Step 7: Generate comprehensive summary
+        if self.check_cancelled():
+            return results
         results['summary'] = self._generate_summary(results)
         
         # Save results
@@ -4114,7 +4143,8 @@ def analyze_frame_quality(video_path: str,
                          output_dir: str = None,
                          frame_config: 'FrameAnalysisConfig' = None,
                          color_bars_end_time: float = None,
-                         signals = None) -> Dict:
+                         signals = None,
+                         check_cancelled = None) -> Dict:
     """
     Main entry point for frame analysis from processing_mgmt.
     
@@ -4125,10 +4155,13 @@ def analyze_frame_quality(video_path: str,
         frame_config: FrameAnalysisConfig dataclass with analysis parameters
         color_bars_end_time: End time of color bars if detected
         signals: Optional signals object for emitting step completion events
+        check_cancelled: Optional callable returning True if processing should stop
     
     Returns:
         Complete analysis results dictionary
     """
+    check_cancelled = check_cancelled or (lambda: False)
+    
     # Use config dataclass directly
     if frame_config is None:
         # Use defaults if no config provided
@@ -4141,8 +4174,12 @@ def analyze_frame_quality(video_path: str,
     skip_color_bars = bool(frame_config.brng_skip_color_bars)
     max_refinements = frame_config.max_border_retries
     
+    if check_cancelled():
+        return None
+    
     # Run enhanced analysis
-    analyzer = EnhancedFrameAnalysis(video_path, output_dir, signals=signals)
+    analyzer = EnhancedFrameAnalysis(video_path, output_dir, signals=signals,
+                                     check_cancelled_fn=check_cancelled)
     
     # Load existing border data if provided
     if border_data_path and Path(border_data_path).exists():
@@ -4150,6 +4187,9 @@ def analyze_frame_quality(video_path: str,
             border_data = json.load(f)
             # Would need to convert this to BorderDetectionResult
             # For now, proceed with fresh analysis
+    
+    if check_cancelled():
+        return None
     
     results = analyzer.analyze(
         method=method,
