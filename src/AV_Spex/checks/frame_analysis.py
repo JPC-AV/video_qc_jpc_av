@@ -1704,7 +1704,7 @@ class DifferentialBRNGAnalyzer:
             elif edge_violations.get('severity') == 'medium':
                 diagnostics.append("Moderate blanking detected")
 
-        if not edge_violations.get('has_edge_violations') or edge_violations.get('severity') == 'low':
+        if not edge_violations.get('has_edge_violations') or edge_violations.get('severity') in ('low', 'none'):
             if luma_distribution:
                 primary_zone = luma_distribution.get('primary_zone')
                 if primary_zone == 'highlights' and luma_distribution.get('highlight_ratio', 0) > 0.7:
@@ -1828,12 +1828,37 @@ class DifferentialBRNGAnalyzer:
                 density_ratio = float('inf') if violation_percentage > 0 else 0
                 excess_density = violation_percentage
             
+            # Edge confinement check: measure violation density in the adjacent
+            # band just inside the edge strip (2x edge_width deep).  True blanking
+            # artifacts are confined to a narrow strip and drop off sharply.
+            # Content violations (e.g. blown-out sky touching the top) persist at
+            # similar density beyond the edge strip.
+            adjacent_band_depth = edge_width * 2
+            if edge_name == 'top':
+                adjacent = violation_mask[edge_width:edge_width + adjacent_band_depth, :]
+            elif edge_name == 'bottom':
+                adjacent = violation_mask[-(edge_width + adjacent_band_depth):-edge_width, :]
+            elif edge_name == 'left':
+                adjacent = violation_mask[:, edge_width:edge_width + adjacent_band_depth]
+            else:  # right
+                adjacent = violation_mask[:, -(edge_width + adjacent_band_depth):-edge_width]
+            
+            adjacent_density = (np.sum(adjacent > 0) / adjacent.size * 100) if adjacent.size > 0 else 0
+            
+            # If the adjacent band has >= 50% the density of the edge strip,
+            # violations are spreading through the frame — not confined to the edge.
+            violations_confined_to_edge = True
+            if violation_percentage > 0 and adjacent_density / violation_percentage >= 0.5:
+                violations_confined_to_edge = False
+            
             # Flag as edge violation only if:
             #   - Strong linear patterns (true blanking), OR
-            #   - Edge density is meaningfully higher than interior
+            #   - Edge density is meaningfully higher than interior AND
+            #     violations are actually confined to the edge strip
             is_edge_specific = (
                 linear_percentage > 50 or
-                (violation_percentage > 15 and (density_ratio >= 2.0 or excess_density >= 15))
+                (violation_percentage > 15 and (density_ratio >= 2.0 or excess_density >= 15)
+                 and violations_confined_to_edge)
             )
             
             if is_edge_specific:
