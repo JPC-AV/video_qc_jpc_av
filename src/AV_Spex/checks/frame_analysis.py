@@ -1451,19 +1451,19 @@ class DifferentialBRNGAnalyzer:
         if sensitivity == 'strict':
             magenta_threshold = 12
             min_change = 10
-            voting_threshold = 2  # Require 2/3 methods
+            voting_threshold = 2  # Require 2/4 methods
             min_component_size = 15
             morph_iterations = 2
         elif sensitivity == 'visualization':
             magenta_threshold = 6
             min_change = 5
-            voting_threshold = 1  # Require only 1/3 methods
+            voting_threshold = 1  # Require only 1/4 methods
             min_component_size = 3
             morph_iterations = 1
         else:  # normal
             magenta_threshold = 10
             min_change = 8
-            voting_threshold = 2
+            voting_threshold = 2  # Require 2/4 methods
             min_component_size = 10
             morph_iterations = 2
         
@@ -1516,12 +1516,27 @@ class DifferentialBRNGAnalyzer:
         value_stable = (h_v.astype(np.float32) - o_v.astype(np.float32)) > -10
         hsv_magenta = is_magenta_hue & sat_increase & value_stable
         
-        # Combine methods with voting
+        # Method 4: Green-channel-drop detection for above-broadcast pixels
+        # When bright/super-white pixels (e.g. blown-out sky) are replaced with
+        # magenta by signalstats, R and B stay high (already near 255) but G drops
+        # dramatically. Methods 1-2 miss this because they require R/B to *increase*.
+        green_drop_threshold = magenta_threshold * 2  # Require significant green loss
+        green_drop = (
+            (green_diff < -green_drop_threshold) &          # Green dropped significantly
+            (h_r.astype(np.float32) > 150) &                # Highlighted R is high (magenta)
+            (h_b.astype(np.float32) > 150) &                # Highlighted B is high (magenta)
+            (h_g.astype(np.float32) < 100) &                # Highlighted G is low (magenta)
+            (np.abs(blue_diff) < green_drop_threshold) &    # B didn't change much
+            (np.abs(red_diff) < green_drop_threshold)       # R didn't change much
+        )
+        
+        # Combine methods with voting (4 methods, threshold still requires 2)
         method1 = strict_magenta.astype(np.uint8)
         method2 = ratio_based.astype(np.uint8)
         method3 = hsv_magenta.astype(np.uint8)
+        method4 = green_drop.astype(np.uint8)
         
-        vote_sum = method1 + method2 + method3
+        vote_sum = method1 + method2 + method3 + method4
         combined_mask = (vote_sum >= voting_threshold).astype(np.uint8) * 255
         
         # Morphological operations (less aggressive for visualization)
@@ -1689,7 +1704,7 @@ class DifferentialBRNGAnalyzer:
             elif edge_violations.get('severity') == 'medium':
                 diagnostics.append("Moderate blanking detected")
 
-        if not edge_violations.get('has_edge_violations') or edge_violations.get('severity') == 'low':
+        if not edge_violations.get('has_edge_violations') or edge_violations.get('severity') in ('low', 'none'):
             if luma_distribution:
                 primary_zone = luma_distribution.get('primary_zone')
                 if primary_zone == 'highlights' and luma_distribution.get('highlight_ratio', 0) > 0.7:
@@ -1813,12 +1828,37 @@ class DifferentialBRNGAnalyzer:
                 density_ratio = float('inf') if violation_percentage > 0 else 0
                 excess_density = violation_percentage
             
+            # Edge confinement check: measure violation density in the adjacent
+            # band just inside the edge strip (2x edge_width deep).  True blanking
+            # artifacts are confined to a narrow strip and drop off sharply.
+            # Content violations (e.g. blown-out sky touching the top) persist at
+            # similar density beyond the edge strip.
+            adjacent_band_depth = edge_width * 2
+            if edge_name == 'top':
+                adjacent = violation_mask[edge_width:edge_width + adjacent_band_depth, :]
+            elif edge_name == 'bottom':
+                adjacent = violation_mask[-(edge_width + adjacent_band_depth):-edge_width, :]
+            elif edge_name == 'left':
+                adjacent = violation_mask[:, edge_width:edge_width + adjacent_band_depth]
+            else:  # right
+                adjacent = violation_mask[:, -(edge_width + adjacent_band_depth):-edge_width]
+            
+            adjacent_density = (np.sum(adjacent > 0) / adjacent.size * 100) if adjacent.size > 0 else 0
+            
+            # If the adjacent band has >= 50% the density of the edge strip,
+            # violations are spreading through the frame — not confined to the edge.
+            violations_confined_to_edge = True
+            if violation_percentage > 0 and adjacent_density / violation_percentage >= 0.5:
+                violations_confined_to_edge = False
+            
             # Flag as edge violation only if:
             #   - Strong linear patterns (true blanking), OR
-            #   - Edge density is meaningfully higher than interior
+            #   - Edge density is meaningfully higher than interior AND
+            #     violations are actually confined to the edge strip
             is_edge_specific = (
                 linear_percentage > 50 or
-                (violation_percentage > 15 and (density_ratio >= 2.0 or excess_density >= 15))
+                (violation_percentage > 15 and (density_ratio >= 2.0 or excess_density >= 15)
+                 and violations_confined_to_edge)
             )
             
             if is_edge_specific:
