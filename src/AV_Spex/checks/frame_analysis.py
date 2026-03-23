@@ -1095,10 +1095,12 @@ class DifferentialBRNGAnalyzer:
     Compares highlighted vs original frames to eliminate false positives.
     """
     
-    def __init__(self, video_path: str, border_data: BorderDetectionResult = None):
+    def __init__(self, video_path: str, border_data: BorderDetectionResult = None,
+                 check_cancelled_fn=None):
         self.video_path = Path(video_path)
         self.border_data = border_data
         self.active_area = border_data.active_area if border_data else None
+        self.check_cancelled = check_cancelled_fn or (lambda: False)
         self._init_video_properties()
         
     def _init_video_properties(self):
@@ -1135,6 +1137,8 @@ class DifferentialBRNGAnalyzer:
             period_summaries = []
             
             for i, (start_time, duration) in enumerate(analysis_periods):
+                if self.check_cancelled():
+                    break
                 logger.info(f"  Analyzing period {i+1}: {start_time:.1f}s - {start_time+duration:.1f}s")
                 
                 # Create temporary directory for this period
@@ -1375,6 +1379,8 @@ class DifferentialBRNGAnalyzer:
         
         frames_checked = 0
         for idx in sample_indices:
+            if self.check_cancelled():
+                break
             cap_h.set(cv2.CAP_PROP_POS_FRAMES, idx)
             cap_o.set(cv2.CAP_PROP_POS_FRAMES, idx)
             
@@ -1451,19 +1457,19 @@ class DifferentialBRNGAnalyzer:
         if sensitivity == 'strict':
             magenta_threshold = 12
             min_change = 10
-            voting_threshold = 2  # Require 2/3 methods
+            voting_threshold = 2  # Require 2/4 methods
             min_component_size = 15
             morph_iterations = 2
         elif sensitivity == 'visualization':
             magenta_threshold = 6
             min_change = 5
-            voting_threshold = 1  # Require only 1/3 methods
+            voting_threshold = 1  # Require only 1/4 methods
             min_component_size = 3
             morph_iterations = 1
         else:  # normal
             magenta_threshold = 10
             min_change = 8
-            voting_threshold = 2
+            voting_threshold = 2  # Require 2/4 methods
             min_component_size = 10
             morph_iterations = 2
         
@@ -1516,12 +1522,27 @@ class DifferentialBRNGAnalyzer:
         value_stable = (h_v.astype(np.float32) - o_v.astype(np.float32)) > -10
         hsv_magenta = is_magenta_hue & sat_increase & value_stable
         
-        # Combine methods with voting
+        # Method 4: Green-channel-drop detection for above-broadcast pixels
+        # When bright/super-white pixels (e.g. blown-out sky) are replaced with
+        # magenta by signalstats, R and B stay high (already near 255) but G drops
+        # dramatically. Methods 1-2 miss this because they require R/B to *increase*.
+        green_drop_threshold = magenta_threshold * 2  # Require significant green loss
+        green_drop = (
+            (green_diff < -green_drop_threshold) &          # Green dropped significantly
+            (h_r.astype(np.float32) > 150) &                # Highlighted R is high (magenta)
+            (h_b.astype(np.float32) > 150) &                # Highlighted B is high (magenta)
+            (h_g.astype(np.float32) < 100) &                # Highlighted G is low (magenta)
+            (np.abs(blue_diff) < green_drop_threshold) &    # B didn't change much
+            (np.abs(red_diff) < green_drop_threshold)       # R didn't change much
+        )
+        
+        # Combine methods with voting (4 methods, threshold still requires 2)
         method1 = strict_magenta.astype(np.uint8)
         method2 = ratio_based.astype(np.uint8)
         method3 = hsv_magenta.astype(np.uint8)
+        method4 = green_drop.astype(np.uint8)
         
-        vote_sum = method1 + method2 + method3
+        vote_sum = method1 + method2 + method3 + method4
         combined_mask = (vote_sum >= voting_threshold).astype(np.uint8) * 255
         
         # Morphological operations (less aggressive for visualization)
@@ -1689,7 +1710,7 @@ class DifferentialBRNGAnalyzer:
             elif edge_violations.get('severity') == 'medium':
                 diagnostics.append("Moderate blanking detected")
 
-        if not edge_violations.get('has_edge_violations') or edge_violations.get('severity') == 'low':
+        if not edge_violations.get('has_edge_violations') or edge_violations.get('severity') in ('low', 'none'):
             if luma_distribution:
                 primary_zone = luma_distribution.get('primary_zone')
                 if primary_zone == 'highlights' and luma_distribution.get('highlight_ratio', 0) > 0.7:
@@ -1701,8 +1722,14 @@ class DifferentialBRNGAnalyzer:
 
     def _detect_edge_violations_enhanced(self, violation_mask, edge_width=15):
         """
-        Enhanced edge violation detection that better identifies blanking patterns.
-        Detects linear patterns even when pixels aren't directly adjacent.
+        Enhanced edge violation detection that identifies blanking patterns
+        by comparing edge violation density against interior density.
+        
+        Without this comparison, frames with violations spread throughout
+        the frame (content-level BRNG issues) get misclassified as having
+        edge artifacts, because the edge strips naturally contain violations
+        too. The interior baseline distinguishes true edge-specific patterns
+        (blanking, border artifacts) from general broadcast range violations.
         """
         h, w = violation_mask.shape
         edge_info = {
@@ -1713,8 +1740,15 @@ class DifferentialBRNGAnalyzer:
             'linear_patterns': {},
             'blanking_depth': {},
             'severity': 'none',
-            'expansion_recommendations': {}
+            'expansion_recommendations': {},
+            'interior_density': 0.0
         }
+        
+        # Calculate interior violation density as baseline for comparison.
+        # This is the region inset by edge_width on all sides.
+        interior = violation_mask[edge_width:-edge_width, edge_width:-edge_width]
+        interior_density = (np.sum(interior > 0) / interior.size * 100) if interior.size > 0 else 0
+        edge_info['interior_density'] = interior_density
         
         # Define edges with increased scan depth
         edges_to_check = [
@@ -1728,7 +1762,7 @@ class DifferentialBRNGAnalyzer:
             if edge_region.size == 0:
                 continue
             
-            # Basic violation percentage
+            # Basic violation percentage in this edge strip
             violation_pixels = np.sum(edge_region > 0)
             total_pixels = edge_region.size
             violation_percentage = (violation_pixels / total_pixels) * 100 if total_pixels > 0 else 0
@@ -1790,28 +1824,68 @@ class DifferentialBRNGAnalyzer:
                 
                 edge_info['blanking_depth'][edge_name] = max_depth
             
-            # Determine if this edge has significant violations
-            if violation_percentage > 15 or linear_percentage > 50:  # Was 5% and 30%
+            # Compare edge density to interior density to determine if violations
+            # are edge-specific or just part of a frame-wide distribution.
+            if interior_density > 0:
+                density_ratio = violation_percentage / interior_density
+                excess_density = violation_percentage - interior_density
+            else:
+                # No interior violations — any edge violations are edge-specific
+                density_ratio = float('inf') if violation_percentage > 0 else 0
+                excess_density = violation_percentage
+            
+            # Edge confinement check: measure violation density in the adjacent
+            # band just inside the edge strip (2x edge_width deep).  True blanking
+            # artifacts are confined to a narrow strip and drop off sharply.
+            # Content violations (e.g. blown-out sky touching the top) persist at
+            # similar density beyond the edge strip.
+            adjacent_band_depth = edge_width * 2
+            if edge_name == 'top':
+                adjacent = violation_mask[edge_width:edge_width + adjacent_band_depth, :]
+            elif edge_name == 'bottom':
+                adjacent = violation_mask[-(edge_width + adjacent_band_depth):-edge_width, :]
+            elif edge_name == 'left':
+                adjacent = violation_mask[:, edge_width:edge_width + adjacent_band_depth]
+            else:  # right
+                adjacent = violation_mask[:, -(edge_width + adjacent_band_depth):-edge_width]
+            
+            adjacent_density = (np.sum(adjacent > 0) / adjacent.size * 100) if adjacent.size > 0 else 0
+            
+            # If the adjacent band has >= 50% the density of the edge strip,
+            # violations are spreading through the frame — not confined to the edge.
+            violations_confined_to_edge = True
+            if violation_percentage > 0 and adjacent_density / violation_percentage >= 0.5:
+                violations_confined_to_edge = False
+            
+            # Flag as edge violation only if:
+            #   - Strong linear patterns (true blanking), OR
+            #   - Edge density is meaningfully higher than interior AND
+            #     violations are actually confined to the edge strip
+            is_edge_specific = (
+                linear_percentage > 50 or
+                (violation_percentage > 15 and (density_ratio >= 2.0 or excess_density >= 15)
+                 and violations_confined_to_edge)
+            )
+            
+            if is_edge_specific:
                 edge_info['edges_affected'].append(edge_name)
                 edge_info['has_edge_violations'] = True
                 
-                # CHANGE 6: Higher threshold for continuous edges
-                if linear_percentage > 70:  # Was 50%
+                if linear_percentage > 70:
                     edge_info['continuous_edges'].append(edge_name)
                 
-                # CHANGE 7: Less aggressive expansion
                 if edge_name in edge_info['blanking_depth']:
                     recommended_expansion = edge_info['blanking_depth'][edge_name] + 2
                     edge_info['expansion_recommendations'][edge_name] = recommended_expansion
         
         # Refine severity assessment
-        if len(edge_info['continuous_edges']) >= 3:  # Was 2
+        if len(edge_info['continuous_edges']) >= 3:
             edge_info['severity'] = 'high'
-        elif len(edge_info['continuous_edges']) >= 2:  # Was 1
+        elif len(edge_info['continuous_edges']) >= 2:
             edge_info['severity'] = 'medium'
-        elif len(edge_info['edges_affected']) >= 3:  # Was 2
+        elif len(edge_info['edges_affected']) >= 3:
             edge_info['severity'] = 'low'
-        elif len(edge_info['edges_affected']) >= 2 and max(edge_info['linear_patterns'].values(), default=0) > 60:  # Was 1 edge and 30%
+        elif len(edge_info['edges_affected']) >= 2 and max(edge_info['linear_patterns'].values(), default=0) > 60:
             edge_info['severity'] = 'low'
         
         return edge_info
@@ -1899,13 +1973,43 @@ class DifferentialBRNGAnalyzer:
                 expansion_recs[edge] = 10 if edge_count > len(violations) * 0.5 else 5
         
         # Determine if border adjustment is needed with more nuanced logic
+        # Log the values feeding into the decision for diagnostic visibility
+        max_linear_score = max(avg_linear_patterns.values(), default=0)
+        logger.debug(f"  Border adjustment decision inputs:")
+        logger.debug(f"    edge_violation_pct: {edge_violation_pct:.1f}%")
+        logger.debug(f"    continuous_edge_pct: {continuous_edge_pct:.1f}%")
+        logger.debug(f"    linear_pattern_pct: {linear_pattern_pct:.1f}%")
+        logger.debug(f"    max avg linear score: {max_linear_score:.1f}")
+        logger.debug(f"    unique edges affected: {unique_edges}")
+        
         requires_adjustment = (
             linear_pattern_pct > 20 or  # Strong linear patterns
             continuous_edge_pct > 15 or  # Many continuous edges
-            edge_violation_pct > 30 or  # Many edge violations
+            (edge_violation_pct > 30 and continuous_edge_pct > 0) or  # Edge violations with SOME linear evidence
+            (edge_violation_pct > 60 and continuous_edge_pct == 0) or  # Overwhelming edge concentration even without lines
             (continuous_edge_pct > 10 and len(unique_edges) >= 2) or  # Multiple edges affected
             any(score > 40 for score in avg_linear_patterns.values())  # High linear scores
         )
+        
+        if requires_adjustment:
+            # Log which condition(s) triggered
+            triggers = []
+            if linear_pattern_pct > 20:
+                triggers.append(f"linear_pattern_pct ({linear_pattern_pct:.1f}%) > 20%")
+            if continuous_edge_pct > 15:
+                triggers.append(f"continuous_edge_pct ({continuous_edge_pct:.1f}%) > 15%")
+            if edge_violation_pct > 30 and continuous_edge_pct > 0:
+                triggers.append(f"edge_violation_pct ({edge_violation_pct:.1f}%) > 30% with continuous edges")
+            if edge_violation_pct > 60 and continuous_edge_pct == 0:
+                triggers.append(f"edge_violation_pct ({edge_violation_pct:.1f}%) > 60% (no continuous edges)")
+            if continuous_edge_pct > 10 and len(unique_edges) >= 2:
+                triggers.append(f"continuous_edge_pct ({continuous_edge_pct:.1f}%) > 10% on {len(unique_edges)} edges")
+            if any(score > 40 for score in avg_linear_patterns.values()):
+                high_scores = {e: s for e, s in avg_linear_patterns.items() if s > 40}
+                triggers.append(f"high avg linear scores: {high_scores}")
+            logger.debug(f"    → Requires adjustment, triggered by: {'; '.join(triggers)}")
+        else:
+            logger.debug(f"    → No border adjustment needed")
         
         return {
             'requires_border_adjustment': requires_adjustment,
@@ -2218,9 +2322,11 @@ class DifferentialBRNGAnalyzer:
 class IntegratedSignalstatsAnalyzer:
     """Signalstats analyzer with QCTools integration"""
     
-    def __init__(self, video_path: str, qctools_report: str = None):
+    def __init__(self, video_path: str, qctools_report: str = None,
+                 check_cancelled_fn=None):
         self.video_path = str(video_path)
         self.qctools_report = qctools_report if qctools_report else self._find_qctools_report(log_result=False)
+        self.check_cancelled = check_cancelled_fn or (lambda: False)
         self._init_video_properties()
         self._brng_cache = None
         self._brng_cache_active_area = None
@@ -2311,6 +2417,8 @@ class IntegratedSignalstatsAnalyzer:
         comparison_results = []
         
         for i, (start_time, duration) in enumerate(analysis_periods):
+            if self.check_cancelled():
+                break
             logger.debug(f"  Analyzing period {i+1} ({self._seconds_to_timecode(start_time)} - {self._seconds_to_timecode(start_time + duration)}):")
             
             period_comparison = {
@@ -2415,7 +2523,7 @@ class IntegratedSignalstatsAnalyzer:
         
         # Log final comparison summary
         logger.info(f"\n  === Signalstats Analysis Summary ===")
-        logger.info(f"  Active area results (what matters for QC):")
+        logger.info(f"  Active area results:")
         logger.info(f"    Frames with violations: {total_violations:,} / {total_frames:,} ({violation_pct:.1f}%)")
         logger.info(f"    Max BRNG value: {max_brng:.4f}%")
         logger.info(f"    Average BRNG value: {avg_brng:.4f}%")
@@ -2758,12 +2866,14 @@ class EnhancedFrameAnalysis:
     Combines efficiency of refactored version with sophistication of original.
     """
     
-    def __init__(self, video_path: str, output_dir: str = None, signals=None):
+    def __init__(self, video_path: str, output_dir: str = None, signals=None,
+                 check_cancelled_fn=None):
         self.video_path = Path(video_path)
         self.video_id = self.video_path.stem
         self.output_dir = Path(output_dir) if output_dir else self.video_path.parent
         self.output_dir.mkdir(exist_ok=True)
         self.signals = signals  # Store signals for emitting step completion
+        self.check_cancelled = check_cancelled_fn or (lambda: False)
 
         # Store config manager as an instance attribute
         self.config_mgr = ConfigManager()
@@ -2778,7 +2888,7 @@ class EnhancedFrameAnalysis:
         # Initialize components (pass qctools_report to avoid duplicate search)
         self.border_detector = SophisticatedBorderDetector(video_path)
         self.brng_analyzer = None  # Will be initialized with border data
-        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path, qctools_report=self.qctools_report)
+        self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path, qctools_report=self.qctools_report, check_cancelled_fn=self.check_cancelled)
         
         # Initialize QCTools parser if report exists
         self.qctools_parser = None
@@ -2902,6 +3012,8 @@ class EnhancedFrameAnalysis:
 
         # Step 2: Parse QCTools for initial violations (needed for BRNG analysis or border detection)
         violations = []
+        if self.check_cancelled():
+            return results
         if self.qctools_report :
             logger.info("Parsing QCTools report for violations...")
             parser = QCToolsParser(self.qctools_report )
@@ -2933,6 +3045,8 @@ class EnhancedFrameAnalysis:
         
         # Detect black segments from QCTools data to avoid selecting them as analysis periods
         black_segments = []
+        if self.check_cancelled():
+            return results
         if self.qctools_report:
             logger.info("Scanning for black segments...")
             parser = QCToolsParser(self.qctools_report)
@@ -2945,6 +3059,8 @@ class EnhancedFrameAnalysis:
         
         # Step 3: Border detection (conditional)
         border_results = None
+        if self.check_cancelled():
+            return results
         if border_detection_enabled:
             logger.info(f"Detecting borders using {method} method...")
             border_results = self.border_detector.detect_borders_with_quality_assessment(
@@ -2999,6 +3115,8 @@ class EnhancedFrameAnalysis:
         # Step 4: Signalstats analysis (conditional)
         signalstats_results = None
         analysis_periods = []
+        if self.check_cancelled():
+            return results
         if signalstats_enabled:
             logger.info("Running signalstats analysis on active picture area to identify key analysis periods...")
             signalstats_results = self.signalstats_analyzer.analyze_with_signalstats(
@@ -3065,6 +3183,8 @@ class EnhancedFrameAnalysis:
         
         # Step 5: BRNG analysis (conditional)
         brng_results = None
+        if self.check_cancelled():
+            return results
         if brng_analysis_enabled:
             # If signalstats wasn't run, use QCTools periods directly or fall back to even distribution
             if not analysis_periods:
@@ -3095,7 +3215,8 @@ class EnhancedFrameAnalysis:
                     )
             
             logger.info("\nAnalyzing BRNG violations in identified periods...")
-            self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
+            self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results,
+                                                          check_cancelled_fn=self.check_cancelled)
             
             brng_results = self.brng_analyzer.analyze_with_differential_detection(
                 output_dir=self.output_dir, 
@@ -3145,6 +3266,9 @@ class EnhancedFrameAnalysis:
                 
                 while (refinement_iterations < max_refinement_iterations and 
                     brng_results.requires_border_adjustment):
+                    
+                    if self.check_cancelled():
+                        break
                     
                     refinement_iterations += 1
                     logger.debug(f"Refinement iteration {refinement_iterations}/{max_refinement_iterations}:")
@@ -3199,7 +3323,8 @@ class EnhancedFrameAnalysis:
                     
                     # Re-analyze BRNG with new borders and periods
                     logger.debug("  Re-analyzing BRNG violations with refined borders...\n")
-                    self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results)
+                    self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results,
+                                                                  check_cancelled_fn=self.check_cancelled)
                     
                     brng_results = self.brng_analyzer.analyze_with_differential_detection(
                         output_dir=self.output_dir,
@@ -3232,16 +3357,18 @@ class EnhancedFrameAnalysis:
                         logger.info(f"  Violations: {iteration_data['violations_after']} (no reduction)")
                     
                     # Check for improvement
-                    improved = self._is_meaningful_improvement(previous_brng, brng_results)
-                    if not improved:
-                        logger.info("  Stopping refinement - further adjustments unlikely to help")
-                        break
+                    improved = self._is_meaningful_improvement(
+                        previous_brng, brng_results,
+                        previous_area=previous_area,
+                        current_area=new_area
+                    )
                 
                 # After refinement loop completes
                 results['refinement_iterations'] = refinement_iterations
                 results['refinement_history'] = refinement_history
                 results['final_borders'] = asdict(border_results)
                 results['final_brng_analysis'] = asdict(brng_results) if brng_results else None
+                results['initial_brng_analysis'] = asdict(initial_brng) if initial_brng else None
                 if signalstats_enabled:
                     results['final_signalstats'] = asdict(signalstats_results)
                 
@@ -3315,6 +3442,8 @@ class EnhancedFrameAnalysis:
                 logger.debug(f"{'='*60}\n")
         
         # Step 7: Generate comprehensive summary
+        if self.check_cancelled():
+            return results
         results['summary'] = self._generate_summary(results)
         
         # Save results
@@ -3353,21 +3482,50 @@ class EnhancedFrameAnalysis:
         return 0
     
     def _is_meaningful_improvement(self, previous: BRNGAnalysisResult, 
-                                  current: BRNGAnalysisResult) -> bool:
-        """Check if refinement produced meaningful improvement"""
+                              current: BRNGAnalysisResult,
+                              previous_area: Tuple = None,
+                              current_area: Tuple = None) -> bool:
+        """Check if refinement produced meaningful improvement or if further refinement is still warranted."""
         if not previous or not current:
             return False
         
         prev_violations = len(previous.violations)
         curr_violations = len(current.violations)
         
-        if curr_violations < prev_violations * 0.8:  # 20% improvement
+        # Original check: violation count dropped by 20%+
+        if curr_violations < prev_violations * 0.8:
             return True
         
+        # Original check: worst-case severity dropped by 20%+
         prev_worst = previous.violations[0].violation_percentage if previous.violations else 0
         curr_worst = current.violations[0].violation_percentage if current.violations else 0
+        if curr_worst < prev_worst * 0.8:
+            return True
         
-        if curr_worst < prev_worst * 0.8:  # 20% improvement in worst case
+        # even if violation count didn't drop (or increased).
+        # A high edge % means the border is still cutting through violation regions.
+        curr_edge_pct = current.aggregate_patterns.get('edge_violation_percentage', 0)
+        prev_edge_pct = previous.aggregate_patterns.get('edge_violation_percentage', 0)
+        
+        if curr_edge_pct > 50:
+            # Edge % still dominant — only stop if borders didn't actually move
+            if previous_area and current_area:
+                width_change = abs(current_area[2] - previous_area[2])
+                height_change = abs(current_area[3] - previous_area[3])
+                border_moved = (width_change > 0 or height_change > 0)
+                if border_moved:
+                    logger.debug(f"  Edge violations still high ({curr_edge_pct:.1f}%) "
+                            f"and border moved — continuing refinement")
+                    return True
+                else:
+                    logger.debug(f"  Edge violations high ({curr_edge_pct:.1f}%) "
+                            f"but border didn't move — stopping refinement")
+                    return False
+            # No area info available, but edge % is very high — keep trying
+            return True
+        
+        if prev_edge_pct > 0 and curr_edge_pct < prev_edge_pct * 0.7:
+            logger.debug(f"  Edge violation % dropped: {prev_edge_pct:.1f}% → {curr_edge_pct:.1f}%")
             return True
         
         return False
@@ -3729,7 +3887,7 @@ class EnhancedFrameAnalysis:
                             for edge in edges_str.split(", "):
                                 edge_artifact_edges.add(edge.strip())
                     elif diag == "Border adjustment recommended":
-                        diagnostic_counts["Border adjustment flags"] = diagnostic_counts.get("Border adjustment flags", 0) + 1
+                        continue
                     else:
                         diagnostic_counts[diag] = diagnostic_counts.get(diag, 0) + 1
         
@@ -3739,7 +3897,7 @@ class EnhancedFrameAnalysis:
         
         # Order diagnostics by relevance
         priority_order = ["Sub-black detected", "Highlight clipping", "Edge artifacts", 
-                        "Linear blanking patterns", "Border adjustment flags", 
+                        "Linear blanking patterns", 
                         "General broadcast range violations"]
         
         logged_any = False
@@ -3985,7 +4143,8 @@ def analyze_frame_quality(video_path: str,
                          output_dir: str = None,
                          frame_config: 'FrameAnalysisConfig' = None,
                          color_bars_end_time: float = None,
-                         signals = None) -> Dict:
+                         signals = None,
+                         check_cancelled = None) -> Dict:
     """
     Main entry point for frame analysis from processing_mgmt.
     
@@ -3996,10 +4155,13 @@ def analyze_frame_quality(video_path: str,
         frame_config: FrameAnalysisConfig dataclass with analysis parameters
         color_bars_end_time: End time of color bars if detected
         signals: Optional signals object for emitting step completion events
+        check_cancelled: Optional callable returning True if processing should stop
     
     Returns:
         Complete analysis results dictionary
     """
+    check_cancelled = check_cancelled or (lambda: False)
+    
     # Use config dataclass directly
     if frame_config is None:
         # Use defaults if no config provided
@@ -4012,8 +4174,12 @@ def analyze_frame_quality(video_path: str,
     skip_color_bars = bool(frame_config.brng_skip_color_bars)
     max_refinements = frame_config.max_border_retries
     
+    if check_cancelled():
+        return None
+    
     # Run enhanced analysis
-    analyzer = EnhancedFrameAnalysis(video_path, output_dir, signals=signals)
+    analyzer = EnhancedFrameAnalysis(video_path, output_dir, signals=signals,
+                                     check_cancelled_fn=check_cancelled)
     
     # Load existing border data if provided
     if border_data_path and Path(border_data_path).exists():
@@ -4021,6 +4187,9 @@ def analyze_frame_quality(video_path: str,
             border_data = json.load(f)
             # Would need to convert this to BorderDetectionResult
             # For now, proceed with fresh analysis
+    
+    if check_cancelled():
+        return None
     
     results = analyzer.analyze(
         method=method,

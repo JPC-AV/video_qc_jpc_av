@@ -253,6 +253,7 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
                 frame_outputs['refinement_iterations'] = enhanced_data['refinement_iterations']
                 frame_outputs['refinement_history'] = enhanced_data.get('refinement_history', [])
                 frame_outputs['initial_borders'] = enhanced_data.get('initial_borders')
+                frame_outputs['initial_brng_analysis'] = enhanced_data.get('initial_brng_analysis')
                 frame_outputs['final_borders'] = enhanced_data.get('final_borders')
                 
                 # Check for refinement comparison visualization
@@ -1678,14 +1679,31 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     15px of frame edges, suggesting border/blanking issues</li>
                 <li style="margin-bottom: 3px;"><strong>Linear blanking patterns</strong> — edge violations 
                     forming continuous horizontal or vertical lines</li>
-                <li style="margin-bottom: 3px;"><strong>Border adjustment flags</strong> — edge violations severe 
-                    enough to suggest the detected active picture area should be expanded</li>
                 <li style="margin-bottom: 3px;"><strong>General broadcast range violations</strong> — violations 
                     that don't match a specific spatial pattern</li>
             </ul>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">How frames are sampled:</p>
+            <p style="margin: 0 0 6px 0;">
+                Each analysis period reports a sampling summary in the format:<br>
+                <code style="background: #eee; padding: 1px 4px; border-radius: 2px;">QCTools targeted N frames → M mapped to period → T total samples analyzed</code>
+            </p>
+            <ul style="margin: 4px 0 10px 16px; padding: 0;">
+                <li style="margin-bottom: 3px;"><strong>QCTools targeted</strong> — the number of BRNG violations 
+                    found in the initial scan of the full QCTools report (capped at 100). These are the frames 
+                    QCTools flagged as having out-of-range pixels anywhere in the video.</li>
+                <li style="margin-bottom: 3px;"><strong>Mapped to period</strong> — how many of those violations 
+                    have timestamps that fall within this specific analysis period's time window. Violations 
+                    from other parts of the video are not relevant to this period.</li>
+                <li style="margin-bottom: 3px;"><strong>Total samples analyzed</strong> — the actual number of 
+                    frames examined by the differential detector. If the mapped violations alone provide 50 or 
+                    more frames, only those frames are analyzed. If fewer than 50 map to the period, 
+                    evenly distributed samples are added across the segment to ensure adequate coverage, 
+                    bringing the total up to approximately 100 frames (after deduplication).</li>
+            </ul>
             <p style="margin: 0; color: #777;">
-                Frames to analyze are selected by targeting timestamps where QCTools detected BRNG values, 
-                supplemented with evenly distributed samples to ensure coverage across each period.
+                Because the differential detector compares two decoded video frames and runs multi-method 
+                computer vision analysis on every sample, this targeted approach keeps processing time 
+                manageable while concentrating analysis on the frames most likely to contain violations.
             </p>
         </div>
         """
@@ -1820,12 +1838,25 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                                     for edge in edges_str.split(", "):
                                         edge_artifact_edges.add(edge.strip())
                             elif diag == "Border adjustment recommended":
-                                diagnostic_counts["Border adjustment flags"] = diagnostic_counts.get("Border adjustment flags", 0) + 1
+                                continue
                             else:
                                 diagnostic_counts[diag] = diagnostic_counts.get(diag, 0) + 1
                 
                 if diagnostic_counts:
                     total_v = len(violations)
+                    refinement_iters = frame_outputs.get('refinement_iterations', 0)
+                    
+                    # Build initial-run diagnostics for comparison if refinement occurred
+                    initial_diag_counts = {}
+                    if refinement_iters > 0 and frame_outputs.get('initial_brng_analysis'):
+                        initial_violations = frame_outputs['initial_brng_analysis'].get('violations', [])
+                        for v in initial_violations:
+                            for diag in v.get('diagnostics', []):
+                                key = "Edge artifacts" if diag.startswith("Edge artifacts") else diag
+                                if key == "Border adjustment recommended":
+                                    continue
+                                initial_diag_counts[key] = initial_diag_counts.get(key, 0) + 1
+
                     html += """
                     <div style="margin: 16px 0;">
                         <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Violation Types Detected</p>
@@ -1833,7 +1864,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     
                     # Sort by count (descending)
                     priority_order = ["Sub-black detected", "Highlight clipping", "Edge artifacts", 
-                                     "Linear blanking patterns", "Border adjustment flags",
+                                     "Linear blanking patterns",
                                      "General broadcast range violations"]
                     
                     sorted_diags = []
@@ -1850,7 +1881,6 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                         "Highlight clipping": "#ef6c00",
                         "Edge artifacts": "#bf971b",
                         "Linear blanking patterns": "#7b1fa2",
-                        "Border adjustment flags": "#795548",
                         "Continuous edge artifacts": "#bf971b",
                         "General broadcast range violations": "#607d8b",
                         "Border detection likely missed blanking": "#d32f2f",
@@ -1861,6 +1891,18 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                         pct = (count / total_v) * 100
                         bar_color = type_colors.get(diag_type, '#90a4ae')
                         
+                        # Show before → after if refinement happened
+                        initial_count = initial_diag_counts.get(diag_type)
+                        count_display = f"{count} frames ({pct:.1f}%)"
+                        if initial_count is not None and refinement_iters > 0:
+                            initial_total = len(initial_violations) if initial_violations else 1
+                            initial_pct = (initial_count / initial_total) * 100
+                            count_display = (
+                                f'<span style="color: #999; text-decoration: line-through;">'
+                                f'{initial_count} ({initial_pct:.1f}%)</span>'
+                                f' → {count} frames ({pct:.1f}%)'
+                            )
+                        
                         # Build label
                         label = diag_type
                         if diag_type == "Edge artifacts" and edge_artifact_edges:
@@ -1870,7 +1912,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                         <div style="margin: 4px 0;">
                             <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 2px;">
                                 <span style="color: #333;">{label}</span>
-                                <span style="color: #666;">{count} frames ({pct:.1f}%)</span>
+                                <span style="color: #666;">{count_display}</span>
                             </div>
                             <div style="background-color: #e8ddd5; border-radius: 3px; height: 10px; overflow: hidden;">
                                 <div style="background-color: {bar_color}; height: 100%; width: {pct:.1f}%; 

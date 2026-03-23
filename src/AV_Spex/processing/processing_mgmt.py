@@ -322,7 +322,8 @@ class ProcessingManager:
                 output_dir=destination_directory,
                 frame_config=frame_config,
                 color_bars_end_time=color_bars_end_time,
-                signals=self.signals  # Pass signals to emit step completion as each step finishes
+                signals=self.signals,  # Pass signals to emit step completion as each step finishes
+                check_cancelled=self.check_cancelled  # Pass cancel check for responsive cancellation
             )
         except Exception as e:
             logger.error(f"Error during frame analysis: {e}")
