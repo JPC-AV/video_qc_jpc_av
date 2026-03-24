@@ -3090,6 +3090,10 @@ class EnhancedFrameAnalysis:
             'qctools_report_available': self.qctools_report is not None
         }
 
+        # Reset the progress bar at the start of frame analysis
+        if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+            self.signals.frame_analysis_progress.emit(0)
+
         frame_config = self.checks_config.outputs.frame_analysis
         
         # Check which steps are enabled (handle both bool and str types)

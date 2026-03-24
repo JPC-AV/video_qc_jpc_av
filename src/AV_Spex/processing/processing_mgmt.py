@@ -260,6 +260,8 @@ class ProcessingManager:
         ]):
             if self.signals:
                 self.signals.output_progress.emit("Performing enhanced frame analysis...")
+                # Reset the detail progress bar before frame analysis begins
+                self.signals.frame_analysis_progress.emit(0)
             
             # Run the new unified frame analysis, passing color bars info from qct-parse
             frame_analysis_results = self.process_frame_analysis(
