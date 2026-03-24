@@ -12,78 +12,88 @@ JPC_AV_videoQC
     ├── __init__.py
     ├── av_spex_the_file.py
     ├── checks
-    │   ├── __init__.py
-    │   ├── __pycache__
-    │   ├── active_area_brng_analyzer.py
-    │   ├── border_detector.py
-    │   ├── embed_fixity.py
-    │   ├── exiftool_check.py
-    │   ├── ffmpeg_signalstats_analyzer.py
-    │   ├── ffprobe_check.py
-    │   ├── fixity_check.py
-    │   ├── make_access.py
-    │   ├── mediaconch_check.py
-    │   ├── mediainfo_check.py
-    │   ├── mediatrace_check.py
-    │   └── qct_parse.py
+    │   ├── __init__.py
+    │   ├── __pycache__
+    │   ├── embed_fixity.py
+    │   ├── exiftool_check.py
+    │   ├── ffprobe_check.py
+    │   ├── fixity_check.py
+    │   ├── frame_analysis.py
+    │   ├── make_access.py
+    │   ├── mediaconch_check.py
+    │   ├── mediainfo_check.py
+    │   ├── mediatrace_check.py
+    │   └── qct_parse.py
     ├── config
-    │   ├── checks_config.json
-    │   ├── filename_config.json
-    │   ├── mediaconch_policies
-    │   ├── profiles_checks_config.json
-    │   ├── signalflow_config.json
-    │   └── spex_config.json
+    │   ├── checks_config.json
+    │   ├── exiftool_config.json
+    │   ├── ffprobe_config.json
+    │   ├── filename_config.json
+    │   ├── mediaconch_policies
+    │   ├── mediainfo_config.json
+    │   ├── profiles_checks_config.json
+    │   ├── signalflow_config.json
+    │   └── spex_config.json
     ├── gui
-    |   ├── __init__.py
+    |   ├── __init__.py
     |   |── gui_checks_tab
-    │   |   |── __init__.py
-    │   |   |── __pycache__
-    │   |   |── gui_checks_tab.py
-    |   │   └── gui_checks_window.py
-    |   ├── gui_custom_filename.py
-    │   ├── gui_custom_profiles.py
-    │   ├── gui_custom_signalflow.py
+    │   |   |── __init__.py
+    │   |   |── __pycache__
+    │   |   |── gui_checks_tab.py
+    |   │   └── gui_checks_window.py
+    |   ├── gui_complex_tab.py
+    |   ├── gui_complex_window.py
+    │   ├── gui_custom_exiftool.py
+    │   ├── gui_custom_ffprobe.py
+    │   ├── gui_custom_filename.py
+    │   ├── gui_custom_mediainfo.py
+    │   ├── gui_custom_profiles.py
+    │   ├── gui_custom_signalflow.py
     |   |── gui_import_tab.py
     |   |── gui_main.py
     |   |── gui_main_window
-    │   |   |── __init__.py
-    │   |   |── __pycache__
-    │   |   |── gui_main_window_processing.py
-    │   |   |── gui_main_window_signals.py
-    │   |   |── gui_main_window_theme.py
-    |   │   └── gui_main_window_ui.py
+    │   |   |── __init__.py
+    │   |   |── __pycache__
+    │   |   |── gui_main_window_processing.py
+    │   |   |── gui_main_window_signals.py
+    │   |   |── gui_main_window_theme.py
+    |   │   └── gui_main_window_ui.py
     |   |── gui_processing_window.py
     |   |── gui_processing_window_console.py
     |   |── gui_signals.py
     |   |── gui_spex_tab.py
     |   └── gui_theme_manager.py
     ├── logo_image_files
-    │   ├── Branding_avspex_noJPC_030725.png
-    │   ├── Branding_avspex_noJPC_inverted_032325.png
-    │   ├── Branding_noJPC_030725.png
-    │   ├── JPCA_Branding_011025.png
-    │   ├── JPCA_H_Branding_011025.png
-    │   ├── av_spex_the_logo.png
-    │   ├── germfree_eq.png
-    │   ├── jpc_logo_purple.png
-    │   └── nmaahc_vert_purple.png
+    │   ├── Branding_avspex_noJPC_030725.png
+    │   ├── Branding_avspex_noJPC_inverted_032325.png
+    │   ├── Branding_noJPC_030725.png
+    │   ├── JPCA_Branding_011025.png
+    │   ├── JPCA_H_Branding_011025.png
+    │   ├── av_spex_the_logo.png
+    │   ├── germfree_eq.png
+    │   ├── jpc_logo_purple.png
+    │   └── nmaahc_vert_purple.png
     ├── processing
-    │   ├── __init__.py
-    │   ├── __pycache__
-    │   ├── avspex_processor.py
-    │   ├── processing_mgmt.py
-    │   ├── run_tools.py
-    │   └── worker_thread.py
+    │   ├── __init__.py
+    │   ├── __pycache__
+    │   ├── avspex_processor.py
+    │   ├── dry_run_analyzer.py
+    │   ├── processing_mgmt.py
+    │   ├── run_tools.py
+    │   └── worker_thread.py
     └── utils
-        ├── __init__.py
-        ├── __pycache__
-        ├── config_edit.py
-        ├── config_io.py
-        ├── config_manager.py
-        ├── config_setup.py
-        ├── dependency_checker.py
-        ├── dir_setup.py
-        ├── filename_validate.py
-        ├── generate_report.py
-        └── log_setup.py
+        ├── __init__.py
+        ├── __pycache__
+        ├── config_edit.py
+        ├── config_io.py
+        ├── config_manager.py
+        ├── config_setup.py
+        ├── dependency_checker.py
+        ├── dir_setup.py
+        ├── exiftool_import.py
+        ├── ffprobe_import.py
+        ├── filename_validate.py
+        ├── generate_report.py
+        ├── log_setup.py
+        └── mediainfo_import.py
 └── tests

@@ -402,10 +402,10 @@ If any fixity-related options are enabled in the Checks Config, the `AVSpexProce
 fixity_enabled = False
 fixity_config = self.checks_config.fixity
 
-if (fixity_config.check_fixity == "yes" or 
-    fixity_config.validate_stream_fixity == "yes" or 
-    fixity_config.embed_stream_fixity == "yes" or 
-    fixity_config.output_fixity == "yes"):
+if (fixity_config.check_fixity or
+    fixity_config.validate_stream_fixity or
+    fixity_config.embed_stream_fixity or
+    fixity_config.output_fixity):
     fixity_enabled = True
 
 if fixity_enabled:
@@ -424,20 +424,20 @@ def process_fixity(self, source_directory, video_path, video_id):
     if self.check_cancelled():
         return None
 
-    if checks_config.fixity.embed_stream_fixity == 'yes':
+    if checks_config.fixity.embed_stream_fixity:
         process_embedded_fixity(video_path)
 
-    if checks_config.fixity.validate_stream_fixity == 'yes':
-        if checks_config.fixity.embed_stream_fixity == 'yes':
+    if checks_config.fixity.validate_stream_fixity:
+        if checks_config.fixity.embed_stream_fixity:
             logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
         else:
             validate_embedded_md5(video_path)
 
     md5_checksum = None
-    if checks_config.fixity.output_fixity == 'yes':
+    if checks_config.fixity.output_fixity:
         md5_checksum = output_fixity(source_directory, video_path)
 
-    if checks_config.fixity.check_fixity == 'yes':
+    if checks_config.fixity.check_fixity:
         check_fixity(source_directory, video_id, actual_checksum=md5_checksum)
 ```
 
@@ -471,7 +471,7 @@ Each function uses cooperative cancellation checks and emits progress either via
 The MediaConch check is triggered if it is enabled in the Checks Config:
 
 ```python
-mediaconch_enabled = self.checks_config.tools.mediaconch.run_mediaconch == "yes"
+mediaconch_enabled = self.checks_config.tools.mediaconch.run_mediaconch
 if mediaconch_enabled:
     mediaconch_results = processing_mgmt.validate_video_with_mediaconch(
         video_path, destination_directory, video_id
@@ -558,10 +558,10 @@ Each tool must be explicitly enabled in the Checks Config (`checks_config.tools`
 metadata_tools_enabled = False
 tools_config = self.checks_config.tools
 
-if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool == "yes" or
-    hasattr(tools_config.mediatrace, 'check_tool') and tools_config.mediatrace.check_tool == "yes" or
-    hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool == "yes" or
-    hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool == "yes"):
+if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool or
+    hasattr(tools_config.mediatrace, 'check_tool') and tools_config.mediatrace.check_tool or
+    hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool or
+    hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool):
     metadata_tools_enabled = True
 
 metadata_differences = None
@@ -689,10 +689,10 @@ After metadata checks are complete, the application can optionally generate addi
 
 ```python
 outputs_enabled = (
-    self.checks_config.outputs.access_file == "yes" or
-    self.checks_config.outputs.report == "yes" or
-    self.checks_config.tools.qctools.run_tool == "yes" or
-    self.checks_config.tools.qct_parse.run_tool == "yes"
+    self.checks_config.outputs.access_file or
+    self.checks_config.outputs.report or
+    self.checks_config.tools.qctools.run_tool or
+    self.checks_config.tools.qct_parse.run_tool
 )
 
 if outputs_enabled:
