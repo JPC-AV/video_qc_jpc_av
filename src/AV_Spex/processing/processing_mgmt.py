@@ -533,7 +533,9 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
 
             # Run QCTools parsing
             logger.info(f"Running qct-parse on: {results['qctools_output_path']}")
-            run_qctparse(video_path, results['qctools_output_path'], report_directory, check_cancelled=check_cancelled)
+            if signals and hasattr(signals, 'qctparse_progress'):
+                signals.qctparse_progress.emit(0)
+            run_qctparse(video_path, results['qctools_output_path'], report_directory, check_cancelled=check_cancelled, signals=signals)
             if signals:
                 signals.step_completed.emit("QCT Parse")
              # After qct-parse completes, check for color bars results
