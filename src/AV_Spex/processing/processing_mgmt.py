@@ -270,6 +270,7 @@ class ProcessingManager:
             processing_results['frame_analysis'] = frame_analysis_results
         
         if self.signals:
+            self.signals.frame_analysis_progress.emit(0)
             self.signals.output_progress.emit("Preparing report...")
         if self.check_cancelled():
             return None
