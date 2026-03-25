@@ -82,6 +82,10 @@ class ParsedArguments:
     enable_border_detection: Optional[str]
     enable_brng_analysis: Optional[str]
     enable_signalstats: Optional[str]
+    frame_borders: Optional[str]
+    frame_border_pixels: Optional[int]
+    frame_no_colorbar_skip: bool
+    frame_brng_duration: Optional[int]
     exiftool_profile: Optional[str]
     mediainfo_profile: Optional[str]
     ffprobe_profile: Optional[str]
@@ -124,11 +128,11 @@ The scripts will confirm that the digital files conform to predetermined specifi
                          metavar="{tool_name.run_tool, tool_name.check_tool}",
                          help="Turns off specific tool run_ or check_ option (format: tool.check_tool or tool.run_tool, e.g. mediainfo.run_tool)")
     parser.add_argument("-sn","--signalflow",
-                        help="Select signal flow profile by name (e.g. 'JPC_AV_SVHS Signal Flow'). Use -pp to list available profiles.")
+                        help="Select signal flow profile by name (e.g. 'JPC_AV_SVHS Signal Flow'). Use -pp signalflow to list available profiles.")
     parser.add_argument("-fn","--filename",
                         help="Select filename profile by name (e.g. 'JPC Filename Profile'). Use -pp to list available profiles.")
-    parser.add_argument("-pp", "--printprofile", type=str, nargs='?', const='all', default=None, 
-                        help="Show config profile(s) and optional subsection. Format: 'config[,subsection]'. Examples: 'all', 'spex', 'checks', 'checks,tools', 'spex,filename_values'")
+    parser.add_argument("-pp", "--printprofile", type=str, nargs='?', const='all', default=None,
+                        help="Show config profile(s) and optional subsection. For current settings: 'config[,subsection]'. Examples: 'all', 'spex', 'checks', 'checks,tools', 'spex,filename_values'. For custom profiles: 'exiftool', 'mediainfo', 'ffprobe', 'signalflow'")
     parser.add_argument("-d","--directory", action="store_true", 
                         help="Flag to indicate input is a directory")
     parser.add_argument("-f","--file", action="store_true", 
@@ -149,11 +153,11 @@ The scripts will confirm that the digital files conform to predetermined specifi
     parser.add_argument("--mediaconch-policy",
                     help="Path to custom MediaConch policy XML file")
     parser.add_argument("--exiftool-profile",
-                    help="Apply an exiftool expected-values profile by name. Use -pp to list available profiles.")
+                    help="Apply an exiftool expected-values profile by name. Use -pp exiftool to list available exiftool profiles.")
     parser.add_argument("--mediainfo-profile",
-                    help="Apply a MediaInfo expected-values profile by name. Use -pp to list available profiles.")
+                    help="Apply a MediaInfo expected-values profile by name. Use -pp mediainfo to list available mediainfo profiles.")
     parser.add_argument("--ffprobe-profile",
-                    help="Apply an FFprobe expected-values profile by name. Use -pp to list available profiles.")
+                    help="Apply an FFprobe expected-values profile by name. Use -pp ffprobe to list available ffprobe profiles.")
 
     # args for frame analysis
     # Enable/disable individual sub-steps
@@ -239,6 +243,10 @@ The scripts will confirm that the digital files conform to predetermined specifi
         enable_border_detection=getattr(args, 'enable_border_detection', None),
         enable_brng_analysis=getattr(args, 'enable_brng_analysis', None),
         enable_signalstats=getattr(args, 'enable_signalstats', None),
+        frame_borders=getattr(args, 'frame_borders', None),
+        frame_border_pixels=getattr(args, 'frame_border_pixels', None),
+        frame_no_colorbar_skip=getattr(args, 'frame_no_colorbar_skip', False),
+        frame_brng_duration=getattr(args, 'frame_brng_duration', None),
         exiftool_profile=args.exiftool_profile,
         mediainfo_profile=args.mediainfo_profile,
         ffprobe_profile=args.ffprobe_profile,
