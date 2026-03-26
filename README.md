@@ -6,7 +6,7 @@ AV processing application for digital preservation
 
 AV Spex is a macOS application written in Python that helps process digital audio and video media created from analog sources. It confirms that digitized files conform to predetermined specifications and performs automated preservation actions: fixity checks, access file creation, metadata sidecars, and HTML reports.
 
-Designed for audiovisual preservation workflows, AV Spex was developed in the context of the Johnson Publishing Company archive at the Smithsonian's National Museum of African American History and Culture (NMAAHC).
+Designed for audiovisual preservation workflows, AV Spex was developed with support from the Smithsonian's National Museum of African American History and Culture (NMAAHC).
 
 ---
 
@@ -18,14 +18,14 @@ brew tap JPC-AV/AV-Spex
 brew install av-spex
 ```
 
-### Run on a directory
-```bash
-av-spex /path/to/video_files
-```
-
 ### Launch the GUI
 ```bash
 av-spex-gui
+```
+
+### Run on a directory
+```bash
+av-spex /path/to/video_files
 ```
 
 ---
@@ -87,19 +87,19 @@ Python 3.10 or higher is required.
 
 Creating a virtual environment is optional but recommended to avoid system-wide package conflicts.
 
-**Using Conda:**
-
-1. Install: `brew install --cask anaconda`
-2. Add to PATH: `export PATH="/opt/homebrew/anaconda3/bin:$PATH"` (Apple Silicon) or `export PATH="/usr/local/anaconda3/bin:$PATH"` (Intel)
-3. Initialize: `conda init zsh`
-4. Create environment: `conda create -n JPC_AV python=3.10.13`
-
 **Using venv:**
 
 ```bash
 python3 -m venv name_of_env
 source ./name_of_env/bin/activate
 ```
+
+**Using Conda:**
+
+1. Install: `brew install --cask anaconda`
+2. Add to PATH: `export PATH="/opt/homebrew/anaconda3/bin:$PATH"` (Apple Silicon) or `export PATH="/usr/local/anaconda3/bin:$PATH"` (Intel)
+3. Initialize: `conda init zsh`
+4. Create environment: `conda create -n JPC_AV python=3.10.13`
 
 </details>
 
@@ -113,7 +113,7 @@ av-spex --help
 
 ## GUI Usage
 
-Launch the GUI:
+If using the homebrew/cli verison, launch the GUI with the command:
 ```bash
 av-spex-gui
 ```
@@ -165,7 +165,7 @@ The Complex tab provides configuration for QCTools, qct-parse, and frame analysi
 
 ## Custom Metadata Profiles
 
-AV Spex supports named expected-value profiles for ExifTool, MediaInfo, and FFprobe. This is useful when processing collections with different technical specifications — for example, SD vs. HD transfers, or FLAC vs. PCM audio.
+AV Spex supports custom profiles for ExifTool, MediaInfo, and FFprobe. This is useful when processing collections with different technical specifications — for example, PAL vs. NTSC transfers, or FLAC vs. PCM audio.
 
 Each tool's section in the Spex tab includes:
 - A **profile dropdown** to select from saved profiles
@@ -263,20 +263,6 @@ av-spex [path/to/directory]
 - `-dr / --dryrun` — Apply config changes without processing any video files
 - `--gui` — Force launch in GUI mode
 
-### Example Workflow
-
-1. Digitize analog media to MKV
-2. Run initial metadata extraction and fixity:
-   ```bash
-   av-spex -d ./digitized_files --profile step1
-   ```
-3. Run quality analysis and report generation:
-   ```bash
-   av-spex -d ./digitized_files --profile step2
-   ```
-4. Review the HTML report, fixity results, and metadata outputs
-5. Address any issues found
-
 ---
 
 ## Configuration
@@ -338,12 +324,14 @@ For each processed input directory `{video_id}/`:
 
 ### Logging
 
-Each run writes a timestamped application log:
-```
-logs/YYYY-MM-DD_HH-MM-SS_JPC_AV_log.log
-```
+A per-file log is written inside each `_qc_metadata` directory.
+`video_id}_qc_metadata/{video_id}_avspex_processing.log`
+These per-file logs are overwritten if a file is re-run. 
 
-A per-file log is also written inside each `_qc_metadata` directory.
+Each run also writes a timestamped application log:
+```
+/.../Library/Logs/AVSpex/YYY-MM-DD/YYYY-MM-DD_HH-MM-SS_JPC_AV_log.log
+```
 
 ---
 
