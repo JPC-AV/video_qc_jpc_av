@@ -163,17 +163,17 @@ The scripts will confirm that the digital files conform to predetermined specifi
     # Enable/disable individual sub-steps
     parser.add_argument(
         '--enable-border-detection',
-        choices=['yes', 'no'],
+        choices=['on', 'off'],
         help='Enable/disable border detection in frame analysis'
     )
     parser.add_argument(
-        '--enable-brng-analysis', 
-        choices=['yes', 'no'],
+        '--enable-brng-analysis',
+        choices=['on', 'off'],
         help='Enable/disable BRNG analysis in frame analysis'
     )
     parser.add_argument(
         '--enable-signalstats',
-        choices=['yes', 'no'],
+        choices=['on', 'off'],
         help='Enable/disable signalstats in frame analysis'
     )
     parser.add_argument(
@@ -371,13 +371,13 @@ def run_cli_mode(args):
 
     # Handle enabling/disabling individual sub-steps
     if args.enable_border_detection:
-        frame_updates['outputs']['frame_analysis']['enable_border_detection'] = (args.enable_border_detection == 'yes')
+        frame_updates['outputs']['frame_analysis']['enable_border_detection'] = (args.enable_border_detection == 'on')
 
     if args.enable_brng_analysis:
-        frame_updates['outputs']['frame_analysis']['enable_brng_analysis'] = (args.enable_brng_analysis == 'yes')
+        frame_updates['outputs']['frame_analysis']['enable_brng_analysis'] = (args.enable_brng_analysis == 'on')
 
     if args.enable_signalstats:
-        frame_updates['outputs']['frame_analysis']['enable_signalstats'] = (args.enable_signalstats == 'yes')
+        frame_updates['outputs']['frame_analysis']['enable_signalstats'] = (args.enable_signalstats == 'on')
 
     # Handle configuration of how sub-steps work
     if args.frame_borders is not None:
