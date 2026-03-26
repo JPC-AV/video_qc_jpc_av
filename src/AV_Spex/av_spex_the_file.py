@@ -15,6 +15,7 @@ from .utils import dir_setup
 from .utils import config_edit
 from .utils.log_setup import logger
 from .utils.config_setup import SpexConfig, FilenameConfig
+from .utils import exiftool_import, mediainfo_import, ffprobe_import
 from .utils.config_manager import ConfigManager
 from .utils.config_io import ConfigIO
 from .utils.dependency_checker import DependencyManager, cli_deps_check
@@ -89,6 +90,9 @@ class ParsedArguments:
     exiftool_profile: Optional[str]
     mediainfo_profile: Optional[str]
     ffprobe_profile: Optional[str]
+    exiftool_from_file: Optional[str]
+    mediainfo_from_file: Optional[str]
+    ffprobe_from_file: Optional[str]
 
 
 PROFILE_MAPPING = {
@@ -158,6 +162,15 @@ The scripts will confirm that the digital files conform to predetermined specifi
                     help="Apply a MediaInfo expected-values profile by name. Use -pp mediainfo to list available mediainfo profiles.")
     parser.add_argument("--ffprobe-profile",
                     help="Apply an FFprobe expected-values profile by name. Use -pp ffprobe to list available ffprobe profiles.")
+    parser.add_argument("--exiftool-from-file",
+                    metavar="FILE",
+                    help="Create a custom exiftool profile from a file (JSON or text exiftool output). Saves as a new profile and applies it.")
+    parser.add_argument("--mediainfo-from-file",
+                    metavar="FILE",
+                    help="Create a custom MediaInfo profile from a JSON file (mediainfo --Output=JSON output). Saves as a new profile and applies it.")
+    parser.add_argument("--ffprobe-from-file",
+                    metavar="FILE",
+                    help="Create a custom FFprobe profile from a JSON file (ffprobe -print_format json output). Saves as a new profile and applies it.")
 
     # args for frame analysis
     # Enable/disable individual sub-steps
@@ -250,6 +263,9 @@ The scripts will confirm that the digital files conform to predetermined specifi
         exiftool_profile=args.exiftool_profile,
         mediainfo_profile=args.mediainfo_profile,
         ffprobe_profile=args.ffprobe_profile,
+        exiftool_from_file=args.exiftool_from_file,
+        mediainfo_from_file=args.mediainfo_from_file,
+        ffprobe_from_file=args.ffprobe_from_file,
     )
 
 
@@ -277,6 +293,28 @@ def apply_filename_profile(config_type: str, profile_name: str):
 def print_av_spex_logo():
     avspex_icon = text2art("A-V Spex", font='5lineoblique')
     print(f'{avspex_icon}\n')
+
+
+def _import_profile_from_file(file_path, tool_name, import_func, save_func, apply_func):
+    """Import a profile from a file, save it, and apply it."""
+    if not os.path.isfile(file_path):
+        print(f"Error: File not found: {file_path}")
+        return
+    try:
+        profile = import_func(file_path)
+    except Exception as e:
+        print(f"Error: Failed to import {tool_name} profile from '{file_path}': {e}")
+        return
+
+    profile_name = os.path.splitext(os.path.basename(file_path))[0]
+    save_result = save_func(profile_name, profile)
+    if save_result is False:
+        print(f"Error: Failed to save {tool_name} profile '{profile_name}'")
+        return
+
+    apply_func(profile)
+    config_mgr.save_config('spex', is_last_used=True)
+    print(f"{tool_name.capitalize()} profile '{profile_name}' imported from '{file_path}' and applied.")
 
 
 def run_cli_mode(args):
@@ -324,6 +362,30 @@ def run_cli_mode(args):
         else:
             available = config_edit.get_available_ffprobe_profiles()
             print(f"Error: FFprobe profile '{args.ffprobe_profile}' not found. Available: {available}")
+
+    if args.exiftool_from_file:
+        _import_profile_from_file(
+            args.exiftool_from_file, 'exiftool',
+            exiftool_import.import_exiftool_file_to_profile,
+            config_edit.save_exiftool_profile,
+            config_edit.apply_exiftool_profile,
+        )
+
+    if args.mediainfo_from_file:
+        _import_profile_from_file(
+            args.mediainfo_from_file, 'mediainfo',
+            mediainfo_import.import_mediainfo_file_to_profile,
+            config_edit.save_mediainfo_profile,
+            config_edit.apply_mediainfo_profile,
+        )
+
+    if args.ffprobe_from_file:
+        _import_profile_from_file(
+            args.ffprobe_from_file, 'ffprobe',
+            ffprobe_import.import_ffprobe_file_to_profile,
+            config_edit.save_ffprobe_profile,
+            config_edit.apply_ffprobe_profile,
+        )
 
     # Update spex config
     if args.sn_config_changes:
