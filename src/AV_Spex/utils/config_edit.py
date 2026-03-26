@@ -44,35 +44,45 @@ def format_config_value(value, indent=0, is_nested=False):
 def print_config(config_spec='all'):
     """
     Print config state for specified config type(s) and optional subsections.
-    
+
     Args:
         config_spec (str): Specification of what to print. Can be:
             - 'all': Print all configs
             - 'checks' or 'spex': Print entire specified config
             - 'checks,tools' or 'spex,filename_values': Print specific subsection
+            - 'exiftool', 'mediainfo', or 'ffprobe': Print available profiles
     """
     if not validate_config_spec(config_spec):
         logger.error(f"Invalid config specification: {config_spec}.")
-        logger.error(f"Format should be 'config[,subsection]' where config is one of: all, spex, checks - subsection (optional) is a valid section of the specified config\n")
-    
+        logger.error(f"Format should be 'config[,subsection]' where config is one of: all, spex, checks, exiftool, mediainfo, ffprobe, signalflow - subsection (optional) is a valid section of the specified config\n")
+
     configs = {}
-    
+    profile_configs = {}
+
     # Parse the config specification
     parts = [p.strip() for p in config_spec.split(',')]
     config_type = parts[0]
     subsection = parts[1] if len(parts) > 1 else None
-    
+
     # Load the requested config(s)
     if config_type in ['all', 'checks']:
         configs['Checks Config'] = config_mgr.get_config('checks', ChecksConfig)
     if config_type in ['all', 'spex']:
         configs['Spex Config'] = config_mgr.get_config('spex', SpexConfig)
-    
-    # Print the configs
+    if config_type in ['all', 'exiftool']:
+        profile_configs['ExifTool Profiles'] = config_mgr.get_config('exiftool', ExiftoolConfig)
+    if config_type in ['all', 'mediainfo']:
+        profile_configs['MediaInfo Profiles'] = config_mgr.get_config('mediainfo', MediainfoConfig)
+    if config_type in ['all', 'ffprobe']:
+        profile_configs['FFprobe Profiles'] = config_mgr.get_config('ffprobe', FfprobeConfig)
+    if config_type in ['all', 'signalflow']:
+        profile_configs['Signalflow Profiles'] = config_mgr.get_config('signalflow', SignalflowConfig)
+
+    # Print the standard configs
     for config_name, config in configs.items():
         print(f"\n{config_name}:")
         config_dict = asdict(config)
-        
+
         if subsection:
             # Print only the specified subsection if it exists
             if subsection in config_dict:
@@ -85,6 +95,19 @@ def print_config(config_spec='all'):
             for key, value in config_dict.items():
                 print(f"{key}:")
                 print(format_config_value(value, indent=2))
+
+    # Print profile configs (exiftool, mediainfo, ffprobe)
+    for config_name, config in profile_configs.items():
+        print(f"\n{config_name}:")
+        config_dict = asdict(config)
+        # Each of these configs has a single top-level key (e.g. exiftool_profiles)
+        for key, profiles in config_dict.items():
+            if not profiles:
+                print("  (no profiles defined)")
+            else:
+                for profile_name, profile_values in profiles.items():
+                    print(f"  {profile_name}:")
+                    print(format_config_value(profile_values, indent=4))
 
 
 def validate_config_spec(config_spec: str) -> bool:
@@ -103,24 +126,28 @@ def validate_config_spec(config_spec: str) -> bool:
     parts = [p.strip() for p in config_spec.split(',')]
     
     # Check base config type
-    if parts[0] not in ['all', 'spex', 'checks']:
+    if parts[0] not in ['all', 'spex', 'checks', 'exiftool', 'mediainfo', 'ffprobe', 'signalflow']:
         return False
-        
+
     # If subsection specified, validate against known subsections
     if len(parts) > 1:
         config_type = parts[0]
         subsection = parts[1]
-        
+
         valid_subsections = {
-            'spex': ['filename_values', 'mediainfo_values', 'exiftool_values', 
+            'spex': ['filename_values', 'mediainfo_values', 'exiftool_values',
                     'ffmpeg_values', 'mediatrace_values', 'qct_parse_values'],
             'checks': ['outputs', 'fixity', 'tools']
         }
-        
+
+        # exiftool/mediainfo/ffprobe don't have named subsections
+        if config_type in ['exiftool', 'mediainfo', 'ffprobe']:
+            return False
+
         # Only check subsection validity for specific configs (not 'all')
         if config_type != 'all':
             return subsection in valid_subsections[config_type]
-            
+
     return True
 
 

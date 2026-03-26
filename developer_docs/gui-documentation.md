@@ -34,6 +34,14 @@ gui/
 │   ├── __init__.py
 │   ├── gui_checks_tab.py
 │   └── gui_checks_window.py
+├── gui_complex_tab.py
+├── gui_complex_window.py
+├── gui_custom_exiftool.py
+├── gui_custom_ffprobe.py
+├── gui_custom_filename.py
+├── gui_custom_mediainfo.py
+├── gui_custom_profiles.py
+├── gui_custom_signalflow.py
 ├── gui_import_tab.py
 ├── gui_main.py
 ├── gui_main_window/
@@ -66,9 +74,21 @@ gui/
 - `gui_checks_tab.py` - Checks tab "profiles" section with "ProfileHandlers" class for managing profile changes
 - `gui_checks_window.py` - Checks tab "output" section
 
+**Complex Tab Module:**
+- `gui_complex_tab.py` - "Complex" tab container; hosts the `ComplexWindow` in a scroll area
+- `gui_complex_window.py` - Configuration window for QCTools, qct-parse, and all frame analysis settings (border detection, BRNG analysis, signalstats)
+
 **Tab Modules:**
 - `gui_import_tab.py` - Import tab with directory selection and config import/export
 - `gui_spex_tab.py` - Spex tab which uses a similar ProfileHandlers class for managing file name and signal flow profiles
+
+**Custom Profile Dialogs:**
+- `gui_custom_exiftool.py` - Dialog for creating/editing custom ExifTool expected-value profiles
+- `gui_custom_ffprobe.py` - Dialog for creating/editing custom FFprobe expected-value profiles
+- `gui_custom_mediainfo.py` - Dialog for creating/editing custom MediaInfo expected-value profiles
+- `gui_custom_filename.py` - Dialog for creating/editing custom filename profiles
+- `gui_custom_signalflow.py` - Dialog for creating/editing signal flow profiles
+- `gui_custom_profiles.py` - Profile manager dialog (list, load, delete saved profiles)
 
 **Other GUI Components:**
 - `gui_processing_window.py` - Processing status and progress display
@@ -216,6 +236,84 @@ As described in the [ConfigManager documentation](https://github.com/JPC-AV/JPC_
         self.config_mgr.update_config('checks', updates)
 ```
 
+## Complex Tab
+
+The Complex tab exposes advanced configuration options for QCTools, qct-parse, and frame analysis. It is defined across two modules:
+
+- `gui_complex_tab.py` - Contains the `ComplexTab` class, which creates the "Complex" tab widget and hosts a `ComplexWindow` inside a scroll area
+- `gui_complex_window.py` - Contains the `ComplexWindow` class, which provides all the actual UI controls
+
+The tab is initialized by `MainWindowUI.setup_tabs()` alongside the other tabs:
+
+```python
+self.main_window.complex_tab.setup_complex_tab()
+```
+
+### ComplexWindow Sections
+
+The `ComplexWindow.setup_ui()` method builds the window in four sections:
+
+#### 1. QCTools
+
+Controls the `checks_config.tools.qctools` settings:
+
+- **Run Tool** checkbox — enables/disables QCTools execution
+- **QCTools File Extension** dropdown — selects output format: `qctools.xml.gz` or `qctools.mkv` (stored in `checks_config.outputs.qctools_ext`)
+
+#### 2. qct-parse
+
+Controls the `checks_config.tools.qct_parse` settings. Dependency logic is enforced in the UI:
+
+- **Run Tool** checkbox — when checked, automatically enables and checks all sub-options; when unchecked, greys them out
+- **Detect Color Bars** checkbox — when unchecked, automatically unchecks and disables Evaluate Color Bars and Thumbnail Export
+- **Evaluate Color Bars** checkbox — compares detected bars against expected values
+- **Thumbnail Export** checkbox — exports thumbnails of failed frames; only enabled when at least one of bars detection or evaluate bars is active
+
+#### 3. Frame Analysis Periods
+
+Shared settings for signalstats and BRNG analysis (stored in `checks_config.outputs.frame_analysis`):
+
+- **Number of Periods** — how many time windows to sample across the video
+- **Period Duration (s)** — length of each analysis window in seconds
+
+#### 4. Border Detection Settings
+
+Controls `checks_config.outputs.frame_analysis` border detection fields:
+
+- **Enable Border Detection** checkbox
+- **Detection Mode** dropdown — `simple` (fixed pixel crop) or `sophisticated` (edge detection)
+  - *Simple mode*: **Border Pixels** field (default: 25px)
+  - *Sophisticated mode*: Detection Parameters sub-group (Brightness Threshold, Edge Sample Width, Sample Frames, Padding), plus **Auto-retry** checkbox and **Max Retries** field
+- Signalstats is disabled in the UI if border detection is turned off
+
+#### 5. Signalstats Settings
+
+- **Enable Signalstats Analysis** checkbox — runs FFmpeg `signalstats` filter; requires border detection to be enabled (enforced by UI)
+
+#### 6. BRNG Analysis Settings
+
+Controls `checks_config.outputs.frame_analysis` BRNG fields:
+
+- **Enable BRNG Analysis** checkbox
+- **Duration Limit (s)** — maximum duration to analyze for out-of-range values
+- **Skip Color Bars** checkbox — excludes color bar sections from BRNG analysis
+
+### Config Update Pattern
+
+`ComplexWindow` uses `on_boolean_changed()` for checkboxes and `on_frame_analysis_param_changed()` for numeric inputs. Both call `config_mgr.update_config('checks', updates)` to persist changes. The `is_loading` flag prevents spurious config writes during `load_config_values()`.
+
+```python
+def on_boolean_changed(self, state, path):
+    if self.is_loading:
+        return
+    new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+    # path examples:
+    #   ['tools', 'qctools', 'run_tool']
+    #   ['outputs', 'frame_analysis', 'enable_border_detection']
+    updates = {path[0]: {path[1]: {path[2]: new_value}}}
+    config_mgr.update_config('checks', updates)
+```
+
 ## Processing Window and Console Text Box
 
 The processing window functionality is split between two modules that work together to provide visualization of processing operations:
@@ -356,23 +454,29 @@ class ProcessingSignals(QObject):
     completed = pyqtSignal(str)             # Processing completed
     error = pyqtSignal(str)                 # Error occurred
     cancelled = pyqtSignal()                # Processing cancelled
-    
+
     status_update = pyqtSignal(str)         # General status updates
     progress = pyqtSignal(int, int)         # Numerical progress (current, total)
 
-    file_started = pyqtSignal(str)          # File processing started
-    tool_started = pyqtSignal(str)          # Tool processing started
-    tool_completed = pyqtSignal(str)        # Tool processing completed
-    step_completed = pyqtSignal(str)        # Processing step completed
-    
-    fixity_progress = pyqtSignal(str)       # Fixity status updates
-    mediaconch_progress = pyqtSignal(str)   # MediaConch status updates
-    metadata_progress = pyqtSignal(str)     # Metadata status updates
-    output_progress = pyqtSignal(str)       # Output creation status updates
+    file_started = pyqtSignal(str, int, int)  # File processing started (path, current_idx, total)
+    tool_started = pyqtSignal(str)            # Tool processing started
+    tool_completed = pyqtSignal(str)          # Tool processing completed
+    step_completed = pyqtSignal(str)          # Processing step completed
+    step_failed = pyqtSignal(str)             # Processing step failed
 
-    stream_hash_progress = pyqtSignal(int)  # Signal for stream hash progress percentage
-    md5_progress = pyqtSignal(int)          # Signal for MD5 calculation progress percentage
-    access_file_progress = pyqtSignal(int)  # Signal for access file creation progress percentage
+    fixity_progress = pyqtSignal(str)         # Fixity status updates
+    mediaconch_progress = pyqtSignal(str)     # MediaConch status updates
+    metadata_progress = pyqtSignal(str)       # Metadata status updates
+    output_progress = pyqtSignal(str)         # Output creation status updates
+
+    stream_hash_progress = pyqtSignal(int)    # Stream hash progress percentage
+    md5_progress = pyqtSignal(int)            # MD5 calculation progress percentage
+    access_file_progress = pyqtSignal(int)    # Access file creation progress percentage
+    qctools_progress = pyqtSignal(int)        # QCTools XML creation progress percentage
+    qctparse_progress = pyqtSignal(int)       # qct-parse analysis progress percentage
+    frame_analysis_progress = pyqtSignal(int) # Frame analysis progress percentage
+
+    clear_status = pyqtSignal()               # Clear status message
 ```
 
 ### 2. Main Window (`MainWindow` Class)
