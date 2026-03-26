@@ -118,7 +118,7 @@ Launch the GUI:
 av-spex-gui
 ```
 
-The GUI has three tabs: **Import**, **Checks**, and **Spex**.
+The GUI has four tabs: **Import**, **Checks**, **Spex**, and **Complex**
 
 ### Import Tab
 
@@ -149,6 +149,17 @@ The Spex tab displays the expected metadata values that AV Spex validates agains
 - **Open Section**: View the current expected values for any section (read-only for default profiles)
 
 Once your Spex selections are complete, navigate to the Checks tab and click **Check Spex!**.
+
+### Complex Tab
+
+The Complex tab provides configuration for QCTools, qct-parse, and frame analysis — the more advanced processing steps that are typically run during Step 2 or configured independently.
+
+- **QCTools**: Toggle QCTools analysis on or off and set the output file extension (`qctools.xml.gz` or `qctools.mkv`)
+- **qct-parse**: Enable or disable qct-parse sub-steps including bars detection, bar evaluation, and thumbnail export
+- **Frame Analysis**: Configure the three frame analysis sub-steps (see [Frame Analysis](#frame-analysis) below for details):
+  - **Border Detection**: Toggle on/off, select mode (simple or sophisticated), and set pixel crop width
+  - **BRNG Analysis**: Toggle on/off, set maximum analysis duration, and enable or disable automatic color bar skipping
+  - **Signalstats**: Toggle on/off
 
 ---
 
