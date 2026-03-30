@@ -7,6 +7,12 @@ os.environ["NUMEXPR_MAX_THREADS"] = "11" # troubleshooting goofy numbpy related 
 import csv
 from base64 import b64encode
 import json
+import subprocess
+import numpy as np
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from PIL import Image
+import io
 
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
@@ -360,6 +366,120 @@ def read_xml_file(xml_file_path):
         except Exception as e:
             logger.error(f"Failed to decode {xml_file_path} with fallback encoding: {e}")
             return f"[Error reading XML file: {e}]"
+
+
+def _extract_low_res_frames(video_path, out_dir, fps=0.5, scale=32):
+    """
+    Extract low-res frames from a video using ffmpeg.
+    
+    Args:
+        video_path (str): Path to the video file
+        out_dir (str): Directory to write frame JPEGs into
+        fps (float): Sampling rate — 0.5 = one frame every 2 seconds
+        scale (int): Pixel dimension for the downscaled square frames
+    """
+    out_pattern = str(Path(out_dir) / "frame_%04d.jpg")
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", video_path,
+        "-vf", f"fps={fps},scale={scale}:{scale}",
+        "-q:v", "5",
+        out_pattern,
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def _kmeans_dominant_color(image_array, k=3, iterations=10):
+    """
+    Lightweight k-means to find the dominant color in a small image.
+    
+    Args:
+        image_array (np.ndarray): HxWx3 uint8 image
+        k (int): Number of clusters
+        iterations (int): Number of k-means iterations
+        
+    Returns:
+        np.ndarray: RGB triplet (uint8) of the largest cluster centroid
+    """
+    pixels = image_array.reshape(-1, 3).astype(np.float32)
+    rng = np.random.default_rng()
+    centroids = pixels[rng.choice(len(pixels), k, replace=False)]
+
+    for _ in range(iterations):
+        distances = np.linalg.norm(pixels[:, None] - centroids[None, :], axis=2)
+        labels = np.argmin(distances, axis=1)
+        new_centroids = []
+        for i in range(k):
+            cluster = pixels[labels == i]
+            new_centroids.append(cluster.mean(axis=0) if len(cluster) else centroids[i])
+        centroids = np.array(new_centroids)
+
+    counts = np.bincount(labels, minlength=k)
+    return centroids[np.argmax(counts)].astype(np.uint8)
+
+
+def generate_color_strip_base64(
+    video_path,
+    fps=0.5,
+    thumb_size=32,
+    strip_height=40,
+    output_width=800,
+    k=3,
+):
+    """
+    Sample frames from a video, extract dominant colors, and return a
+    horizontal color strip as a base64-encoded PNG string.
+
+    The strip is built at native width (one pixel column per sampled frame),
+    then resized to ``output_width`` using nearest-neighbor interpolation so
+    the hard color-band edges stay crisp.
+
+    Args:
+        video_path (str): Path to the source video file.
+        fps (float): Frame sampling rate (0.5 = every 2 s).
+        thumb_size (int): Pixel size of the square thumbnails sent to k-means.
+        strip_height (int): Height in pixels of the final strip image.
+        output_width (int): Width in pixels to resize the strip to.
+        k (int): Number of k-means clusters per frame.
+
+    Returns:
+        str or None: Base64-encoded PNG data (no ``data:`` prefix), or None on
+        failure.
+    """
+    try:
+        with TemporaryDirectory() as tmpdir:
+            _extract_low_res_frames(video_path, tmpdir, fps=fps, scale=thumb_size)
+            frame_files = sorted(Path(tmpdir).glob("frame_*.jpg"))
+            if not frame_files:
+                logger.warning("Color strip: no frames extracted — skipping")
+                return None
+
+            colors = []
+            for frame_file in frame_files:
+                img = np.array(Image.open(frame_file))
+                colors.append(_kmeans_dominant_color(img, k=k))
+
+        # Build the strip at native width (1 px per sample)
+        native_width = len(colors)
+        strip = np.zeros((strip_height, native_width, 3), dtype=np.uint8)
+        for i, color in enumerate(colors):
+            strip[:, i] = color
+
+        image = Image.fromarray(strip)
+        # Resize to a usable width with nearest-neighbor to keep hard edges
+        image = image.resize((output_width, strip_height), Image.NEAREST)
+
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return b64encode(buffer.getvalue()).decode("utf-8")
+
+    except Exception as e:
+        logger.warning(f"Color strip generation failed: {e}")
+        return None
+
+
 
 
 def find_qc_metadata(destination_directory):
@@ -2434,7 +2554,27 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # Determine the  path to the image file
     logo_image_path = config_mgr.get_logo_path('av_spex_the_logo.png')
-    eq_image_path = config_mgr.get_logo_path('germfree_eq.png')
+    # Generate a color strip from the video, fall back to the static eq image
+    color_strip_b64 = None
+    if video_path:
+        color_strip_b64 = generate_color_strip_base64(video_path)
+ 
+    if color_strip_b64:
+        # data URI for embedding directly in the HTML
+        color_strip_src = f"data:image/png;base64,{color_strip_b64}"
+        # Reusable divider snippet for inserting between sections
+        color_strip_divider = (
+            f'<img src="{color_strip_src}" alt="Color strip" '
+            f'class="color-strip-divider">'
+        )
+    else:
+        # Fallback: use the static eq image as before
+        eq_image_path = config_mgr.get_logo_path('germfree_eq.png')
+        color_strip_src = eq_image_path
+        color_strip_divider = (
+            f'<img src="{eq_image_path}" alt="AV Spex Graphic EQ Logo" '
+            f'style="width: 10%">'
+        )
 
     # HTML template with JavaScript functions
     html_template = f"""
@@ -2512,6 +2652,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
                 max-height: 400px;
                 overflow-y: auto;
             }}
+            .color-strip-divider {{
+                display: block;
+                width: 100%;
+                height: auto;
+                margin: 25px 0;
+                border-radius: 3px;
+                image-rendering: pixelated;          /* Chrome/Edge */
+                image-rendering: crisp-edges;         /* Firefox */
+                -ms-interpolation-mode: nearest-neighbor; /* legacy IE */
+            }}
         </style>
         <script>
         function openImage(imgData, caption) {{
@@ -2551,7 +2701,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     <body>
         <h1>AV Spex Report</h1>
         <h2>{video_id}</h2>
-        <img src="{eq_image_path}" alt="AV Spex Graphic EQ Logo" style="width: 10%">
+        {color_strip_divider}
     """
 
     if check_cancelled():
@@ -2577,6 +2727,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         """
 
     if frame_analysis_html:
+        html_template += frame_analysis_html
         html_template += frame_analysis_html
 
     # Rest of the HTML template remains the same...
