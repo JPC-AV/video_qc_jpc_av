@@ -126,6 +126,9 @@ class MainWindowProcessing:
 
         # Connect the step_failed signal
         self.main_window.signals.step_failed.connect(self.main_window.processing_window.mark_step_failed)
+
+        # Connect the step_reset signal
+        self.main_window.signals.step_reset.connect(self.main_window.processing_window.mark_step_pending)
             
         # Connect the cancel button
         self.main_window.processing_window.cancel_button.clicked.connect(self.cancel_processing)

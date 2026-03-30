@@ -1,4 +1,4 @@
-from PyQt6.QtGui import QTextCharFormat, QColor, QFont, QTextCursor
+from PyQt6.QtGui import QTextCharFormat, QColor, QFont, QTextCursor, QFontDatabase
 from PyQt6.QtWidgets import QTextEdit, QSizePolicy
 from PyQt6.QtCore import Qt, QRegularExpression, QSize
 from enum import Enum, auto
@@ -24,8 +24,14 @@ class ConsoleTextEdit(QTextEdit):
         self.setMinimumHeight(300)
         self.setMaximumHeight(900)
         
+        # Store current font size for zoom functionality
+        self._current_font_size = 14  # Default size
+        self._min_font_size = 8
+        self._max_font_size = 32
+
         # Set default font to monospace for console-like appearance
-        font = QFont("Courier New, monospace")
+        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        font.setPointSize(self._current_font_size)
         self.setFont(font)
         
         # Document margin settings for better appearance
@@ -33,19 +39,11 @@ class ConsoleTextEdit(QTextEdit):
         
         # Initialize format cache
         self._format_cache = {}
-        
-        # Store current font size for zoom functionality
-        self._current_font_size = 14  # Default size
-        self._min_font_size = 8
-        self._max_font_size = 32
 
         # Disable word wrapping for horizontal scrolling
         self.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         
-        # Set horizontal scrollbar policy to always show
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        
-        # Set a reasonable minimum width but allow horizontal scrolling
         self.setMinimumWidth(300)
         
     def append_message(self, text, msg_type=MessageType.NORMAL):
@@ -112,7 +110,7 @@ class ConsoleTextEdit(QTextEdit):
         self._format_cache.clear()
         
         # Update the widget's default font for new text
-        font = QFont("Courier New, monospace")
+        font = font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         font.setPointSize(self._current_font_size)
         self.setFont(font)
         
@@ -156,7 +154,7 @@ class ConsoleTextEdit(QTextEdit):
         fmt = QTextCharFormat()
         
         # Base font (monospace) - now using current font size
-        font = QFont("Courier New, monospace")
+        font = font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         font.setPointSize(self._current_font_size)  # Use current font size
         
         # Apply styling based on message type
@@ -165,23 +163,16 @@ class ConsoleTextEdit(QTextEdit):
             pass
         elif msg_type == MessageType.ERROR:
             # Error messages are bold and red (uses a distinct shade)
-            font.setBold(True)
             fmt.setForeground(QColor(255, 80, 80))
         elif msg_type == MessageType.WARNING:
             # Warning messages are orange
-            font.setBold(True)
             fmt.setForeground(QColor(255, 160, 0))
         elif msg_type == MessageType.INFO:
             # Info messages are cyan/blue
-            font.setBold(True)
             fmt.setForeground(QColor(40, 170, 255))
         elif msg_type == MessageType.SUCCESS:
             # Success messages are green
-            font.setBold(True)
             fmt.setForeground(QColor(0, 200, 0))
-        elif msg_type == MessageType.COMMAND:
-            # Command messages are bold
-            font.setBold(True)
             
         fmt.setFont(font)
         
@@ -206,9 +197,8 @@ class ConsoleTextEdit(QTextEdit):
         
         # Create a divider format - now using current font size
         divider_format = QTextCharFormat()
-        font = QFont("Courier New, monospace")
+        font = font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         font.setPointSize(self._current_font_size)  # Use current font size
-        font.setBold(True)
         divider_format.setFont(font)
         divider_format.setForeground(QColor(100, 100, 255))  # Blue color for the divider
         
