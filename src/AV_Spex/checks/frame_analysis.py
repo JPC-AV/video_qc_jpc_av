@@ -3378,8 +3378,17 @@ class EnhancedFrameAnalysis:
                 # Store initial state for comparison
                 initial_borders = border_results
                 initial_brng = brng_results
-                
-                while (refinement_iterations < max_refinement_iterations and 
+
+                # Reset frame analysis steps back to pending before re-running
+                if signals:
+                    if frame_config.enable_border_detection:
+                        signals.step_reset.emit("Frame Analysis - Border Detection")
+                    if frame_config.enable_signalstats and method == 'sophisticated':
+                        signals.step_reset.emit("Frame Analysis - Signalstats")
+                    if frame_config.enable_brng_analysis:
+                        signals.step_reset.emit("Frame Analysis - BRNG Analysis")
+
+                while (refinement_iterations < max_refinement_iterations and
                     brng_results.requires_border_adjustment):
                     
                     if self.check_cancelled():
@@ -3479,6 +3488,15 @@ class EnhancedFrameAnalysis:
                         current_area=new_area
                     )
                 
+                # Re-check frame analysis steps after refinement completes
+                if signals and refinement_iterations > 0:
+                    if frame_config.enable_border_detection:
+                        signals.step_completed.emit("Frame Analysis - Border Detection")
+                    if frame_config.enable_signalstats and method == 'sophisticated':
+                        signals.step_completed.emit("Frame Analysis - Signalstats")
+                    if frame_config.enable_brng_analysis:
+                        signals.step_completed.emit("Frame Analysis - BRNG Analysis")
+
                 # After refinement loop completes
                 results['refinement_iterations'] = refinement_iterations
                 results['refinement_history'] = refinement_history
