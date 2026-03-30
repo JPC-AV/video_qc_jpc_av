@@ -655,6 +655,8 @@ class SophisticatedBorderDetector:
         if len(quality_frames) < 30:
             sample_indices = np.linspace(0, self.total_frames - 1, 50, dtype=int)
             for j, idx in enumerate(sample_indices):
+                if self.check_cancelled():
+                    break
                 cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
                 ret, frame = cap.read()
                 if ret:
@@ -789,13 +791,15 @@ class SophisticatedBorderDetector:
         artifact_count = 0
         
         for frame_idx in sample_frames:
+            if self.check_cancelled():
+                break
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
                 continue
-            
+
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
+
             # Analyze bottom 15 lines
             bottom_region = gray[-15:, :]
             
@@ -921,6 +925,8 @@ class SophisticatedBorderDetector:
         quality_frames = []
         total_to_check = len(frame_indices)
         for i, idx in enumerate(frame_indices):
+            if self.check_cancelled():
+                break
             cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = cap.read()
             if not ret:
@@ -2951,28 +2957,40 @@ class IntegratedSignalstatsAnalyzer:
         ]
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            while proc.poll() is None:
+                if self.check_cancelled():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    return None
+                try:
+                    proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
+            if proc.returncode != 0:
                 logger.warning(f"    FFprobe failed for period {period_num}")
                 return None
-            
+
             # Parse output
             brng_values = []
-            for line in result.stdout.strip().split('\n'):
+            for line in proc.stdout.strip().split('\n'):
                 if line.strip():
                     try:
                         brng_values.append(float(line.strip()))
                     except:
                         pass
-            
+
             frames_with_violations = len([v for v in brng_values if v > 0])
             violation_pct = (frames_with_violations / len(brng_values) * 100) if brng_values else 0
             max_brng = max(brng_values) if brng_values else 0
-            
+
             logger.debug(f"    Period {period_num} FFprobe results: {len(brng_values):,} frames, "
                        f"{frames_with_violations:,} violations ({violation_pct:.1f}%), "
                        f"max BRNG: {max_brng*100:.4f}%")
-            
+
             return {
                 'frames_analyzed': len(brng_values),
                 'frames_with_violations': frames_with_violations,
@@ -3011,7 +3029,7 @@ class EnhancedFrameAnalysis:
             logger.warning(f"No QCTools report found for {self.video_path.name}")
         
         # Initialize components (pass qctools_report to avoid duplicate search)
-        self.border_detector = SophisticatedBorderDetector(video_path, signals=signals)
+        self.border_detector = SophisticatedBorderDetector(video_path, signals=signals, check_cancelled_fn=self.check_cancelled)
         self.brng_analyzer = None  # Will be initialized with border data
         self.signalstats_analyzer = IntegratedSignalstatsAnalyzer(video_path, qctools_report=self.qctools_report, check_cancelled_fn=self.check_cancelled, signals=signals)
         
