@@ -86,7 +86,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
 
         # Zoom reset button
         self.zoom_reset_button = QPushButton("Reset")
-        self.zoom_reset_button.setMaximumWidth(50)
+        self.zoom_reset_button.setMaximumWidth(60)
         self.zoom_reset_button.setToolTip("Reset text size to default")
         self.zoom_reset_button.clicked.connect(self.reset_console_zoom)
         zoom_layout.addWidget(self.zoom_reset_button)
