@@ -260,6 +260,8 @@ class ProcessingManager:
         ]):
             if self.signals:
                 self.signals.output_progress.emit("Performing enhanced frame analysis...")
+                # Reset the detail progress bar before frame analysis begins
+                self.signals.frame_analysis_progress.emit(0)
             
             # Run the new unified frame analysis, passing color bars info from qct-parse
             frame_analysis_results = self.process_frame_analysis(
@@ -270,6 +272,7 @@ class ProcessingManager:
             processing_results['frame_analysis'] = frame_analysis_results
         
         if self.signals:
+            self.signals.frame_analysis_progress.emit(0)
             self.signals.output_progress.emit("Preparing report...")
         if self.check_cancelled():
             return None
@@ -532,7 +535,9 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
 
             # Run QCTools parsing
             logger.info(f"Running qct-parse on: {results['qctools_output_path']}")
-            run_qctparse(video_path, results['qctools_output_path'], report_directory, check_cancelled=check_cancelled)
+            if signals and hasattr(signals, 'qctparse_progress'):
+                signals.qctparse_progress.emit(0)
+            run_qctparse(video_path, results['qctools_output_path'], report_directory, check_cancelled=check_cancelled, signals=signals)
             if signals:
                 signals.step_completed.emit("QCT Parse")
              # After qct-parse completes, check for color bars results

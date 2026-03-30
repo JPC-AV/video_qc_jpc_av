@@ -13,7 +13,8 @@ class ProcessingSignals(QObject):
     tool_started = pyqtSignal(str)  # Signal for when a specific tool starts
     tool_completed = pyqtSignal(str)  # Signal for when a tool completes
     step_completed = pyqtSignal(str)  # Signal when a specific step is completed
-    step_failed = pyqtSignal(str)     # Signal when a specific step fails 
+    step_failed = pyqtSignal(str)     # Signal when a specific step fails
+    step_reset = pyqtSignal(str)      # Signal to reset a step back to pending (e.g. before re-running)
     
     fixity_progress = pyqtSignal(str)  # For detailed fixity status
     mediaconch_progress = pyqtSignal(str)  # For detailed mediaconch status
@@ -24,5 +25,7 @@ class ProcessingSignals(QObject):
     md5_progress = pyqtSignal(int)          # Signal for MD5 calculation progress percentage
     access_file_progress = pyqtSignal(int)  # Signal for access file creation progress percentage
     qctools_progress = pyqtSignal(int)       # Signal for qctools xml creation progress percentage
+    qctparse_progress = pyqtSignal(int)      # Signal for qct-parse analysis progress percentage
+    frame_analysis_progress = pyqtSignal(int)  # Signal for frame analysis progress percentage
 
     clear_status = pyqtSignal()  # Signal to clear status message

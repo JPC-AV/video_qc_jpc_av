@@ -15,6 +15,7 @@ from .utils import dir_setup
 from .utils import config_edit
 from .utils.log_setup import logger
 from .utils.config_setup import SpexConfig, FilenameConfig
+from .utils import exiftool_import, mediainfo_import, ffprobe_import
 from .utils.config_manager import ConfigManager
 from .utils.config_io import ConfigIO
 from .utils.dependency_checker import DependencyManager, cli_deps_check
@@ -82,6 +83,16 @@ class ParsedArguments:
     enable_border_detection: Optional[str]
     enable_brng_analysis: Optional[str]
     enable_signalstats: Optional[str]
+    frame_borders: Optional[str]
+    frame_border_pixels: Optional[int]
+    frame_no_colorbar_skip: bool
+    frame_brng_duration: Optional[int]
+    exiftool_profile: Optional[str]
+    mediainfo_profile: Optional[str]
+    ffprobe_profile: Optional[str]
+    exiftool_from_file: Optional[str]
+    mediainfo_from_file: Optional[str]
+    ffprobe_from_file: Optional[str]
 
 
 PROFILE_MAPPING = {
@@ -89,33 +100,6 @@ PROFILE_MAPPING = {
     "step2": config_edit.profile_step2,
     "off": config_edit.profile_allOff
 }
-
-
-SIGNALFLOW_MAPPING = {
-    "JPC_AV_SVHS": config_edit.JPC_AV_SVHS,
-    "BVH3100": config_edit.BVH3100
-}
-
-
-filename_config = config_mgr.get_config("filename", FilenameConfig)
-
-FILENAME_MAPPING = {
-    "jpc": filename_config.filename_profiles["JPC Filename Profile"],
-    "bowser": filename_config.filename_profiles["Bowser Filename Profile"]
-}
-
-
-SIGNAL_FLOW_CONFIGS = {
-    "JPC_AV_SVHS": {
-        "format_tags": {"ENCODER_SETTINGS": config_edit.JPC_AV_SVHS},
-        "mediatrace": {"ENCODER_SETTINGS": config_edit.JPC_AV_SVHS}
-    },
-    "BVH3100": {
-        "format_tags": {"ENCODER_SETTINGS": config_edit.BVH3100}, 
-        "mediatrace": {"ENCODER_SETTINGS": config_edit.BVH3100}
-    }
-}
-
 
 
 def parse_arguments():
@@ -147,12 +131,12 @@ The scripts will confirm that the digital files conform to predetermined specifi
                         action='append', 
                          metavar="{tool_name.run_tool, tool_name.check_tool}",
                          help="Turns off specific tool run_ or check_ option (format: tool.check_tool or tool.run_tool, e.g. mediainfo.run_tool)")
-    parser.add_argument("-sn","--signalflow", choices=['JPC_AV_SVHS', 'BVH3100'],
-                        help="Select signal flow config type (JPC_AV_SVHS or BVH3100)")
-    parser.add_argument("-fn","--filename", choices=['jpc', 'bowser'], 
-                        help="Select file name config type (jpc or bowser)")
-    parser.add_argument("-pp", "--printprofile", type=str, nargs='?', const='all', default=None, 
-                        help="Show config profile(s) and optional subsection. Format: 'config[,subsection]'. Examples: 'all', 'spex', 'checks', 'checks,tools', 'spex,filename_values'")
+    parser.add_argument("-sn","--signalflow",
+                        help="Select signal flow profile by name (e.g. 'JPC_AV_SVHS Signal Flow'). Use -pp signalflow to list available profiles.")
+    parser.add_argument("-fn","--filename",
+                        help="Select filename profile by name (e.g. 'JPC Filename Profile'). Use -pp to list available profiles.")
+    parser.add_argument("-pp", "--printprofile", type=str, nargs='?', const='all', default=None,
+                        help="Show config profile(s) and optional subsection. For current settings: 'config[,subsection]'. Examples: 'all', 'spex', 'checks', 'checks,tools', 'spex,filename_values'. For custom profiles: 'exiftool', 'mediainfo', 'ffprobe', 'signalflow'")
     parser.add_argument("-d","--directory", action="store_true", 
                         help="Flag to indicate input is a directory")
     parser.add_argument("-f","--file", action="store_true", 
@@ -172,35 +156,48 @@ The scripts will confirm that the digital files conform to predetermined specifi
                     help='Import configs from JSON file')
     parser.add_argument("--mediaconch-policy",
                     help="Path to custom MediaConch policy XML file")
-    
+    parser.add_argument("--exiftool-profile",
+                    help="Apply an exiftool expected-values profile by name. Use -pp exiftool to list available exiftool profiles.")
+    parser.add_argument("--mediainfo-profile",
+                    help="Apply a MediaInfo expected-values profile by name. Use -pp mediainfo to list available mediainfo profiles.")
+    parser.add_argument("--ffprobe-profile",
+                    help="Apply an FFprobe expected-values profile by name. Use -pp ffprobe to list available ffprobe profiles.")
+    parser.add_argument("--exiftool-from-file",
+                    metavar="FILE",
+                    help="Create a custom exiftool profile from a file (JSON or text exiftool output). Saves as a new profile and applies it.")
+    parser.add_argument("--mediainfo-from-file",
+                    metavar="FILE",
+                    help="Create a custom MediaInfo profile from a JSON file (mediainfo --Output=JSON output). Saves as a new profile and applies it.")
+    parser.add_argument("--ffprobe-from-file",
+                    metavar="FILE",
+                    help="Create a custom FFprobe profile from a JSON file (ffprobe -print_format json output). Saves as a new profile and applies it.")
+
     # args for frame analysis
     # Enable/disable individual sub-steps
     parser.add_argument(
         '--enable-border-detection',
-        choices=['yes', 'no'],
+        choices=['on', 'off'],
         help='Enable/disable border detection in frame analysis'
     )
     parser.add_argument(
-        '--enable-brng-analysis', 
-        choices=['yes', 'no'],
+        '--enable-brng-analysis',
+        choices=['on', 'off'],
         help='Enable/disable BRNG analysis in frame analysis'
     )
     parser.add_argument(
         '--enable-signalstats',
-        choices=['yes', 'no'],
+        choices=['on', 'off'],
         help='Enable/disable signalstats in frame analysis'
     )
     parser.add_argument(
         '--frame-borders',
         choices=['simple', 'sophisticated'],
-        default='simple',
-        help='Border detection mode for frame analysis (default: simple 25px borders)'
+        help='Border detection mode for frame analysis (simple or sophisticated)'
     )
     parser.add_argument(
         '--frame-border-pixels',
         type=int,
-        default=25,
-        help='Number of pixels to crop from each edge in simple border mode (default: 25)'
+        help='Number of pixels to crop from each edge in simple border mode'
     )
     parser.add_argument(
         '--frame-no-colorbar-skip',
@@ -210,8 +207,7 @@ The scripts will confirm that the digital files conform to predetermined specifi
     parser.add_argument(
         '--frame-brng-duration',
         type=int,
-        default=300,
-        help='Maximum duration in seconds for BRNG analysis (default: 300)'
+        help='Maximum duration in seconds for BRNG analysis'
     )
 
     args = parser.parse_args()
@@ -220,8 +216,8 @@ The scripts will confirm that the digital files conform to predetermined specifi
     source_directories = dir_setup.validate_input_paths(input_paths, args.file)
 
     selected_profile = config_edit.resolve_config(args.profile, PROFILE_MAPPING)
-    sn_config_changes = config_edit.resolve_config(args.signalflow, SIGNALFLOW_MAPPING)
-    fn_config_changes = config_edit.resolve_config(args.filename, FILENAME_MAPPING)
+    sn_config_changes = args.signalflow
+    fn_config_changes = args.filename
 
     if args.use_default_config:
         try:
@@ -259,7 +255,17 @@ The scripts will confirm that the digital files conform to predetermined specifi
         use_default_config=args.use_default_config,
         enable_border_detection=getattr(args, 'enable_border_detection', None),
         enable_brng_analysis=getattr(args, 'enable_brng_analysis', None),
-        enable_signalstats=getattr(args, 'enable_signalstats', None)
+        enable_signalstats=getattr(args, 'enable_signalstats', None),
+        frame_borders=getattr(args, 'frame_borders', None),
+        frame_border_pixels=getattr(args, 'frame_border_pixels', None),
+        frame_no_colorbar_skip=getattr(args, 'frame_no_colorbar_skip', False),
+        frame_brng_duration=getattr(args, 'frame_brng_duration', None),
+        exiftool_profile=args.exiftool_profile,
+        mediainfo_profile=args.mediainfo_profile,
+        ffprobe_profile=args.ffprobe_profile,
+        exiftool_from_file=args.exiftool_from_file,
+        mediainfo_from_file=args.mediainfo_from_file,
+        ffprobe_from_file=args.ffprobe_from_file,
     )
 
 
@@ -289,6 +295,28 @@ def print_av_spex_logo():
     print(f'{avspex_icon}\n')
 
 
+def _import_profile_from_file(file_path, tool_name, import_func, save_func, apply_func):
+    """Import a profile from a file, save it, and apply it."""
+    if not os.path.isfile(file_path):
+        print(f"Error: File not found: {file_path}")
+        return
+    try:
+        profile = import_func(file_path)
+    except Exception as e:
+        print(f"Error: Failed to import {tool_name} profile from '{file_path}': {e}")
+        return
+
+    profile_name = os.path.splitext(os.path.basename(file_path))[0]
+    save_result = save_func(profile_name, profile)
+    if save_result is False:
+        print(f"Error: Failed to save {tool_name} profile '{profile_name}'")
+        return
+
+    apply_func(profile)
+    config_mgr.save_config('spex', is_last_used=True)
+    print(f"{tool_name.capitalize()} profile '{profile_name}' imported from '{file_path}' and applied.")
+
+
 def run_cli_mode(args):
     print_av_spex_logo()
 
@@ -308,13 +336,80 @@ def run_cli_mode(args):
     if args.mediaconch_policy:
         processing_mgmt.setup_mediaconch_policy(args.mediaconch_policy)
 
+    if args.exiftool_profile:
+        profile = config_edit.get_exiftool_profile(args.exiftool_profile)
+        if profile:
+            config_edit.apply_exiftool_profile(profile)
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            available = config_edit.get_available_exiftool_profiles()
+            print(f"Error: exiftool profile '{args.exiftool_profile}' not found. Available: {available}")
+
+    if args.mediainfo_profile:
+        profile = config_edit.get_mediainfo_profile(args.mediainfo_profile)
+        if profile:
+            config_edit.apply_mediainfo_profile(profile)
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            available = config_edit.get_available_mediainfo_profiles()
+            print(f"Error: MediaInfo profile '{args.mediainfo_profile}' not found. Available: {available}")
+
+    if args.ffprobe_profile:
+        profile = config_edit.get_ffprobe_profile(args.ffprobe_profile)
+        if profile:
+            config_edit.apply_ffprobe_profile(profile)
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            available = config_edit.get_available_ffprobe_profiles()
+            print(f"Error: FFprobe profile '{args.ffprobe_profile}' not found. Available: {available}")
+
+    if args.exiftool_from_file:
+        _import_profile_from_file(
+            args.exiftool_from_file, 'exiftool',
+            exiftool_import.import_exiftool_file_to_profile,
+            config_edit.save_exiftool_profile,
+            config_edit.apply_exiftool_profile,
+        )
+
+    if args.mediainfo_from_file:
+        _import_profile_from_file(
+            args.mediainfo_from_file, 'mediainfo',
+            mediainfo_import.import_mediainfo_file_to_profile,
+            config_edit.save_mediainfo_profile,
+            config_edit.apply_mediainfo_profile,
+        )
+
+    if args.ffprobe_from_file:
+        _import_profile_from_file(
+            args.ffprobe_from_file, 'ffprobe',
+            ffprobe_import.import_ffprobe_file_to_profile,
+            config_edit.save_ffprobe_profile,
+            config_edit.apply_ffprobe_profile,
+        )
+
     # Update spex config
     if args.sn_config_changes:
-        config_edit.apply_signalflow_profile(args.sn_config_changes)
+        _sn_aliases = {'JPC_AV_SVHS': 'JPC_AV_SVHS Signal Flow', 'BVH3100': 'BVH3100 Signal Flow'}
+        sn_name = _sn_aliases.get(args.sn_config_changes, args.sn_config_changes)
+        sn_profile = config_edit.get_signalflow_profile(sn_name)
+        if sn_profile:
+            config_edit.apply_signalflow_profile(sn_profile)
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            from .utils.config_setup import SignalflowConfig
+            available = list(config_mgr.get_config('signalflow', SignalflowConfig).signalflow_profiles.keys())
+            print(f"Error: signalflow profile '{args.sn_config_changes}' not found. Available: {available}")
+
     if args.fn_config_changes:
-        filename_profile = args.fn_config_changes
-        config_edit.apply_filename_profile(filename_profile)
-        config_mgr.save_config('spex', is_last_used=True)
+        _fn_aliases = {'jpc': 'JPC Filename Profile', 'bowser': 'Bowser Filename Profile'}
+        fn_name = _fn_aliases.get(args.fn_config_changes, args.fn_config_changes)
+        fn_config = config_mgr.get_config('filename', FilenameConfig)
+        if fn_name in fn_config.filename_profiles:
+            config_edit.apply_filename_profile(fn_config.filename_profiles[fn_name])
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            available = list(fn_config.filename_profiles.keys())
+            print(f"Error: filename profile '{args.fn_config_changes}' not found. Available: {available}")
 
     # Handle config I/O operations
     if args.export_config:
@@ -338,25 +433,25 @@ def run_cli_mode(args):
 
     # Handle enabling/disabling individual sub-steps
     if args.enable_border_detection:
-        frame_updates['outputs']['frame_analysis']['enable_border_detection'] = args.enable_border_detection
+        frame_updates['outputs']['frame_analysis']['enable_border_detection'] = (args.enable_border_detection == 'on')
 
     if args.enable_brng_analysis:
-        frame_updates['outputs']['frame_analysis']['enable_brng_analysis'] = args.enable_brng_analysis
+        frame_updates['outputs']['frame_analysis']['enable_brng_analysis'] = (args.enable_brng_analysis == 'on')
 
     if args.enable_signalstats:
-        frame_updates['outputs']['frame_analysis']['enable_signalstats'] = args.enable_signalstats
+        frame_updates['outputs']['frame_analysis']['enable_signalstats'] = (args.enable_signalstats == 'on')
 
     # Handle configuration of how sub-steps work
-    if hasattr(args, 'frame_borders'):
+    if args.frame_borders is not None:
         frame_updates['outputs']['frame_analysis']['border_detection_mode'] = args.frame_borders
 
-    if hasattr(args, 'frame_border_pixels'):
+    if args.frame_border_pixels is not None:
         frame_updates['outputs']['frame_analysis']['simple_border_pixels'] = args.frame_border_pixels
 
-    if hasattr(args, 'frame_no_colorbar_skip') and args.frame_no_colorbar_skip:
-        frame_updates['outputs']['frame_analysis']['brng_skip_color_bars'] = 'no'
+    if args.frame_no_colorbar_skip:
+        frame_updates['outputs']['frame_analysis']['brng_skip_color_bars'] = False
 
-    if hasattr(args, 'frame_brng_duration'):
+    if args.frame_brng_duration is not None:
         frame_updates['outputs']['frame_analysis']['brng_duration_limit'] = args.frame_brng_duration
 
     # Only update config if there are actual changes

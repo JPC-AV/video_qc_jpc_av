@@ -116,20 +116,36 @@ class ParsedArguments:
     tools_off_names: List[str]
     gui: Optional[Any]
     export_config: Optional[str]
-    export_file: Optional[str] 
+    export_file: Optional[str]
     import_config: Optional[str]
     mediaconch_policy: Optional[str]
     use_default_config: bool
+    enable_border_detection: Optional[str]
+    enable_brng_analysis: Optional[str]
+    enable_signalstats: Optional[str]
+    frame_borders: Optional[str]
+    frame_border_pixels: Optional[int]
+    frame_no_colorbar_skip: bool
+    frame_brng_duration: Optional[int]
+    exiftool_profile: Optional[str]
+    mediainfo_profile: Optional[str]
+    ffprobe_profile: Optional[str]
 ```
 
 Examples of supported CLI flags:
 
-* `--profile`: applies a predefined processing profile
-* `--on` / `--off`: selectively toggle individual tools
-* `--signalflow` / `--filename`: apply specialized configuration structures
+* `--profile`: applies a predefined processing profile (`step1`, `step2`, or `off`)
+* `--on` / `--off`: selectively toggle individual tools (e.g. `mediainfo.run_tool`)
+* `--signalflow` / `--filename`: apply specialized configuration structures by profile name
+* `--exiftool-profile` / `--mediainfo-profile` / `--ffprobe-profile`: apply named expected-value profiles for metadata tools
 * `--export-config` / `--import-config`: serialize and load JSON-based configurations
 * `--dryrun`: skip processing and apply config changes only
 * `--printprofile`: print selected config values for review
+* `--enable-border-detection` / `--enable-brng-analysis` / `--enable-signalstats`: toggle individual frame analysis sub-steps on or off
+* `--frame-borders`: set border detection mode (`simple` or `sophisticated`)
+* `--frame-border-pixels`: set pixel crop width for simple border mode
+* `--frame-brng-duration`: set max duration (in seconds) for BRNG analysis
+* `--frame-no-colorbar-skip`: disable automatic color bar skipping in frame analysis
 
 The parsed values are passed downstream as a `ParsedArguments` instance.
 
@@ -144,14 +160,13 @@ def run_cli_mode(args):
 
     cli_deps_check()
 
+    # Checks config: profile, tool toggles
     if args.selected_profile:
         config_edit.apply_profile(args.selected_profile)
         config_mgr.save_config('checks', is_last_used=True)
-
     if args.tools_on_names:
         config_edit.toggle_on(args.tools_on_names)
         config_mgr.save_config('checks', is_last_used=True)
-
     if args.tools_off_names:
         config_edit.toggle_off(args.tools_off_names)
         config_mgr.save_config('checks', is_last_used=True)
@@ -159,14 +174,58 @@ def run_cli_mode(args):
     if args.mediaconch_policy:
         processing_mgmt.setup_mediaconch_policy(args.mediaconch_policy)
 
+    # Custom expected-value profiles for metadata tools
+    if args.exiftool_profile:
+        profile = config_edit.get_exiftool_profile(args.exiftool_profile)
+        if profile:
+            config_edit.apply_exiftool_profile(profile)
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            available = config_edit.get_available_exiftool_profiles()
+            print(f"Error: exiftool profile '{args.exiftool_profile}' not found. Available: {available}")
+
+    if args.mediainfo_profile:
+        profile = config_edit.get_mediainfo_profile(args.mediainfo_profile)
+        if profile:
+            config_edit.apply_mediainfo_profile(profile)
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            available = config_edit.get_available_mediainfo_profiles()
+            print(f"Error: MediaInfo profile '{args.mediainfo_profile}' not found. Available: {available}")
+
+    if args.ffprobe_profile:
+        profile = config_edit.get_ffprobe_profile(args.ffprobe_profile)
+        if profile:
+            config_edit.apply_ffprobe_profile(profile)
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            available = config_edit.get_available_ffprobe_profiles()
+            print(f"Error: FFprobe profile '{args.ffprobe_profile}' not found. Available: {available}")
+
+    # Spex config: signal flow and filename profiles (with legacy short-name aliases)
     if args.sn_config_changes:
-        config_edit.apply_signalflow_profile(args.sn_config_changes)
+        _sn_aliases = {'JPC_AV_SVHS': 'JPC_AV_SVHS Signal Flow', 'BVH3100': 'BVH3100 Signal Flow'}
+        sn_name = _sn_aliases.get(args.sn_config_changes, args.sn_config_changes)
+        sn_profile = config_edit.get_signalflow_profile(sn_name)
+        if sn_profile:
+            config_edit.apply_signalflow_profile(sn_profile)
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            available = list(config_mgr.get_config('signalflow', SignalflowConfig).signalflow_profiles.keys())
+            print(f"Error: signalflow profile '{args.sn_config_changes}' not found. Available: {available}")
 
     if args.fn_config_changes:
-        filename_profile = args.fn_config_changes
-        config_edit.apply_filename_profile(filename_profile)
-        config_mgr.save_config('spex', is_last_used=True)
+        _fn_aliases = {'jpc': 'JPC Filename Profile', 'bowser': 'Bowser Filename Profile'}
+        fn_name = _fn_aliases.get(args.fn_config_changes, args.fn_config_changes)
+        fn_config = config_mgr.get_config('filename', FilenameConfig)
+        if fn_name in fn_config.filename_profiles:
+            config_edit.apply_filename_profile(fn_config.filename_profiles[fn_name])
+            config_mgr.save_config('spex', is_last_used=True)
+        else:
+            available = list(fn_config.filename_profiles.keys())
+            print(f"Error: filename profile '{args.fn_config_changes}' not found. Available: {available}")
 
+    # Config I/O
     if args.export_config:
         config_types = ['spex', 'checks'] if args.export_config == 'all' else [args.export_config]
         config_io = ConfigIO(config_mgr)
@@ -183,6 +242,28 @@ def run_cli_mode(args):
     if args.print_config_profile:
         config_edit.print_config(args.print_config_profile)
 
+    # Frame analysis sub-step configuration
+    frame_updates = {'outputs': {'frame_analysis': {}}}
+
+    if args.enable_border_detection:
+        frame_updates['outputs']['frame_analysis']['enable_border_detection'] = (args.enable_border_detection == 'on')
+    if args.enable_brng_analysis:
+        frame_updates['outputs']['frame_analysis']['enable_brng_analysis'] = (args.enable_brng_analysis == 'on')
+    if args.enable_signalstats:
+        frame_updates['outputs']['frame_analysis']['enable_signalstats'] = (args.enable_signalstats == 'on')
+    if args.frame_borders is not None:
+        frame_updates['outputs']['frame_analysis']['border_detection_mode'] = args.frame_borders
+    if args.frame_border_pixels is not None:
+        frame_updates['outputs']['frame_analysis']['simple_border_pixels'] = args.frame_border_pixels
+    if args.frame_no_colorbar_skip:
+        frame_updates['outputs']['frame_analysis']['brng_skip_color_bars'] = False
+    if args.frame_brng_duration is not None:
+        frame_updates['outputs']['frame_analysis']['brng_duration_limit'] = args.frame_brng_duration
+
+    if frame_updates['outputs']['frame_analysis']:
+        config_mgr.update_config('checks', frame_updates)
+        config_mgr.save_config('checks', is_last_used=True)
+
     if args.dry_run_only:
         logger.critical("Dry run selected. Exiting now.")
         sys.exit(1)
@@ -191,9 +272,55 @@ def run_cli_mode(args):
 This function performs the following:
 
 * Verifies external dependencies
-* Updates and persists configuration changes
+* Applies predefined profiles and tool-level toggles to the checks config
+* Applies named custom profiles for exiftool, mediainfo, and ffprobe expected values
+* Applies signal flow and filename profiles to the spex config (supporting legacy short-name aliases)
 * Handles config import/export
+* Applies frame analysis sub-step configuration flags
 * Optionally skips processing if `--dryrun` is used
+
+### Frame Analysis CLI Flags
+
+The frame analysis sub-system is configured via `checks_config.outputs.frame_analysis` (a `FrameAnalysisConfig` dataclass). The CLI exposes individual flags for toggling and tuning each sub-step without needing to edit a JSON file directly.
+
+| Flag | Config field | Effect |
+|------|-------------|--------|
+| `--enable-border-detection {on,off}` | `enable_border_detection` | Toggle border detection step |
+| `--enable-brng-analysis {on,off}` | `enable_brng_analysis` | Toggle BRNG out-of-range analysis |
+| `--enable-signalstats {on,off}` | `enable_signalstats` | Toggle FFmpeg signalstats step |
+| `--frame-borders {simple,sophisticated}` | `border_detection_mode` | Border detection algorithm |
+| `--frame-border-pixels N` | `simple_border_pixels` | Crop width (px) for simple mode |
+| `--frame-brng-duration N` | `brng_duration_limit` | Max seconds analyzed for BRNG |
+| `--frame-no-colorbar-skip` | `brng_skip_color_bars` → `False` | Disable automatic color bar skipping |
+
+All frame analysis updates are applied as a single deep-merge `update_config('checks', ...)` call at the end of `run_cli_mode`. If none of the frame analysis flags are supplied, the config is unchanged.
+
+Color bar skipping relies on the `color_bars_end_time` value from qct-parse being passed through `process_video_outputs()` → `process_frame_analysis()` → `analyze_frame_quality()`. Passing `--frame-no-colorbar-skip` sets `brng_skip_color_bars = False` in the config so that color bars at the head of the tape are included in BRNG analysis.
+
+---
+
+### Custom Metadata Profile Flags
+
+Three flags allow named expected-value profiles to be applied to the spex config from the CLI. These profiles are defined in their respective JSON config files (`exiftool_config.json`, `mediainfo_config.json`, `ffprobe_config.json`).
+
+```bash
+av-spex --exiftool-profile "My ExifTool Profile"
+av-spex --mediainfo-profile "My MediaInfo Profile"
+av-spex --ffprobe-profile "My FFprobe Profile"
+```
+
+Each flag resolves the profile by name, applies it to the spex config, and persists the change as `last_used_spex_config.json`. If the profile name is not found, an error is printed listing the available names (use `-pp exiftool`, `-pp mediainfo`, or `-pp ffprobe` to list profiles without processing).
+
+Signal flow and filename profiles similarly support **legacy short-name aliases** for backward compatibility:
+
+| Short name | Full profile name |
+|------------|------------------|
+| `JPC_AV_SVHS` | `JPC_AV_SVHS Signal Flow` |
+| `BVH3100` | `BVH3100 Signal Flow` |
+| `jpc` | `JPC Filename Profile` |
+| `bowser` | `Bowser Filename Profile` |
+
+---
 
 ### Processing Initiation
 
@@ -402,10 +529,10 @@ If any fixity-related options are enabled in the Checks Config, the `AVSpexProce
 fixity_enabled = False
 fixity_config = self.checks_config.fixity
 
-if (fixity_config.check_fixity == "yes" or 
-    fixity_config.validate_stream_fixity == "yes" or 
-    fixity_config.embed_stream_fixity == "yes" or 
-    fixity_config.output_fixity == "yes"):
+if (fixity_config.check_fixity or
+    fixity_config.validate_stream_fixity or
+    fixity_config.embed_stream_fixity or
+    fixity_config.output_fixity):
     fixity_enabled = True
 
 if fixity_enabled:
@@ -424,20 +551,20 @@ def process_fixity(self, source_directory, video_path, video_id):
     if self.check_cancelled():
         return None
 
-    if checks_config.fixity.embed_stream_fixity == 'yes':
+    if checks_config.fixity.embed_stream_fixity:
         process_embedded_fixity(video_path)
 
-    if checks_config.fixity.validate_stream_fixity == 'yes':
-        if checks_config.fixity.embed_stream_fixity == 'yes':
+    if checks_config.fixity.validate_stream_fixity:
+        if checks_config.fixity.embed_stream_fixity:
             logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
         else:
             validate_embedded_md5(video_path)
 
     md5_checksum = None
-    if checks_config.fixity.output_fixity == 'yes':
+    if checks_config.fixity.output_fixity:
         md5_checksum = output_fixity(source_directory, video_path)
 
-    if checks_config.fixity.check_fixity == 'yes':
+    if checks_config.fixity.check_fixity:
         check_fixity(source_directory, video_id, actual_checksum=md5_checksum)
 ```
 
@@ -471,7 +598,7 @@ Each function uses cooperative cancellation checks and emits progress either via
 The MediaConch check is triggered if it is enabled in the Checks Config:
 
 ```python
-mediaconch_enabled = self.checks_config.tools.mediaconch.run_mediaconch == "yes"
+mediaconch_enabled = self.checks_config.tools.mediaconch.run_mediaconch
 if mediaconch_enabled:
     mediaconch_results = processing_mgmt.validate_video_with_mediaconch(
         video_path, destination_directory, video_id
@@ -558,10 +685,10 @@ Each tool must be explicitly enabled in the Checks Config (`checks_config.tools`
 metadata_tools_enabled = False
 tools_config = self.checks_config.tools
 
-if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool == "yes" or
-    hasattr(tools_config.mediatrace, 'check_tool') and tools_config.mediatrace.check_tool == "yes" or
-    hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool == "yes" or
-    hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool == "yes"):
+if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool or
+    hasattr(tools_config.mediatrace, 'check_tool') and tools_config.mediatrace.check_tool or
+    hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool or
+    hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool):
     metadata_tools_enabled = True
 
 metadata_differences = None
@@ -611,7 +738,7 @@ Supported tools and their output formats:
 | Tool         | Command Preview                      | Output Format |
 | ------------ | ------------------------------------ | ------------- |
 | `exiftool`   | `exiftool -j`                        | `.json`       |
-| `mediainfo`  | `mediainfo -f --Output=JSON`         | `.json`       |
+| `mediainfo`  | `mediainfo -f --Output=XML`          | `.xml`        |
 | `mediatrace` | `mediainfo --Details=1 --Output=XML` | `.xml`        |
 | `ffprobe`    | `ffprobe ... -print_format json`     | `.txt`        |
 
@@ -619,7 +746,7 @@ Supported tools and their output formats:
 
 ### Parsing and Validation
 
-Each tool's output is parsed and validated by a tool-specific function, located in `AV_Spex.checks`. Parsing is only performed if the tool’s `check_tool` flag is set to `"yes"`.
+Each tool's output is parsed and validated by a tool-specific function, located in `AV_Spex.checks`. Parsing is only performed if the tool’s `check_tool` flag is `True`.
 
 ```python
 from AV_Spex.checks.exiftool_check import parse_exiftool
@@ -689,10 +816,10 @@ After metadata checks are complete, the application can optionally generate addi
 
 ```python
 outputs_enabled = (
-    self.checks_config.outputs.access_file == "yes" or
-    self.checks_config.outputs.report == "yes" or
-    self.checks_config.tools.qctools.run_tool == "yes" or
-    self.checks_config.tools.qct_parse.run_tool == "yes"
+    self.checks_config.outputs.access_file or
+    self.checks_config.outputs.report or
+    self.checks_config.tools.qctools.run_tool or
+    self.checks_config.tools.qct_parse.run_tool
 )
 
 if outputs_enabled:

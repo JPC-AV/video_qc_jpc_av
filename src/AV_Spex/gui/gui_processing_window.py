@@ -86,7 +86,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
 
         # Zoom reset button
         self.zoom_reset_button = QPushButton("Reset")
-        self.zoom_reset_button.setMaximumWidth(50)
+        self.zoom_reset_button.setMaximumWidth(60)
         self.zoom_reset_button.setToolTip("Reset text size to default")
         self.zoom_reset_button.clicked.connect(self.reset_console_zoom)
         zoom_layout.addWidget(self.zoom_reset_button)
@@ -385,7 +385,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         for i in range(self.steps_list.count()):
             item = self.steps_list.item(i)
             item_text = item.text()[2:]  # Remove the checkbox prefix
-            
+
             # Check for exact match first
             if item_text == step_name:
                 item.setText(f"❌ {step_name}")
@@ -398,7 +398,28 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
                 item.setFont(QFont("Arial", weight=QFont.Weight.Bold))
                 found = True
                 break
-        
+
+        if not found:
+            self.details_text.append(f"Warning: No matching step found for '{step_name}'")
+
+    def mark_step_pending(self, step_name):
+        """Reset a step back to pending (unchecked) state."""
+        found = False
+        for i in range(self.steps_list.count()):
+            item = self.steps_list.item(i)
+            item_text = item.text()[2:]  # Remove the checkbox/status prefix
+
+            if item_text == step_name:
+                item.setText(f"⬜ {step_name}")
+                item.setFont(QFont("Arial", weight=QFont.Weight.Normal))
+                found = True
+                break
+            elif item_text.lower() == step_name.lower():
+                item.setText(f"⬜ {item_text}")
+                item.setFont(QFont("Arial", weight=QFont.Weight.Normal))
+                found = True
+                break
+
         if not found:
             self.details_text.append(f"Warning: No matching step found for '{step_name}'")
 

@@ -245,7 +245,7 @@ def printThumb(video_path, tag, profile_name, startObj, thumbPath, tagValue, tim
 
 
 # detect bars    
-def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_depth_10):
+def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, bit_depth_10, signals=None, total_duration=None):
     """
     Detects color bars in a video by analyzing frames within a buffered window and logging the start and end times of the bars.
 
@@ -323,9 +323,22 @@ def detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_de
         return "", "", None, None
 
     try:
+        bars_frame_count = 0
+        bars_progress_interval = 500  # Emit progress every 500 frames
+        bars_last_progress_pct = 5
         for event, elem in parser_iter: #iterparse the xml doc
             if elem.attrib['media_type'] == "video": #get just the video frames
                 frame_pkt_dts_time = elem.attrib[pkt] #get the timestamps for the current frame we're looking at
+                
+                # Emit progress during bars detection (maps into 5→12% range)
+                bars_frame_count += 1
+                if (signals and hasattr(signals, 'qctparse_progress') and 
+                    total_duration and bars_frame_count % bars_progress_interval == 0):
+                    pct = 5 + int((float(frame_pkt_dts_time) / total_duration) * 7)
+                    pct = min(12, max(5, pct))
+                    if pct > bars_last_progress_pct:
+                        signals.qctparse_progress.emit(pct)
+                        bars_last_progress_pct = pct
                 
                 # Stop searching after 5 minutes if no bars found yet
                 if durationStart == "" and float(frame_pkt_dts_time) > search_time_limit:
@@ -605,7 +618,7 @@ def getCompFromConfig(qct_parse, profile, tag):
    raise ValueError(f"No matching comparison operator found for profile and tag: {profile}, {tag}")
 
 
-def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=None):
+def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=None, signals=None, total_duration=None):
     """
     Analyzes video frames from the QCTools report to detect threshold exceedances for specified tags or profiles and logs frame failures.
 
@@ -653,6 +666,11 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
     for k,v in profile.items(): 
         kbeyond[k] = 0
 
+    # Progress emission setup: emit every ~1000 frames to avoid overhead
+    # Maps frameCount against total_frames_estimate into the 15→95% range
+    progress_emit_interval = 1000
+    last_progress_pct = 0
+
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
     if parser_iter is None:
@@ -664,6 +682,16 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
             if elem.attrib['media_type'] == "video": 	#get just the video frames
                 frameCount = frameCount + 1
                 frame_pkt_dts_time = elem.attrib[pkt] 	#get the timestamps for the current frame we're looking at
+                
+                # Emit progress periodically
+                if (signals and hasattr(signals, 'qctparse_progress') and 
+                    total_duration and frameCount % progress_emit_interval == 0):
+                    pct = 20 + int((float(frame_pkt_dts_time) / total_duration) * 75)
+                    pct = min(95, max(20, pct))
+                    if pct > last_progress_pct:
+                        signals.qctparse_progress.emit(pct)
+                        last_progress_pct = pct
+                
                 if frame_pkt_dts_time >= str(durationStart): 	#only work on frames that are after the start time
                     if check_cancelled():
                         return kbeyond, frameCount, overallFrameFail, failureInfo
@@ -1020,7 +1048,29 @@ def detectBitdepth(startObj,pkt,framesList,buffSize):
     return bit_depth_10
 
 
-def run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=None):
+def _get_video_duration(video_path):
+    """Get video duration in seconds using ffprobe.
+    
+    Returns:
+        float or None: Duration in seconds, or None if unavailable.
+    """
+    try:
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'csv=p=0',
+            video_path
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
+def run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=None, signals=None):
     """
     Executes the qct-parse analysis on a given video file, exporting relevant data and thumbnails based on specified thresholds and profiles.
 
@@ -1028,6 +1078,8 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         video_path (str): Path to the video file being analyzed.
         qctools_output_path (str): Path to the QCTools XML report output.
         report_directory (str): Path to {video_id}_report_csvs directory.
+        check_cancelled (callable): Optional function to check if processing was cancelled.
+        signals: Optional signals object for emitting progress updates.
 
     """
     
@@ -1043,6 +1095,9 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         return None
     
     logger.info("Starting qct-parse\n")
+
+    # Estimate total video frames for progress reporting
+    total_duration = _get_video_duration(video_path)
 
     ###### Initialize variables ######
     startObj = qctools_output_path
@@ -1106,6 +1161,9 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     # Determine if video values are 10 bit depth
     bit_depth_10 = detectBitdepth(startObj,pkt,framesList,buffSize)
 
+    if signals and hasattr(signals, 'qctparse_progress'):
+        signals.qctparse_progress.emit(5)
+
     if check_cancelled():
         return None
 
@@ -1115,7 +1173,7 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         durationEnd = ""                            # if bar detection is turned on then we have to calculate this
         logger.debug(f"Starting Bars Detection on {baseName}\n")
         qctools_colorbars_duration_output = os.path.join(report_directory, "qct-parse_colorbars_durations.csv")
-        durationStart, durationEnd, barsStartString, barsEndString = detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_depth_10)
+        durationStart, durationEnd, barsStartString, barsEndString = detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_depth_10,signals=signals,total_duration=total_duration)
         
         # Handle case where bars start was found but no end transition was detected
         # This happens when the entire video is color bars
@@ -1144,6 +1202,9 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     if check_cancelled():
         return None
 
+    if signals and hasattr(signals, 'qctparse_progress'):
+        signals.qctparse_progress.emit(13)
+
     ######## Iterate Through the XML for Bars Evaluation ########
     if qct_parse['evaluateBars']:
         bars_fallback = False
@@ -1153,7 +1214,11 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             maxBarsDict = asdict(spex_config.qct_parse_values.smpte_color_bars)
             bars_fallback = True
         elif qct_parse['barsDetection'] and durationStart != "" and durationEnd != "":
+            if signals and hasattr(signals, 'qctparse_progress'):
+                signals.qctparse_progress.emit(14)
             maxBarsDict = evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize)
+            if signals and hasattr(signals, 'qctparse_progress'):
+                signals.qctparse_progress.emit(16)
             if maxBarsDict is None:
                 logger.critical("Something went wrong - Cannot run evaluate color bars\n")
         else:
@@ -1174,8 +1239,10 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             durationEnd = 99999999
             profile = maxBarsDict
             profile_name = 'color_bars_evaluation'
-            thumbExportDelay = 9000            
-            kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled)
+            thumbExportDelay = 9000
+            if signals and hasattr(signals, 'qctparse_progress'):
+                signals.qctparse_progress.emit(18)
+            kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled, signals=signals, total_duration=total_duration)
             colorbars_eval_fails_csv_path = os.path.join(report_directory, "qct-parse_colorbars_eval_failures.csv")
             if failureInfo:
                 save_failures_to_csv(failureInfo, colorbars_eval_fails_csv_path)
@@ -1187,6 +1254,9 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         return None
 
     logger.info(f"qct-parse finished processing file: {os.path.basename(startObj)} \n")
+
+    if signals and hasattr(signals, 'qctparse_progress'):
+        signals.qctparse_progress.emit(100)
 
     return
 
