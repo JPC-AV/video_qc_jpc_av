@@ -477,9 +477,10 @@ class QCToolsParser:
 class SophisticatedBorderDetector:
     """Advanced border detection with quality assessment and refinement capabilities"""
     
-    def __init__(self, video_path: str, signals=None):
+    def __init__(self, video_path: str, signals=None, check_cancelled_fn=None):
         self.video_path = str(video_path)
         self.signals = signals
+        self.check_cancelled = check_cancelled_fn or (lambda: False)
         self._init_video_properties()
 
     def _emit_progress(self, percent: int):
@@ -547,7 +548,11 @@ class SophisticatedBorderDetector:
         # Select quality frames for analysis
         self._emit_progress(0)
         quality_frames = self._select_quality_frames(cap, violations)
-        
+
+        if self.check_cancelled():
+            cap.release()
+            return self._detect_simple_borders()
+
         if len(quality_frames) < 5:
             logger.warning("Insufficient quality frames, falling back to simple detection")
             cap.release()
@@ -555,17 +560,25 @@ class SophisticatedBorderDetector:
             return self._detect_simple_borders()
         
         self._emit_progress(15)
-        
+
         # Detect borders using quality frames
         borders = self._analyze_borders_from_frames(cap, quality_frames)
-        
+
+        if self.check_cancelled():
+            cap.release()
+            return self._detect_simple_borders()
+
         self._emit_progress(25)
-        
+
         # Detect head switching artifacts
         head_switching = self._detect_head_switching(cap, borders)
-        
+
+        if self.check_cancelled():
+            cap.release()
+            return self._detect_simple_borders()
+
         self._emit_progress(35)
-        
+
         # Check for vertical blanking lines
         vertical_blanking = self._detect_vertical_blanking(cap, quality_frames)
         
@@ -621,6 +634,8 @@ class SophisticatedBorderDetector:
         if violations:
             violation_batch = violations[:30]
             for i, v in enumerate(violation_batch):
+                if self.check_cancelled():
+                    break
                 cap.set(cv2.CAP_PROP_POS_FRAMES, v.frame_num)
                 ret, frame = cap.read()
                 if ret:
@@ -3379,39 +3394,44 @@ class EnhancedFrameAnalysis:
                 initial_borders = border_results
                 initial_brng = brng_results
 
-                # Reset frame analysis steps back to pending before re-running
-                if signals:
-                    if frame_config.enable_border_detection:
-                        signals.step_reset.emit("Frame Analysis - Border Detection")
-                    if frame_config.enable_signalstats and method == 'sophisticated':
-                        signals.step_reset.emit("Frame Analysis - Signalstats")
-                    if frame_config.enable_brng_analysis:
-                        signals.step_reset.emit("Frame Analysis - BRNG Analysis")
-
                 while (refinement_iterations < max_refinement_iterations and
                     brng_results.requires_border_adjustment):
-                    
+
                     if self.check_cancelled():
                         break
-                    
+
                     refinement_iterations += 1
                     logger.debug(f"Refinement iteration {refinement_iterations}/{max_refinement_iterations}:")
-                    
+
+                    # Reset frame analysis steps to pending for this refinement iteration
+                    if signals:
+                        if frame_config.enable_border_detection:
+                            signals.step_reset.emit("Frame Analysis - Border Detection")
+                        if frame_config.enable_signalstats and method == 'sophisticated':
+                            signals.step_reset.emit("Frame Analysis - Signalstats")
+                        if frame_config.enable_brng_analysis:
+                            signals.step_reset.emit("Frame Analysis - BRNG Analysis")
+
                     # Store pre-refinement state
                     previous_area = border_results.active_area
                     previous_brng = brng_results
-                    
+
                     # Refine borders
+                    if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+                        self.signals.frame_analysis_progress.emit(0)
                     border_results = self.border_detector.refine_borders(border_results, brng_results)
                     new_area = border_results.active_area
-                    
+
                     logger.info(f"  Active area: {previous_area[2]}x{previous_area[3]} → {new_area[2]}x{new_area[3]}")
-                    
+
+                    if self.check_cancelled():
+                        break
+
                     # CREATE VISUALIZATION FOR THIS ITERATION
                     logger.info("  Creating border visualization for refined borders...\n")
                     viz_filename = f"{self.video_id}_border_detection_refined_iter{refinement_iterations}.jpg"
                     viz_output_path = self.output_dir / viz_filename
-                    
+
                     try:
                         success = self.border_detector.generate_border_visualization(
                             output_path=str(viz_output_path),
@@ -3421,7 +3441,7 @@ class EnhancedFrameAnalysis:
                             search_window=120,
                             detection_method=border_results.detection_method
                         )
-                        
+
                         if success:
                             logger.info(f"  ✓ Refined border visualization saved: {viz_filename}\n")
                         else:
@@ -3430,9 +3450,18 @@ class EnhancedFrameAnalysis:
                         logger.warning(f"  ⚠ Error creating visualization: {e}")
                         import traceback
                         logger.debug(traceback.format_exc())
-                    
+
+                    if self.check_cancelled():
+                        break
+
+                    # Mark border detection complete for this iteration
+                    if signals and frame_config.enable_border_detection:
+                        signals.step_completed.emit("Frame Analysis - Border Detection")
+
                     # Re-run signalstats with new borders to get updated periods (only if signalstats is enabled)
                     if signalstats_enabled:
+                        if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+                            self.signals.frame_analysis_progress.emit(0)
                         logger.debug("  Re-running signalstats with refined borders...\n")
                         signalstats_results = self.signalstats_analyzer.analyze_with_signalstats(
                             border_data=border_results,
@@ -3444,13 +3473,22 @@ class EnhancedFrameAnalysis:
                             black_segments=black_segments
                         )
                         analysis_periods = signalstats_results.analysis_periods
-                    
+
+                    if self.check_cancelled():
+                        break
+
+                    # Mark signalstats complete for this iteration
+                    if signals and frame_config.enable_signalstats and method == 'sophisticated':
+                        signals.step_completed.emit("Frame Analysis - Signalstats")
+
                     # Re-analyze BRNG with new borders and periods
+                    if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+                        self.signals.frame_analysis_progress.emit(0)
                     logger.debug("  Re-analyzing BRNG violations with refined borders...\n")
                     self.brng_analyzer = DifferentialBRNGAnalyzer(self.video_path, border_results,
                                                                   check_cancelled_fn=self.check_cancelled,
                                                                   signals=self.signals)
-                    
+
                     brng_results = self.brng_analyzer.analyze_with_differential_detection(
                         output_dir=self.output_dir,
                         duration_limit=duration_limit,
@@ -3458,7 +3496,14 @@ class EnhancedFrameAnalysis:
                         qctools_violations=violations,
                         analysis_periods=analysis_periods
                     )
-                    
+
+                    if self.check_cancelled():
+                        break
+
+                    # Mark BRNG analysis complete for this iteration
+                    if signals and frame_config.enable_brng_analysis:
+                        signals.step_completed.emit("Frame Analysis - BRNG Analysis")
+
                     # Track this iteration's results
                     iteration_data = {
                         'iteration': refinement_iterations,
@@ -3473,29 +3518,20 @@ class EnhancedFrameAnalysis:
                         'visualization_path': str(viz_output_path) if success else None
                     }
                     refinement_history.append(iteration_data)
-                    
+
                     # Log improvement metrics
                     violation_reduction = iteration_data['violations_before'] - iteration_data['violations_after']
                     if violation_reduction > 0:
                         logger.info(f"  Violations reduced: {iteration_data['violations_before']} → {iteration_data['violations_after']} (-{violation_reduction})")
                     else:
                         logger.info(f"  Violations: {iteration_data['violations_after']} (no reduction)")
-                    
+
                     # Check for improvement
                     improved = self._is_meaningful_improvement(
                         previous_brng, brng_results,
                         previous_area=previous_area,
                         current_area=new_area
                     )
-                
-                # Re-check frame analysis steps after refinement completes
-                if signals and refinement_iterations > 0:
-                    if frame_config.enable_border_detection:
-                        signals.step_completed.emit("Frame Analysis - Border Detection")
-                    if frame_config.enable_signalstats and method == 'sophisticated':
-                        signals.step_completed.emit("Frame Analysis - Signalstats")
-                    if frame_config.enable_brng_analysis:
-                        signals.step_completed.emit("Frame Analysis - BRNG Analysis")
 
                 # After refinement loop completes
                 results['refinement_iterations'] = refinement_iterations
