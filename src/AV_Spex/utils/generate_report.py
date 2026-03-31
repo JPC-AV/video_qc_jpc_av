@@ -448,6 +448,7 @@ def generate_color_strip_base64(
         str or None: Base64-encoded PNG data (no ``data:`` prefix), or None on
         failure.
     """
+    logger.info("Color strip generation started")
     try:
         with TemporaryDirectory() as tmpdir:
             _extract_low_res_frames(video_path, tmpdir, fps=fps, scale=thumb_size)
@@ -473,6 +474,7 @@ def generate_color_strip_base64(
 
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
+        logger.info("Color strip generation completed")
         return b64encode(buffer.getvalue()).decode("utf-8")
 
     except Exception as e:
