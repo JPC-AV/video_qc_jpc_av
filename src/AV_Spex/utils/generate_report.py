@@ -409,7 +409,7 @@ def _extract_frame_at(video_path, timestamp, output_path, height):
     subprocess.run(cmd, check=True)
 
 
-def generate_color_strip_base64(video_path, num_frames=30, strip_height=150, max_workers=4):
+def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max_workers=4):
     """
     Generate a frame-strip image from a video and return it as a
     base64-encoded PNG string.
