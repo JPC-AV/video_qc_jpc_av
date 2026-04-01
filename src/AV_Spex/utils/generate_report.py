@@ -8,11 +8,9 @@ import csv
 from base64 import b64encode
 import json
 import subprocess
-import numpy as np
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from PIL import Image
-import io
+from concurrent.futures import ThreadPoolExecutor
 
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
@@ -368,114 +366,125 @@ def read_xml_file(xml_file_path):
             return f"[Error reading XML file: {e}]"
 
 
-def _extract_low_res_frames(video_path, out_dir, fps=0.5, scale=32):
+def _get_video_duration(video_path):
     """
-    Extract low-res frames from a video using ffmpeg.
+    Probe the video duration in seconds using ffprobe.
     
-    Args:
-        video_path (str): Path to the video file
-        out_dir (str): Directory to write frame JPEGs into
-        fps (float): Sampling rate — 0.5 = one frame every 2 seconds
-        scale (int): Pixel dimension for the downscaled square frames
+    Returns:
+        float or None: Duration in seconds, or None on failure.
     """
-    out_pattern = str(Path(out_dir) / "frame_%04d.jpg")
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(result.stdout.strip())
+    except Exception as e:
+        logger.warning(f"Could not probe video duration: {e}")
+        return None
+
+
+def _extract_frame_at(video_path, timestamp, output_path, height):
+    """
+    Fast-seek to *timestamp* and extract a single frame scaled to *height*.
+
+    Placing ``-ss`` before ``-i`` triggers keyframe seeking, which jumps
+    directly to the nearest keyframe without decoding intermediate frames.
+    """
     cmd = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel", "error",
+        "-ss", str(timestamp),
         "-i", video_path,
-        "-vf", f"fps={fps},scale={scale}:{scale}",
+        "-frames:v", "1",
+        "-vf", f"scale=-1:{height}",
         "-q:v", "5",
-        out_pattern,
+        output_path,
     ]
     subprocess.run(cmd, check=True)
 
 
-def _kmeans_dominant_color(image_array, k=3, iterations=10):
+def generate_color_strip_base64(video_path, num_frames=30, strip_height=150, max_workers=4):
     """
-    Lightweight k-means to find the dominant color in a small image.
-    
-    Args:
-        image_array (np.ndarray): HxWx3 uint8 image
-        k (int): Number of clusters
-        iterations (int): Number of k-means iterations
-        
-    Returns:
-        np.ndarray: RGB triplet (uint8) of the largest cluster centroid
-    """
-    pixels = image_array.reshape(-1, 3).astype(np.float32)
-    rng = np.random.default_rng()
-    centroids = pixels[rng.choice(len(pixels), k, replace=False)]
+    Generate a frame-strip image from a video and return it as a
+    base64-encoded PNG string.
 
-    for _ in range(iterations):
-        distances = np.linalg.norm(pixels[:, None] - centroids[None, :], axis=2)
-        labels = np.argmin(distances, axis=1)
-        new_centroids = []
-        for i in range(k):
-            cluster = pixels[labels == i]
-            new_centroids.append(cluster.mean(axis=0) if len(cluster) else centroids[i])
-        centroids = np.array(new_centroids)
-
-    counts = np.bincount(labels, minlength=k)
-    return centroids[np.argmax(counts)].astype(np.uint8)
-
-
-def generate_color_strip_base64(
-    video_path,
-    fps=0.5,
-    thumb_size=32,
-    strip_height=40,
-    output_width=800,
-    k=3,
-):
-    """
-    Sample frames from a video, extract dominant colors, and return a
-    horizontal color strip as a base64-encoded PNG string.
-
-    The strip is built at native width (one pixel column per sampled frame),
-    then resized to ``output_width`` using nearest-neighbor interpolation so
-    the hard color-band edges stay crisp.
+    Instead of decoding the full video with an ``fps`` filter, this function
+    fast-seeks (``-ss`` before ``-i``) to *num_frames* evenly spaced
+    timestamps in parallel, extracts one frame at each position, then tiles
+    them into a single horizontal row with a second ffmpeg call.
 
     Args:
         video_path (str): Path to the source video file.
-        fps (float): Frame sampling rate (0.5 = every 2 s).
-        thumb_size (int): Pixel size of the square thumbnails sent to k-means.
-        strip_height (int): Height in pixels of the final strip image.
-        output_width (int): Width in pixels to resize the strip to.
-        k (int): Number of k-means clusters per frame.
+        num_frames (int): Number of frames to sample across the video.
+        strip_height (int): Height of each frame tile in pixels.
+        max_workers (int): Number of parallel ffmpeg seek processes.
 
     Returns:
-        str or None: Base64-encoded PNG data (no ``data:`` prefix), or None on
-        failure.
+        str or None: Base64-encoded PNG data (no ``data:`` prefix), or None
+        on failure.
     """
     logger.info("Color strip generation started")
     try:
+        duration = _get_video_duration(video_path)
+        if duration is None or duration <= 0:
+            logger.warning("Color strip: could not determine video duration — skipping")
+            return None
+
+        # Evenly space timestamps, avoiding the very start and end
+        timestamps = [
+            duration * (i + 0.5) / num_frames
+            for i in range(num_frames)
+        ]
+
         with TemporaryDirectory() as tmpdir:
-            _extract_low_res_frames(video_path, tmpdir, fps=fps, scale=thumb_size)
-            frame_files = sorted(Path(tmpdir).glob("frame_*.jpg"))
-            if not frame_files:
+            # ── Step 1: extract frames via parallel keyframe seeks ──
+            frame_paths = []
+            futures = []
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                for i, ts in enumerate(timestamps):
+                    frame_path = str(Path(tmpdir) / f"frame_{i:04d}.jpg")
+                    frame_paths.append(frame_path)
+                    futures.append(
+                        pool.submit(_extract_frame_at, video_path, ts, frame_path, strip_height)
+                    )
+                for fut in futures:
+                    fut.result()  # raises on failure
+
+            # Drop any frames that failed to extract
+            valid_paths = [p for p in frame_paths if os.path.isfile(p)]
+            if not valid_paths:
                 logger.warning("Color strip: no frames extracted — skipping")
                 return None
 
-            colors = []
-            for frame_file in frame_files:
-                img = np.array(Image.open(frame_file))
-                colors.append(_kmeans_dominant_color(img, k=k))
+            # ── Step 2: tile the extracted frames into a single row ──
+            output_path = str(Path(tmpdir) / "frame_strip.png")
+            tile_count = len(valid_paths)
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-i", str(Path(tmpdir) / "frame_%04d.jpg"),
+                "-frames:v", "1",
+                "-vf", f"tile={tile_count}x1",
+                output_path,
+            ]
+            subprocess.run(cmd, check=True)
 
-        # Build the strip at native width (1 px per sample)
-        native_width = len(colors)
-        strip = np.zeros((strip_height, native_width, 3), dtype=np.uint8)
-        for i, color in enumerate(colors):
-            strip[:, i] = color
+            if not os.path.isfile(output_path):
+                logger.warning("Color strip: ffmpeg tile produced no output — skipping")
+                return None
 
-        image = Image.fromarray(strip)
-        # Resize to a usable width with nearest-neighbor to keep hard edges
-        image = image.resize((output_width, strip_height), Image.NEAREST)
+            with open(output_path, "rb") as f:
+                b64 = b64encode(f.read()).decode("utf-8")
 
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
         logger.info("Color strip generation completed")
-        return b64encode(buffer.getvalue()).decode("utf-8")
+        return b64
 
     except Exception as e:
         logger.warning(f"Color strip generation failed: {e}")
@@ -2730,7 +2739,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if frame_analysis_html:
         html_template += frame_analysis_html
-        html_template += frame_analysis_html
+        html_template += color_strip_divider
 
     # Rest of the HTML template remains the same...
     if no_qct_parse_files:
