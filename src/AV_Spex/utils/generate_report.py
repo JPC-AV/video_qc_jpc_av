@@ -2347,8 +2347,8 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         html_report_path = os.path.join(source_directory, f'{video_id}_avspex_report.html')
         
         # Generate HTML report with video path (no frame_analysis parameter needed)
-        write_html_report(video_id, report_directory, destination_directory, html_report_path, 
-                         video_path=video_path, check_cancelled=check_cancelled)
+        write_html_report(video_id, report_directory, destination_directory, html_report_path,
+                         video_path=video_path, check_cancelled=check_cancelled, signals=signals)
         
         logger.info(f"HTML report generated: {html_report_path}\n")
         if signals:
@@ -2362,8 +2362,11 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         return None
 
 
-def write_html_report(video_id, report_directory, destination_directory, html_report_path, video_path=None, check_cancelled=None):
-    
+def write_html_report(video_id, report_directory, destination_directory, html_report_path, video_path=None, check_cancelled=None, signals=None):
+
+    if signals:
+        signals.report_progress.emit(0)
+
     qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
@@ -2437,7 +2440,10 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Merge with existing thumbs (for things like color bars detection)
     existing_thumbs = find_qct_thumbs(report_directory)
     thumbs_dict = {**existing_thumbs, **generated_thumbs}
-    
+
+    if signals:
+        signals.report_progress.emit(20)
+
     # Sort thumbs_dict as before
     sorted_thumbs_dict = {}
     for key in sorted(thumbs_dict.keys(), key=lambda x: (parse_profile(thumbs_dict[x][1]), parse_timestamp(thumbs_dict[x][2]))):
@@ -2453,7 +2459,10 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if check_cancelled():
         return
-    
+
+    if signals:
+        signals.report_progress.emit(40)
+
     # Find frame analysis outputs
     frame_outputs = find_frame_analysis_outputs(
         os.path.dirname(html_report_path),  # source_directory
@@ -2565,6 +2574,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # Determine the  path to the image file
     logo_image_path = config_mgr.get_logo_path('av_spex_the_logo.png')
+    if signals:
+        signals.report_progress.emit(60)
+
     # Generate a color strip from the video, fall back to the static eq image
     color_strip_b64 = None
     if video_path:
@@ -2831,8 +2843,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     </html>
     """
 
+    if signals:
+        signals.report_progress.emit(80)
+
     # Write the HTML file
     with open(html_report_path, 'w') as f:
         f.write(html_template)
+
+    if signals:
+        signals.report_progress.emit(100)
 
     logger.info("HTML report generated successfully!\n")
