@@ -120,6 +120,7 @@ class MainWindowProcessing:
         self.main_window.signals.qctools_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.qctparse_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.frame_analysis_progress.connect(self.main_window.processing_window.update_detail_progress)
+        self.main_window.signals.report_progress.connect(self.main_window.processing_window.update_detail_progress)
             
         # Connect the step_completed signal
         self.main_window.signals.step_completed.connect(self.main_window.processing_window.mark_step_complete)
