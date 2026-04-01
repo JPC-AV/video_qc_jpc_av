@@ -429,7 +429,7 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
         str or None: Base64-encoded PNG data (no ``data:`` prefix), or None
         on failure.
     """
-    logger.info("Color strip generation started")
+    logger.info("Creating screenshot spacer")
     try:
         duration = _get_video_duration(video_path)
         if duration is None or duration <= 0:
@@ -483,11 +483,11 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
             with open(output_path, "rb") as f:
                 b64 = b64encode(f.read()).decode("utf-8")
 
-        logger.info("Color strip generation completed")
+        logger.info("Screenshot spacer completed")
         return b64
 
     except Exception as e:
-        logger.warning(f"Color strip generation failed: {e}")
+        logger.warning(f"Screenshot spacer generation failed: {e}")
         return None
 
 
