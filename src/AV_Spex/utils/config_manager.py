@@ -14,6 +14,7 @@ T = TypeVar('T')
 class ConfigManager:
     _instance = None  # Class-level variable to hold single instance
     _configs: Dict[str, Any] = {}  # Shared configuration cache
+    _config_classes: Dict[str, Any] = {}  # Registry of config name → dataclass type
     
     # The __new__(cls) insures only one instance is ever created
     def __new__(cls):
@@ -379,18 +380,21 @@ class ConfigManager:
         Returns:
             An instance of the config_class
         """
+        # Register the config class so update_config can reload after cache clears
+        self._config_classes[config_name] = config_class
+
         # Return cached config if available
         if config_name in self._configs:
             return self._configs[config_name]
-        
+
         try:
             # Load config data from file (with migration)
             config_data = self._load_json_config(config_name, use_last_used=use_last_used)
-            
+
             # Convert to dataclass and cache
             config = self._deserialize_dataclass(config_class, config_data)
             self._configs[config_name] = config
-            
+
             return config
             
         except Exception as e:
@@ -453,10 +457,12 @@ class ConfigManager:
             updates: Dictionary of updates to apply
         """
         config = self._configs.get(config_name)
-        if not config:
+        if config is None and config_name in self._config_classes:
+            config = self.get_config(config_name, self._config_classes[config_name])
+        if config is None:
             logger.error(f"No config found for {config_name}, cannot update")
             return
-            
+
         # Convert current config to dict
         config_dict = asdict(config)
         
@@ -488,7 +494,9 @@ class ConfigManager:
             new_value: New value to replace the entire section with
         """
         config = self._configs.get(config_name)
-        if not config:
+        if config is None and config_name in self._config_classes:
+            config = self.get_config(config_name, self._config_classes[config_name])
+        if config is None:
             logger.error(f"No config found for {config_name}, cannot replace section")
             return
             
