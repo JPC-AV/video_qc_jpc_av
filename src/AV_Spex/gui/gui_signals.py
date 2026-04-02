@@ -27,5 +27,6 @@ class ProcessingSignals(QObject):
     qctools_progress = pyqtSignal(int)       # Signal for qctools xml creation progress percentage
     qctparse_progress = pyqtSignal(int)      # Signal for qct-parse analysis progress percentage
     frame_analysis_progress = pyqtSignal(int)  # Signal for frame analysis progress percentage
+    report_progress = pyqtSignal(int)          # Signal for HTML report generation progress percentage
 
     clear_status = pyqtSignal()  # Signal to clear status message

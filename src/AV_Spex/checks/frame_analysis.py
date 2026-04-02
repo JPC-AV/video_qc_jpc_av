@@ -2976,7 +2976,7 @@ class IntegratedSignalstatsAnalyzer:
 
             # Parse output
             brng_values = []
-            for line in proc.stdout.strip().split('\n'):
+            for line in proc.stdout.read().strip().split('\n'):
                 if line.strip():
                     try:
                         brng_values.append(float(line.strip()))

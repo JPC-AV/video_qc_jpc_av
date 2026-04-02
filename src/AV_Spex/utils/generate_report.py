@@ -7,6 +7,10 @@ os.environ["NUMEXPR_MAX_THREADS"] = "11" # troubleshooting goofy numbpy related 
 import csv
 from base64 import b64encode
 import json
+import subprocess
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from concurrent.futures import ThreadPoolExecutor
 
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
@@ -360,6 +364,133 @@ def read_xml_file(xml_file_path):
         except Exception as e:
             logger.error(f"Failed to decode {xml_file_path} with fallback encoding: {e}")
             return f"[Error reading XML file: {e}]"
+
+
+def _get_video_duration(video_path):
+    """
+    Probe the video duration in seconds using ffprobe.
+    
+    Returns:
+        float or None: Duration in seconds, or None on failure.
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(result.stdout.strip())
+    except Exception as e:
+        logger.warning(f"Could not probe video duration: {e}")
+        return None
+
+
+def _extract_frame_at(video_path, timestamp, output_path, height):
+    """
+    Fast-seek to *timestamp* and extract a single frame scaled to *height*.
+
+    Placing ``-ss`` before ``-i`` triggers keyframe seeking, which jumps
+    directly to the nearest keyframe without decoding intermediate frames.
+    """
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-ss", str(timestamp),
+        "-i", video_path,
+        "-frames:v", "1",
+        "-vf", f"scale=-1:{height}",
+        "-q:v", "5",
+        output_path,
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max_workers=4):
+    """
+    Generate a frame-strip image from a video and return it as a
+    base64-encoded PNG string.
+
+    Instead of decoding the full video with an ``fps`` filter, this function
+    fast-seeks (``-ss`` before ``-i``) to *num_frames* evenly spaced
+    timestamps in parallel, extracts one frame at each position, then tiles
+    them into a single horizontal row with a second ffmpeg call.
+
+    Args:
+        video_path (str): Path to the source video file.
+        num_frames (int): Number of frames to sample across the video.
+        strip_height (int): Height of each frame tile in pixels.
+        max_workers (int): Number of parallel ffmpeg seek processes.
+
+    Returns:
+        str or None: Base64-encoded PNG data (no ``data:`` prefix), or None
+        on failure.
+    """
+    logger.info("Creating screenshot spacer")
+    try:
+        duration = _get_video_duration(video_path)
+        if duration is None or duration <= 0:
+            logger.warning("Color strip: could not determine video duration — skipping")
+            return None
+
+        # Evenly space timestamps, avoiding the very start and end
+        timestamps = [
+            duration * (i + 0.5) / num_frames
+            for i in range(num_frames)
+        ]
+
+        with TemporaryDirectory() as tmpdir:
+            # ── Step 1: extract frames via parallel keyframe seeks ──
+            frame_paths = []
+            futures = []
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                for i, ts in enumerate(timestamps):
+                    frame_path = str(Path(tmpdir) / f"frame_{i:04d}.jpg")
+                    frame_paths.append(frame_path)
+                    futures.append(
+                        pool.submit(_extract_frame_at, video_path, ts, frame_path, strip_height)
+                    )
+                for fut in futures:
+                    fut.result()  # raises on failure
+
+            # Drop any frames that failed to extract
+            valid_paths = [p for p in frame_paths if os.path.isfile(p)]
+            if not valid_paths:
+                logger.warning("Color strip: no frames extracted — skipping")
+                return None
+
+            # ── Step 2: tile the extracted frames into a single row ──
+            output_path = str(Path(tmpdir) / "frame_strip.png")
+            tile_count = len(valid_paths)
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-i", str(Path(tmpdir) / "frame_%04d.jpg"),
+                "-frames:v", "1",
+                "-vf", f"tile={tile_count}x1",
+                output_path,
+            ]
+            subprocess.run(cmd, check=True)
+
+            if not os.path.isfile(output_path):
+                logger.warning("Color strip: ffmpeg tile produced no output — skipping")
+                return None
+
+            with open(output_path, "rb") as f:
+                b64 = b64encode(f.read()).decode("utf-8")
+
+        logger.info("Screenshot spacer completed")
+        return b64
+
+    except Exception as e:
+        logger.warning(f"Screenshot spacer generation failed: {e}")
+        return None
+
+
 
 
 def find_qc_metadata(destination_directory):
@@ -2216,8 +2347,8 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         html_report_path = os.path.join(source_directory, f'{video_id}_avspex_report.html')
         
         # Generate HTML report with video path (no frame_analysis parameter needed)
-        write_html_report(video_id, report_directory, destination_directory, html_report_path, 
-                         video_path=video_path, check_cancelled=check_cancelled)
+        write_html_report(video_id, report_directory, destination_directory, html_report_path,
+                         video_path=video_path, check_cancelled=check_cancelled, signals=signals)
         
         logger.info(f"HTML report generated: {html_report_path}\n")
         if signals:
@@ -2231,8 +2362,11 @@ def generate_final_report(video_id, source_directory, report_directory, destinat
         return None
 
 
-def write_html_report(video_id, report_directory, destination_directory, html_report_path, video_path=None, check_cancelled=None):
-    
+def write_html_report(video_id, report_directory, destination_directory, html_report_path, video_path=None, check_cancelled=None, signals=None):
+
+    if signals:
+        signals.report_progress.emit(0)
+
     qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
@@ -2306,7 +2440,10 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Merge with existing thumbs (for things like color bars detection)
     existing_thumbs = find_qct_thumbs(report_directory)
     thumbs_dict = {**existing_thumbs, **generated_thumbs}
-    
+
+    if signals:
+        signals.report_progress.emit(20)
+
     # Sort thumbs_dict as before
     sorted_thumbs_dict = {}
     for key in sorted(thumbs_dict.keys(), key=lambda x: (parse_profile(thumbs_dict[x][1]), parse_timestamp(thumbs_dict[x][2]))):
@@ -2322,7 +2459,10 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if check_cancelled():
         return
-    
+
+    if signals:
+        signals.report_progress.emit(40)
+
     # Find frame analysis outputs
     frame_outputs = find_frame_analysis_outputs(
         os.path.dirname(html_report_path),  # source_directory
@@ -2434,7 +2574,30 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # Determine the  path to the image file
     logo_image_path = config_mgr.get_logo_path('av_spex_the_logo.png')
-    eq_image_path = config_mgr.get_logo_path('germfree_eq.png')
+    if signals:
+        signals.report_progress.emit(60)
+
+    # Generate a color strip from the video, fall back to the static eq image
+    color_strip_b64 = None
+    if video_path:
+        color_strip_b64 = generate_color_strip_base64(video_path)
+ 
+    if color_strip_b64:
+        # data URI for embedding directly in the HTML
+        color_strip_src = f"data:image/png;base64,{color_strip_b64}"
+        # Reusable divider snippet for inserting between sections
+        color_strip_divider = (
+            f'<img src="{color_strip_src}" alt="Color strip" '
+            f'class="color-strip-divider">'
+        )
+    else:
+        # Fallback: use the static eq image as before
+        eq_image_path = config_mgr.get_logo_path('germfree_eq.png')
+        color_strip_src = eq_image_path
+        color_strip_divider = (
+            f'<img src="{eq_image_path}" alt="AV Spex Graphic EQ Logo" '
+            f'style="width: 10%">'
+        )
 
     # HTML template with JavaScript functions
     html_template = f"""
@@ -2512,6 +2675,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
                 max-height: 400px;
                 overflow-y: auto;
             }}
+            .color-strip-divider {{
+                display: block;
+                width: 100%;
+                height: auto;
+                margin: 25px 0;
+                border-radius: 3px;
+                image-rendering: pixelated;          /* Chrome/Edge */
+                image-rendering: crisp-edges;         /* Firefox */
+                -ms-interpolation-mode: nearest-neighbor; /* legacy IE */
+            }}
         </style>
         <script>
         function openImage(imgData, caption) {{
@@ -2551,7 +2724,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     <body>
         <h1>AV Spex Report</h1>
         <h2>{video_id}</h2>
-        <img src="{eq_image_path}" alt="AV Spex Graphic EQ Logo" style="width: 10%">
+        {color_strip_divider}
     """
 
     if check_cancelled():
@@ -2578,6 +2751,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if frame_analysis_html:
         html_template += frame_analysis_html
+        html_template += color_strip_divider
 
     # Rest of the HTML template remains the same...
     if no_qct_parse_files:
@@ -2669,8 +2843,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     </html>
     """
 
+    if signals:
+        signals.report_progress.emit(80)
+
     # Write the HTML file
     with open(html_report_path, 'w') as f:
         f.write(html_template)
+
+    if signals:
+        signals.report_progress.emit(100)
 
     logger.info("HTML report generated successfully!\n")
