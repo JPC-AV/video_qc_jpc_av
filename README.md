@@ -142,15 +142,17 @@ Click **Check Spex!** to start processing.
 
 ### Spex Tab
 
+<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_spex_tab.png?raw=true" alt="AV Spex Spex Tab" width="400"/>
+
 The Spex tab displays the expected metadata values that AV Spex validates against, organized by tool. It includes:
 
 - **Filename / Signal Flow**: Dropdown menus to select the active filename convention and signal flow equipment profiles
 - **ExifTool / MediaInfo / FFprobe**: Dropdown menus to select named expected-values profiles for each metadata tool (see [Custom Metadata Profiles](#custom-metadata-profiles) below)
 - **Open Section**: View the current expected values for any section (read-only for default profiles)
 
-Once your Spex selections are complete, navigate to the Checks tab and click **Check Spex!**.
-
 ### Complex Tab
+
+<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_complex_tab.png?raw=true" alt="AV Spex Complex Tab" width="400"/>
 
 The Complex tab provides configuration for QCTools, qct-parse, and frame analysis — the more advanced processing steps that are typically run during Step 2 or configured independently.
 
@@ -161,9 +163,13 @@ The Complex tab provides configuration for QCTools, qct-parse, and frame analysi
   - **BRNG Analysis**: Toggle on/off, set maximum analysis duration, and enable or disable automatic color bar skipping
   - **Signalstats**: Toggle on/off
 
+Once your Spex selections are complete, navigate to the Checks tab and click **Check Spex!**.
+
 ---
 
 ## Custom Metadata Profiles
+
+<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_mediainfo_profile_gui.png?raw=true" alt="AV Spex Custom MediaInfo Profile Window" width="400"/>
 
 AV Spex supports custom profiles for ExifTool, MediaInfo, and FFprobe. This is useful when processing collections with different technical specifications — for example, PAL vs. NTSC transfers, or FLAC vs. PCM audio.
 
@@ -193,6 +199,8 @@ av-spex -pp ffprobe
 ---
 
 ## Frame Analysis
+
+<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_frame_analysis_gui.png?raw=true" alt="AV Spex Frame Analysis Options" width="400"/>
 
 AV Spex includes a frame analysis module for detecting common analog video artifacts. It has three independently togglable sub-steps, all controlled from the Checks config.
 
