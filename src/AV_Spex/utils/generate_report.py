@@ -2433,65 +2433,46 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if not os.path.exists(thumbPath):
         os.makedirs(thumbPath)
     
-    # Generate thumbnails for peak failures (existing code...)
+    # Collect all thumbnail tasks across all failure types, then generate with progress
     generated_thumbs = {}
-    
+    thumbnail_tasks = []
+
     if profile_fails_csv and video_path:
         profile_fails_csv_path = os.path.join(report_directory, profile_fails_csv)
         failureInfoSummary_profile = summarize_failures(profile_fails_csv_path)
-        
-        # Generate thumbnails for profile failures
         for timestamp, info_list in failureInfoSummary_profile.items():
             for info in info_list:
-                thumb_path = generate_thumbnail_for_failure(
-                    video_path, 
-                    info['tag'], 
-                    info['tagValue'], 
-                    timestamp, 
-                    'threshold_profile',  # or determine from context
-                    thumbPath
-                )
-                if thumb_path:
-                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
-                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
-    
+                thumbnail_tasks.append((info['tag'], info['tagValue'], timestamp, 'threshold_profile'))
+
     if tag_fails_csv and video_path:
         tag_fails_csv_path = os.path.join(report_directory, tag_fails_csv)
         failureInfoSummary_tags = summarize_failures(tag_fails_csv_path)
-        
-        # Generate thumbnails for tag failures
         for timestamp, info_list in failureInfoSummary_tags.items():
             for info in info_list:
-                thumb_path = generate_thumbnail_for_failure(
-                    video_path, 
-                    info['tag'], 
-                    info['tagValue'], 
-                    timestamp, 
-                    'tag_check',
-                    thumbPath
-                )
-                if thumb_path:
-                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
-                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
-    
+                thumbnail_tasks.append((info['tag'], info['tagValue'], timestamp, 'tag_check'))
+
     if colorbars_eval_fails_csv and video_path:
         colorbars_eval_fails_csv_path = os.path.join(report_directory, colorbars_eval_fails_csv)
         failureInfoSummary_colorbars = summarize_failures(colorbars_eval_fails_csv_path)
-        
-        # Generate thumbnails for colorbar failures
         for timestamp, info_list in failureInfoSummary_colorbars.items():
             for info in info_list:
-                thumb_path = generate_thumbnail_for_failure(
-                    video_path, 
-                    info['tag'], 
-                    info['tagValue'], 
-                    timestamp, 
-                    'color_bars_evaluation',
-                    thumbPath
-                )
-                if thumb_path:
-                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
-                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
+                thumbnail_tasks.append((info['tag'], info['tagValue'], timestamp, 'color_bars_evaluation'))
+
+    total_thumbs = len(thumbnail_tasks)
+    for i, (tag, tagValue, timestamp, profile_name) in enumerate(thumbnail_tasks):
+        thumb_path = generate_thumbnail_for_failure(
+            video_path,
+            tag,
+            tagValue,
+            timestamp,
+            profile_name,
+            thumbPath
+        )
+        if thumb_path:
+            thumb_key = f"Failed frame \n\n{tag}:{tagValue}\n\n{timestamp}"
+            generated_thumbs[thumb_key] = (thumb_path, tag, timestamp)
+        if signals and total_thumbs > 0:
+            signals.report_progress.emit(1 + int(18 * (i + 1) / total_thumbs))
     
     # Merge with existing thumbs (for things like color bars detection)
     existing_thumbs = find_qct_thumbs(report_directory)
