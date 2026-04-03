@@ -45,13 +45,13 @@ def csv_to_html_table(csv_file, style_mismatched=False, mismatch_color="#ff9999"
             table_html += '  <tr>\n'
             for i, cell in enumerate(row):
                 if check_fail and cell.lower() == "fail":
-                    table_html += f'    <td style="background-color: {mismatch_color};">{cell}</td>\n'
+                    table_html += f'    <td class="cell-mismatch">{cell}</td>\n'
                 elif check_fail and cell.lower() == "pass":
-                    table_html += f'    <td style="background-color: {match_color};">{cell}</td>\n'
+                    table_html += f'    <td class="cell-match">{cell}</td>\n'
                 elif style_mismatched and i == 2 and row[2] != '' and row[1] != row[2]:
-                    table_html += f'    <td style="background-color: {match_color};">{cell}</td>\n'
+                    table_html += f'    <td class="cell-match">{cell}</td>\n'
                 elif style_mismatched and i == 3 and row[2] != '' and row[1] != row[2]:
-                    table_html += f'    <td style="background-color: {mismatch_color};">{cell}</td>\n'
+                    table_html += f'    <td class="cell-mismatch">{cell}</td>\n'
                 else:
                     table_html += f'    <td>{cell}</td>\n'
             table_html += '  </tr>\n'
@@ -994,9 +994,9 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                                 # Create caption for the new window
                                 caption = f"{tag} at {timestamp} - Value: {info['tagValue']}, Threshold: {info['over']}"
                                 # Make thumbnail clickable with JavaScript
-                                thumb_html = f'''<img src="data:image/png;base64,{encoded_string}" 
-                                                onclick="openImage('data:image/png;base64,{encoded_string}', '{caption}')"
-                                                style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px; cursor: pointer; border: 1px solid #ccc;" 
+                                thumb_html = f'''<img src="data:image/png;base64,{encoded_string}"
+                                                onclick="openImage(this.src, '{caption}')"
+                                                style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px; cursor: pointer; border: 1px solid #ccc;"
                                                 title="Click to enlarge" />'''
                             
                             # Create entry with or without thumbnail
@@ -1413,10 +1413,10 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 for caption, encoded_img in refinement_thumbs:
                     html += f"""
                         <div style="flex: 1 1 0; min-width: 180px; max-width: {max(100 // len(refinement_thumbs), 20)}%; text-align: center;">
-                            <img src="data:image/jpeg;base64,{encoded_img}" 
+                            <img src="data:image/jpeg;base64,{encoded_img}"
                                  style="width: 100%; height: auto; border: 1px solid #4d2b12; cursor: pointer; transition: opacity 0.2s;"
                                  onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'"
-                                 onclick="openImage('data:image/jpeg;base64,{encoded_img}', '{caption}')"
+                                 onclick="openImage(this.src, '{caption}')"
                                  title="Click to enlarge"
                                  alt="{caption}" />
                             <p style="font-size: 11px; color: #888; margin: 4px 0 0 0;">{caption}</p>
@@ -2305,9 +2305,9 @@ def generate_frame_analysis_html(frame_outputs, video_id):
             
             html += f"""
             <div style="text-align: center; margin: 5px;">
-                <img src="data:image/jpeg;base64,{encoded_thumb}" 
+                <img src="data:image/jpeg;base64,{encoded_thumb}"
                      style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
-                     onclick="openImage('data:image/jpeg;base64,{encoded_thumb}', 'BRNG Diagnostic - {caption_line1}')"
+                     onclick="openImage(this.src, 'BRNG Diagnostic - {caption_line1}')"
                      title="Click to enlarge" />
                 <p style="font-size: 12px; margin: 4px 0 0 0;">{caption_line1}</p>
             """
@@ -2622,21 +2622,34 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         signals.report_progress.emit(75)
  
     if color_strip_b64:
-        # data URI for embedding directly in the HTML
+        # Store the data URI once in a hidden element, reference it via JS
         color_strip_src = f"data:image/png;base64,{color_strip_b64}"
-        # Reusable divider snippet for inserting between sections
-        color_strip_divider = (
-            f'<img src="{color_strip_src}" alt="Color strip" '
-            f'class="color-strip-divider">'
+        color_strip_store = (
+            f'<img id="color-strip-data" src="{color_strip_src}" '
+            f'alt="Color strip" class="color-strip-divider">'
         )
+        # Subsequent uses clone the src from the stored element
+        color_strip_divider = (
+            '<img class="color-strip-divider color-strip-clone" alt="Color strip">'
+        )
+        color_strip_init_script = """
+        <script>
+        (function() {
+            var src = document.getElementById('color-strip-data').src;
+            var clones = document.getElementsByClassName('color-strip-clone');
+            for (var i = 0; i < clones.length; i++) { clones[i].src = src; }
+        })();
+        </script>"""
     else:
         # Fallback: use the static eq image as before
         eq_image_path = config_mgr.get_logo_path('germfree_eq.png')
         color_strip_src = eq_image_path
-        color_strip_divider = (
+        color_strip_store = (
             f'<img src="{eq_image_path}" alt="AV Spex Graphic EQ Logo" '
             f'style="width: 10%">'
         )
+        color_strip_divider = color_strip_store
+        color_strip_init_script = ""
 
     # HTML template with JavaScript functions
     html_template = f"""
@@ -2724,6 +2737,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
                 image-rendering: crisp-edges;         /* Firefox */
                 -ms-interpolation-mode: nearest-neighbor; /* legacy IE */
             }}
+            .cell-match {{
+                background-color: #d2ffed;
+            }}
+            .cell-mismatch {{
+                background-color: #ff9999;
+            }}
         </style>
         <script>
         function openImage(imgData, caption) {{
@@ -2763,7 +2782,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     <body>
         <h1>AV Spex Report</h1>
         <h2>{video_id}</h2>
-        {color_strip_divider}
+        {color_strip_store}
     """
 
     if check_cancelled():
@@ -2877,6 +2896,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if check_cancelled():
         return
 
+    html_template += color_strip_init_script
     html_template += """
     </body>
     </html>
