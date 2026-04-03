@@ -10,7 +10,7 @@ import json
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
@@ -409,7 +409,7 @@ def _extract_frame_at(video_path, timestamp, output_path, height):
     subprocess.run(cmd, check=True)
 
 
-def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max_workers=4):
+def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max_workers=4, signals=None, progress_start=62, progress_end=73):
     """
     Generate a frame-strip image from a video and return it as a
     base64-encoded PNG string.
@@ -445,16 +445,21 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
         with TemporaryDirectory() as tmpdir:
             # ── Step 1: extract frames via parallel keyframe seeks ──
             frame_paths = []
-            futures = []
+            future_to_index = {}
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 for i, ts in enumerate(timestamps):
                     frame_path = str(Path(tmpdir) / f"frame_{i:04d}.jpg")
                     frame_paths.append(frame_path)
-                    futures.append(
-                        pool.submit(_extract_frame_at, video_path, ts, frame_path, strip_height)
-                    )
-                for fut in futures:
+                    fut = pool.submit(_extract_frame_at, video_path, ts, frame_path, strip_height)
+                    future_to_index[fut] = i
+                completed_count = 0
+                progress_range = progress_end - progress_start
+                for fut in as_completed(future_to_index):
                     fut.result()  # raises on failure
+                    completed_count += 1
+                    if signals:
+                        pct = progress_start + int(progress_range * completed_count / num_frames)
+                        signals.report_progress.emit(pct)
 
             # Drop any frames that failed to extract
             valid_paths = [p for p in frame_paths if os.path.isfile(p)]
@@ -484,6 +489,8 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
                 b64 = b64encode(f.read()).decode("utf-8")
 
         logger.info("Screenshot spacer completed")
+        if signals:
+            signals.report_progress.emit(progress_end)
         return b64
 
     except Exception as e:
@@ -2629,7 +2636,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Generate a color strip from the video, fall back to the static eq image
     color_strip_b64 = None
     if video_path:
-        color_strip_b64 = generate_color_strip_base64(video_path)
+        color_strip_b64 = generate_color_strip_base64(video_path, signals=signals, progress_start=62, progress_end=74)
+    if signals:
+        signals.report_progress.emit(75)
  
     if color_strip_b64:
         # data URI for embedding directly in the HTML
