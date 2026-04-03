@@ -76,6 +76,32 @@ class SignalstatsResult:
     used_qctools: bool
     comparison_results: List[Dict] = None
 
+@dataclass
+class UpstreamAnalysisContext:
+    """
+    Packages findings from border detection and signalstats
+    that should inform BRNG analysis decisions.
+    
+    Built by EnhancedFrameAnalysis.analyze() after signalstats completes,
+    passed to DifferentialBRNGAnalyzer to adapt sensitivity, sampling
+    density, edge detection, and thumbnail selection.
+    """
+    # Per-period signalstats findings (keyed by 0-based period index)
+    period_diagnoses: Dict[int, str]          # 'border_violations' | 'content_violations' | 'minimal_violations'
+    period_active_area_brng: Dict[int, Dict]  # {'max_brng': float, 'violation_pct': float}
+    period_full_frame_brng: Dict[int, Dict]   # {'max_brng': float, 'violation_pct': float}
+    
+    # Aggregate signalstats findings
+    avg_active_area_brng: float
+    overall_diagnosis: str
+    
+    # Border detection findings relevant to BRNG
+    head_switching: Optional[Dict] = None
+    border_widths: Optional[Dict] = None      # {'left': px, 'right': px, 'top': px, 'bottom': px}
+    
+    # How much of the violation budget is border vs content (0.0–1.0)
+    border_violation_fraction: float = 0.0
+
 
 class QCToolsParser:
     """Memory-efficient QCTools parser with streaming capabilities"""
@@ -1183,13 +1209,21 @@ class DifferentialBRNGAnalyzer:
                                        duration_limit: int = 300,
                                        skip_start_seconds: float = 0,
                                        qctools_violations: List[FrameViolation] = None,
-                                       analysis_periods: List[Tuple[float, int]] = None) -> BRNGAnalysisResult:
+                                       analysis_periods: List[Tuple[float, int]] = None,
+                                       upstream_context: 'UpstreamAnalysisContext' = None) -> BRNGAnalysisResult:
         """
         Perform differential BRNG detection by creating highlighted and original versions.
         Now supports analyzing specific periods from signalstats.
+        
+        Args:
+            upstream_context: Findings from border detection and signalstats that
+                inform sensitivity, sampling density, and thumbnail selection.
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True)
+        
+        # Store upstream context for use in submethods
+        self.upstream_context = upstream_context
         
         # Store paths to temporary videos for thumbnail creation
         temp_video_paths = []
@@ -1207,6 +1241,35 @@ class DifferentialBRNGAnalyzer:
                 if self.check_cancelled():
                     break
                 logger.info(f"  Analyzing period {i+1}: {start_time:.1f}s - {start_time+duration:.1f}s")
+                
+                # Determine sensitivity and sampling density from upstream context
+                period_sensitivity = 'normal'
+                period_target_samples = None  # None = use default logic
+                if self.upstream_context and i in self.upstream_context.period_diagnoses:
+                    diagnosis = self.upstream_context.period_diagnoses[i]
+                    active_data = self.upstream_context.period_active_area_brng.get(i, {})
+                    active_pct = active_data.get('violation_pct', 0)
+                    active_max = active_data.get('max_brng', 0)
+                    
+                    if diagnosis == 'border_violations':
+                        period_sensitivity = 'strict'
+                        logger.debug(f"    Strict sensitivity (signalstats: border violations)")
+                    elif diagnosis == 'content_violations':
+                        period_sensitivity = 'normal'
+                        logger.debug(f"    Normal sensitivity (signalstats: content violations)")
+                    elif diagnosis == 'minimal_violations':
+                        period_sensitivity = 'strict'
+                        logger.debug(f"    Strict sensitivity (signalstats: minimal violations)")
+                    
+                    # Adapt sampling density based on active-area BRNG magnitude
+                    if active_pct < 1.0 and active_max < 0.01:
+                        period_target_samples = 30
+                        logger.debug(f"    Light sampling ({period_target_samples} frames): "
+                                   f"active area BRNG negligible ({active_pct:.1f}%)")
+                    elif active_pct > 30 or active_max > 1.0:
+                        period_target_samples = 200
+                        logger.debug(f"    Dense sampling ({period_target_samples} frames): "
+                                   f"significant active area BRNG ({active_pct:.1f}%)")
                 
                 # Calculate progress range for this period (each period gets equal share of 0-85%)
                 period_base = int(i / total_periods * 85)
@@ -1245,11 +1308,14 @@ class DifferentialBRNGAnalyzer:
                 period_violations, period_stats = self._analyze_differential_violations(
                     highlighted_path, original_path, start_time,
                     qctools_violations=qctools_violations,
-                    progress_range=(period_analysis_start, period_end)
+                    progress_range=(period_analysis_start, period_end),
+                    sensitivity=period_sensitivity,
+                    target_samples=period_target_samples,
+                    period_index=i
                 )
                 
                 # Track per-period summary
-                period_summaries.append({
+                period_summary = {
                     'period_num': i + 1,
                     'start_time': start_time,
                     'end_time': start_time + duration,
@@ -1257,8 +1323,18 @@ class DifferentialBRNGAnalyzer:
                     'frames_mapped': period_stats['frames_mapped_to_period'],
                     'total_samples': period_stats['total_samples_analyzed'],
                     'frames_checked': period_stats['frames_checked'],
-                    'violations_found': period_stats['violations_found']
-                })
+                    'violations_found': period_stats['violations_found'],
+                    'sensitivity_used': period_sensitivity,
+                }
+                
+                # Include signalstats diagnosis if available from upstream context
+                if self.upstream_context and i in self.upstream_context.period_diagnoses:
+                    period_summary['signalstats_diagnosis'] = self.upstream_context.period_diagnoses[i]
+                    active_data = self.upstream_context.period_active_area_brng.get(i, {})
+                    period_summary['signalstats_active_area_pct'] = active_data.get('violation_pct', 0)
+                    period_summary['signalstats_active_area_max'] = active_data.get('max_brng', 0)
+                
+                period_summaries.append(period_summary)
                 
                 all_violations.extend(period_violations)
                 
@@ -1337,11 +1413,12 @@ class DifferentialBRNGAnalyzer:
                 except Exception as e:
                     logger.warning(f"  Could not remove old thumbnail {old_thumb.name}: {e}")
             
-            # Select violations with temporal spacing
+            # Select violations with temporal spacing and upstream-context-aware priority
             selected_violations = self._select_diverse_violations_for_thumbnails(
                 violations, 
                 max_thumbnails=5, 
-                min_time_separation=5.0
+                min_time_separation=5.0,
+                analysis_periods=analysis_periods
             )
             
             logger.debug(f"  Creating diagnostic thumbnails for {len(selected_violations)} temporally diverse violations\n")
@@ -1426,8 +1503,19 @@ class DifferentialBRNGAnalyzer:
                         original_path: Path,
                         period_start_time: float,  # Renamed for clarity
                         qctools_violations: List[FrameViolation] = None,
-                        progress_range: Tuple[int, int] = None) -> List[FrameViolation]:
-        """Analyze violations using differential detection"""
+                        progress_range: Tuple[int, int] = None,
+                        sensitivity: str = 'normal',
+                        target_samples: int = None,
+                        period_index: int = None) -> List[FrameViolation]:
+        """Analyze violations using differential detection.
+        
+        Args:
+            sensitivity: 'strict', 'normal', or 'visualization' — controls detection
+                thresholds in _detect_differential_violations_frame.
+            target_samples: Override for how many frames to analyze. None = default logic.
+                Set by upstream context based on active-area BRNG magnitude.
+            period_index: 0-based index of this period, used for upstream context lookups.
+        """
         violations = []
         
         cap_h = cv2.VideoCapture(str(highlighted_path))
@@ -1440,6 +1528,11 @@ class DifferentialBRNGAnalyzer:
         
         # Calculate the time range this video segment represents
         period_end_time = period_start_time + duration
+        
+        # Sampling thresholds — adapt based on upstream context
+        min_qctools_samples = target_samples or 50
+        distributed_fill_count = target_samples or 100
+        max_sample_cap = target_samples or 200
         
         # Use QCTools violations to target specific frames
         if qctools_violations and len(qctools_violations) > 0:
@@ -1458,17 +1551,17 @@ class DifferentialBRNGAnalyzer:
             logger.debug(f"  Mapped {len(sample_indices)} violation frames to processed video positions")
             
             # If we didn't get enough samples from QCTools, add some distributed samples
-            if len(sample_indices) < 50:
-                logger.debug(f"  Adding distributed samples to reach minimum coverage")
-                additional_samples = np.linspace(0, total_frames - 1, 100, dtype=int)
+            if len(sample_indices) < min_qctools_samples:
+                logger.debug(f"  Adding distributed samples to reach minimum coverage ({min_qctools_samples})")
+                additional_samples = np.linspace(0, total_frames - 1, distributed_fill_count, dtype=int)
                 for sample in additional_samples:
                     if sample not in sample_indices:
                         sample_indices.append(sample)
-                sample_indices = sorted(sample_indices)[:200]
+                sample_indices = sorted(sample_indices)[:max_sample_cap]
         else:
             # Fallback to distributed sampling
             logger.info(f"  No QCTools violations provided, using distributed sampling")
-            num_samples = min(500, total_frames)
+            num_samples = min(target_samples or 500, total_frames)
             sample_indices = np.linspace(0, total_frames - 1, num_samples, dtype=int).tolist()
         
         logger.debug(f"  Analyzing {len(sample_indices)} frame samples...")
@@ -1499,8 +1592,8 @@ class DifferentialBRNGAnalyzer:
                 pct = p_start + int((sample_num + 1) / total_samples * (p_end - p_start))
                 self._emit_progress(pct)
             
-            # Detect violations differentially with lower threshold
-            violation_mask = self._detect_differential_violations_frame(frame_h, frame_o)
+            # Detect violations differentially using period-appropriate sensitivity
+            violation_mask = self._detect_differential_violations_frame(frame_h, frame_o, sensitivity=sensitivity)
             violation_pixels = int(np.sum(violation_mask > 0))
             
             # Lower threshold for detection (was 5, now 2)
@@ -1734,14 +1827,21 @@ class DifferentialBRNGAnalyzer:
     
     def _select_diverse_violations_for_thumbnails(self, violations: List[FrameViolation], 
                                                 max_thumbnails: int = 5, 
-                                                min_time_separation: float = 10.0) -> List[FrameViolation]:
+                                                min_time_separation: float = 10.0,
+                                                analysis_periods: List[Tuple[float, int]] = None) -> List[FrameViolation]:
         """
-        Select violations for thumbnails ensuring temporal diversity.
+        Select violations for thumbnails ensuring temporal diversity and diagnostic value.
+        
+        When upstream context is available, prioritizes violations from periods that
+        signalstats diagnosed as 'content_violations' — these are the actionable findings
+        a conservator needs to see. Border-dominated violations are deprioritized since
+        they're already documented in the border detection section of the report.
         
         Args:
             violations: List of violations sorted by violation_score (highest first)
             max_thumbnails: Maximum number of thumbnails to create
             min_time_separation: Minimum time separation between selected frames (seconds)
+            analysis_periods: List of (start_time, duration) tuples for period lookups
         
         Returns:
             List of violations for thumbnail creation
@@ -1749,14 +1849,46 @@ class DifferentialBRNGAnalyzer:
         if not violations:
             return []
         
+        # If we have upstream context, reorder violations to prioritize content violations
+        priority_ordered = violations
+        if (hasattr(self, 'upstream_context') and self.upstream_context 
+            and self.upstream_context.period_diagnoses and analysis_periods):
+            
+            # Build a lookup: which period does each violation belong to?
+            def _get_period_diagnosis(timestamp):
+                for idx, (start, dur) in enumerate(analysis_periods):
+                    if start <= timestamp < start + dur:
+                        return self.upstream_context.period_diagnoses.get(idx, '')
+                return ''
+            
+            content_violations = []
+            border_violations = []
+            other_violations = []
+            
+            for v in violations:
+                diag = _get_period_diagnosis(v.timestamp)
+                if diag == 'content_violations':
+                    content_violations.append(v)
+                elif diag == 'border_violations':
+                    border_violations.append(v)
+                else:
+                    other_violations.append(v)
+            
+            # Content first, then unclassified, then border
+            priority_ordered = content_violations + other_violations + border_violations
+            
+            if content_violations:
+                logger.debug(f"  Thumbnail priority: {len(content_violations)} content, "
+                           f"{len(other_violations)} other, {len(border_violations)} border violations")
+        
         selected_violations = []
         
-        # Always include the highest scoring violation
-        selected_violations.append(violations[0])
-        logger.info(f"\n  Selected thumbnail 1: Frame {violations[0].frame_num} at {violations[0].timestamp:.1f}s (score: {violations[0].violation_score:.4f})")
+        # Always include the highest-priority violation
+        selected_violations.append(priority_ordered[0])
+        logger.info(f"\n  Selected thumbnail 1: Frame {priority_ordered[0].frame_num} at {priority_ordered[0].timestamp:.1f}s (score: {priority_ordered[0].violation_score:.4f})")
         
         # Select additional violations with time separation constraint
-        for violation in violations[1:]:
+        for violation in priority_ordered[1:]:
             if len(selected_violations) >= max_thumbnails:
                 break
                 
@@ -1774,12 +1906,12 @@ class DifferentialBRNGAnalyzer:
         
         # If we couldn't find enough diverse violations, fill in with the best remaining ones
         # (but log this situation)
-        if len(selected_violations) < max_thumbnails and len(violations) > len(selected_violations):
+        if len(selected_violations) < max_thumbnails and len(priority_ordered) > len(selected_violations):
             remaining_needed = max_thumbnails - len(selected_violations)
             logger.info(f"  Only found {len(selected_violations)} violations with {min_time_separation}s separation")
             
             # Add the best remaining violations regardless of time separation
-            for violation in violations:
+            for violation in priority_ordered:
                 if violation not in selected_violations:
                     selected_violations.append(violation)
                     logger.info(f"  Added thumbnail {len(selected_violations)} (relaxed spacing): Frame {violation.frame_num} at {violation.timestamp:.1f}s\n")
@@ -1787,7 +1919,8 @@ class DifferentialBRNGAnalyzer:
                     if remaining_needed <= 0:
                         break
         
-        logger.debug(f"  Final selection: {len(selected_violations)} thumbnails spanning {selected_violations[-1].timestamp - selected_violations[0].timestamp:.1f} seconds")
+        if len(selected_violations) > 1:
+            logger.debug(f"  Final selection: {len(selected_violations)} thumbnails spanning {selected_violations[-1].timestamp - selected_violations[0].timestamp:.1f} seconds")
         
         return selected_violations
     
@@ -1851,18 +1984,32 @@ class DifferentialBRNGAnalyzer:
             'interior_density': 0.0
         }
         
+        # Determine per-edge widths. Widen bottom edge if head switching was detected
+        # upstream — head switching noise produces expected BRNG violations that should
+        # be classified as edge artifacts, not content issues.
+        bottom_edge_width = edge_width
+        if (hasattr(self, 'upstream_context') and self.upstream_context 
+            and self.upstream_context.head_switching):
+            hs = self.upstream_context.head_switching
+            hs_height = hs.get('artifact_height', 0)
+            hs_pct = hs.get('affected_percentage', 0)
+            if hs_pct > 30 and hs_height > edge_width:
+                bottom_edge_width = min(hs_height + 5, 40)  # Cap at 40px
+                logger.debug(f"    Bottom edge width expanded to {bottom_edge_width}px "
+                           f"(head switching: {hs_height}px in {hs_pct:.0f}% of frames)")
+        
         # Calculate interior violation density as baseline for comparison.
-        # This is the region inset by edge_width on all sides.
-        interior = violation_mask[edge_width:-edge_width, edge_width:-edge_width]
+        # This is the region inset by edge_width on all sides (using bottom_edge_width for bottom).
+        interior = violation_mask[edge_width:-bottom_edge_width, edge_width:-edge_width] if bottom_edge_width < h else violation_mask[edge_width:-edge_width, edge_width:-edge_width]
         interior_density = (np.sum(interior > 0) / interior.size * 100) if interior.size > 0 else 0
         edge_info['interior_density'] = interior_density
         
-        # Define edges with increased scan depth
+        # Define edges with increased scan depth (bottom uses head-switching-aware width)
         edges_to_check = [
             ('left', violation_mask[:, :edge_width], 'vertical'),
             ('right', violation_mask[:, -edge_width:], 'vertical'),
             ('top', violation_mask[:edge_width, :], 'horizontal'),
-            ('bottom', violation_mask[-edge_width:, :], 'horizontal')
+            ('bottom', violation_mask[-bottom_edge_width:, :], 'horizontal')
         ]
         
         for edge_name, edge_region, orientation in edges_to_check:
@@ -2589,7 +2736,7 @@ class IntegratedSignalstatsAnalyzer:
                         full_violations = period_comparison['qctools_full_frame']['violations_pct']
                         active_violations = period_comparison['ffprobe_active_area']['violations_pct']
                         
-                        if full_violations > active_violations + 5:
+                        if full_violations > active_violations + 5 and active_violations < 30:
                             logger.info(f"    → Border violations detected: Full frame has {full_violations - active_violations:.1f}% more violations\n")
                             period_comparison['diagnosis'] = 'border_violations'
                         elif active_violations > 10:
@@ -3328,6 +3475,24 @@ class EnhancedFrameAnalysis:
         else:
             logger.warning("Skipping signalstats analysis (disabled in config)\n")
         
+        # Build upstream context from border detection + signalstats for BRNG analyzer
+        upstream_context = None
+        if signalstats_results and border_results:
+            upstream_context = self._build_upstream_context(
+                signalstats_results, border_results
+            )
+            
+            # Refine analysis periods: replace low-value periods with better candidates
+            if analysis_periods and qctools_suggested_periods:
+                analysis_periods = self._refine_periods_from_signalstats(
+                    current_periods=analysis_periods,
+                    signalstats_results=signalstats_results,
+                    qctools_candidate_periods=qctools_suggested_periods,
+                    black_segments=black_segments,
+                    period_duration=frame_config.analysis_period_duration,
+                    color_bars_end_time=color_bars_end_time
+                )
+        
         # Step 5: BRNG analysis (conditional)
         brng_results = None
         if self.check_cancelled():
@@ -3371,7 +3536,8 @@ class EnhancedFrameAnalysis:
                 duration_limit=duration_limit,
                 skip_start_seconds=color_bars_end_time,
                 qctools_violations=violations,
-                analysis_periods=analysis_periods 
+                analysis_periods=analysis_periods,
+                upstream_context=upstream_context
             )
             results['brng_analysis'] = asdict(brng_results) if brng_results else None
             
@@ -3507,12 +3673,19 @@ class EnhancedFrameAnalysis:
                                                                   check_cancelled_fn=self.check_cancelled,
                                                                   signals=self.signals)
 
+                    # Rebuild upstream context with updated signalstats/border results
+                    if signalstats_results and border_results:
+                        upstream_context = self._build_upstream_context(
+                            signalstats_results, border_results
+                        )
+
                     brng_results = self.brng_analyzer.analyze_with_differential_detection(
                         output_dir=self.output_dir,
                         duration_limit=duration_limit,
                         skip_start_seconds=color_bars_end_time,
                         qctools_violations=violations,
-                        analysis_periods=analysis_periods
+                        analysis_periods=analysis_periods,
+                        upstream_context=upstream_context
                     )
 
                     if self.check_cancelled():
@@ -4209,6 +4382,143 @@ class EnhancedFrameAnalysis:
                 logger.info("    → Mixed violation distribution - review thumbnails for details")
             logger.info("")
     
+    def _build_upstream_context(self, signalstats_results: SignalstatsResult,
+                                border_results: BorderDetectionResult) -> UpstreamAnalysisContext:
+        """
+        Package findings from border detection and signalstats into a context
+        object that informs BRNG analyzer decisions.
+        """
+        period_diagnoses = {}
+        period_active_brng = {}
+        period_full_brng = {}
+        
+        for comp in (signalstats_results.comparison_results or []):
+            idx = comp.get('period', 1) - 1  # 0-indexed
+            period_diagnoses[idx] = comp.get('diagnosis', '')
+            
+            ff_data = comp.get('ffprobe_active_area', {})
+            qc_data = comp.get('qctools_full_frame', {})
+            
+            period_active_brng[idx] = {
+                'max_brng': ff_data.get('max_brng', 0),
+                'violation_pct': ff_data.get('violations_pct', 0)
+            }
+            period_full_brng[idx] = {
+                'max_brng': qc_data.get('max_brng', 0),
+                'violation_pct': qc_data.get('violations_pct', 0)
+            }
+        
+        # Calculate border violation fraction from full-frame vs active-area delta
+        total_full = sum(d.get('violation_pct', 0) for d in period_full_brng.values())
+        total_active = sum(d.get('violation_pct', 0) for d in period_active_brng.values())
+        border_fraction = ((total_full - total_active) / total_full) if total_full > 0 else 0.0
+        
+        # Extract border widths from active area
+        active = border_results.active_area  # (x, y, w, h)
+        border_widths = {
+            'left': active[0],
+            'right': max(0, self.border_detector.width - active[0] - active[2]),
+            'top': active[1],
+            'bottom': max(0, self.border_detector.height - active[1] - active[3])
+        }
+        
+        context = UpstreamAnalysisContext(
+            period_diagnoses=period_diagnoses,
+            period_active_area_brng=period_active_brng,
+            period_full_frame_brng=period_full_brng,
+            avg_active_area_brng=signalstats_results.avg_brng,
+            overall_diagnosis=signalstats_results.diagnosis,
+            head_switching=border_results.head_switching_artifacts,
+            border_widths=border_widths,
+            border_violation_fraction=max(0.0, min(1.0, border_fraction))
+        )
+        
+        logger.debug(f"  Built upstream context for BRNG analyzer:")
+        logger.debug(f"    Period diagnoses: {period_diagnoses}")
+        logger.debug(f"    Border violation fraction: {border_fraction:.2f}")
+        if border_results.head_switching_artifacts:
+            logger.debug(f"    Head switching: detected")
+        
+        return context
+    
+    def _refine_periods_from_signalstats(self, current_periods, signalstats_results,
+                                          qctools_candidate_periods, black_segments,
+                                          period_duration, color_bars_end_time):
+        """
+        Replace low-value periods with better candidates based on signalstats findings.
+        
+        A period is "low-value" for BRNG analysis if signalstats diagnosed it as 
+        'minimal_violations' with near-zero active-area BRNG — meaning there's 
+        nothing meaningful for the differential detector to find there.
+        """
+        comparison_results = signalstats_results.comparison_results or []
+        
+        if not comparison_results:
+            return current_periods
+        
+        # Score each current period by how useful it is for BRNG analysis
+        period_scores = []
+        for i, (start, dur) in enumerate(current_periods):
+            comp = comparison_results[i] if i < len(comparison_results) else {}
+            diagnosis = comp.get('diagnosis', '')
+            
+            ff_data = comp.get('ffprobe_active_area', {})
+            active_pct = ff_data.get('violations_pct', 0)
+            
+            # Score: content_violations > border_violations > minimal
+            if diagnosis == 'content_violations':
+                score = 100 + active_pct
+            elif diagnosis == 'border_violations':
+                score = 50 + active_pct
+            else:
+                score = active_pct
+            
+            period_scores.append((i, score, start, dur))
+        
+        # Find periods worth replacing (score < 5 means essentially no active-area signal)
+        replaceable = [(i, s, start, dur) for i, s, start, dur in period_scores if s < 5]
+        
+        if not replaceable:
+            return current_periods
+        
+        # Find candidate replacement periods from QCTools that aren't already selected
+        current_ranges = [(start, start + dur) for start, dur in current_periods]
+        
+        candidates = []
+        for qct_start, qct_dur in qctools_candidate_periods:
+            overlaps = False
+            for cs, ce in current_ranges:
+                if not (qct_start + qct_dur < cs or qct_start > ce):
+                    overlaps = True
+                    break
+            if not overlaps:
+                candidates.append((qct_start, qct_dur))
+        
+        if not candidates:
+            return current_periods
+        
+        # Replace low-value periods with candidates
+        refined = list(current_periods)
+        replacements_made = 0
+        for (idx, _, old_start, _), candidate in zip(replaceable, candidates):
+            refined[idx] = candidate
+            replacements_made += 1
+            logger.info(f"  Replaced period {idx+1} ({old_start:.1f}s, minimal active-area BRNG) "
+                       f"with QCTools candidate at {candidate[0]:.1f}s")
+        
+        # Validate replacements against black segments
+        if black_segments and replacements_made > 0:
+            refined = self.signalstats_analyzer._validate_periods_against_black_segments(
+                refined, black_segments,
+                effective_start=(color_bars_end_time or 0) + 10,
+                period_duration=period_duration
+            )
+        
+        if replacements_made > 0:
+            logger.info(f"  Refined {replacements_made} analysis period(s) based on signalstats findings\n")
+        
+        return refined
+
     def _save_results(self, results: Dict):
         """Save analysis results to JSON"""
         import copy

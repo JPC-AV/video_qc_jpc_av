@@ -2,7 +2,9 @@
 
 AV processing application for digital preservation
 
-![AV Spex logo](https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/av_spex_the_logo.png?raw=true)
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/av_spex_the_logo.png?raw=true" alt="AV Spex logo"/>
+</p>
 
 AV Spex is a macOS application written in Python that helps process digital audio and video media created from analog sources. It confirms that digitized files conform to predetermined specifications and performs automated preservation actions: fixity checks, access file creation, metadata sidecars, and HTML reports.
 
@@ -54,7 +56,9 @@ QCTools must be installed separately from [MediaArea](https://mediaarea.net/QCTo
 
 The AV Spex GUI checks for all required dependencies at startup:
 
-![Dependency Check](https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/dependency_check_0102026.png?raw=true)
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/dependency_check_0102026.png?raw=true" alt="Dependency Check"/>
+</p>
 
 ---
 
@@ -122,13 +126,17 @@ The GUI has four tabs: **Import**, **Checks**, **Spex**, and **Complex**
 
 ### Import Tab
 
-<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_import_tab.png?raw=true" alt="AV Spex Import Tab" width="400"/>
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_import_tab.png?raw=true" alt="AV Spex Import Tab"/>
+</p>
 
 The Import tab is where you select input directories for processing and manage configuration files. It includes options to import, export, or reset the Checks and Spex configurations as JSON files.
 
 ### Checks Tab
 
-<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_checks_tab.png?raw=true" alt="AV Spex Checks Tab" width="400"/>
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_checks_tab.png?raw=true" alt="AV Spex Checks Tab"/>
+</p>
 
 The Checks tab controls which tools and processing steps are run. It includes:
 
@@ -142,7 +150,9 @@ Click **Check Spex!** to start processing.
 
 ### Spex Tab
 
-<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_spex_tab.png?raw=true" alt="AV Spex Spex Tab" width="400"/>
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_spex_tab.png?raw=true" alt="AV Spex Spex Tab"/>
+</p>
 
 The Spex tab displays the expected metadata values that AV Spex validates against, organized by tool. It includes:
 
@@ -152,7 +162,9 @@ The Spex tab displays the expected metadata values that AV Spex validates agains
 
 ### Complex Tab
 
-<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_complex_tab.png?raw=true" alt="AV Spex Complex Tab" width="400"/>
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_complex_tab.png?raw=true" alt="AV Spex Complex Tab"/>
+</p>
 
 The Complex tab provides configuration for QCTools, qct-parse, and frame analysis — the more advanced processing steps that are typically run during Step 2 or configured independently.
 
@@ -169,7 +181,9 @@ Once your Spex selections are complete, navigate to the Checks tab and click **C
 
 ## Custom Metadata Profiles
 
-<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_mediainfo_profile_gui.png?raw=true" alt="AV Spex Custom MediaInfo Profile Window" width="400"/>
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_mediainfo_profile_gui.png?raw=true" alt="AV Spex Custom MediaInfo Profile Window"/>
+</p>
 
 AV Spex supports custom profiles for ExifTool, MediaInfo, and FFprobe. This is useful when processing collections with different technical specifications — for example, PAL vs. NTSC transfers, or FLAC vs. PCM audio.
 
@@ -200,7 +214,9 @@ av-spex -pp ffprobe
 
 ## Frame Analysis
 
-<img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_frame_analysis_gui.png?raw=true" alt="AV Spex Frame Analysis Options" width="400"/>
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_frame_analysis_gui.png?raw=true" alt="AV Spex Frame Analysis Options"/>
+</p>
 
 AV Spex includes a frame analysis module for detecting common analog video artifacts. It has three independently togglable sub-steps, all controlled from the Checks config.
 
@@ -208,7 +224,9 @@ AV Spex includes a frame analysis module for detecting common analog video artif
 
 Detects the active video area and identifies edge artifacts including head-switching noise at the bottom of the frame.
 
-![Border Detection Example](https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/JPC_AV_01709_border_detection.jpg?raw=true)
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/JPC_AV_01709_border_detection.jpg?raw=true" alt="Border Detection Example"/>
+</p>
 
 Two modes are available:
 - **Simple** (default): Crops a fixed pixel border from each edge (default: 25px)
@@ -218,7 +236,9 @@ Two modes are available:
 
 Detects out-of-range luma and chroma values (BRNG — **B**roadcast **Ra**n**g**e) using a multi-method voting approach. Frames with violations are highlighted in the diagnostic output, and results are included in the HTML report. BRNG analysis automatically skips color bars at the head of the tape to avoid false positives.
 
-![BRNG Analysis Example](https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_brng_example.png?raw=true)
+<p align="center">
+  <img src="https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/images_for_readme/avspex_brng_example.png?raw=true" alt="BRNG Analysis Example"/>
+</p>
 
 ### Signalstats
 

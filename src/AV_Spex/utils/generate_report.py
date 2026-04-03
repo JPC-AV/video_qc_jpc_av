@@ -10,7 +10,7 @@ import json
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
@@ -409,7 +409,7 @@ def _extract_frame_at(video_path, timestamp, output_path, height):
     subprocess.run(cmd, check=True)
 
 
-def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max_workers=4):
+def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max_workers=4, signals=None, progress_start=62, progress_end=73):
     """
     Generate a frame-strip image from a video and return it as a
     base64-encoded PNG string.
@@ -445,16 +445,21 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
         with TemporaryDirectory() as tmpdir:
             # ── Step 1: extract frames via parallel keyframe seeks ──
             frame_paths = []
-            futures = []
+            future_to_index = {}
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 for i, ts in enumerate(timestamps):
                     frame_path = str(Path(tmpdir) / f"frame_{i:04d}.jpg")
                     frame_paths.append(frame_path)
-                    futures.append(
-                        pool.submit(_extract_frame_at, video_path, ts, frame_path, strip_height)
-                    )
-                for fut in futures:
+                    fut = pool.submit(_extract_frame_at, video_path, ts, frame_path, strip_height)
+                    future_to_index[fut] = i
+                completed_count = 0
+                progress_range = progress_end - progress_start
+                for fut in as_completed(future_to_index):
                     fut.result()  # raises on failure
+                    completed_count += 1
+                    if signals:
+                        pct = progress_start + int(progress_range * completed_count / num_frames)
+                        signals.report_progress.emit(pct)
 
             # Drop any frames that failed to extract
             valid_paths = [p for p in frame_paths if os.path.isfile(p)]
@@ -484,6 +489,8 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
                 b64 = b64encode(f.read()).decode("utf-8")
 
         logger.info("Screenshot spacer completed")
+        if signals:
+            signals.report_progress.emit(progress_end)
         return b64
 
     except Exception as e:
@@ -1826,11 +1833,23 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     have timestamps that fall within this specific analysis period's time window. Violations 
                     from other parts of the video are not relevant to this period.</li>
                 <li style="margin-bottom: 3px;"><strong>Total samples analyzed</strong> — the actual number of 
-                    frames examined by the differential detector. If the mapped violations alone provide 50 or 
-                    more frames, only those frames are analyzed. If fewer than 50 map to the period, 
-                    evenly distributed samples are added across the segment to ensure adequate coverage, 
-                    bringing the total up to approximately 100 frames (after deduplication).</li>
+                    frames examined by the differential detector. The sample count adapts based on signalstats 
+                    findings for each period: periods with significant active-area violations receive denser 
+                    sampling (~200 frames) while periods with negligible active-area BRNG use lighter sampling 
+                    (~30 frames). When no upstream data is available, the default behavior targets ~50–100 frames 
+                    per period.</li>
             </ul>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">Adaptive detection:</p>
+            <p style="margin: 0 0 10px 0;">
+                When signalstats analysis is available, BRNG detection adapts per period based on the 
+                signalstats diagnosis. Periods diagnosed as <em>border-dominated</em> or <em>minimal</em> 
+                use stricter detection thresholds (requiring stronger evidence to classify a pixel as a 
+                violation), reducing false positives in regions where actual content violations are unlikely. 
+                Periods with <em>content violations</em> use standard sensitivity. When head switching 
+                artifacts were detected during border detection, the bottom-edge analysis zone is 
+                automatically widened to classify head switching noise as edge artifacts rather than 
+                content violations.
+            </p>
             <p style="margin: 0; color: #777;">
                 Because the differential detector compares two decoded video frames and runs multi-method 
                 computer vision analysis on every sample, this targeted approach keeps processing time 
@@ -1913,6 +1932,9 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     total_samples = ps.get('total_samples', 0)
                     checked = ps.get('frames_checked', 0)
                     found = ps.get('violations_found', 0)
+                    ss_diagnosis = ps.get('signalstats_diagnosis', '')
+                    sensitivity_used = ps.get('sensitivity_used', '')
+                    ss_active_pct = ps.get('signalstats_active_area_pct', None)
                     
                     # Bar width as proportion of violations found vs frames checked
                     bar_pct = (found / checked * 100) if checked > 0 else 0
@@ -1925,8 +1947,28 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                             <span style="font-weight: bold; color: #4d2b12;">
                                 Period {p_num}: {_seconds_to_display(p_start)} – {_seconds_to_display(p_end)}
                             </span>
-                            <span style="font-size: 13px; color: #666;">
-                                {found} violation{'s' if found != 1 else ''} / {checked} frames checked
+                            <span style="display: flex; align-items: center; gap: 6px;">
+                    """
+                    
+                    # Signalstats diagnosis badge
+                    if ss_diagnosis:
+                        diag_labels = {
+                            'border_violations': ('Border-dominated', '#bf971b', '#fff3cd'),
+                            'content_violations': ('Content violations', '#d32f2f', '#ffbaba'),
+                            'minimal_violations': ('Minimal signal', '#378d6a', '#d2ffed')
+                        }
+                        label, color, bg = diag_labels.get(ss_diagnosis, ('', '#666', '#eee'))
+                        if label:
+                            html += f"""
+                                <span style="background: {bg}; color: {color}; padding: 2px 8px; 
+                                            border-radius: 3px; font-size: 11px; font-weight: bold;"
+                                      title="Signalstats diagnosis for this period">{label}</span>
+                            """
+                    
+                    html += f"""
+                                <span style="font-size: 13px; color: #666;">
+                                    {found} violation{'s' if found != 1 else ''} / {checked} frames checked
+                                </span>
                             </span>
                         </div>
                         <div style="background-color: #e8ddd5; border-radius: 3px; height: 14px; overflow: hidden; margin-bottom: 6px;">
@@ -1936,6 +1978,20 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                         </div>
                         <div style="font-size: 12px; color: #777;">
                             QCTools targeted {qct_targeted} frames → {frames_mapped} mapped to period → {total_samples} total samples analyzed
+                    """
+                    
+                    # Show sensitivity and signalstats context on a second line if available
+                    context_parts = []
+                    if sensitivity_used and sensitivity_used != 'normal':
+                        context_parts.append(f"{sensitivity_used} detection sensitivity")
+                    if ss_active_pct is not None and ss_active_pct > 0:
+                        context_parts.append(f"signalstats active-area: {ss_active_pct:.1f}%")
+                    if context_parts:
+                        html += f"""
+                            <br>{'  ·  '.join(context_parts)}
+                        """
+                    
+                    html += """
                         </div>
                     </div>
                     """
@@ -2377,65 +2433,46 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if not os.path.exists(thumbPath):
         os.makedirs(thumbPath)
     
-    # Generate thumbnails for peak failures (existing code...)
+    # Collect all thumbnail tasks across all failure types, then generate with progress
     generated_thumbs = {}
-    
+    thumbnail_tasks = []
+
     if profile_fails_csv and video_path:
         profile_fails_csv_path = os.path.join(report_directory, profile_fails_csv)
         failureInfoSummary_profile = summarize_failures(profile_fails_csv_path)
-        
-        # Generate thumbnails for profile failures
         for timestamp, info_list in failureInfoSummary_profile.items():
             for info in info_list:
-                thumb_path = generate_thumbnail_for_failure(
-                    video_path, 
-                    info['tag'], 
-                    info['tagValue'], 
-                    timestamp, 
-                    'threshold_profile',  # or determine from context
-                    thumbPath
-                )
-                if thumb_path:
-                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
-                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
-    
+                thumbnail_tasks.append((info['tag'], info['tagValue'], timestamp, 'threshold_profile'))
+
     if tag_fails_csv and video_path:
         tag_fails_csv_path = os.path.join(report_directory, tag_fails_csv)
         failureInfoSummary_tags = summarize_failures(tag_fails_csv_path)
-        
-        # Generate thumbnails for tag failures
         for timestamp, info_list in failureInfoSummary_tags.items():
             for info in info_list:
-                thumb_path = generate_thumbnail_for_failure(
-                    video_path, 
-                    info['tag'], 
-                    info['tagValue'], 
-                    timestamp, 
-                    'tag_check',
-                    thumbPath
-                )
-                if thumb_path:
-                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
-                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
-    
+                thumbnail_tasks.append((info['tag'], info['tagValue'], timestamp, 'tag_check'))
+
     if colorbars_eval_fails_csv and video_path:
         colorbars_eval_fails_csv_path = os.path.join(report_directory, colorbars_eval_fails_csv)
         failureInfoSummary_colorbars = summarize_failures(colorbars_eval_fails_csv_path)
-        
-        # Generate thumbnails for colorbar failures
         for timestamp, info_list in failureInfoSummary_colorbars.items():
             for info in info_list:
-                thumb_path = generate_thumbnail_for_failure(
-                    video_path, 
-                    info['tag'], 
-                    info['tagValue'], 
-                    timestamp, 
-                    'color_bars_evaluation',
-                    thumbPath
-                )
-                if thumb_path:
-                    thumb_key = f"Failed frame \n\n{info['tag']}:{info['tagValue']}\n\n{timestamp}"
-                    generated_thumbs[thumb_key] = (thumb_path, info['tag'], timestamp)
+                thumbnail_tasks.append((info['tag'], info['tagValue'], timestamp, 'color_bars_evaluation'))
+
+    total_thumbs = len(thumbnail_tasks)
+    for i, (tag, tagValue, timestamp, profile_name) in enumerate(thumbnail_tasks):
+        thumb_path = generate_thumbnail_for_failure(
+            video_path,
+            tag,
+            tagValue,
+            timestamp,
+            profile_name,
+            thumbPath
+        )
+        if thumb_path:
+            thumb_key = f"Failed frame \n\n{tag}:{tagValue}\n\n{timestamp}"
+            generated_thumbs[thumb_key] = (thumb_path, tag, timestamp)
+        if signals and total_thumbs > 0:
+            signals.report_progress.emit(1 + int(18 * (i + 1) / total_thumbs))
     
     # Merge with existing thumbs (for things like color bars detection)
     existing_thumbs = find_qct_thumbs(report_directory)
@@ -2580,7 +2617,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Generate a color strip from the video, fall back to the static eq image
     color_strip_b64 = None
     if video_path:
-        color_strip_b64 = generate_color_strip_base64(video_path)
+        color_strip_b64 = generate_color_strip_base64(video_path, signals=signals, progress_start=62, progress_end=74)
+    if signals:
+        signals.report_progress.emit(75)
  
     if color_strip_b64:
         # data URI for embedding directly in the HTML
