@@ -2736,7 +2736,7 @@ class IntegratedSignalstatsAnalyzer:
                         full_violations = period_comparison['qctools_full_frame']['violations_pct']
                         active_violations = period_comparison['ffprobe_active_area']['violations_pct']
                         
-                        if full_violations > active_violations + 5:
+                        if full_violations > active_violations + 5 and active_violations < 30:
                             logger.info(f"    → Border violations detected: Full frame has {full_violations - active_violations:.1f}% more violations\n")
                             period_comparison['diagnosis'] = 'border_violations'
                         elif active_violations > 10:
