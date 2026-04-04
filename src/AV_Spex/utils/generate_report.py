@@ -7,6 +7,7 @@ os.environ["NUMEXPR_MAX_THREADS"] = "11" # troubleshooting goofy numbpy related 
 import csv
 from base64 import b64encode
 import json
+import re
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -153,15 +154,15 @@ def find_qct_thumbs(report_directory):
                     tag_value = filename_segments[3]
                     
                     # Find the timestamp pattern in the filename
-                    # It should be HH.MM.SS.ssss before the .png extension
+                    # It should be HH.MM.SS.ssss before the file extension
                     # We need to reconstruct it as HH:MM:SS.ssss
-                    
-                    # The timestamp starts after tag_value (index 4) and goes until .png
-                    # For a file like: JPC_AV_01663.color_bars_evaluation.YMAX.940.0.00.00.53.7870.png
-                    # segments[4:] would be ['0', '00', '00', '53', '7870', 'png']
+
+                    # The timestamp starts after tag_value (index 4) and goes until the extension
+                    # For a file like: JPC_AV_01663.color_bars_evaluation.YMAX.940.0.00.00.53.7870.jpg
+                    # segments[4:] would be ['0', '00', '00', '53', '7870', 'jpg']
                     # We want to reconstruct 00:00:53.7870
-                    
-                    timestamp_parts = filename_segments[4:-1]  # Exclude .png
+
+                    timestamp_parts = filename_segments[4:-1]  # Exclude extension
                     
                     if len(timestamp_parts) >= 4:
                         # Assuming format is always HH.MM.SS.milliseconds
@@ -409,10 +410,10 @@ def _extract_frame_at(video_path, timestamp, output_path, height):
     subprocess.run(cmd, check=True)
 
 
-def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max_workers=4, signals=None, progress_start=62, progress_end=73):
+def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max_workers=4, signals=None, progress_start=62, progress_end=73):
     """
     Generate a frame-strip image from a video and return it as a
-    base64-encoded PNG string.
+    base64-encoded JPEG string.
 
     Instead of decoding the full video with an ``fps`` filter, this function
     fast-seeks (``-ss`` before ``-i``) to *num_frames* evenly spaced
@@ -468,7 +469,7 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
                 return None
 
             # ── Step 2: tile the extracted frames into a single row ──
-            output_path = str(Path(tmpdir) / "frame_strip.png")
+            output_path = str(Path(tmpdir) / "frame_strip.jpg")
             tile_count = len(valid_paths)
             cmd = [
                 "ffmpeg",
@@ -477,6 +478,7 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
                 "-i", str(Path(tmpdir) / "frame_%04d.jpg"),
                 "-frames:v", "1",
                 "-vf", f"tile={tile_count}x1",
+                "-q:v", "3",
                 output_path,
             ]
             subprocess.run(cmd, check=True)
@@ -569,9 +571,6 @@ def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile
     Returns:
         str: Path to the generated thumbnail, or None if generation failed.
     """
-    import subprocess
-    import re
-    
     if not os.path.isfile(video_path):
         logger.error(f"Video file not found: {video_path}")
         return None
@@ -580,21 +579,21 @@ def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile
     video_id = os.path.splitext(video_basename)[0]
     
     # Create filename matching existing convention
-    outputFramePath = os.path.join(thumbPath, f"{video_id}.{profile_name}.{tag}.{tagValue}.{timestamp}.png")
+    outputFramePath = os.path.join(thumbPath, f"{video_id}.{profile_name}.{tag}.{tagValue}.{timestamp}.jpg")
     ffoutputFramePath = outputFramePath.replace(":", ".")
-    
+
     # Windows drive letter fix
     match = re.search(r"[A-Z]\.\/", ffoutputFramePath)
     if match:
         ffoutputFramePath = ffoutputFramePath.replace(".", ":", 1)
-    
+
     # Generate appropriate ffmpeg command based on tag
     if tag == "TOUT":
-        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=tout:color=yellow -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=tout:color=yellow -vframes 1 -s 720x486 -q:v 3 -y "{ffoutputFramePath}"'
     elif tag == "VREP":
-        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=vrep:color=pink -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=vrep:color=pink -vframes 1 -s 720x486 -q:v 3 -y "{ffoutputFramePath}"'
     else:
-        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=brng:color=cyan -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=brng:color=cyan -vframes 1 -s 720x486 -q:v 3 -y "{ffoutputFramePath}"'
     
     try:
         logger.debug(f"Generating thumbnail for {tag} failure at {timestamp}\n")
@@ -994,7 +993,7 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                                 # Create caption for the new window
                                 caption = f"{tag} at {timestamp} - Value: {info['tagValue']}, Threshold: {info['over']}"
                                 # Make thumbnail clickable with JavaScript
-                                thumb_html = f'''<img src="data:image/png;base64,{encoded_string}"
+                                thumb_html = f'''<img src="data:image/jpeg;base64,{encoded_string}"
                                                 onclick="openImage(this.src, '{caption}')"
                                                 style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px; cursor: pointer; border: 1px solid #ccc;"
                                                 title="Click to enlarge" />'''
@@ -2356,7 +2355,7 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
             thumb_name, thumb_path = matching_thumbs[i]
             with open(thumb_path, "rb") as image_file:
                 encoded_string = b64encode(image_file.read()).decode()
-            thumbnail_html = f"""<img src="data:image/png;base64,{encoded_string}" style="width: 150px; height: auto;" />"""
+            thumbnail_html = f"""<img src="data:image/jpeg;base64,{encoded_string}" style="width: 150px; height: auto;" />"""
 
         table_rows.append(f"""
             <tr>
@@ -2623,7 +2622,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
  
     if color_strip_b64:
         # Store the data URI once in a hidden element, reference it via JS
-        color_strip_src = f"data:image/png;base64,{color_strip_b64}"
+        color_strip_src = f"data:image/jpeg;base64,{color_strip_b64}"
         color_strip_store = (
             f'<img id="color-strip-data" src="{color_strip_src}" '
             f'alt="Color strip" class="color-strip-divider">'
@@ -2904,6 +2903,10 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if signals:
         signals.report_progress.emit(80)
+
+    # Minify: collapse runs of whitespace between tags and strip leading whitespace on lines
+    html_template = re.sub(r'>\s+<', '>\n<', html_template)
+    html_template = re.sub(r'^\s+', '', html_template, flags=re.MULTILINE)
 
     # Write the HTML file
     with open(html_report_path, 'w') as f:
