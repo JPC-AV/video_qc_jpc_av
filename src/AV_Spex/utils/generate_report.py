@@ -7,6 +7,7 @@ os.environ["NUMEXPR_MAX_THREADS"] = "11" # troubleshooting goofy numbpy related 
 import csv
 from base64 import b64encode
 import json
+import re
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -45,13 +46,13 @@ def csv_to_html_table(csv_file, style_mismatched=False, mismatch_color="#ff9999"
             table_html += '  <tr>\n'
             for i, cell in enumerate(row):
                 if check_fail and cell.lower() == "fail":
-                    table_html += f'    <td style="background-color: {mismatch_color};">{cell}</td>\n'
+                    table_html += f'    <td class="cell-mismatch">{cell}</td>\n'
                 elif check_fail and cell.lower() == "pass":
-                    table_html += f'    <td style="background-color: {match_color};">{cell}</td>\n'
+                    table_html += f'    <td class="cell-match">{cell}</td>\n'
                 elif style_mismatched and i == 2 and row[2] != '' and row[1] != row[2]:
-                    table_html += f'    <td style="background-color: {match_color};">{cell}</td>\n'
+                    table_html += f'    <td class="cell-match">{cell}</td>\n'
                 elif style_mismatched and i == 3 and row[2] != '' and row[1] != row[2]:
-                    table_html += f'    <td style="background-color: {mismatch_color};">{cell}</td>\n'
+                    table_html += f'    <td class="cell-mismatch">{cell}</td>\n'
                 else:
                     table_html += f'    <td>{cell}</td>\n'
             table_html += '  </tr>\n'
@@ -153,15 +154,15 @@ def find_qct_thumbs(report_directory):
                     tag_value = filename_segments[3]
                     
                     # Find the timestamp pattern in the filename
-                    # It should be HH.MM.SS.ssss before the .png extension
+                    # It should be HH.MM.SS.ssss before the file extension
                     # We need to reconstruct it as HH:MM:SS.ssss
-                    
-                    # The timestamp starts after tag_value (index 4) and goes until .png
-                    # For a file like: JPC_AV_01663.color_bars_evaluation.YMAX.940.0.00.00.53.7870.png
-                    # segments[4:] would be ['0', '00', '00', '53', '7870', 'png']
+
+                    # The timestamp starts after tag_value (index 4) and goes until the extension
+                    # For a file like: JPC_AV_01663.color_bars_evaluation.YMAX.940.0.00.00.53.7870.jpg
+                    # segments[4:] would be ['0', '00', '00', '53', '7870', 'jpg']
                     # We want to reconstruct 00:00:53.7870
-                    
-                    timestamp_parts = filename_segments[4:-1]  # Exclude .png
+
+                    timestamp_parts = filename_segments[4:-1]  # Exclude extension
                     
                     if len(timestamp_parts) >= 4:
                         # Assuming format is always HH.MM.SS.milliseconds
@@ -409,10 +410,10 @@ def _extract_frame_at(video_path, timestamp, output_path, height):
     subprocess.run(cmd, check=True)
 
 
-def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max_workers=4, signals=None, progress_start=62, progress_end=73):
+def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max_workers=4, signals=None, progress_start=62, progress_end=73):
     """
     Generate a frame-strip image from a video and return it as a
-    base64-encoded PNG string.
+    base64-encoded JPEG string.
 
     Instead of decoding the full video with an ``fps`` filter, this function
     fast-seeks (``-ss`` before ``-i``) to *num_frames* evenly spaced
@@ -468,7 +469,7 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
                 return None
 
             # ── Step 2: tile the extracted frames into a single row ──
-            output_path = str(Path(tmpdir) / "frame_strip.png")
+            output_path = str(Path(tmpdir) / "frame_strip.jpg")
             tile_count = len(valid_paths)
             cmd = [
                 "ffmpeg",
@@ -477,6 +478,7 @@ def generate_color_strip_base64(video_path, num_frames=60, strip_height=150, max
                 "-i", str(Path(tmpdir) / "frame_%04d.jpg"),
                 "-frames:v", "1",
                 "-vf", f"tile={tile_count}x1",
+                "-q:v", "3",
                 output_path,
             ]
             subprocess.run(cmd, check=True)
@@ -569,9 +571,6 @@ def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile
     Returns:
         str: Path to the generated thumbnail, or None if generation failed.
     """
-    import subprocess
-    import re
-    
     if not os.path.isfile(video_path):
         logger.error(f"Video file not found: {video_path}")
         return None
@@ -580,21 +579,21 @@ def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile
     video_id = os.path.splitext(video_basename)[0]
     
     # Create filename matching existing convention
-    outputFramePath = os.path.join(thumbPath, f"{video_id}.{profile_name}.{tag}.{tagValue}.{timestamp}.png")
+    outputFramePath = os.path.join(thumbPath, f"{video_id}.{profile_name}.{tag}.{tagValue}.{timestamp}.jpg")
     ffoutputFramePath = outputFramePath.replace(":", ".")
-    
+
     # Windows drive letter fix
     match = re.search(r"[A-Z]\.\/", ffoutputFramePath)
     if match:
         ffoutputFramePath = ffoutputFramePath.replace(".", ":", 1)
-    
+
     # Generate appropriate ffmpeg command based on tag
     if tag == "TOUT":
-        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=tout:color=yellow -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=tout:color=yellow -vframes 1 -s 720x486 -q:v 3 -y "{ffoutputFramePath}"'
     elif tag == "VREP":
-        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=vrep:color=pink -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=vrep:color=pink -vframes 1 -s 720x486 -q:v 3 -y "{ffoutputFramePath}"'
     else:
-        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=brng:color=cyan -vframes 1 -s 720x486 -y "{ffoutputFramePath}"'
+        ffmpegString = f'ffmpeg -ss {timestamp} -i "{video_path}" -vf signalstats=out=brng:color=cyan -vframes 1 -s 720x486 -q:v 3 -y "{ffoutputFramePath}"'
     
     try:
         logger.debug(f"Generating thumbnail for {tag} failure at {timestamp}\n")
@@ -994,9 +993,9 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                                 # Create caption for the new window
                                 caption = f"{tag} at {timestamp} - Value: {info['tagValue']}, Threshold: {info['over']}"
                                 # Make thumbnail clickable with JavaScript
-                                thumb_html = f'''<img src="data:image/png;base64,{encoded_string}" 
-                                                onclick="openImage('data:image/png;base64,{encoded_string}', '{caption}')"
-                                                style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px; cursor: pointer; border: 1px solid #ccc;" 
+                                thumb_html = f'''<img src="data:image/jpeg;base64,{encoded_string}"
+                                                onclick="openImage(this.src, '{caption}')"
+                                                style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px; cursor: pointer; border: 1px solid #ccc;"
                                                 title="Click to enlarge" />'''
                             
                             # Create entry with or without thumbnail
@@ -1413,10 +1412,10 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 for caption, encoded_img in refinement_thumbs:
                     html += f"""
                         <div style="flex: 1 1 0; min-width: 180px; max-width: {max(100 // len(refinement_thumbs), 20)}%; text-align: center;">
-                            <img src="data:image/jpeg;base64,{encoded_img}" 
+                            <img src="data:image/jpeg;base64,{encoded_img}"
                                  style="width: 100%; height: auto; border: 1px solid #4d2b12; cursor: pointer; transition: opacity 0.2s;"
                                  onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'"
-                                 onclick="openImage('data:image/jpeg;base64,{encoded_img}', '{caption}')"
+                                 onclick="openImage(this.src, '{caption}')"
                                  title="Click to enlarge"
                                  alt="{caption}" />
                             <p style="font-size: 11px; color: #888; margin: 4px 0 0 0;">{caption}</p>
@@ -2305,9 +2304,9 @@ def generate_frame_analysis_html(frame_outputs, video_id):
             
             html += f"""
             <div style="text-align: center; margin: 5px;">
-                <img src="data:image/jpeg;base64,{encoded_thumb}" 
+                <img src="data:image/jpeg;base64,{encoded_thumb}"
                      style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
-                     onclick="openImage('data:image/jpeg;base64,{encoded_thumb}', 'BRNG Diagnostic - {caption_line1}')"
+                     onclick="openImage(this.src, 'BRNG Diagnostic - {caption_line1}')"
                      title="Click to enlarge" />
                 <p style="font-size: 12px; margin: 4px 0 0 0;">{caption_line1}</p>
             """
@@ -2356,7 +2355,7 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
             thumb_name, thumb_path = matching_thumbs[i]
             with open(thumb_path, "rb") as image_file:
                 encoded_string = b64encode(image_file.read()).decode()
-            thumbnail_html = f"""<img src="data:image/png;base64,{encoded_string}" style="width: 150px; height: auto;" />"""
+            thumbnail_html = f"""<img src="data:image/jpeg;base64,{encoded_string}" style="width: 150px; height: auto;" />"""
 
         table_rows.append(f"""
             <tr>
@@ -2622,21 +2621,34 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         signals.report_progress.emit(75)
  
     if color_strip_b64:
-        # data URI for embedding directly in the HTML
-        color_strip_src = f"data:image/png;base64,{color_strip_b64}"
-        # Reusable divider snippet for inserting between sections
-        color_strip_divider = (
-            f'<img src="{color_strip_src}" alt="Color strip" '
-            f'class="color-strip-divider">'
+        # Store the data URI once in a hidden element, reference it via JS
+        color_strip_src = f"data:image/jpeg;base64,{color_strip_b64}"
+        color_strip_store = (
+            f'<img id="color-strip-data" src="{color_strip_src}" '
+            f'alt="Color strip" class="color-strip-divider">'
         )
+        # Subsequent uses clone the src from the stored element
+        color_strip_divider = (
+            '<img class="color-strip-divider color-strip-clone" alt="Color strip">'
+        )
+        color_strip_init_script = """
+        <script>
+        (function() {
+            var src = document.getElementById('color-strip-data').src;
+            var clones = document.getElementsByClassName('color-strip-clone');
+            for (var i = 0; i < clones.length; i++) { clones[i].src = src; }
+        })();
+        </script>"""
     else:
         # Fallback: use the static eq image as before
         eq_image_path = config_mgr.get_logo_path('germfree_eq.png')
         color_strip_src = eq_image_path
-        color_strip_divider = (
+        color_strip_store = (
             f'<img src="{eq_image_path}" alt="AV Spex Graphic EQ Logo" '
             f'style="width: 10%">'
         )
+        color_strip_divider = color_strip_store
+        color_strip_init_script = ""
 
     # HTML template with JavaScript functions
     html_template = f"""
@@ -2724,6 +2736,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
                 image-rendering: crisp-edges;         /* Firefox */
                 -ms-interpolation-mode: nearest-neighbor; /* legacy IE */
             }}
+            .cell-match {{
+                background-color: #d2ffed;
+            }}
+            .cell-mismatch {{
+                background-color: #ff9999;
+            }}
         </style>
         <script>
         function openImage(imgData, caption) {{
@@ -2763,7 +2781,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     <body>
         <h1>AV Spex Report</h1>
         <h2>{video_id}</h2>
-        {color_strip_divider}
+        {color_strip_store}
     """
 
     if check_cancelled():
@@ -2877,6 +2895,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if check_cancelled():
         return
 
+    html_template += color_strip_init_script
     html_template += """
     </body>
     </html>
@@ -2884,6 +2903,10 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if signals:
         signals.report_progress.emit(80)
+
+    # Minify: collapse runs of whitespace between tags and strip leading whitespace on lines
+    html_template = re.sub(r'>\s+<', '>\n<', html_template)
+    html_template = re.sub(r'^\s+', '', html_template, flags=re.MULTILINE)
 
     # Write the HTML file
     with open(html_report_path, 'w') as f:
