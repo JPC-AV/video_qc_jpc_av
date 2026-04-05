@@ -412,23 +412,46 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         frame_group = QGroupBox("Frame Analysis Settings")
         frame_layout = QVBoxLayout()
         
+        # --- Bitplane Check Settings ---
+        self.setup_bitplane_check_profile_section(frame_layout)
+
         # --- Border Detection Settings ---
         self.setup_border_detection_profile_section(frame_layout)
-        
+
         # --- BRNG Analysis Settings ---
         self.setup_brng_profile_section(frame_layout)
-        
+
         # --- Signalstats Settings ---
         self.setup_signalstats_profile_section(frame_layout)
         
         frame_group.setLayout(frame_layout)
         self.config_layout.addWidget(frame_group)
     
+    def setup_bitplane_check_profile_section(self, parent_layout):
+        """Setup the bitplane check sub-section."""
+        bitplane_group = QGroupBox("Bitplane Check")
+        bitplane_layout = QVBoxLayout()
+
+        self.enable_bitplane_check_check = QCheckBox("Enable Bitplane Check")
+        self.enable_bitplane_check_check.setStyleSheet("font-weight: bold;")
+        bitplane_desc = QLabel(
+            "Verify that the 9th and 10th bits of 10-bit video contain data. "
+            "Some TBC/framesync devices truncate these bits."
+        )
+        bitplane_desc.setWordWrap(True)
+        bitplane_desc.setIndent(20)
+
+        bitplane_layout.addWidget(self.enable_bitplane_check_check)
+        bitplane_layout.addWidget(bitplane_desc)
+
+        bitplane_group.setLayout(bitplane_layout)
+        parent_layout.addWidget(bitplane_group)
+
     def setup_border_detection_profile_section(self, parent_layout):
         """Setup the border detection sub-section."""
         border_group = QGroupBox("Border Detection Settings")
         border_layout = QVBoxLayout()
-        
+
         # Enable Border Detection
         self.enable_border_detection_check = QCheckBox("Enable Border Detection")
         self.enable_border_detection_check.setStyleSheet("font-weight: bold;")
@@ -682,6 +705,9 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             if hasattr(current_config.outputs, 'frame_analysis'):
                 fa = current_config.outputs.frame_analysis
                 
+                # Bitplane check
+                self.enable_bitplane_check_check.setChecked(bool(getattr(fa, 'enable_bitplane_check', True)))
+
                 # Border detection
                 self.enable_border_detection_check.setChecked(bool(fa.enable_border_detection))
                 mode_index = self.border_detection_combo.findData(fa.border_detection_mode)
@@ -778,6 +804,9 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         if hasattr(profile.outputs, 'frame_analysis'):
             fa = profile.outputs.frame_analysis
             
+            # Bitplane check
+            self.enable_bitplane_check_check.setChecked(bool(getattr(fa, 'enable_bitplane_check', True)))
+
             # Border detection
             self.enable_border_detection_check.setChecked(bool(getattr(fa, 'enable_border_detection', False)))
             mode_index = self.border_detection_combo.findData(getattr(fa, 'border_detection_mode', 'simple'))
@@ -858,6 +887,7 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         
         # Create frame analysis config with all parameters
         frame_analysis = FrameAnalysisConfig(
+            enable_bitplane_check=self.enable_bitplane_check_check.isChecked(),
             enable_border_detection=self.enable_border_detection_check.isChecked(),
             enable_brng_analysis=self.enable_brng_analysis_check.isChecked(),
             enable_signalstats=self.enable_signalstats_check.isChecked(),

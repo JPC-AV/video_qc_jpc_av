@@ -238,6 +238,7 @@ class FrameAnalysisConfig:
     '''Configuration for frame analysis (borders, BRNG violations, signalstats)'''
     
     # Individual sub-step enable flags (now using bool to match JSON config)
+    enable_bitplane_check: bool = True
     enable_border_detection: bool = True
     enable_brng_analysis: bool = True
     enable_signalstats: bool = True

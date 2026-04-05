@@ -308,8 +308,9 @@ class ProcessingManager:
         
         # Check if any frame analysis sub-steps are enabled
         if not any([
+            frame_config.enable_bitplane_check,
             frame_config.enable_border_detection,
-            frame_config.enable_brng_analysis, 
+            frame_config.enable_brng_analysis,
             frame_config.enable_signalstats
         ]):
             logger.info("No frame analysis sub-steps enabled")

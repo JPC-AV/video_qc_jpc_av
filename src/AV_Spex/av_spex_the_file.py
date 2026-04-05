@@ -80,6 +80,7 @@ class ParsedArguments:
     import_config: Optional[str]
     mediaconch_policy: Optional[str]
     use_default_config: bool
+    enable_bitplane_check: Optional[str]
     enable_border_detection: Optional[str]
     enable_brng_analysis: Optional[str]
     enable_signalstats: Optional[str]
@@ -175,6 +176,11 @@ The scripts will confirm that the digital files conform to predetermined specifi
     # args for frame analysis
     # Enable/disable individual sub-steps
     parser.add_argument(
+        '--enable-bitplane-check',
+        choices=['on', 'off'],
+        help='Enable/disable bitplane check (9th/10th bit verification) in frame analysis'
+    )
+    parser.add_argument(
         '--enable-border-detection',
         choices=['on', 'off'],
         help='Enable/disable border detection in frame analysis'
@@ -253,6 +259,7 @@ The scripts will confirm that the digital files conform to predetermined specifi
         import_config=args.import_config,
         mediaconch_policy=args.mediaconch_policy,
         use_default_config=args.use_default_config,
+        enable_bitplane_check=getattr(args, 'enable_bitplane_check', None),
         enable_border_detection=getattr(args, 'enable_border_detection', None),
         enable_brng_analysis=getattr(args, 'enable_brng_analysis', None),
         enable_signalstats=getattr(args, 'enable_signalstats', None),
@@ -432,6 +439,9 @@ def run_cli_mode(args):
     frame_updates = {'outputs': {'frame_analysis': {}}}
 
     # Handle enabling/disabling individual sub-steps
+    if args.enable_bitplane_check:
+        frame_updates['outputs']['frame_analysis']['enable_bitplane_check'] = (args.enable_bitplane_check == 'on')
+
     if args.enable_border_detection:
         frame_updates['outputs']['frame_analysis']['enable_border_detection'] = (args.enable_border_detection == 'on')
 
