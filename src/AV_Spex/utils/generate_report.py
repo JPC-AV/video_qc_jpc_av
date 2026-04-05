@@ -253,6 +253,10 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
                 if brng_data:
                     frame_outputs['brng_analysis'] = brng_data  # Store as dict directly
             
+            # Extract bitplane check data from enhanced JSON
+            if enhanced_data.get('bitplane_check'):
+                frame_outputs['bitplane_check'] = enhanced_data['bitplane_check']
+
             # Extract border refinement data from enhanced JSON
             if enhanced_data.get('refinement_iterations'):
                 frame_outputs['refinement_iterations'] = enhanced_data['refinement_iterations']
@@ -1134,6 +1138,96 @@ def generate_frame_analysis_html(frame_outputs, video_id):
         <h2 style="color: #0a5f1c; text-decoration: underline; margin-top: 30px;">Frame Analysis Results</h2>
     """
     
+    # Bitplane Check Section
+    bitplane_data = frame_outputs.get('bitplane_check')
+    if bitplane_data:
+        status = bitplane_data.get('status', 'unknown')
+        message = bitplane_data.get('message', '')
+        frames_sampled = bitplane_data.get('frames_sampled', 0)
+        overall_avgs = bitplane_data.get('overall_bitplane_averages', {})
+        channels = bitplane_data.get('channels', {})
+
+        # Choose color based on status
+        if status == 'truncated':
+            status_color = '#cc0000'
+            status_icon = '&#x26A0;'  # warning triangle
+        elif status == 'partial_truncation':
+            status_color = '#cc6600'
+            status_icon = '&#x26A0;'
+        elif status == 'valid':
+            status_color = '#0a5f1c'
+            status_icon = '&#x2705;'  # checkmark
+        else:
+            status_color = '#666666'
+            status_icon = '&#x2753;'  # question mark
+
+        html += "<h3 style='color: #bf971b;'>Bitplane Check (9th &amp; 10th Bit Verification)</h3>"
+        html += f"""
+        <p style="font-size: 14px; color: {status_color}; font-weight: bold;">
+            {status_icon} {message}
+        </p>
+        <p style="font-size: 13px; color: #555;">Frames sampled: {frames_sampled}</p>
+        """
+
+        # Overall averages
+        if overall_avgs:
+            html += """
+            <table style="border-collapse: collapse; margin: 10px 0; font-size: 13px;">
+                <tr style="background-color: #f0ebe4;">
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: left;">Bitplane</th>
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise (all channels)</th>
+                </tr>
+            """
+            for bp_name, avg in overall_avgs.items():
+                val_str = f"{avg:.6f}" if avg is not None else "N/A"
+                html += f"""
+                <tr>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{val_str}</td>
+                </tr>
+                """
+            html += "</table>"
+
+        # Per-channel detail (collapsible)
+        if channels:
+            html += """
+            <a id="link_bitplane_detail" href="javascript:void(0);"
+               onclick="toggleContent('bitplane_detail', 'Per-channel detail ▼', 'Per-channel detail ▲')"
+               style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block; font-size: 13px;">
+               Per-channel detail ▼</a>
+            <div id="bitplane_detail" style="display: none; margin: 0 0 16px 0;">
+            <table style="border-collapse: collapse; font-size: 13px;">
+                <tr style="background-color: #f0ebe4;">
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Channel</th>
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Bitplane</th>
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">Status</th>
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise</th>
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Max Noise</th>
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Zero Frames</th>
+                </tr>
+            """
+            for ch_name, bp_data in channels.items():
+                for bp_name, bp_result in bp_data.items():
+                    bp_status = bp_result.get('status', 'unknown')
+                    avg_noise = bp_result.get('average_noise', 0)
+                    max_noise = bp_result.get('max_noise', 0)
+                    zero_pct = bp_result.get('zero_percentage', 0)
+                    row_color = '#fce4e4' if bp_status == 'empty' else ''
+                    style = f' style="background-color: {row_color};"' if row_color else ''
+                    html += f"""
+                    <tr{style}>
+                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{ch_name}</td>
+                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
+                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">
+                            {'&#x274C; empty' if bp_status == 'empty' else '&#x2705; active'}
+                        </td>
+                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_noise:.6f}</td>
+                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{max_noise:.6f}</td>
+                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{zero_pct:.1f}%</td>
+                    </tr>
+                    """
+            html += "</table></div>"
+
     # Border Detection Section
     if frame_outputs['border_visualization'] or frame_outputs['border_data']:
         html += "<h3 style='color: #bf971b;'>Border Detection</h3>"
