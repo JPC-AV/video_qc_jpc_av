@@ -506,7 +506,7 @@ def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max
         return None
 
 
-def generate_audio_waveform_base64(video_path, width=1200, height=80):
+def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=None, progress_start=75, progress_end=79):
     """
     Generate a compact audio waveform image from a video file and return it
     as a base64-encoded JPEG string.
@@ -524,12 +524,24 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80):
         on failure.
     """
     logger.info("Creating audio waveform spacer")
+    if signals:
+        signals.report_progress.emit(progress_start)
     try:
+        duration = _get_video_duration(video_path)
+        if duration is None or duration <= 0:
+            logger.warning("Audio waveform: could not determine video duration — skipping")
+            return None
+
+        duration_ms = duration * 1000000
+        progress_range = progress_end - progress_start
+
         with TemporaryDirectory() as tmpdir:
             output_path = str(Path(tmpdir) / "waveform.jpg")
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
+                "-progress", "pipe:1",
+                "-nostats",
                 "-loglevel", "error",
                 "-i", video_path,
                 "-filter_complex",
@@ -538,7 +550,23 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80):
                 "-q:v", "5",
                 output_path,
             ]
-            subprocess.run(cmd, check=True, timeout=60)
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                if line.startswith("out_time_ms=") and signals:
+                    try:
+                        current_ms = float(line.split("=")[1])
+                        percent_complete = current_ms / duration_ms
+                        pct = progress_start + int(progress_range * min(1.0, max(0.0, percent_complete)))
+                        signals.report_progress.emit(pct)
+                    except (ValueError, ZeroDivisionError):
+                        pass
+            process.wait()
+            stderr_output = process.stderr.read()
+            if stderr_output:
+                logger.warning(f"Audio waveform ffmpeg stderr: {stderr_output.strip()}")
 
             if not os.path.isfile(output_path):
                 logger.warning("Audio waveform: ffmpeg produced no output — skipping")
@@ -548,6 +576,8 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80):
                 b64 = b64encode(f.read()).decode("utf-8")
 
         logger.info("Audio waveform spacer completed")
+        if signals:
+            signals.report_progress.emit(progress_end)
         return b64
 
     except Exception as e:
@@ -2917,7 +2947,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Generate audio waveform
     waveform_b64 = None
     if video_path:
-        waveform_b64 = generate_audio_waveform_base64(video_path)
+        waveform_b64 = generate_audio_waveform_base64(video_path, signals=signals, progress_start=75, progress_end=79)
 
     if waveform_b64:
         # Note: Using class "waveform-data-store" to target via JS
