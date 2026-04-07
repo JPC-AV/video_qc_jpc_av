@@ -753,7 +753,7 @@ def make_audio_clipping_html(audio_clipping_csv):
         logger.error(f"Error reading audio clipping CSV: {e}")
         return None
 
-    if len(rows) < 7:
+    if len(rows) < 8:
         return None
 
     # Parse summary rows
@@ -762,7 +762,8 @@ def make_audio_clipping_html(audio_clipping_csv):
     clipped_frames = rows[3][1] if len(rows[3]) > 1 else "N/A"
     clipped_pct = rows[4][1] if len(rows[4]) > 1 else "N/A"
     max_peak = rows[5][1] if len(rows[5]) > 1 else "N/A"
-    clipping_detected = rows[6][1] if len(rows[6]) > 1 else "N/A"
+    max_flat_factor = rows[6][1] if len(rows[6]) > 1 else "N/A"
+    clipping_detected = rows[7][1] if len(rows[7]) > 1 else "N/A"
 
     if clipping_detected == "Yes":
         status_color = "#dc3545"
@@ -785,20 +786,22 @@ def make_audio_clipping_html(audio_clipping_csv):
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Clipped Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{clipped_frames}</td></tr>
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Clipped Frames (%)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{clipped_pct}</td></tr>
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Max Peak Level (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{max_peak}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Max Flat Factor</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{max_flat_factor}</td></tr>
     </table>
     '''
 
     # Add clipping events table if there are any
-    clipping_events = [r for r in rows[8:] if len(r) >= 2]
+    clipping_events = [r for r in rows[9:] if len(r) >= 2]
     if clipping_events:
         html += f'''
         <a href="javascript:void(0);" onclick="toggleContent('audio_clipping_events', 'Show clipping events ({len(clipping_events)}) ▼', 'Hide clipping events ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show clipping events ({len(clipping_events)}) ▼</a>
         <div id="audio_clipping_events" style="display: none;">
         <table style="border-collapse: collapse; margin: 10px 0;">
-            <tr><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Timestamp</th><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Peak Level (dBFS)</th></tr>
+            <tr><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Timestamp</th><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Peak Level (dBFS)</th><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Flat Factor</th></tr>
         '''
         for event in clipping_events:
-            html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;">{event[0]}</td><td style="padding: 4px 12px; border: 1px solid #ddd;">{event[1]}</td></tr>\n'
+            ff_val = event[2] if len(event) > 2 else "N/A"
+            html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;">{event[0]}</td><td style="padding: 4px 12px; border: 1px solid #ddd;">{event[1]}</td><td style="padding: 4px 12px; border: 1px solid #ddd;">{ff_val}</td></tr>\n'
         html += '</table></div>\n'
 
     return html

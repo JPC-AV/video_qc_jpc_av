@@ -1086,6 +1086,7 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     clipping_events = []
     clipped_frames = 0
     max_peak_level = None
+    max_flat_factor = None
 
     # Channel imbalance state
     ch1_rms_values = []
@@ -1099,6 +1100,7 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
 
                 # Parse audio frame attributes in one loop
                 peak_level = None
+                flat_factor = None
                 ch1_rms = None
                 ch2_rms = None
 
@@ -1109,8 +1111,11 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                     except (ValueError, KeyError):
                         continue
 
-                    if detect_clipping and key.endswith('.Peak_level') and 'Overall' in key:
-                        peak_level = val
+                    if detect_clipping:
+                        if key.endswith('.Peak_level') and 'Overall' in key:
+                            peak_level = val
+                        elif key.endswith('.Flat_factor') and 'Overall' in key:
+                            flat_factor = val
 
                     if detect_imbalance:
                         # lavfi.astats.1.RMS_level and lavfi.astats.2.RMS_level
@@ -1124,6 +1129,8 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                 if detect_clipping and peak_level is not None:
                     if max_peak_level is None or peak_level > max_peak_level:
                         max_peak_level = peak_level
+                    if flat_factor is not None and (max_flat_factor is None or flat_factor > max_flat_factor):
+                        max_flat_factor = flat_factor
 
                     if peak_level >= AUDIO_CLIPPING_THRESHOLD_DB:
                         clipped_frames += 1
@@ -1131,7 +1138,8 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                         clipping_events.append({
                             'timestamp': timeStampString,
                             'timestamp_seconds': float(frame_pkt_dts_time),
-                            'peak_level': peak_level
+                            'peak_level': peak_level,
+                            'flat_factor': flat_factor
                         })
 
                 # Channel imbalance collection
@@ -1154,7 +1162,7 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     if detect_clipping:
         clipping_results = _write_clipping_results(
             report_directory, total_audio_frames, clipped_frames,
-            max_peak_level, clipping_events
+            max_peak_level, max_flat_factor, clipping_events
         )
 
     # Build channel imbalance results
@@ -1167,7 +1175,7 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     return clipping_results, imbalance_results
 
 
-def _write_clipping_results(report_directory, total_audio_frames, clipped_frames, max_peak_level, clipping_events):
+def _write_clipping_results(report_directory, total_audio_frames, clipped_frames, max_peak_level, max_flat_factor, clipping_events):
     """Write audio clipping detection results to CSV and log summary."""
     clipping_detected = clipped_frames > 0
     pct = (clipped_frames / total_audio_frames) * 100 if total_audio_frames > 0 else 0
@@ -1178,6 +1186,7 @@ def _write_clipping_results(report_directory, total_audio_frames, clipped_frames
         'total_audio_frames': total_audio_frames,
         'clipped_frames': clipped_frames,
         'max_peak_level': max_peak_level if max_peak_level is not None else 0.0,
+        'max_flat_factor': max_flat_factor if max_flat_factor is not None else 0.0,
         'threshold_db': AUDIO_CLIPPING_THRESHOLD_DB
     }
 
@@ -1190,13 +1199,16 @@ def _write_clipping_results(report_directory, total_audio_frames, clipped_frames
         writer.writerow(["Clipped Frames", clipped_frames])
         writer.writerow(["Clipped Frames (%)", f"{pct:.2f}"])
         writer.writerow(["Max Peak Level (dBFS)", f"{max_peak_level:.1f}" if max_peak_level is not None else "N/A"])
+        writer.writerow(["Max Flat Factor", f"{max_flat_factor:.0f}" if max_flat_factor is not None else "N/A"])
         writer.writerow(["Clipping Detected", "Yes" if clipping_detected else "No"])
         writer.writerow([])
 
         if clipping_events:
-            writer.writerow(["Timestamp", "Peak Level (dBFS)"])
+            writer.writerow(["Timestamp", "Peak Level (dBFS)", "Flat Factor"])
             for event in clipping_events:
-                writer.writerow([event['timestamp'], f"{event['peak_level']:.1f}"])
+                ff = event.get('flat_factor')
+                ff_str = f"{ff:.0f}" if ff is not None else "N/A"
+                writer.writerow([event['timestamp'], f"{event['peak_level']:.1f}", ff_str])
 
     if clipping_detected:
         logger.warning(f"Audio clipping detected: {clipped_frames} frames ({pct:.2f}%) exceeded {AUDIO_CLIPPING_THRESHOLD_DB} dBFS threshold. Max peak: {max_peak_level:.1f} dBFS\n")
