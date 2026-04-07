@@ -1213,7 +1213,7 @@ def _write_clipping_results(report_directory, total_audio_frames, clipped_frames
     if clipping_detected:
         logger.warning(f"Audio clipping detected: {clipped_frames} frames ({pct:.2f}%) exceeded {AUDIO_CLIPPING_THRESHOLD_DB} dBFS threshold. Max peak: {max_peak_level:.1f} dBFS\n")
     else:
-        logger.info(f"No audio clipping detected. Max peak level: {max_peak_level:.1f} dBFS\n")
+        logger.debug(f"No audio clipping detected. Max peak level: {max_peak_level:.1f} dBFS\n")
 
     return results
 
@@ -1272,7 +1272,7 @@ def _write_imbalance_results(report_directory, total_audio_frames, ch1_rms_value
         writer.writerow(["Characterization", characterization])
         writer.writerow(["Louder Channel", louder_channel])
 
-    logger.info(f"Channel imbalance analysis: {characterization} (Ch1: {ch1_mean_rms:.1f} dBFS, Ch2: {ch2_mean_rms:.1f} dBFS, diff: {mean_diff:+.1f} dB)\n")
+    logger.debug(f"Channel imbalance analysis: {characterization} (Ch1: {ch1_mean_rms:.1f} dBFS, Ch2: {ch2_mean_rms:.1f} dBFS, diff: {mean_diff:+.1f} dB)\n")
 
     return results
 

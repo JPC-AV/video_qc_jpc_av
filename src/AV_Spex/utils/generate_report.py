@@ -777,6 +777,35 @@ def make_audio_clipping_html(audio_clipping_csv):
         status_text = "No Audio Clipping Detected"
 
     html = f'''
+    <a id="link_clipping_methodology" href="javascript:void(0);"
+       onclick="toggleContent('clipping_methodology', 'What is audio clipping detection? ▼', 'What is audio clipping detection? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is audio clipping detection? ▼</a>
+    <div id="clipping_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Audio clipping detection</strong> scans the audio frames of the QCTools report to
+            identify moments where the audio signal reaches or exceeds digital full scale, indicating
+            that the original analog signal may have been too hot during digitization.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Metrics used:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>Peak Level (dBFS)</strong> &mdash; the peak sample
+                value per audio frame, expressed in decibels relative to full scale. A value of 0.0 dBFS
+                means the signal has hit the absolute digital maximum. Frames with a peak level at or above
+                the configured threshold ({threshold} dBFS) are flagged as clipped.</li>
+            <li style="margin-bottom: 4px;"><strong>Flat Factor</strong> &mdash; measures how many
+                consecutive audio samples share the same value. When the signal clips, it is clamped at
+                the digital ceiling, producing runs of identical samples. A Flat Factor of 1&ndash;10 is
+                normal in any audio. Values above 100 at near-peak levels indicate sustained clipping where
+                the waveform is being flattened for extended periods.</li>
+        </ul>
+        <p style="margin: 0;">
+            Both metrics are derived from FFmpeg's <code>astats</code> filter as recorded in the QCTools
+            report. Peak Level identifies <em>whether</em> clipping occurred; Flat Factor indicates
+            <em>how severe</em> it is.
+        </p>
+    </div>
     <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
         <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
     </div>
@@ -863,6 +892,36 @@ def make_channel_imbalance_html(channel_imbalance_csv):
         status_text += f" ({louder_channel} is louder)"
 
     html = f'''
+    <a id="link_imbalance_methodology" href="javascript:void(0);"
+       onclick="toggleContent('imbalance_methodology', 'What is channel imbalance analysis? ▼', 'What is channel imbalance analysis? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is channel imbalance analysis? ▼</a>
+    <div id="imbalance_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Channel imbalance analysis</strong> compares the average loudness of channel 1 (left)
+            and channel 2 (right) across the entire audio program to characterize any level difference
+            between the two channels.
+        </p>
+        <p style="margin: 0 0 10px 0;">
+            The analysis uses the <strong>RMS level</strong> (Root Mean Square, in dBFS) from each channel,
+            as recorded per audio frame by FFmpeg's <code>astats</code> filter in the QCTools report. The
+            mean RMS for each channel is computed across all audio frames, and the difference between them
+            is reported in decibels.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Characterization:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>Balanced</strong> &mdash; less than 1 dB difference between channels.</li>
+            <li style="margin-bottom: 4px;"><strong>Slight imbalance</strong> &mdash; 1&ndash;3 dB difference. Common with analog sources and generally not a concern.</li>
+            <li style="margin-bottom: 4px;"><strong>Moderate imbalance</strong> &mdash; 3&ndash;6 dB difference. May indicate a level calibration issue with the playback or capture equipment.</li>
+            <li style="margin-bottom: 4px;"><strong>Significant imbalance</strong> &mdash; greater than 6 dB difference. Could indicate a hardware fault, bad cable, or a mono source recorded to only one channel.</li>
+        </ul>
+        <p style="margin: 0;">
+            It is not uncommon for one channel to be somewhat louder than the other on analog source
+            material. This analysis is informational &mdash; it characterizes the file rather than
+            flagging an error.
+        </p>
+    </div>
     <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
         <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
     </div>
