@@ -545,7 +545,12 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
                 "-loglevel", "error",
                 "-i", video_path,
                 "-filter_complex",
-                f"showwavespic=s={width}x{height}:colors=#378d6a|#bf971b:draw=full:scale=sqrt",
+                f"""
+                [0:a]channelsplit=channel_layout=stereo[left][right];
+                [left]showwavespic=s={width}x{height}:colors=#378d6a@0.6:draw=full:scale=sqrt[l];
+                [right]showwavespic=s={width}x{height}:colors=#bf971b@0.6:draw=full:scale=sqrt[r];
+                [l][r]overlay=format=auto
+                """,
                 "-frames:v", "1",
                 "-q:v", "5",
                 output_path,
