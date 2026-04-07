@@ -506,6 +506,53 @@ def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max
         return None
 
 
+def generate_audio_waveform_base64(video_path, width=1200, height=80):
+    """
+    Generate a compact audio waveform image from a video file and return it
+    as a base64-encoded JPEG string.
+
+    Uses FFmpeg's ``showwavespic`` filter, which renders the entire audio
+    stream into a single image in one pass — no frame-by-frame extraction.
+
+    Args:
+        video_path (str): Path to the source video file.
+        width (int): Width of the output image in pixels.
+        height (int): Height of the output image in pixels.
+
+    Returns:
+        str or None: Base64-encoded JPEG data (no ``data:`` prefix), or None
+        on failure.
+    """
+    logger.info("Creating audio waveform spacer")
+    try:
+        with TemporaryDirectory() as tmpdir:
+            output_path = str(Path(tmpdir) / "waveform.jpg")
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-i", video_path,
+                "-filter_complex",
+                f"showwavespic=s={width}x{height}:colors=#378d6a|#bf971b:split_channels=1",
+                "-frames:v", "1",
+                "-q:v", "5",
+                output_path,
+            ]
+            subprocess.run(cmd, check=True, timeout=60)
+
+            if not os.path.isfile(output_path):
+                logger.warning("Audio waveform: ffmpeg produced no output — skipping")
+                return None
+
+            with open(output_path, "rb") as f:
+                b64 = b64encode(f.read()).decode("utf-8")
+
+        logger.info("Audio waveform spacer completed")
+        return b64
+
+    except Exception as e:
+        logger.warning(f"Audio waveform generation failed: {e}")
+        return None
 
 
 def find_qc_metadata(destination_directory):
@@ -2867,6 +2914,43 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         color_strip_divider = color_strip_store
         color_strip_init_script = ""
 
+    # Generate audio waveform
+    waveform_b64 = None
+    if video_path:
+        waveform_b64 = generate_audio_waveform_base64(video_path)
+
+    if waveform_b64:
+        # Note: Using class "waveform-data-store" to target via JS
+        waveform_store = (
+            f'<img class="waveform-data-store" src="data:image/jpeg;base64,{waveform_b64}" '
+            f'style="display: none;">'
+        )
+        
+        # Divider: The placeholder that will be cloned by the script
+        waveform_divider = (
+            '<div style="margin: 20px 0; text-align: center;">'
+            '<img class="waveform-clone" style="width: 100%; height: auto; border: 1px solid #378d6a;">'
+            '</div>'
+        )
+        
+        # JavaScript: Finds all clones and populates them with the source data
+        waveform_init_script = """
+        <script>
+        (function() {
+            var src = document.querySelector('.waveform-data-store').src;
+            var clones = document.querySelectorAll('.waveform-clone');
+            for (var i = 0; i < clones.length; i++) {
+                clones[i].src = src;
+            }
+        })();
+        </script>"""
+    else:
+        # Fallback: If generation fails, use the static logo as a divider (similar to eq_image_path)
+        eq_image_path = config_mgr.get_logo_path('germfree_eq.png') # Reusing your existing fallback
+        waveform_store = f'<img src="{eq_image_path}" alt="AV Spex Logo" style="width: 10%; display: none;">'
+        waveform_divider = f'<div style="text-align: center;"><img src="{eq_image_path}" style="width: 10%;"></div>'
+        waveform_init_script = ""
+
     # HTML template with JavaScript functions
     html_template = f"""
     <!DOCTYPE html>
@@ -2999,6 +3083,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h1>AV Spex Report</h1>
         <h2>{video_id}</h2>
         {color_strip_store}
+        {waveform_store}
     """
 
     if check_cancelled():
@@ -3057,6 +3142,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         """
 
     if audio_clipping_html:
+        html_template += waveform_divider
         html_template += f"""
         <h3>Audio Clipping Detection</h3>
         {audio_clipping_html}
@@ -3067,6 +3153,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h3>Channel Imbalance Analysis</h3>
         {channel_imbalance_html}
         """
+        html_template += waveform_divider
 
     if difference_csv:
         html_template += f"""
@@ -3125,6 +3212,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         return
 
     html_template += color_strip_init_script
+    html_template += waveform_init_script   
     html_template += """
     </body>
     </html>
