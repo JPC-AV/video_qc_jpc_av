@@ -311,6 +311,8 @@ def find_report_csvs(report_directory):
     tags_check_output = None
     tag_fails_csv = None
     colorbars_eval_fails_csv = None
+    audio_clipping_csv = None
+    channel_imbalance_csv = None
     difference_csv = None
 
     if os.path.isdir(report_directory):
@@ -336,10 +338,14 @@ def find_report_csvs(report_directory):
                         tag_fails_csv = file_path
                     elif "qct-parse_colorbars_eval_failures" in file:
                         colorbars_eval_fails_csv = file_path
+                    elif "qct-parse_audio_clipping" in file:
+                        audio_clipping_csv = file_path
+                    elif "qct-parse_channel_imbalance" in file:
+                        channel_imbalance_csv = file_path
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -724,6 +730,150 @@ def summarize_failures(failure_csv_path):  # Change parameter to accept CSV file
         summary_dict[timestamp].append(info)
 
     return summary_dict
+
+
+def make_audio_clipping_html(audio_clipping_csv):
+    """
+    Generates an HTML section summarizing audio clipping detection results.
+
+    Args:
+        audio_clipping_csv (str): Path to the audio clipping CSV file.
+
+    Returns:
+        str: HTML string with audio clipping results, or None if file cannot be read.
+    """
+    if not audio_clipping_csv or not os.path.isfile(audio_clipping_csv):
+        return None
+
+    try:
+        with open(audio_clipping_csv, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    except Exception as e:
+        logger.error(f"Error reading audio clipping CSV: {e}")
+        return None
+
+    if len(rows) < 7:
+        return None
+
+    # Parse summary rows
+    threshold = rows[1][1] if len(rows[1]) > 1 else "N/A"
+    total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
+    clipped_frames = rows[3][1] if len(rows[3]) > 1 else "N/A"
+    clipped_pct = rows[4][1] if len(rows[4]) > 1 else "N/A"
+    max_peak = rows[5][1] if len(rows[5]) > 1 else "N/A"
+    clipping_detected = rows[6][1] if len(rows[6]) > 1 else "N/A"
+
+    if clipping_detected == "Yes":
+        status_color = "#dc3545"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+        status_text = "Audio Clipping Detected"
+    else:
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+        status_text = "No Audio Clipping Detected"
+
+    html = f'''
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Threshold (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{threshold}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Clipped Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{clipped_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Clipped Frames (%)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{clipped_pct}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Max Peak Level (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{max_peak}</td></tr>
+    </table>
+    '''
+
+    # Add clipping events table if there are any
+    clipping_events = [r for r in rows[8:] if len(r) >= 2]
+    if clipping_events:
+        html += f'''
+        <a href="javascript:void(0);" onclick="toggleContent('audio_clipping_events', 'Show clipping events ({len(clipping_events)}) ▼', 'Hide clipping events ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show clipping events ({len(clipping_events)}) ▼</a>
+        <div id="audio_clipping_events" style="display: none;">
+        <table style="border-collapse: collapse; margin: 10px 0;">
+            <tr><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Timestamp</th><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Peak Level (dBFS)</th></tr>
+        '''
+        for event in clipping_events:
+            html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;">{event[0]}</td><td style="padding: 4px 12px; border: 1px solid #ddd;">{event[1]}</td></tr>\n'
+        html += '</table></div>\n'
+
+    return html
+
+
+def make_channel_imbalance_html(channel_imbalance_csv):
+    """
+    Generates an HTML section summarizing channel imbalance analysis results.
+
+    Args:
+        channel_imbalance_csv (str): Path to the channel imbalance CSV file.
+
+    Returns:
+        str: HTML string with channel imbalance results, or None if file cannot be read.
+    """
+    if not channel_imbalance_csv or not os.path.isfile(channel_imbalance_csv):
+        return None
+
+    try:
+        with open(channel_imbalance_csv, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    except Exception as e:
+        logger.error(f"Error reading channel imbalance CSV: {e}")
+        return None
+
+    if len(rows) < 8:
+        return None
+
+    # Parse summary rows
+    total_frames = rows[1][1] if len(rows[1]) > 1 else "N/A"
+    frames_analyzed = rows[2][1] if len(rows[2]) > 1 else "N/A"
+    ch1_mean_rms = rows[3][1] if len(rows[3]) > 1 else "N/A"
+    ch2_mean_rms = rows[4][1] if len(rows[4]) > 1 else "N/A"
+    mean_diff = rows[5][1] if len(rows[5]) > 1 else "N/A"
+    characterization = rows[6][1] if len(rows[6]) > 1 else "N/A"
+    louder_channel = rows[7][1] if len(rows[7]) > 1 else "N/A"
+
+    # Color based on characterization
+    if characterization == "Balanced":
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+    elif characterization == "Slight imbalance":
+        status_color = "#856404"
+        status_bg = "#fff3cd"
+        status_border = "#ffeeba"
+    elif characterization == "Moderate imbalance":
+        status_color = "#856404"
+        status_bg = "#fff3cd"
+        status_border = "#ffeeba"
+    else:
+        status_color = "#721c24"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+
+    status_text = characterization
+    if louder_channel != "Neither":
+        status_text += f" ({louder_channel} is louder)"
+
+    html = f'''
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Frames Analyzed</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{frames_analyzed}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Channel 1 Mean RMS (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{ch1_mean_rms}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Channel 2 Mean RMS (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{ch2_mean_rms}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Mean Difference (dB)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{mean_diff}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Louder Channel</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{louder_channel}</td></tr>
+    </table>
+    '''
+
+    return html
 
 
 def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict):
@@ -2422,7 +2572,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
         return
@@ -2597,11 +2747,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     else:
         tags_summary_html = None
 
+    audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
+    channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
+
     existing_thumbs = find_qct_thumbs(report_directory)
     no_qct_parse_files = (
-        not profile_fails_csv and 
-        not tag_fails_csv and 
-        not colorbars_eval_fails_csv and 
+        not profile_fails_csv and
+        not tag_fails_csv and
+        not colorbars_eval_fails_csv and
+        not audio_clipping_csv and
+        not channel_imbalance_csv and
         not existing_thumbs
     )
 
@@ -2837,6 +2992,18 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3>{eval_header}</h3>
         {colorbars_eval_html}
+        """
+
+    if audio_clipping_html:
+        html_template += f"""
+        <h3>Audio Clipping Detection</h3>
+        {audio_clipping_html}
+        """
+
+    if channel_imbalance_html:
+        html_template += f"""
+        <h3>Channel Imbalance Analysis</h3>
+        {channel_imbalance_html}
         """
 
     if difference_csv:
