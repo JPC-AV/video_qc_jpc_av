@@ -532,7 +532,6 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
             logger.warning("Audio waveform: could not determine video duration — skipping")
             return None
 
-        duration_ms = duration * 1000000
         progress_range = progress_end - progress_start
 
         with TemporaryDirectory() as tmpdir:
@@ -540,8 +539,7 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
-                "-progress", "pipe:1",
-                "-nostats",
+                "-stats",
                 "-loglevel", "error",
                 "-i", video_path,
                 "-filter_complex",
@@ -555,23 +553,46 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
                 "-q:v", "5",
                 output_path,
             ]
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # Use stderr for progress: -stats writes "size=...time=HH:MM:SS.xx..." lines
+            # showing how much input audio has been read, which updates incrementally
+            # even for single-output-frame filters like showwavespic
+            time_pattern = re.compile(r'time=\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+            last_pct = progress_start
+            stderr_lines = []
+            # Read stderr byte-by-byte looking for \r or \n delimited progress lines
+            buf = b''
             while True:
-                line = process.stdout.readline()
-                if not line:
+                byte = process.stderr.read(1)
+                if not byte:
                     break
-                if line.startswith("out_time_ms=") and signals:
-                    try:
-                        current_ms = float(line.split("=")[1])
-                        percent_complete = current_ms / duration_ms
-                        pct = progress_start + int(progress_range * min(1.0, max(0.0, percent_complete)))
-                        signals.report_progress.emit(pct)
-                    except (ValueError, ZeroDivisionError):
-                        pass
+                if byte in (b'\r', b'\n'):
+                    if buf:
+                        line = buf.decode('utf-8', errors='replace')
+                        buf = b''
+                        match = time_pattern.search(line)
+                        if match and signals:
+                            hours = float(match.group(1))
+                            minutes = float(match.group(2))
+                            seconds = float(match.group(3))
+                            current_seconds = hours * 3600 + minutes * 60 + seconds
+                            percent_complete = current_seconds / duration
+                            pct = progress_start + int(progress_range * min(1.0, max(0.0, percent_complete)))
+                            if pct > last_pct:
+                                signals.report_progress.emit(pct)
+                                last_pct = pct
+                        elif 'error' in line.lower() or 'warning' in line.lower():
+                            stderr_lines.append(line)
+                else:
+                    buf += byte
+            # Process any remaining buffer
+            if buf:
+                line = buf.decode('utf-8', errors='replace')
+                if 'error' in line.lower() or 'warning' in line.lower():
+                    stderr_lines.append(line)
             process.wait()
-            stderr_output = process.stderr.read()
-            if stderr_output:
-                logger.warning(f"Audio waveform ffmpeg stderr: {stderr_output.strip()}")
+            if stderr_lines:
+                logger.warning(f"Audio waveform ffmpeg stderr: {'; '.join(stderr_lines)}")
 
             if not os.path.isfile(output_path):
                 logger.warning("Audio waveform: ffmpeg produced no output — skipping")

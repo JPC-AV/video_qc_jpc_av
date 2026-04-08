@@ -667,7 +667,8 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
         kbeyond[k] = 0
 
     # Progress emission setup: emit every ~1000 frames to avoid overhead
-    # Maps frameCount against total_frames_estimate into the 15→95% range
+    # Maps frameCount against total_frames_estimate into the 20→88% range
+    # (reserves 88-98% for audio analysis)
     progress_emit_interval = 1000
     last_progress_pct = 0
 
@@ -684,10 +685,10 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
                 frame_pkt_dts_time = elem.attrib[pkt] 	#get the timestamps for the current frame we're looking at
                 
                 # Emit progress periodically
-                if (signals and hasattr(signals, 'qctparse_progress') and 
+                if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and frameCount % progress_emit_interval == 0):
-                    pct = 20 + int((float(frame_pkt_dts_time) / total_duration) * 75)
-                    pct = min(95, max(20, pct))
+                    pct = 20 + int((float(frame_pkt_dts_time) / total_duration) * 68)
+                    pct = min(88, max(20, pct))
                     if pct > last_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         last_progress_pct = pct
@@ -1082,6 +1083,10 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
 
     total_audio_frames = 0
 
+    # Progress emission setup: maps into the 90→98% range of qctparse_progress
+    audio_progress_interval = 500
+    last_audio_progress_pct = 90
+
     # Clipping state
     clipping_events = []
     clipped_frames = 0
@@ -1097,6 +1102,15 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
             if elem.attrib.get('media_type') == "audio":
                 total_audio_frames += 1
                 frame_pkt_dts_time = elem.attrib.get(pkt, "0")
+
+                # Emit incremental progress during audio analysis (90→98% range)
+                if (signals and hasattr(signals, 'qctparse_progress') and
+                    total_duration and total_audio_frames % audio_progress_interval == 0):
+                    pct = 90 + int((float(frame_pkt_dts_time) / total_duration) * 8)
+                    pct = min(98, max(90, pct))
+                    if pct > last_audio_progress_pct:
+                        signals.qctparse_progress.emit(pct)
+                        last_audio_progress_pct = pct
 
                 # Parse audio frame attributes in one loop
                 peak_level = None
