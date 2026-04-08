@@ -311,6 +311,8 @@ def find_report_csvs(report_directory):
     tags_check_output = None
     tag_fails_csv = None
     colorbars_eval_fails_csv = None
+    audio_clipping_csv = None
+    channel_imbalance_csv = None
     difference_csv = None
 
     if os.path.isdir(report_directory):
@@ -336,10 +338,14 @@ def find_report_csvs(report_directory):
                         tag_fails_csv = file_path
                     elif "qct-parse_colorbars_eval_failures" in file:
                         colorbars_eval_fails_csv = file_path
+                    elif "qct-parse_audio_clipping" in file:
+                        audio_clipping_csv = file_path
+                    elif "qct-parse_channel_imbalance" in file:
+                        channel_imbalance_csv = file_path
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -500,6 +506,194 @@ def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max
         return None
 
 
+def _get_audio_channel_count(video_path):
+    """Get the number of audio channels in the first audio stream using ffprobe.
+
+    Returns:
+        int or None: Number of channels, or None if unavailable.
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries", "stream=channels",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return int(result.stdout.strip())
+    except Exception as e:
+        logger.warning(f"Could not probe audio channel count: {e}")
+        return None
+
+
+# Colors assigned per channel for waveform visualization
+_WAVEFORM_CHANNEL_COLORS = [
+    "#378d6a",  # green (channel 1 / left)
+    "#bf971b",  # gold (channel 2 / right)
+    "#5b8abf",  # blue (channel 3)
+    "#c45a3c",  # red-orange (channel 4)
+    "#8e6bbf",  # purple (channel 5)
+    "#bf6b8e",  # pink (channel 6)
+    "#6bbfb5",  # teal (channel 7)
+    "#bfad6b",  # tan (channel 8)
+]
+
+
+def _build_waveform_filter(num_channels, width, height):
+    """Build an FFmpeg filter_complex string for N-channel waveform overlay.
+
+    Args:
+        num_channels (int): Number of audio channels.
+        width (int): Image width.
+        height (int): Image height.
+
+    Returns:
+        str: filter_complex string for FFmpeg.
+    """
+    colors = _WAVEFORM_CHANNEL_COLORS
+    opacity = 0.6
+
+    if num_channels == 1:
+        # Mono — single waveform, no split needed
+        return f"[0:a]showwavespic=s={width}x{height}:colors={colors[0]}@{opacity}:draw=full:scale=sqrt"
+
+    # Map channel count to a standard FFmpeg layout name for channelsplit
+    layout_map = {2: "stereo", 3: "2.1", 4: "quad", 6: "5.1", 8: "7.1"}
+    layout_arg = layout_map.get(num_channels, f"{num_channels}c")
+
+    # Build channelsplit → per-channel showwavespic → overlay chain
+    split_outputs = "".join(f"[ch{i}]" for i in range(num_channels))
+    lines = [f"[0:a]channelsplit=channel_layout={layout_arg}{split_outputs};"]
+
+    for i in range(num_channels):
+        color = colors[i % len(colors)]
+        lines.append(
+            f"[ch{i}]showwavespic=s={width}x{height}:colors={color}@{opacity}:draw=full:scale=sqrt[w{i}];"
+        )
+
+    # Chain overlays: overlay w0 + w1 → t0, t0 + w2 → t1, ...
+    if num_channels == 2:
+        lines.append(f"[w0][w1]overlay=format=auto")
+    else:
+        lines.append(f"[w0][w1]overlay=format=auto[t0];")
+        for i in range(2, num_channels):
+            if i == num_channels - 1:
+                lines.append(f"[t{i - 2}][w{i}]overlay=format=auto")
+            else:
+                lines.append(f"[t{i - 2}][w{i}]overlay=format=auto[t{i - 1}];")
+
+    return "\n".join(lines)
+
+
+def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=None, progress_start=75, progress_end=79):
+    """
+    Generate a compact audio waveform image from a video file and return it
+    as a base64-encoded JPEG string.
+
+    Uses FFmpeg's ``showwavespic`` filter, which renders the entire audio
+    stream into a single image in one pass — no frame-by-frame extraction.
+    Automatically detects the number of audio channels and renders each
+    channel in a distinct color, layered on top of each other.
+
+    Args:
+        video_path (str): Path to the source video file.
+        width (int): Width of the output image in pixels.
+        height (int): Height of the output image in pixels.
+
+    Returns:
+        str or None: Base64-encoded JPEG data (no ``data:`` prefix), or None
+        on failure.
+    """
+    logger.info("Creating audio waveform spacer")
+    if signals:
+        signals.report_progress.emit(progress_start)
+    try:
+        duration = _get_video_duration(video_path)
+        if duration is None or duration <= 0:
+            logger.warning("Audio waveform: could not determine video duration — skipping")
+            return None
+
+        num_channels = _get_audio_channel_count(video_path)
+        if num_channels is None or num_channels <= 0:
+            logger.warning("Audio waveform: could not determine audio channel count — skipping")
+            return None
+
+        filter_complex = _build_waveform_filter(num_channels, width, height)
+
+        progress_range = progress_end - progress_start
+
+        with TemporaryDirectory() as tmpdir:
+            output_path = str(Path(tmpdir) / "waveform.jpg")
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-stats",
+                "-loglevel", "error",
+                "-i", video_path,
+                "-filter_complex",
+                filter_complex,
+                "-frames:v", "1",
+                "-q:v", "5",
+                output_path,
+            ]
+            # Use stderr for progress: -stats writes "size=...time=HH:MM:SS.xx..." lines
+            # showing how much input audio has been read, which updates incrementally
+            # even for single-output-frame filters like showwavespic
+            time_pattern = re.compile(r'time=\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+            last_pct = progress_start
+            stderr_lines = []
+            # Read stderr byte-by-byte looking for \r or \n delimited progress lines
+            buf = b''
+            while True:
+                byte = process.stderr.read(1)
+                if not byte:
+                    break
+                if byte in (b'\r', b'\n'):
+                    if buf:
+                        line = buf.decode('utf-8', errors='replace')
+                        buf = b''
+                        match = time_pattern.search(line)
+                        if match and signals:
+                            hours = float(match.group(1))
+                            minutes = float(match.group(2))
+                            seconds = float(match.group(3))
+                            current_seconds = hours * 3600 + minutes * 60 + seconds
+                            percent_complete = current_seconds / duration
+                            pct = progress_start + int(progress_range * min(1.0, max(0.0, percent_complete)))
+                            if pct > last_pct:
+                                signals.report_progress.emit(pct)
+                                last_pct = pct
+                        elif 'error' in line.lower() or 'warning' in line.lower():
+                            stderr_lines.append(line)
+                else:
+                    buf += byte
+            # Process any remaining buffer
+            if buf:
+                line = buf.decode('utf-8', errors='replace')
+                if 'error' in line.lower() or 'warning' in line.lower():
+                    stderr_lines.append(line)
+            process.wait()
+            if stderr_lines:
+                logger.warning(f"Audio waveform ffmpeg stderr: {'; '.join(stderr_lines)}")
+
+            if not os.path.isfile(output_path):
+                logger.warning("Audio waveform: ffmpeg produced no output — skipping")
+                return None
+
+            with open(output_path, "rb") as f:
+                b64 = b64encode(f.read()).decode("utf-8")
+
+        logger.info("Audio waveform spacer completed")
+        if signals:
+            signals.report_progress.emit(progress_end)
+        return b64
+
+    except Exception as e:
+        logger.warning(f"Audio waveform generation failed: {e}")
+        return None
 
 
 def find_qc_metadata(destination_directory):
@@ -724,6 +918,292 @@ def summarize_failures(failure_csv_path):  # Change parameter to accept CSV file
         summary_dict[timestamp].append(info)
 
     return summary_dict
+
+
+def make_audio_clipping_html(audio_clipping_csv):
+    """
+    Generates an HTML section summarizing audio clipping detection results.
+
+    Args:
+        audio_clipping_csv (str): Path to the audio clipping CSV file.
+
+    Returns:
+        str: HTML string with audio clipping results, or None if file cannot be read.
+    """
+    if not audio_clipping_csv or not os.path.isfile(audio_clipping_csv):
+        return None
+
+    try:
+        with open(audio_clipping_csv, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    except Exception as e:
+        logger.error(f"Error reading audio clipping CSV: {e}")
+        return None
+
+    if len(rows) < 8:
+        return None
+
+    # Parse summary rows
+    threshold = rows[1][1] if len(rows[1]) > 1 else "N/A"
+    total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
+    clipped_frames = rows[3][1] if len(rows[3]) > 1 else "N/A"
+    clipped_pct = rows[4][1] if len(rows[4]) > 1 else "N/A"
+    max_peak = rows[5][1] if len(rows[5]) > 1 else "N/A"
+    max_flat_factor = rows[6][1] if len(rows[6]) > 1 else "N/A"
+    clipping_detected = rows[7][1] if len(rows[7]) > 1 else "N/A"
+
+    if clipping_detected == "Yes":
+        status_color = "#dc3545"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+        status_text = "Audio Clipping Detected"
+    else:
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+        status_text = "No Audio Clipping Detected"
+
+    html = f'''
+    <a id="link_clipping_methodology" href="javascript:void(0);"
+       onclick="toggleContent('clipping_methodology', 'What is audio clipping detection? ▼', 'What is audio clipping detection? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is audio clipping detection? ▼</a>
+    <div id="clipping_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Audio clipping detection</strong> scans the audio frames of the QCTools report to
+            identify moments where the audio signal reaches or exceeds digital full scale, indicating
+            that the original analog signal may have been too hot during digitization.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Metrics used:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>Peak Level (dBFS)</strong> &mdash; the peak sample
+                value per audio frame, expressed in decibels relative to full scale. A value of 0.0 dBFS
+                means the signal has hit the absolute digital maximum. Frames with a peak level at or above
+                the configured threshold ({threshold} dBFS) are flagged as clipped.</li>
+            <li style="margin-bottom: 4px;"><strong>Flat Factor</strong> &mdash; measures how many
+                consecutive audio samples share the same value. When the signal clips, it is clamped at
+                the digital ceiling, producing runs of identical samples. A Flat Factor of 1&ndash;10 is
+                normal in any audio. Values above 100 at near-peak levels indicate sustained clipping where
+                the waveform is being flattened for extended periods.</li>
+        </ul>
+        <p style="margin: 0;">
+            Both metrics are derived from FFmpeg's <code>astats</code> filter as recorded in the QCTools
+            report. Peak Level identifies <em>whether</em> clipping occurred; Flat Factor indicates
+            <em>how severe</em> it is.
+        </p>
+    </div>
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Threshold (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{threshold}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Clipped Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{clipped_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Clipped Frames (%)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{clipped_pct}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Max Peak Level (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{max_peak}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Max Flat Factor</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{max_flat_factor}</td></tr>
+    </table>
+    '''
+
+    # Add clipping events table if there are any
+    clipping_events = [r for r in rows[9:] if len(r) >= 2]
+    if clipping_events:
+        html += f'''
+        <a href="javascript:void(0);" onclick="toggleContent('audio_clipping_events', 'Show clipping events ({len(clipping_events)}) ▼', 'Hide clipping events ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show clipping events ({len(clipping_events)}) ▼</a>
+        <div id="audio_clipping_events" style="display: none;">
+        <table style="border-collapse: collapse; margin: 10px 0;">
+            <tr><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Timestamp</th><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Peak Level (dBFS)</th><th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Flat Factor</th></tr>
+        '''
+        for event in clipping_events:
+            ff_val = event[2] if len(event) > 2 else "N/A"
+            html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;">{event[0]}</td><td style="padding: 4px 12px; border: 1px solid #ddd;">{event[1]}</td><td style="padding: 4px 12px; border: 1px solid #ddd;">{ff_val}</td></tr>\n'
+        html += '</table></div>\n'
+
+    return html
+
+
+def _imbalance_status_colors(characterization):
+    """Return (text_color, bg_color, border_color) for an imbalance characterization."""
+    if characterization in ("Balanced", "Mono (single channel)"):
+        return "#155724", "#d4edda", "#c3e6cb"
+    elif characterization in ("Slight imbalance",):
+        return "#856404", "#fff3cd", "#ffeeba"
+    elif characterization in ("Moderate imbalance",):
+        return "#856404", "#fff3cd", "#ffeeba"
+    else:
+        return "#721c24", "#f8d7da", "#f5c6cb"
+
+
+def make_channel_imbalance_html(channel_imbalance_csv):
+    """
+    Generates an HTML section summarizing channel imbalance analysis results.
+    Handles mono, stereo, and multi-channel CSV formats.
+
+    Args:
+        channel_imbalance_csv (str): Path to the channel imbalance CSV file.
+
+    Returns:
+        str: HTML string with channel imbalance results, or None if file cannot be read.
+    """
+    if not channel_imbalance_csv or not os.path.isfile(channel_imbalance_csv):
+        return None
+
+    try:
+        with open(channel_imbalance_csv, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    except Exception as e:
+        logger.error(f"Error reading channel imbalance CSV: {e}")
+        return None
+
+    if len(rows) < 3:
+        return None
+
+    # Build a lookup dict from the CSV rows for flexible parsing
+    csv_data = {}
+    for row in rows:
+        if len(row) >= 2:
+            csv_data[row[0]] = row[1]
+
+    total_frames = csv_data.get("Total Audio Frames", "N/A")
+    num_channels_str = csv_data.get("Number of Channels", "2")
+    try:
+        num_channels = int(num_channels_str)
+    except (ValueError, TypeError):
+        num_channels = 2
+    frames_analyzed = csv_data.get("Frames Analyzed", "N/A")
+    overall_characterization = csv_data.get("Overall Characterization", csv_data.get("Characterization", "N/A"))
+
+    # Collect per-channel mean RMS values
+    channel_means = {}
+    for key, val in csv_data.items():
+        match = re.match(r'Channel (\d+) Mean RMS \(dBFS\)', key)
+        if match:
+            channel_means[int(match.group(1))] = val
+
+    silent_channels = csv_data.get("Silent Channels", "")
+
+    status_color, status_bg, status_border = _imbalance_status_colors(overall_characterization)
+    status_text = overall_characterization
+
+    # For stereo, add louder channel info
+    louder_channel = csv_data.get("Louder Channel")
+    if louder_channel and louder_channel != "Neither":
+        status_text += f" ({louder_channel} is louder)"
+
+    if silent_channels:
+        status_text += f" — silent channel(s) detected: {silent_channels}"
+
+    # Methodology description adapts to channel count
+    if num_channels == 1:
+        methodology_text = """
+            <strong>Channel imbalance analysis</strong> reports the average loudness of each audio channel
+            across the entire audio program. This file has a single audio channel (mono), so no
+            inter-channel comparison is performed.
+        """
+    else:
+        methodology_text = """
+            <strong>Channel imbalance analysis</strong> compares the average loudness of each audio channel
+            across the entire audio program to characterize any level differences between channels.
+        """
+
+    html = f'''
+    <a id="link_imbalance_methodology" href="javascript:void(0);"
+       onclick="toggleContent('imbalance_methodology', 'What is channel imbalance analysis? ▼', 'What is channel imbalance analysis? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is channel imbalance analysis? ▼</a>
+    <div id="imbalance_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            {methodology_text}
+        </p>
+        <p style="margin: 0 0 10px 0;">
+            The analysis uses the <strong>RMS level</strong> (Root Mean Square, in dBFS) from each channel,
+            as recorded per audio frame by FFmpeg's <code>astats</code> filter in the QCTools report. The
+            mean RMS for each channel is computed across all audio frames, and the difference between each
+            pair of channels is reported in decibels.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Characterization:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>Balanced</strong> &mdash; less than 1 dB difference between channels.</li>
+            <li style="margin-bottom: 4px;"><strong>Slight imbalance</strong> &mdash; 1&ndash;3 dB difference. Common with analog sources and generally not a concern.</li>
+            <li style="margin-bottom: 4px;"><strong>Moderate imbalance</strong> &mdash; 3&ndash;6 dB difference. May indicate a level calibration issue with the playback or capture equipment.</li>
+            <li style="margin-bottom: 4px;"><strong>Significant imbalance</strong> &mdash; greater than 6 dB difference. Could indicate a hardware fault, bad cable, or a mono source recorded to only one channel.</li>
+        </ul>
+        <p style="margin: 0;">
+            It is not uncommon for one channel to be somewhat louder than the other on analog source
+            material. This analysis is informational &mdash; it characterizes the file rather than
+            flagging an error.
+        </p>
+    </div>
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Number of Channels</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{num_channels}</td></tr>
+    '''
+
+    if num_channels > 1:
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Frames Analyzed</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{frames_analyzed}</td></tr>\n'
+
+    for ch in sorted(channel_means.keys()):
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Channel {ch} Mean RMS (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{channel_means[ch]}</td></tr>\n'
+
+    if silent_channels:
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Silent Channels</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd; color: #dc3545;"><strong>{silent_channels}</strong></td></tr>\n'
+
+    # For stereo, show simple difference and louder channel
+    if num_channels == 2:
+        mean_diff = csv_data.get("Mean Difference (dB)", "N/A")
+        louder = csv_data.get("Louder Channel", "N/A")
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Mean Difference (dB)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{mean_diff}</td></tr>\n'
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Louder Channel</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{louder}</td></tr>\n'
+
+    html += '</table>\n'
+
+    # For >2 channels, add pairwise comparison table
+    if num_channels > 2:
+        # Find pairwise rows in CSV (look for "Pairwise Comparisons" header followed by data rows)
+        pairwise_rows = []
+        in_pairwise = False
+        for row in rows:
+            if len(row) >= 1 and row[0] == "Pairwise Comparisons":
+                in_pairwise = True
+                continue
+            if in_pairwise:
+                if len(row) >= 5 and row[0].startswith("Channel"):
+                    pairwise_rows.append(row)
+                elif len(row) >= 5 and row[0] == "Channel A":
+                    continue  # skip header row
+                elif len(row) == 0 or (len(row) == 1 and row[0] == ""):
+                    break  # end of pairwise section
+
+        if pairwise_rows:
+            html += '''
+            <h4 style="margin-top: 16px;">Pairwise Comparisons</h4>
+            <table style="border-collapse: collapse; margin: 10px 0;">
+                <tr>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel A</th>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel B</th>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Mean Diff (dB)</th>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Characterization</th>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Louder Channel</th>
+                </tr>
+            '''
+            for row in pairwise_rows:
+                html += f'''<tr>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[0]}</td>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[1]}</td>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[2]}</td>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[3]}</td>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[4]}</td>
+                </tr>\n'''
+            html += '</table>\n'
+
+    return html
 
 
 def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict):
@@ -2422,7 +2902,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
         return
@@ -2597,11 +3077,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     else:
         tags_summary_html = None
 
+    audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
+    channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
+
     existing_thumbs = find_qct_thumbs(report_directory)
     no_qct_parse_files = (
-        not profile_fails_csv and 
-        not tag_fails_csv and 
-        not colorbars_eval_fails_csv and 
+        not profile_fails_csv and
+        not tag_fails_csv and
+        not colorbars_eval_fails_csv and
+        not audio_clipping_csv and
+        not channel_imbalance_csv and
         not existing_thumbs
     )
 
@@ -2649,6 +3134,43 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         )
         color_strip_divider = color_strip_store
         color_strip_init_script = ""
+
+    # Generate audio waveform
+    waveform_b64 = None
+    if video_path:
+        waveform_b64 = generate_audio_waveform_base64(video_path, signals=signals, progress_start=75, progress_end=79)
+
+    if waveform_b64:
+        # Note: Using class "waveform-data-store" to target via JS
+        waveform_store = (
+            f'<img class="waveform-data-store" src="data:image/jpeg;base64,{waveform_b64}" '
+            f'style="display: none;">'
+        )
+        
+        # Divider: The placeholder that will be cloned by the script
+        waveform_divider = (
+            '<div style="margin: 20px 0; text-align: center;">'
+            '<img class="waveform-clone" style="width: 100%; height: auto; border: 1px solid #378d6a;">'
+            '</div>'
+        )
+        
+        # JavaScript: Finds all clones and populates them with the source data
+        waveform_init_script = """
+        <script>
+        (function() {
+            var src = document.querySelector('.waveform-data-store').src;
+            var clones = document.querySelectorAll('.waveform-clone');
+            for (var i = 0; i < clones.length; i++) {
+                clones[i].src = src;
+            }
+        })();
+        </script>"""
+    else:
+        # Fallback: If generation fails, use the static logo as a divider (similar to eq_image_path)
+        eq_image_path = config_mgr.get_logo_path('germfree_eq.png') # Reusing your existing fallback
+        waveform_store = f'<img src="{eq_image_path}" alt="AV Spex Logo" style="width: 10%; display: none;">'
+        waveform_divider = f'<div style="text-align: center;"><img src="{eq_image_path}" style="width: 10%;"></div>'
+        waveform_init_script = ""
 
     # HTML template with JavaScript functions
     html_template = f"""
@@ -2782,6 +3304,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h1>AV Spex Report</h1>
         <h2>{video_id}</h2>
         {color_strip_store}
+        {waveform_store}
     """
 
     if check_cancelled():
@@ -2838,6 +3361,20 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h3>{eval_header}</h3>
         {colorbars_eval_html}
         """
+
+    if audio_clipping_html:
+        html_template += waveform_divider
+        html_template += f"""
+        <h3>Audio Clipping Detection</h3>
+        {audio_clipping_html}
+        """
+
+    if channel_imbalance_html:
+        html_template += f"""
+        <h3>Channel Imbalance Analysis</h3>
+        {channel_imbalance_html}
+        """
+        html_template += waveform_divider
 
     if difference_csv:
         html_template += f"""
@@ -2896,6 +3433,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         return
 
     html_template += color_strip_init_script
+    html_template += waveform_init_script   
     html_template += """
     </body>
     </html>

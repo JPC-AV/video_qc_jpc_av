@@ -667,7 +667,8 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
         kbeyond[k] = 0
 
     # Progress emission setup: emit every ~1000 frames to avoid overhead
-    # Maps frameCount against total_frames_estimate into the 15→95% range
+    # Maps frameCount against total_frames_estimate into the 20→88% range
+    # (reserves 88-98% for audio analysis)
     progress_emit_interval = 1000
     last_progress_pct = 0
 
@@ -684,10 +685,10 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
                 frame_pkt_dts_time = elem.attrib[pkt] 	#get the timestamps for the current frame we're looking at
                 
                 # Emit progress periodically
-                if (signals and hasattr(signals, 'qctparse_progress') and 
+                if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and frameCount % progress_emit_interval == 0):
-                    pct = 20 + int((float(frame_pkt_dts_time) / total_duration) * 75)
-                    pct = min(95, max(20, pct))
+                    pct = 20 + int((float(frame_pkt_dts_time) / total_duration) * 68)
+                    pct = min(88, max(20, pct))
                     if pct > last_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         last_progress_pct = pct
@@ -1048,6 +1049,334 @@ def detectBitdepth(startObj,pkt,framesList,buffSize):
     return bit_depth_10
 
 
+AUDIO_CLIPPING_THRESHOLD_DB = -0.5
+SILENCE_THRESHOLD_DB = -60.0
+
+
+def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, signals=None, total_duration=None):
+    """
+    Analyzes audio frames in a QCTools report in a single pass. Optionally detects
+    audio clipping (Peak_level >= threshold) and/or channel imbalance (comparing
+    per-channel RMS_level values).
+
+    Parameters:
+        startObj (str): Path to the QCTools report file (.qctools.xml.gz)
+        pkt (str): The attribute key used to extract timestamps (pkt_dts_time or pkt_pts_time).
+        report_directory (str): Path to {video_id}_report_csvs directory for CSV output.
+        detect_clipping (bool): Whether to run audio clipping detection.
+        detect_imbalance (bool): Whether to run channel imbalance detection.
+        signals: Optional signals object for emitting progress updates.
+        total_duration (float or None): Total video duration in seconds for progress reporting.
+
+    Returns:
+        tuple: (clipping_results, imbalance_results)
+            Each is a dict with analysis results, or None if that analysis was
+            not requested or no audio frames were found.
+    """
+    etree = load_etree()
+    if etree is None:
+        return None, None
+
+    parser_iter = safe_gzip_iterparse(startObj, etree)
+    if parser_iter is None:
+        logger.error(f"Failed to parse {startObj} for audio analysis")
+        return None, None
+
+    total_audio_frames = 0
+
+    # Progress emission setup: maps into the 90→98% range of qctparse_progress
+    audio_progress_interval = 500
+    last_audio_progress_pct = 90
+
+    # Clipping state
+    clipping_events = []
+    clipped_frames = 0
+    max_peak_level = None
+    max_flat_factor = None
+
+    # Channel imbalance state — dict keyed by channel number (int), values are lists of RMS levels
+    channel_rms_values = {}
+
+    try:
+        for event, elem in parser_iter:
+            if elem.attrib.get('media_type') == "audio":
+                total_audio_frames += 1
+                frame_pkt_dts_time = elem.attrib.get(pkt, "0")
+
+                # Emit incremental progress during audio analysis (90→98% range)
+                if (signals and hasattr(signals, 'qctparse_progress') and
+                    total_duration and total_audio_frames % audio_progress_interval == 0):
+                    pct = 90 + int((float(frame_pkt_dts_time) / total_duration) * 8)
+                    pct = min(98, max(90, pct))
+                    if pct > last_audio_progress_pct:
+                        signals.qctparse_progress.emit(pct)
+                        last_audio_progress_pct = pct
+
+                # Parse audio frame attributes in one loop
+                peak_level = None
+                flat_factor = None
+                frame_channel_rms = {}
+
+                for t in list(elem):
+                    key = t.attrib.get('key', '')
+                    try:
+                        val = float(t.attrib['value'])
+                    except (ValueError, KeyError):
+                        continue
+
+                    if detect_clipping:
+                        if key.endswith('.Peak_level') and 'Overall' in key:
+                            peak_level = val
+                        elif key.endswith('.Flat_factor') and 'Overall' in key:
+                            flat_factor = val
+
+                    if detect_imbalance:
+                        # Match lavfi.astats.N.RMS_level for any channel number N
+                        if key.endswith('.RMS_level') and 'Overall' not in key:
+                            match = re.search(r'\.(\d+)\.RMS_level$', key)
+                            if match:
+                                ch_num = int(match.group(1))
+                                frame_channel_rms[ch_num] = val
+
+                # Clipping analysis
+                if detect_clipping and peak_level is not None:
+                    if max_peak_level is None or peak_level > max_peak_level:
+                        max_peak_level = peak_level
+                    if flat_factor is not None and (max_flat_factor is None or flat_factor > max_flat_factor):
+                        max_flat_factor = flat_factor
+
+                    if peak_level >= AUDIO_CLIPPING_THRESHOLD_DB:
+                        clipped_frames += 1
+                        timeStampString = dts2ts(frame_pkt_dts_time)
+                        clipping_events.append({
+                            'timestamp': timeStampString,
+                            'timestamp_seconds': float(frame_pkt_dts_time),
+                            'peak_level': peak_level,
+                            'flat_factor': flat_factor
+                        })
+
+                # Channel imbalance collection
+                if detect_imbalance:
+                    for ch_num, rms_val in frame_channel_rms.items():
+                        if ch_num not in channel_rms_values:
+                            channel_rms_values[ch_num] = []
+                        channel_rms_values[ch_num].append(rms_val)
+
+            elem.clear()
+    except Exception as e:
+        logger.error(f"Error during audio analysis: {e}")
+
+    if total_audio_frames == 0:
+        logger.warning("No audio frames found in QCTools report for audio analysis\n")
+        return None, None
+
+    # Build clipping results
+    clipping_results = None
+    if detect_clipping:
+        clipping_results = _write_clipping_results(
+            report_directory, total_audio_frames, clipped_frames,
+            max_peak_level, max_flat_factor, clipping_events
+        )
+
+    # Build channel imbalance results
+    imbalance_results = None
+    if detect_imbalance:
+        imbalance_results = _write_imbalance_results(
+            report_directory, total_audio_frames, channel_rms_values
+        )
+
+    return clipping_results, imbalance_results
+
+
+def _write_clipping_results(report_directory, total_audio_frames, clipped_frames, max_peak_level, max_flat_factor, clipping_events):
+    """Write audio clipping detection results to CSV and log summary."""
+    clipping_detected = clipped_frames > 0
+    pct = (clipped_frames / total_audio_frames) * 100 if total_audio_frames > 0 else 0
+
+    results = {
+        'clipping_detected': clipping_detected,
+        'clipping_events': clipping_events,
+        'total_audio_frames': total_audio_frames,
+        'clipped_frames': clipped_frames,
+        'max_peak_level': max_peak_level if max_peak_level is not None else 0.0,
+        'max_flat_factor': max_flat_factor if max_flat_factor is not None else 0.0,
+        'threshold_db': AUDIO_CLIPPING_THRESHOLD_DB
+    }
+
+    audio_clipping_csv = os.path.join(report_directory, "qct-parse_audio_clipping.csv")
+    with open(audio_clipping_csv, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Audio Clipping Detection Results"])
+        writer.writerow(["Threshold (dBFS)", AUDIO_CLIPPING_THRESHOLD_DB])
+        writer.writerow(["Total Audio Frames", total_audio_frames])
+        writer.writerow(["Clipped Frames", clipped_frames])
+        writer.writerow(["Clipped Frames (%)", f"{pct:.2f}"])
+        writer.writerow(["Max Peak Level (dBFS)", f"{max_peak_level:.1f}" if max_peak_level is not None else "N/A"])
+        writer.writerow(["Max Flat Factor", f"{max_flat_factor:.0f}" if max_flat_factor is not None else "N/A"])
+        writer.writerow(["Clipping Detected", "Yes" if clipping_detected else "No"])
+        writer.writerow([])
+
+        if clipping_events:
+            writer.writerow(["Timestamp", "Peak Level (dBFS)", "Flat Factor"])
+            for event in clipping_events:
+                ff = event.get('flat_factor')
+                ff_str = f"{ff:.0f}" if ff is not None else "N/A"
+                writer.writerow([event['timestamp'], f"{event['peak_level']:.1f}", ff_str])
+
+    if clipping_detected:
+        logger.warning(f"Audio clipping detected: {clipped_frames} frames ({pct:.2f}%) exceeded {AUDIO_CLIPPING_THRESHOLD_DB} dBFS threshold. Max peak: {max_peak_level:.1f} dBFS\n")
+    else:
+        logger.debug(f"No audio clipping detected. Max peak level: {max_peak_level:.1f} dBFS\n")
+
+    return results
+
+
+def _characterize_imbalance(abs_diff):
+    """Return a human-readable characterization for a given absolute dB difference."""
+    if abs_diff < 1.0:
+        return "Balanced"
+    elif abs_diff < 3.0:
+        return "Slight imbalance"
+    elif abs_diff < 6.0:
+        return "Moderate imbalance"
+    else:
+        return "Significant imbalance"
+
+
+def _write_imbalance_results(report_directory, total_audio_frames, channel_rms_values):
+    """Compute channel imbalance from per-channel RMS levels and write results to CSV.
+
+    Args:
+        report_directory (str): Path to report CSV directory.
+        total_audio_frames (int): Total audio frames encountered.
+        channel_rms_values (dict): {channel_num: [rms_values...]} for each channel found.
+    """
+    num_channels = len(channel_rms_values)
+
+    if num_channels == 0:
+        logger.warning("No per-channel RMS level data found in QCTools report for channel imbalance analysis\n")
+        return None
+
+    sorted_channels = sorted(channel_rms_values.keys())
+
+    if num_channels == 1:
+        # Mono — no imbalance to compute, but report the single channel's mean RMS
+        ch = sorted_channels[0]
+        vals = channel_rms_values[ch]
+        mean_rms = sum(vals) / len(vals)
+        results = {
+            'total_audio_frames': total_audio_frames,
+            'num_channels': 1,
+            'channel_means': {ch: mean_rms},
+            'pairwise': [],
+            'overall_characterization': "Mono (single channel)",
+        }
+        imbalance_csv = os.path.join(report_directory, "qct-parse_channel_imbalance.csv")
+        with open(imbalance_csv, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Channel Imbalance Analysis Results"])
+            writer.writerow(["Total Audio Frames", total_audio_frames])
+            writer.writerow(["Number of Channels", 1])
+            writer.writerow([f"Channel {ch} Mean RMS (dBFS)", f"{mean_rms:.1f}"])
+            writer.writerow(["Overall Characterization", "Mono (single channel)"])
+        logger.debug(f"Channel imbalance analysis: Mono — single channel detected (Ch{ch}: {mean_rms:.1f} dBFS)\n")
+        return results
+
+    # Multi-channel: compute per-channel means and pairwise comparisons
+    frames_with_all = min(len(channel_rms_values[ch]) for ch in sorted_channels)
+    if frames_with_all == 0:
+        logger.warning("No per-channel RMS level data found in QCTools report for channel imbalance analysis\n")
+        return None
+
+    channel_means = {}
+    for ch in sorted_channels:
+        vals = channel_rms_values[ch][:frames_with_all]
+        channel_means[ch] = sum(vals) / len(vals)
+
+    # Pairwise comparisons between all channel pairs
+    pairwise = []
+    for i, ch_a in enumerate(sorted_channels):
+        for ch_b in sorted_channels[i + 1:]:
+            mean_diff = channel_means[ch_a] - channel_means[ch_b]
+            abs_diff = abs(mean_diff)
+            characterization = _characterize_imbalance(abs_diff)
+            if abs_diff >= 1.0:
+                louder = f"Channel {ch_a}" if mean_diff > 0 else f"Channel {ch_b}"
+            else:
+                louder = "Neither"
+            pairwise.append({
+                'channel_a': ch_a,
+                'channel_b': ch_b,
+                'mean_difference_db': mean_diff,
+                'abs_mean_difference_db': abs_diff,
+                'characterization': characterization,
+                'louder_channel': louder,
+            })
+
+    # Overall characterization: worst pairwise result
+    worst = max(pairwise, key=lambda p: p['abs_mean_difference_db'])
+    overall_characterization = worst['characterization']
+
+    # Silent channel detection — only when significant imbalance is found
+    silent_channels = []
+    if overall_characterization == "Significant imbalance":
+        for ch in sorted_channels:
+            mean_rms = channel_means[ch]
+            if mean_rms == float('-inf') or mean_rms < SILENCE_THRESHOLD_DB:
+                silent_channels.append(ch)
+
+    results = {
+        'total_audio_frames': total_audio_frames,
+        'num_channels': num_channels,
+        'frames_analyzed': frames_with_all,
+        'channel_means': channel_means,
+        'pairwise': pairwise,
+        'overall_characterization': overall_characterization,
+        'silent_channels': silent_channels,
+    }
+
+    # Write CSV
+    imbalance_csv = os.path.join(report_directory, "qct-parse_channel_imbalance.csv")
+    with open(imbalance_csv, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Channel Imbalance Analysis Results"])
+        writer.writerow(["Total Audio Frames", total_audio_frames])
+        writer.writerow(["Number of Channels", num_channels])
+        writer.writerow(["Frames Analyzed", frames_with_all])
+        for ch in sorted_channels:
+            writer.writerow([f"Channel {ch} Mean RMS (dBFS)", f"{channel_means[ch]:.1f}"])
+        writer.writerow([])
+        if num_channels == 2:
+            # For stereo, keep a simple summary like before
+            p = pairwise[0]
+            writer.writerow(["Mean Difference (dB)", f"{p['mean_difference_db']:+.1f}"])
+            writer.writerow(["Characterization", p['characterization']])
+            writer.writerow(["Louder Channel", p['louder_channel']])
+        else:
+            # For >2 channels, write pairwise comparison table
+            writer.writerow(["Pairwise Comparisons"])
+            writer.writerow(["Channel A", "Channel B", "Mean Difference (dB)", "Characterization", "Louder Channel"])
+            for p in pairwise:
+                writer.writerow([
+                    f"Channel {p['channel_a']}", f"Channel {p['channel_b']}",
+                    f"{p['mean_difference_db']:+.1f}", p['characterization'], p['louder_channel']
+                ])
+        writer.writerow([])
+        writer.writerow(["Overall Characterization", overall_characterization])
+        if silent_channels:
+            writer.writerow(["Silent Channels", ", ".join(f"Channel {ch}" for ch in silent_channels)])
+
+    # Log summary
+    ch_summary = ", ".join(f"Ch{ch}: {channel_means[ch]:.1f} dBFS" for ch in sorted_channels)
+    if silent_channels:
+        silent_str = ", ".join(f"Ch{ch}" for ch in silent_channels)
+        logger.warning(f"Channel imbalance analysis: {overall_characterization} — silent channel(s) detected: {silent_str} ({ch_summary})\n")
+    else:
+        logger.debug(f"Channel imbalance analysis: {overall_characterization} ({ch_summary})\n")
+
+    return results
+
+
 def _get_video_duration(video_path):
     """Get video duration in seconds using ffprobe.
     
@@ -1249,6 +1578,25 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             qctools_bars_eval_check_output = os.path.join(report_directory, "qct-parse_colorbars_eval_summary.csv")
             printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_bars_eval_check_output)
             logger.debug(f"qct-parse bars evaluation complete. qct-parse summary written to {qctools_bars_eval_check_output}\n")
+
+    if check_cancelled():
+        return None
+
+    ######## Audio Analysis (Clipping Detection / Channel Imbalance) ########
+    do_clipping = qct_parse.get('detect_audio_clipping', False)
+    do_imbalance = qct_parse.get('detect_channel_imbalance', False)
+    if do_clipping or do_imbalance:
+        logger.debug(f"Starting audio analysis on {baseName}\n")
+        clipping_results, imbalance_results = analyzeAudio(
+            startObj, pkt, report_directory,
+            detect_clipping=do_clipping,
+            detect_imbalance=do_imbalance,
+            signals=signals, total_duration=total_duration
+        )
+        if do_clipping and clipping_results is None:
+            logger.warning("Audio clipping detection could not be performed\n")
+        if do_imbalance and imbalance_results is None:
+            logger.warning("Channel imbalance analysis could not be performed\n")
 
     if check_cancelled():
         return None
