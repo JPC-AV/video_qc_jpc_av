@@ -1093,9 +1093,8 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     max_peak_level = None
     max_flat_factor = None
 
-    # Channel imbalance state
-    ch1_rms_values = []
-    ch2_rms_values = []
+    # Channel imbalance state — dict keyed by channel number (int), values are lists of RMS levels
+    channel_rms_values = {}
 
     try:
         for event, elem in parser_iter:
@@ -1115,8 +1114,7 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                 # Parse audio frame attributes in one loop
                 peak_level = None
                 flat_factor = None
-                ch1_rms = None
-                ch2_rms = None
+                frame_channel_rms = {}
 
                 for t in list(elem):
                     key = t.attrib.get('key', '')
@@ -1132,12 +1130,12 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                             flat_factor = val
 
                     if detect_imbalance:
-                        # lavfi.astats.1.RMS_level and lavfi.astats.2.RMS_level
-                        if key.endswith('.RMS_level'):
-                            if '.1.' in key:
-                                ch1_rms = val
-                            elif '.2.' in key:
-                                ch2_rms = val
+                        # Match lavfi.astats.N.RMS_level for any channel number N
+                        if key.endswith('.RMS_level') and 'Overall' not in key:
+                            match = re.search(r'\.(\d+)\.RMS_level$', key)
+                            if match:
+                                ch_num = int(match.group(1))
+                                frame_channel_rms[ch_num] = val
 
                 # Clipping analysis
                 if detect_clipping and peak_level is not None:
@@ -1158,10 +1156,10 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
 
                 # Channel imbalance collection
                 if detect_imbalance:
-                    if ch1_rms is not None:
-                        ch1_rms_values.append(ch1_rms)
-                    if ch2_rms is not None:
-                        ch2_rms_values.append(ch2_rms)
+                    for ch_num, rms_val in frame_channel_rms.items():
+                        if ch_num not in channel_rms_values:
+                            channel_rms_values[ch_num] = []
+                        channel_rms_values[ch_num].append(rms_val)
 
             elem.clear()
     except Exception as e:
@@ -1183,7 +1181,7 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     imbalance_results = None
     if detect_imbalance:
         imbalance_results = _write_imbalance_results(
-            report_directory, total_audio_frames, ch1_rms_values, ch2_rms_values
+            report_directory, total_audio_frames, channel_rms_values
         )
 
     return clipping_results, imbalance_results
@@ -1232,61 +1230,133 @@ def _write_clipping_results(report_directory, total_audio_frames, clipped_frames
     return results
 
 
-def _write_imbalance_results(report_directory, total_audio_frames, ch1_rms_values, ch2_rms_values):
-    """Compute channel imbalance from per-channel RMS levels and write results to CSV."""
-    frames_with_both = min(len(ch1_rms_values), len(ch2_rms_values))
+def _characterize_imbalance(abs_diff):
+    """Return a human-readable characterization for a given absolute dB difference."""
+    if abs_diff < 1.0:
+        return "Balanced"
+    elif abs_diff < 3.0:
+        return "Slight imbalance"
+    elif abs_diff < 6.0:
+        return "Moderate imbalance"
+    else:
+        return "Significant imbalance"
 
-    if frames_with_both == 0:
+
+def _write_imbalance_results(report_directory, total_audio_frames, channel_rms_values):
+    """Compute channel imbalance from per-channel RMS levels and write results to CSV.
+
+    Args:
+        report_directory (str): Path to report CSV directory.
+        total_audio_frames (int): Total audio frames encountered.
+        channel_rms_values (dict): {channel_num: [rms_values...]} for each channel found.
+    """
+    num_channels = len(channel_rms_values)
+
+    if num_channels == 0:
         logger.warning("No per-channel RMS level data found in QCTools report for channel imbalance analysis\n")
         return None
 
-    # Compute per-frame difference (ch1 - ch2) in dB, then overall mean
-    differences = [ch1_rms_values[i] - ch2_rms_values[i] for i in range(frames_with_both)]
-    mean_diff = sum(differences) / len(differences)
-    abs_mean_diff = abs(mean_diff)
+    sorted_channels = sorted(channel_rms_values.keys())
 
-    ch1_mean_rms = sum(ch1_rms_values[:frames_with_both]) / frames_with_both
-    ch2_mean_rms = sum(ch2_rms_values[:frames_with_both]) / frames_with_both
+    if num_channels == 1:
+        # Mono — no imbalance to compute, but report the single channel's mean RMS
+        ch = sorted_channels[0]
+        vals = channel_rms_values[ch]
+        mean_rms = sum(vals) / len(vals)
+        results = {
+            'total_audio_frames': total_audio_frames,
+            'num_channels': 1,
+            'channel_means': {ch: mean_rms},
+            'pairwise': [],
+            'overall_characterization': "Mono (single channel)",
+        }
+        imbalance_csv = os.path.join(report_directory, "qct-parse_channel_imbalance.csv")
+        with open(imbalance_csv, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Channel Imbalance Analysis Results"])
+            writer.writerow(["Total Audio Frames", total_audio_frames])
+            writer.writerow(["Number of Channels", 1])
+            writer.writerow([f"Channel {ch} Mean RMS (dBFS)", f"{mean_rms:.1f}"])
+            writer.writerow(["Overall Characterization", "Mono (single channel)"])
+        logger.debug(f"Channel imbalance analysis: Mono — single channel detected (Ch{ch}: {mean_rms:.1f} dBFS)\n")
+        return results
 
-    # Characterize the imbalance
-    if abs_mean_diff < 1.0:
-        characterization = "Balanced"
-    elif abs_mean_diff < 3.0:
-        characterization = "Slight imbalance"
-    elif abs_mean_diff < 6.0:
-        characterization = "Moderate imbalance"
-    else:
-        characterization = "Significant imbalance"
+    # Multi-channel: compute per-channel means and pairwise comparisons
+    frames_with_all = min(len(channel_rms_values[ch]) for ch in sorted_channels)
+    if frames_with_all == 0:
+        logger.warning("No per-channel RMS level data found in QCTools report for channel imbalance analysis\n")
+        return None
 
-    if abs_mean_diff >= 1.0:
-        louder_channel = "Channel 1" if mean_diff > 0 else "Channel 2"
-    else:
-        louder_channel = "Neither"
+    channel_means = {}
+    for ch in sorted_channels:
+        vals = channel_rms_values[ch][:frames_with_all]
+        channel_means[ch] = sum(vals) / len(vals)
+
+    # Pairwise comparisons between all channel pairs
+    pairwise = []
+    for i, ch_a in enumerate(sorted_channels):
+        for ch_b in sorted_channels[i + 1:]:
+            mean_diff = channel_means[ch_a] - channel_means[ch_b]
+            abs_diff = abs(mean_diff)
+            characterization = _characterize_imbalance(abs_diff)
+            if abs_diff >= 1.0:
+                louder = f"Channel {ch_a}" if mean_diff > 0 else f"Channel {ch_b}"
+            else:
+                louder = "Neither"
+            pairwise.append({
+                'channel_a': ch_a,
+                'channel_b': ch_b,
+                'mean_difference_db': mean_diff,
+                'abs_mean_difference_db': abs_diff,
+                'characterization': characterization,
+                'louder_channel': louder,
+            })
+
+    # Overall characterization: worst pairwise result
+    worst = max(pairwise, key=lambda p: p['abs_mean_difference_db'])
+    overall_characterization = worst['characterization']
 
     results = {
         'total_audio_frames': total_audio_frames,
-        'frames_analyzed': frames_with_both,
-        'ch1_mean_rms': ch1_mean_rms,
-        'ch2_mean_rms': ch2_mean_rms,
-        'mean_difference_db': mean_diff,
-        'abs_mean_difference_db': abs_mean_diff,
-        'characterization': characterization,
-        'louder_channel': louder_channel,
+        'num_channels': num_channels,
+        'frames_analyzed': frames_with_all,
+        'channel_means': channel_means,
+        'pairwise': pairwise,
+        'overall_characterization': overall_characterization,
     }
 
+    # Write CSV
     imbalance_csv = os.path.join(report_directory, "qct-parse_channel_imbalance.csv")
     with open(imbalance_csv, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["Channel Imbalance Analysis Results"])
         writer.writerow(["Total Audio Frames", total_audio_frames])
-        writer.writerow(["Frames Analyzed", frames_with_both])
-        writer.writerow(["Channel 1 Mean RMS (dBFS)", f"{ch1_mean_rms:.1f}"])
-        writer.writerow(["Channel 2 Mean RMS (dBFS)", f"{ch2_mean_rms:.1f}"])
-        writer.writerow(["Mean Difference (dB)", f"{mean_diff:+.1f}"])
-        writer.writerow(["Characterization", characterization])
-        writer.writerow(["Louder Channel", louder_channel])
+        writer.writerow(["Number of Channels", num_channels])
+        writer.writerow(["Frames Analyzed", frames_with_all])
+        for ch in sorted_channels:
+            writer.writerow([f"Channel {ch} Mean RMS (dBFS)", f"{channel_means[ch]:.1f}"])
+        writer.writerow([])
+        if num_channels == 2:
+            # For stereo, keep a simple summary like before
+            p = pairwise[0]
+            writer.writerow(["Mean Difference (dB)", f"{p['mean_difference_db']:+.1f}"])
+            writer.writerow(["Characterization", p['characterization']])
+            writer.writerow(["Louder Channel", p['louder_channel']])
+        else:
+            # For >2 channels, write pairwise comparison table
+            writer.writerow(["Pairwise Comparisons"])
+            writer.writerow(["Channel A", "Channel B", "Mean Difference (dB)", "Characterization", "Louder Channel"])
+            for p in pairwise:
+                writer.writerow([
+                    f"Channel {p['channel_a']}", f"Channel {p['channel_b']}",
+                    f"{p['mean_difference_db']:+.1f}", p['characterization'], p['louder_channel']
+                ])
+        writer.writerow([])
+        writer.writerow(["Overall Characterization", overall_characterization])
 
-    logger.debug(f"Channel imbalance analysis: {characterization} (Ch1: {ch1_mean_rms:.1f} dBFS, Ch2: {ch2_mean_rms:.1f} dBFS, diff: {mean_diff:+.1f} dB)\n")
+    # Log summary
+    ch_summary = ", ".join(f"Ch{ch}: {channel_means[ch]:.1f} dBFS" for ch in sorted_channels)
+    logger.debug(f"Channel imbalance analysis: {overall_characterization} ({ch_summary})\n")
 
     return results
 

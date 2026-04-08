@@ -506,6 +506,87 @@ def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max
         return None
 
 
+def _get_audio_channel_count(video_path):
+    """Get the number of audio channels in the first audio stream using ffprobe.
+
+    Returns:
+        int or None: Number of channels, or None if unavailable.
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries", "stream=channels",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return int(result.stdout.strip())
+    except Exception as e:
+        logger.warning(f"Could not probe audio channel count: {e}")
+        return None
+
+
+# Colors assigned per channel for waveform visualization
+_WAVEFORM_CHANNEL_COLORS = [
+    "#378d6a",  # green (channel 1 / left)
+    "#bf971b",  # gold (channel 2 / right)
+    "#5b8abf",  # blue (channel 3)
+    "#c45a3c",  # red-orange (channel 4)
+    "#8e6bbf",  # purple (channel 5)
+    "#bf6b8e",  # pink (channel 6)
+    "#6bbfb5",  # teal (channel 7)
+    "#bfad6b",  # tan (channel 8)
+]
+
+
+def _build_waveform_filter(num_channels, width, height):
+    """Build an FFmpeg filter_complex string for N-channel waveform overlay.
+
+    Args:
+        num_channels (int): Number of audio channels.
+        width (int): Image width.
+        height (int): Image height.
+
+    Returns:
+        str: filter_complex string for FFmpeg.
+    """
+    colors = _WAVEFORM_CHANNEL_COLORS
+    opacity = 0.6
+
+    if num_channels == 1:
+        # Mono — single waveform, no split needed
+        return f"[0:a]showwavespic=s={width}x{height}:colors={colors[0]}@{opacity}:draw=full:scale=sqrt"
+
+    # Map channel count to a standard FFmpeg layout name for channelsplit
+    layout_map = {2: "stereo", 3: "2.1", 4: "quad", 6: "5.1", 8: "7.1"}
+    layout_arg = layout_map.get(num_channels, f"{num_channels}c")
+
+    # Build channelsplit → per-channel showwavespic → overlay chain
+    split_outputs = "".join(f"[ch{i}]" for i in range(num_channels))
+    lines = [f"[0:a]channelsplit=channel_layout={layout_arg}{split_outputs};"]
+
+    for i in range(num_channels):
+        color = colors[i % len(colors)]
+        lines.append(
+            f"[ch{i}]showwavespic=s={width}x{height}:colors={color}@{opacity}:draw=full:scale=sqrt[w{i}];"
+        )
+
+    # Chain overlays: overlay w0 + w1 → t0, t0 + w2 → t1, ...
+    if num_channels == 2:
+        lines.append(f"[w0][w1]overlay=format=auto")
+    else:
+        lines.append(f"[w0][w1]overlay=format=auto[t0];")
+        for i in range(2, num_channels):
+            if i == num_channels - 1:
+                lines.append(f"[t{i - 2}][w{i}]overlay=format=auto")
+            else:
+                lines.append(f"[t{i - 2}][w{i}]overlay=format=auto[t{i - 1}];")
+
+    return "\n".join(lines)
+
+
 def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=None, progress_start=75, progress_end=79):
     """
     Generate a compact audio waveform image from a video file and return it
@@ -513,6 +594,8 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
 
     Uses FFmpeg's ``showwavespic`` filter, which renders the entire audio
     stream into a single image in one pass — no frame-by-frame extraction.
+    Automatically detects the number of audio channels and renders each
+    channel in a distinct color, layered on top of each other.
 
     Args:
         video_path (str): Path to the source video file.
@@ -532,6 +615,13 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
             logger.warning("Audio waveform: could not determine video duration — skipping")
             return None
 
+        num_channels = _get_audio_channel_count(video_path)
+        if num_channels is None or num_channels <= 0:
+            logger.warning("Audio waveform: could not determine audio channel count — skipping")
+            return None
+
+        filter_complex = _build_waveform_filter(num_channels, width, height)
+
         progress_range = progress_end - progress_start
 
         with TemporaryDirectory() as tmpdir:
@@ -543,12 +633,7 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
                 "-loglevel", "error",
                 "-i", video_path,
                 "-filter_complex",
-                f"""
-                [0:a]channelsplit=channel_layout=stereo[left][right];
-                [left]showwavespic=s={width}x{height}:colors=#378d6a@0.6:draw=full:scale=sqrt[l];
-                [right]showwavespic=s={width}x{height}:colors=#bf971b@0.6:draw=full:scale=sqrt[r];
-                [l][r]overlay=format=auto
-                """,
+                filter_complex,
                 "-frames:v", "1",
                 "-q:v", "5",
                 output_path,
@@ -939,9 +1024,22 @@ def make_audio_clipping_html(audio_clipping_csv):
     return html
 
 
+def _imbalance_status_colors(characterization):
+    """Return (text_color, bg_color, border_color) for an imbalance characterization."""
+    if characterization in ("Balanced", "Mono (single channel)"):
+        return "#155724", "#d4edda", "#c3e6cb"
+    elif characterization in ("Slight imbalance",):
+        return "#856404", "#fff3cd", "#ffeeba"
+    elif characterization in ("Moderate imbalance",):
+        return "#856404", "#fff3cd", "#ffeeba"
+    else:
+        return "#721c24", "#f8d7da", "#f5c6cb"
+
+
 def make_channel_imbalance_html(channel_imbalance_csv):
     """
     Generates an HTML section summarizing channel imbalance analysis results.
+    Handles mono, stereo, and multi-channel CSV formats.
 
     Args:
         channel_imbalance_csv (str): Path to the channel imbalance CSV file.
@@ -960,39 +1058,51 @@ def make_channel_imbalance_html(channel_imbalance_csv):
         logger.error(f"Error reading channel imbalance CSV: {e}")
         return None
 
-    if len(rows) < 8:
+    if len(rows) < 3:
         return None
 
-    # Parse summary rows
-    total_frames = rows[1][1] if len(rows[1]) > 1 else "N/A"
-    frames_analyzed = rows[2][1] if len(rows[2]) > 1 else "N/A"
-    ch1_mean_rms = rows[3][1] if len(rows[3]) > 1 else "N/A"
-    ch2_mean_rms = rows[4][1] if len(rows[4]) > 1 else "N/A"
-    mean_diff = rows[5][1] if len(rows[5]) > 1 else "N/A"
-    characterization = rows[6][1] if len(rows[6]) > 1 else "N/A"
-    louder_channel = rows[7][1] if len(rows[7]) > 1 else "N/A"
+    # Build a lookup dict from the CSV rows for flexible parsing
+    csv_data = {}
+    for row in rows:
+        if len(row) >= 2:
+            csv_data[row[0]] = row[1]
 
-    # Color based on characterization
-    if characterization == "Balanced":
-        status_color = "#155724"
-        status_bg = "#d4edda"
-        status_border = "#c3e6cb"
-    elif characterization == "Slight imbalance":
-        status_color = "#856404"
-        status_bg = "#fff3cd"
-        status_border = "#ffeeba"
-    elif characterization == "Moderate imbalance":
-        status_color = "#856404"
-        status_bg = "#fff3cd"
-        status_border = "#ffeeba"
-    else:
-        status_color = "#721c24"
-        status_bg = "#f8d7da"
-        status_border = "#f5c6cb"
+    total_frames = csv_data.get("Total Audio Frames", "N/A")
+    num_channels_str = csv_data.get("Number of Channels", "2")
+    try:
+        num_channels = int(num_channels_str)
+    except (ValueError, TypeError):
+        num_channels = 2
+    frames_analyzed = csv_data.get("Frames Analyzed", "N/A")
+    overall_characterization = csv_data.get("Overall Characterization", csv_data.get("Characterization", "N/A"))
 
-    status_text = characterization
-    if louder_channel != "Neither":
+    # Collect per-channel mean RMS values
+    channel_means = {}
+    for key, val in csv_data.items():
+        match = re.match(r'Channel (\d+) Mean RMS \(dBFS\)', key)
+        if match:
+            channel_means[int(match.group(1))] = val
+
+    status_color, status_bg, status_border = _imbalance_status_colors(overall_characterization)
+    status_text = overall_characterization
+
+    # For stereo, add louder channel info
+    louder_channel = csv_data.get("Louder Channel")
+    if louder_channel and louder_channel != "Neither":
         status_text += f" ({louder_channel} is louder)"
+
+    # Methodology description adapts to channel count
+    if num_channels == 1:
+        methodology_text = """
+            <strong>Channel imbalance analysis</strong> reports the average loudness of each audio channel
+            across the entire audio program. This file has a single audio channel (mono), so no
+            inter-channel comparison is performed.
+        """
+    else:
+        methodology_text = """
+            <strong>Channel imbalance analysis</strong> compares the average loudness of each audio channel
+            across the entire audio program to characterize any level differences between channels.
+        """
 
     html = f'''
     <a id="link_imbalance_methodology" href="javascript:void(0);"
@@ -1002,15 +1112,13 @@ def make_channel_imbalance_html(channel_imbalance_csv):
     <div id="imbalance_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
          margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
         <p style="margin: 0 0 10px 0;">
-            <strong>Channel imbalance analysis</strong> compares the average loudness of channel 1 (left)
-            and channel 2 (right) across the entire audio program to characterize any level difference
-            between the two channels.
+            {methodology_text}
         </p>
         <p style="margin: 0 0 10px 0;">
             The analysis uses the <strong>RMS level</strong> (Root Mean Square, in dBFS) from each channel,
             as recorded per audio frame by FFmpeg's <code>astats</code> filter in the QCTools report. The
-            mean RMS for each channel is computed across all audio frames, and the difference between them
-            is reported in decibels.
+            mean RMS for each channel is computed across all audio frames, and the difference between each
+            pair of channels is reported in decibels.
         </p>
         <p style="margin: 0 0 10px 0; font-weight: bold;">Characterization:</p>
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
@@ -1030,13 +1138,62 @@ def make_channel_imbalance_html(channel_imbalance_csv):
     </div>
     <table style="border-collapse: collapse; margin: 10px 0;">
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Frames Analyzed</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{frames_analyzed}</td></tr>
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Channel 1 Mean RMS (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{ch1_mean_rms}</td></tr>
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Channel 2 Mean RMS (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{ch2_mean_rms}</td></tr>
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Mean Difference (dB)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{mean_diff}</td></tr>
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Louder Channel</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{louder_channel}</td></tr>
-    </table>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Number of Channels</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{num_channels}</td></tr>
     '''
+
+    if num_channels > 1:
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Frames Analyzed</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{frames_analyzed}</td></tr>\n'
+
+    for ch in sorted(channel_means.keys()):
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Channel {ch} Mean RMS (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{channel_means[ch]}</td></tr>\n'
+
+    # For stereo, show simple difference and louder channel
+    if num_channels == 2:
+        mean_diff = csv_data.get("Mean Difference (dB)", "N/A")
+        louder = csv_data.get("Louder Channel", "N/A")
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Mean Difference (dB)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{mean_diff}</td></tr>\n'
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Louder Channel</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{louder}</td></tr>\n'
+
+    html += '</table>\n'
+
+    # For >2 channels, add pairwise comparison table
+    if num_channels > 2:
+        # Find pairwise rows in CSV (look for "Pairwise Comparisons" header followed by data rows)
+        pairwise_rows = []
+        in_pairwise = False
+        for row in rows:
+            if len(row) >= 1 and row[0] == "Pairwise Comparisons":
+                in_pairwise = True
+                continue
+            if in_pairwise:
+                if len(row) >= 5 and row[0].startswith("Channel"):
+                    pairwise_rows.append(row)
+                elif len(row) >= 5 and row[0] == "Channel A":
+                    continue  # skip header row
+                elif len(row) == 0 or (len(row) == 1 and row[0] == ""):
+                    break  # end of pairwise section
+
+        if pairwise_rows:
+            html += '''
+            <h4 style="margin-top: 16px;">Pairwise Comparisons</h4>
+            <table style="border-collapse: collapse; margin: 10px 0;">
+                <tr>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel A</th>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel B</th>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Mean Diff (dB)</th>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Characterization</th>
+                    <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Louder Channel</th>
+                </tr>
+            '''
+            for row in pairwise_rows:
+                html += f'''<tr>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[0]}</td>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[1]}</td>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[2]}</td>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[3]}</td>
+                    <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[4]}</td>
+                </tr>\n'''
+            html += '</table>\n'
 
     return html
 
