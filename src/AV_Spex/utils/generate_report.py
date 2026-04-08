@@ -1083,6 +1083,8 @@ def make_channel_imbalance_html(channel_imbalance_csv):
         if match:
             channel_means[int(match.group(1))] = val
 
+    silent_channels = csv_data.get("Silent Channels", "")
+
     status_color, status_bg, status_border = _imbalance_status_colors(overall_characterization)
     status_text = overall_characterization
 
@@ -1090,6 +1092,9 @@ def make_channel_imbalance_html(channel_imbalance_csv):
     louder_channel = csv_data.get("Louder Channel")
     if louder_channel and louder_channel != "Neither":
         status_text += f" ({louder_channel} is louder)"
+
+    if silent_channels:
+        status_text += f" — silent channel(s) detected: {silent_channels}"
 
     # Methodology description adapts to channel count
     if num_channels == 1:
@@ -1146,6 +1151,9 @@ def make_channel_imbalance_html(channel_imbalance_csv):
 
     for ch in sorted(channel_means.keys()):
         html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Channel {ch} Mean RMS (dBFS)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{channel_means[ch]}</td></tr>\n'
+
+    if silent_channels:
+        html += f'<tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Silent Channels</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd; color: #dc3545;"><strong>{silent_channels}</strong></td></tr>\n'
 
     # For stereo, show simple difference and louder channel
     if num_channels == 2:

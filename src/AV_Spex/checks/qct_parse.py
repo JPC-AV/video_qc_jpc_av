@@ -1050,6 +1050,7 @@ def detectBitdepth(startObj,pkt,framesList,buffSize):
 
 
 AUDIO_CLIPPING_THRESHOLD_DB = -0.5
+SILENCE_THRESHOLD_DB = -60.0
 
 
 def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, signals=None, total_duration=None):
@@ -1316,6 +1317,14 @@ def _write_imbalance_results(report_directory, total_audio_frames, channel_rms_v
     worst = max(pairwise, key=lambda p: p['abs_mean_difference_db'])
     overall_characterization = worst['characterization']
 
+    # Silent channel detection — only when significant imbalance is found
+    silent_channels = []
+    if overall_characterization == "Significant imbalance":
+        for ch in sorted_channels:
+            mean_rms = channel_means[ch]
+            if mean_rms == float('-inf') or mean_rms < SILENCE_THRESHOLD_DB:
+                silent_channels.append(ch)
+
     results = {
         'total_audio_frames': total_audio_frames,
         'num_channels': num_channels,
@@ -1323,6 +1332,7 @@ def _write_imbalance_results(report_directory, total_audio_frames, channel_rms_v
         'channel_means': channel_means,
         'pairwise': pairwise,
         'overall_characterization': overall_characterization,
+        'silent_channels': silent_channels,
     }
 
     # Write CSV
@@ -1353,10 +1363,16 @@ def _write_imbalance_results(report_directory, total_audio_frames, channel_rms_v
                 ])
         writer.writerow([])
         writer.writerow(["Overall Characterization", overall_characterization])
+        if silent_channels:
+            writer.writerow(["Silent Channels", ", ".join(f"Channel {ch}" for ch in silent_channels)])
 
     # Log summary
     ch_summary = ", ".join(f"Ch{ch}: {channel_means[ch]:.1f} dBFS" for ch in sorted_channels)
-    logger.debug(f"Channel imbalance analysis: {overall_characterization} ({ch_summary})\n")
+    if silent_channels:
+        silent_str = ", ".join(f"Ch{ch}" for ch in silent_channels)
+        logger.warning(f"Channel imbalance analysis: {overall_characterization} — silent channel(s) detected: {silent_str} ({ch_summary})\n")
+    else:
+        logger.debug(f"Channel imbalance analysis: {overall_characterization} ({ch_summary})\n")
 
     return results
 
@@ -1570,7 +1586,7 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     do_clipping = qct_parse.get('detect_audio_clipping', False)
     do_imbalance = qct_parse.get('detect_channel_imbalance', False)
     if do_clipping or do_imbalance:
-        logger.info(f"Starting audio analysis on {baseName}\n")
+        logger.debug(f"Starting audio analysis on {baseName}\n")
         clipping_results, imbalance_results = analyzeAudio(
             startObj, pkt, report_directory,
             detect_clipping=do_clipping,
