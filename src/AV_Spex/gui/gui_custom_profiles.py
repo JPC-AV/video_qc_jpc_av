@@ -392,7 +392,19 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.thumb_export_check.setStyleSheet("font-weight: bold;")
         thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
         thumb_export_desc.setIndent(20)
-        
+
+        # Detect Audio Clipping
+        self.detect_audio_clipping_check = QCheckBox("Detect Audio Clipping")
+        self.detect_audio_clipping_check.setStyleSheet("font-weight: bold;")
+        detect_audio_clipping_desc = QLabel("Detect audio clipping using peak level analysis")
+        detect_audio_clipping_desc.setIndent(20)
+
+        # Detect Channel Imbalance
+        self.detect_channel_imbalance_check = QCheckBox("Detect Channel Imbalance")
+        self.detect_channel_imbalance_check.setStyleSheet("font-weight: bold;")
+        detect_channel_imbalance_desc = QLabel("Compare channel 1 vs channel 2 RMS levels")
+        detect_channel_imbalance_desc.setIndent(20)
+
         # Add all widgets
         qct_parse_layout.addWidget(self.qct_parse_run_check)
         qct_parse_layout.addWidget(run_qctparse_desc)
@@ -402,6 +414,10 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         qct_parse_layout.addWidget(evaluate_bars_desc)
         qct_parse_layout.addWidget(self.thumb_export_check)
         qct_parse_layout.addWidget(thumb_export_desc)
+        qct_parse_layout.addWidget(self.detect_audio_clipping_check)
+        qct_parse_layout.addWidget(detect_audio_clipping_desc)
+        qct_parse_layout.addWidget(self.detect_channel_imbalance_check)
+        qct_parse_layout.addWidget(detect_channel_imbalance_desc)
         
         qct_parse_group.setLayout(qct_parse_layout)
         parent_layout.addWidget(qct_parse_group)
@@ -777,7 +793,9 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
             self.bars_detection_check.setChecked(qct_config.barsDetection)
             self.evaluate_bars_check.setChecked(qct_config.evaluateBars)
             self.thumb_export_check.setChecked(qct_config.thumbExport)
-            
+            self.detect_audio_clipping_check.setChecked(getattr(qct_config, 'detect_audio_clipping', False))
+            self.detect_channel_imbalance_check.setChecked(getattr(qct_config, 'detect_channel_imbalance', False))
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load current config: {str(e)}")
     
@@ -876,6 +894,7 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         self.bars_detection_check.setChecked(qct_config.barsDetection)
         self.evaluate_bars_check.setChecked(qct_config.evaluateBars)
         self.thumb_export_check.setChecked(qct_config.thumbExport)
+        self.detect_audio_clipping_check.setChecked(getattr(qct_config, 'detect_audio_clipping', False))
     
     def get_profile_from_form(self):
         """Create a ChecksProfile from the form data."""
@@ -953,7 +972,9 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
                 run_tool=self.qct_parse_run_check.isChecked(),
                 barsDetection=self.bars_detection_check.isChecked(),
                 evaluateBars=self.evaluate_bars_check.isChecked(),
-                thumbExport=self.thumb_export_check.isChecked()
+                thumbExport=self.thumb_export_check.isChecked(),
+                detect_audio_clipping=self.detect_audio_clipping_check.isChecked(),
+                detect_channel_imbalance=self.detect_channel_imbalance_check.isChecked()
             )
         )
         
