@@ -1641,12 +1641,12 @@ def generate_frame_analysis_html(frame_outputs, video_id):
             status_color = '#666666'
             status_icon = '&#x2753;'  # question mark
 
-        html += "<h3 style='color: #bf971b;'>Bitplane Check (9th &amp; 10th Bit Verification)</h3>"
+        html += "<h3 style='color: #bf971b;'>Bitplane Check (7th–10th Bit Verification)</h3>"
         html += f"""
         <p style="font-size: 14px; color: {status_color}; font-weight: bold;">
             {status_icon} {message}
         </p>
-        <p style="font-size: 13px; color: #555;">Frames sampled: {frames_sampled}</p>
+        <p style="font-size: 13px; color: #555;">Frames sampled: {frames_sampled} (evenly spaced across the full video duration)</p>
         """
 
         # Overall averages

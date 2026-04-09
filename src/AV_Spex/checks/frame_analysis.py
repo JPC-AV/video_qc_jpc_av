@@ -3268,7 +3268,7 @@ class EnhancedFrameAnalysis:
             logger.warning("Could not determine video duration for bitplane check")
             return {'status': 'error', 'message': 'Could not determine video duration'}
 
-        logger.info(f"Checking bitplane noise on {num_samples} sampled frames across {duration:.1f}s...")
+        logger.debug(f"Checking bitplane noise on {num_samples} sampled frames across {duration:.1f}s...")
 
         if self.check_cancelled():
             return {'status': 'cancelled', 'message': 'Cancelled before bitplane check started'}
@@ -3280,12 +3280,16 @@ class EnhancedFrameAnalysis:
 
         tag_keys = [
             'lavfi.bitplanenoise.0.1', 'lavfi.bitplanenoise.1.1', 'lavfi.bitplanenoise.2.1',
-            'lavfi.bitplanenoise.0.2', 'lavfi.bitplanenoise.1.2', 'lavfi.bitplanenoise.2.2'
+            'lavfi.bitplanenoise.0.2', 'lavfi.bitplanenoise.1.2', 'lavfi.bitplanenoise.2.2',
+            'lavfi.bitplanenoise.0.3', 'lavfi.bitplanenoise.1.3', 'lavfi.bitplanenoise.2.3',
+            'lavfi.bitplanenoise.0.4', 'lavfi.bitplanenoise.1.4', 'lavfi.bitplanenoise.2.4'
         ]
 
         vf = (
             'bitplanenoise=bitplane=1,'
             'bitplanenoise=bitplane=2,'
+            'bitplanenoise=bitplane=3,'
+            'bitplanenoise=bitplane=4,'
             'metadata=print:file=-'
         )
 
@@ -3335,12 +3339,12 @@ class EnhancedFrameAnalysis:
 
         # Channel names for reporting
         channel_names = {0: 'Y', 1: 'Cb', 2: 'Cr'}
-        bitplane_names = {1: '9th bit (bit 1)', 2: '10th bit (bit 2)'}
+        bitplane_names = {1: '9th bit (bit 1)', 2: '10th bit (bit 2)', 3: '8th bit (bit 3)', 4: '7th bit (bit 4)'}
 
         # Collect per-channel, per-bitplane values
         values = {}
         for plane in range(3):
-            for bitplane in [1, 2]:
+            for bitplane in [1, 2, 3, 4]:
                 key = f'lavfi.bitplanenoise.{plane}.{bitplane}'
                 frame_values = []
                 for frame in frames:
@@ -3358,7 +3362,7 @@ class EnhancedFrameAnalysis:
         for plane in range(3):
             ch_name = channel_names[plane]
             channel_results[ch_name] = {}
-            for bitplane in [1, 2]:
+            for bitplane in [1, 2, 3, 4]:
                 bp_name = bitplane_names[bitplane]
                 frame_values = values[(plane, bitplane)]
 
@@ -3395,7 +3399,7 @@ class EnhancedFrameAnalysis:
 
         # Compute overall average noise per bitplane (across all channels)
         overall_bitplane_avg = {}
-        for bitplane in [1, 2]:
+        for bitplane in [1, 2, 3, 4]:
             bp_name = bitplane_names[bitplane]
             all_values = []
             for plane in range(3):
@@ -3414,8 +3418,8 @@ class EnhancedFrameAnalysis:
         if all_empty:
             overall_status = 'truncated'
             overall_message = (
-                'All channels show empty 9th and 10th bits — '
-                'video appears to be 8-bit data in a 10-bit container'
+                'All channels show empty 7th–10th bits — '
+                'video appears to have significant bit truncation'
             )
             logger.warning(f"Bitplane check: {overall_message}")
         elif any_empty:
@@ -3433,7 +3437,7 @@ class EnhancedFrameAnalysis:
             logger.warning(f"Bitplane check: {overall_message}")
         else:
             overall_status = 'valid'
-            overall_message = '9th and 10th bits contain data across all channels'
+            overall_message = '7th–10th bits contain data across all channels'
             logger.info(f"Bitplane check: {overall_message}")
 
         return {

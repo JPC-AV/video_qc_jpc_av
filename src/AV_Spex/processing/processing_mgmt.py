@@ -254,6 +254,7 @@ class ProcessingManager:
         # Check if frame analysis is enabled
         frame_config = self.checks_config.outputs.frame_analysis
         if any([
+            frame_config.enable_bitplane_check,
             frame_config.enable_border_detection,
             frame_config.enable_brng_analysis,
             frame_config.enable_signalstats
