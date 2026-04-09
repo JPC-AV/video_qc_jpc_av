@@ -3414,6 +3414,35 @@ class EnhancedFrameAnalysis:
             if avg is not None:
                 logger.info(f"  Avg bitplanenoise {bp_name}: {avg}")
 
+        # Compare less significant bits (9th/10th) against more significant bits (7th/8th)
+        # The 9th and 10th bits should have noise values closer to 1.0 than the 7th and 8th
+        bit_order_check = None
+        avg_9th = overall_bitplane_avg.get(bitplane_names[1])   # 9th bit
+        avg_10th = overall_bitplane_avg.get(bitplane_names[2])  # 10th bit
+        avg_8th = overall_bitplane_avg.get(bitplane_names[3])   # 8th bit
+        avg_7th = overall_bitplane_avg.get(bitplane_names[4])   # 7th bit
+
+        if all(v is not None for v in [avg_9th, avg_10th, avg_8th, avg_7th]):
+            avg_lsb = (avg_9th + avg_10th) / 2   # average of less significant bits
+            avg_msb = (avg_7th + avg_8th) / 2     # average of more significant bits
+
+            if avg_lsb >= avg_msb:
+                bit_order_check = {
+                    'status': 'expected',
+                    'message': 'Less significant bits (9th/10th) have higher noise than more significant bits (7th/8th), as expected',
+                    'avg_9th_10th': round(avg_lsb, 6),
+                    'avg_7th_8th': round(avg_msb, 6)
+                }
+                logger.info(f"  Bit order check: expected (9th/10th avg: {avg_lsb:.6f} >= 7th/8th avg: {avg_msb:.6f})")
+            else:
+                bit_order_check = {
+                    'status': 'unexpected',
+                    'message': 'Less significant bits (9th/10th) have lower noise than more significant bits (7th/8th) — possible bit truncation or unusual encoding',
+                    'avg_9th_10th': round(avg_lsb, 6),
+                    'avg_7th_8th': round(avg_msb, 6)
+                }
+                logger.warning(f"  Bit order check: unexpected (9th/10th avg: {avg_lsb:.6f} < 7th/8th avg: {avg_msb:.6f})")
+
         # Determine overall status
         if all_empty:
             overall_status = 'truncated'
@@ -3446,7 +3475,8 @@ class EnhancedFrameAnalysis:
             'frames_sampled': len(frames),
             'video_duration': duration,
             'overall_bitplane_averages': overall_bitplane_avg,
-            'channels': channel_results
+            'channels': channel_results,
+            'bit_order_check': bit_order_check
         }
 
     def analyze(self,

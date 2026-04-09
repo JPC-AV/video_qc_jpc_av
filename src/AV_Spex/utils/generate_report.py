@@ -1668,6 +1668,28 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 """
             html += "</table>"
 
+        # Bit order comparison (9th/10th vs 7th/8th)
+        bit_order = bitplane_data.get('bit_order_check')
+        if bit_order:
+            bo_status = bit_order.get('status', '')
+            bo_message = bit_order.get('message', '')
+            avg_lsb = bit_order.get('avg_9th_10th', 0)
+            avg_msb = bit_order.get('avg_7th_8th', 0)
+            if bo_status == 'expected':
+                bo_color = '#0a5f1c'
+                bo_icon = '&#x2705;'
+            else:
+                bo_color = '#cc6600'
+                bo_icon = '&#x26A0;'
+            html += f"""
+            <p style="font-size: 13px; color: {bo_color}; margin: 8px 0;">
+                {bo_icon} {bo_message}
+            </p>
+            <p style="font-size: 13px; color: #555; margin: 4px 0 12px 0;">
+                Avg noise — 9th/10th bits: {avg_lsb:.6f} | 7th/8th bits: {avg_msb:.6f}
+            </p>
+            """
+
         # Per-channel detail (collapsible)
         if channels:
             html += """
