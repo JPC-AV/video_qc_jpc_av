@@ -326,9 +326,11 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             if checks_config.tools.qct_parse.run_tool:
                 self._add_step_item("QCT Parse")
             
-            # Frame Analysis 
+            # Frame Analysis
             if hasattr(checks_config.outputs, 'frame_analysis'):
                 frame_config = checks_config.outputs.frame_analysis
+                if frame_config.enable_bitplane_check:
+                    self._add_step_item("Frame Analysis - Bitplane Check")
                 if frame_config.enable_border_detection:
                     self._add_step_item("Frame Analysis - Border Detection")
                 # Only add signalstats if enabled AND in sophisticated mode

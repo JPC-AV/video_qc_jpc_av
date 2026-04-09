@@ -7,6 +7,7 @@ Combines the efficiency of the refactored version with the sophistication of the
 import os
 import json
 import gzip
+import time
 import cv2
 import numpy as np
 import subprocess
@@ -3241,8 +3242,244 @@ class EnhancedFrameAnalysis:
         except Exception as e:
             logger.warning(f"Could not get video duration: {e}")
         return None
-    
-    def analyze(self, 
+
+    def _check_bitplane_noise(self, num_samples: int = 20) -> Dict:
+        """
+        Check if the 9th and 10th bits (two least significant bits) of a 10-bit
+        video contain actual data by running ffprobe's bitplanenoise filter on
+        sampled frames.
+
+        TBC and framesync devices can truncate these bits, producing a file that
+        is technically 10-bit but effectively 8-bit. When bits are truncated,
+        the bitplanenoise value for those bitplanes will be 0.
+
+        Uses -read_intervals to seek to evenly-spaced timestamps (fast) rather
+        than decoding every frame sequentially.
+
+        Args:
+            num_samples: Number of frames to sample (evenly distributed)
+
+        Returns:
+            Dict with check results including per-channel, per-bitplane findings
+        """
+        # Get video duration to calculate sample timestamps
+        duration = self._get_video_duration()
+        if duration is None or duration == 0:
+            logger.warning("Could not determine video duration for bitplane check")
+            return {'status': 'error', 'message': 'Could not determine video duration'}
+
+        logger.debug(f"Checking bitplane noise on {num_samples} sampled frames across {duration:.1f}s...")
+
+        if self.check_cancelled():
+            return {'status': 'cancelled', 'message': 'Cancelled before bitplane check started'}
+
+        # Sample frames by seeking with -ss (input seeking, instant) and
+        # decoding just 1 frame per position. Each ffmpeg call takes ~0.1-0.2s,
+        # so 20 calls ≈ 2-4 seconds total regardless of video length.
+        timestamps = [i * duration / num_samples for i in range(num_samples)]
+
+        tag_keys = [
+            'lavfi.bitplanenoise.0.1', 'lavfi.bitplanenoise.1.1', 'lavfi.bitplanenoise.2.1',
+            'lavfi.bitplanenoise.0.2', 'lavfi.bitplanenoise.1.2', 'lavfi.bitplanenoise.2.2',
+            'lavfi.bitplanenoise.0.3', 'lavfi.bitplanenoise.1.3', 'lavfi.bitplanenoise.2.3',
+            'lavfi.bitplanenoise.0.4', 'lavfi.bitplanenoise.1.4', 'lavfi.bitplanenoise.2.4'
+        ]
+
+        vf = (
+            'bitplanenoise=bitplane=1,'
+            'bitplanenoise=bitplane=2,'
+            'bitplanenoise=bitplane=3,'
+            'bitplanenoise=bitplane=4,'
+            'metadata=print:file=-'
+        )
+
+        frames = []
+        for ts in timestamps:
+            if self.check_cancelled():
+                logger.info("Bitplane noise check cancelled")
+                return {'status': 'cancelled', 'message': 'Bitplane check was cancelled'}
+
+            cmd = [
+                'ffmpeg', '-nostdin', '-hide_banner', '-v', 'quiet',
+                '-ss', f'{ts:.3f}',
+                '-i', str(self.video_path),
+                '-vf', vf,
+                '-an',
+                '-frames:v', '1',
+                '-f', 'null',
+                '-'
+            ]
+
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=30
+                )
+                # Parse metadata=print output from stdout
+                current_tags = {}
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if '=' in line:
+                        key, _, val = line.partition('=')
+                        if key in tag_keys:
+                            current_tags[key] = val
+                if current_tags:
+                    frames.append({'tags': current_tags})
+            except subprocess.TimeoutExpired:
+                logger.debug(f"Bitplane probe timed out at {ts:.1f}s")
+                continue
+            except Exception as e:
+                logger.debug(f"Bitplane probe error at {ts:.1f}s: {e}")
+                continue
+
+        if not frames:
+            logger.warning("No frames returned from bitplane noise check")
+            return {'status': 'error', 'message': 'No frames analyzed'}
+
+        logger.info(f"Bitplane check analyzed {len(frames)} frames")
+
+        # Channel names for reporting
+        channel_names = {0: 'Y', 1: 'Cb', 2: 'Cr'}
+        bitplane_names = {1: '9th bit (bit 1)', 2: '10th bit (bit 2)', 3: '8th bit (bit 3)', 4: '7th bit (bit 4)'}
+
+        # Collect per-channel, per-bitplane values
+        values = {}
+        for plane in range(3):
+            for bitplane in [1, 2, 3, 4]:
+                key = f'lavfi.bitplanenoise.{plane}.{bitplane}'
+                frame_values = []
+                for frame in frames:
+                    frame_tags = frame.get('tags', {})
+                    val_str = frame_tags.get(key)
+                    if val_str is not None:
+                        frame_values.append(float(val_str))
+                values[(plane, bitplane)] = frame_values
+
+        # Analyze results: check if all sampled frames have zero noise for each channel/bitplane
+        channel_results = {}
+        all_empty = True
+        any_empty = False
+
+        for plane in range(3):
+            ch_name = channel_names[plane]
+            channel_results[ch_name] = {}
+            for bitplane in [1, 2, 3, 4]:
+                bp_name = bitplane_names[bitplane]
+                frame_values = values[(plane, bitplane)]
+
+                if not frame_values:
+                    channel_results[ch_name][bp_name] = {
+                        'status': 'no_data',
+                        'frames_sampled': 0
+                    }
+                    continue
+
+                zero_count = sum(1 for v in frame_values if v == 0.0)
+                total = len(frame_values)
+                zero_pct = (zero_count / total) * 100
+                avg_noise = sum(frame_values) / total
+                max_noise = max(frame_values)
+
+                is_empty = zero_count == total
+                if is_empty:
+                    any_empty = True
+                else:
+                    all_empty = False
+
+                channel_results[ch_name][bp_name] = {
+                    'status': 'empty' if is_empty else 'active',
+                    'frames_sampled': total,
+                    'zero_frames': zero_count,
+                    'zero_percentage': round(zero_pct, 1),
+                    'average_noise': round(avg_noise, 6),
+                    'max_noise': round(max_noise, 6)
+                }
+
+        if not any_empty:
+            all_empty = False
+
+        # Compute overall average noise per bitplane (across all channels)
+        overall_bitplane_avg = {}
+        for bitplane in [1, 2, 3, 4]:
+            bp_name = bitplane_names[bitplane]
+            all_values = []
+            for plane in range(3):
+                all_values.extend(values[(plane, bitplane)])
+            if all_values:
+                avg = sum(all_values) / len(all_values)
+                overall_bitplane_avg[bp_name] = round(avg, 6)
+            else:
+                overall_bitplane_avg[bp_name] = None
+
+        for bp_name, avg in overall_bitplane_avg.items():
+            if avg is not None:
+                logger.info(f"  Avg bitplanenoise {bp_name}: {avg}")
+
+        # Compare less significant bits (9th/10th) against more significant bits (7th/8th)
+        # The 9th and 10th bits should have noise values closer to 1.0 than the 7th and 8th
+        bit_order_check = None
+        avg_9th = overall_bitplane_avg.get(bitplane_names[1])   # 9th bit
+        avg_10th = overall_bitplane_avg.get(bitplane_names[2])  # 10th bit
+        avg_8th = overall_bitplane_avg.get(bitplane_names[3])   # 8th bit
+        avg_7th = overall_bitplane_avg.get(bitplane_names[4])   # 7th bit
+
+        if all(v is not None for v in [avg_9th, avg_10th, avg_8th, avg_7th]):
+            avg_lsb = (avg_9th + avg_10th) / 2   # average of less significant bits
+            avg_msb = (avg_7th + avg_8th) / 2     # average of more significant bits
+
+            if avg_lsb >= avg_msb:
+                bit_order_check = {
+                    'status': 'expected',
+                    'message': 'Less significant bits (9th/10th) have higher noise than more significant bits (7th/8th), as expected',
+                    'avg_9th_10th': round(avg_lsb, 6),
+                    'avg_7th_8th': round(avg_msb, 6)
+                }
+                logger.info(f"  Bit order check: expected (9th/10th avg: {avg_lsb:.6f} >= 7th/8th avg: {avg_msb:.6f})")
+            else:
+                bit_order_check = {
+                    'status': 'unexpected',
+                    'message': 'Less significant bits (9th/10th) have lower noise than more significant bits (7th/8th) — possible bit truncation or unusual encoding',
+                    'avg_9th_10th': round(avg_lsb, 6),
+                    'avg_7th_8th': round(avg_msb, 6)
+                }
+                logger.warning(f"  Bit order check: unexpected (9th/10th avg: {avg_lsb:.6f} < 7th/8th avg: {avg_msb:.6f})")
+
+        # Determine overall status
+        if all_empty:
+            overall_status = 'truncated'
+            overall_message = (
+                'All channels show empty 7th–10th bits — '
+                'video appears to have significant bit truncation'
+            )
+            logger.warning(f"Bitplane check: {overall_message}")
+        elif any_empty:
+            # Find which specific channels/bitplanes are empty
+            empty_parts = []
+            for ch_name, bp_data in channel_results.items():
+                for bp_name, bp_result in bp_data.items():
+                    if bp_result.get('status') == 'empty':
+                        empty_parts.append(f"{ch_name} {bp_name}")
+            overall_status = 'partial_truncation'
+            overall_message = (
+                f'Some bitplanes appear empty: {", ".join(empty_parts)} — '
+                f'possible partial bit truncation'
+            )
+            logger.warning(f"Bitplane check: {overall_message}")
+        else:
+            overall_status = 'valid'
+            overall_message = '7th–10th bits contain data across all channels'
+            logger.info(f"Bitplane check: {overall_message}")
+
+        return {
+            'status': overall_status,
+            'message': overall_message,
+            'frames_sampled': len(frames),
+            'video_duration': duration,
+            'overall_bitplane_averages': overall_bitplane_avg,
+            'channels': channel_results,
+            'bit_order_check': bit_order_check
+        }
+
+    def analyze(self,
         method: str = 'sophisticated',
         duration_limit: int = 300,
         skip_color_bars: bool = True,
@@ -3277,23 +3514,35 @@ class EnhancedFrameAnalysis:
         frame_config = self.checks_config.outputs.frame_analysis
         
         # Check which steps are enabled (handle both bool and str types)
+        bitplane_check_enabled = self._is_step_enabled(frame_config.enable_bitplane_check)
         border_detection_enabled = self._is_step_enabled(frame_config.enable_border_detection)
         brng_analysis_enabled = self._is_step_enabled(frame_config.enable_brng_analysis)
         signalstats_enabled = self._is_step_enabled(frame_config.enable_signalstats)
-        
+
         # Log which steps will run
         logger.info(f"Frame analysis configuration:")
+        logger.debug(f"  Bitplane check: {'enabled' if bitplane_check_enabled else 'disabled'}")
         logger.debug(f"  Border detection: {'enabled' if border_detection_enabled else 'disabled'}")
         logger.debug(f"  BRNG analysis: {'enabled' if brng_analysis_enabled else 'disabled'}")
         logger.debug(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}\n")
-        
+
         # Track what was actually run
         results['steps_enabled'] = {
+            'bitplane_check': bitplane_check_enabled,
             'border_detection': border_detection_enabled,
             'brng_analysis': brng_analysis_enabled,
             'signalstats': signalstats_enabled
         }
-        
+
+        # Step 0: Bitplane check — verify 9th and 10th bits are not empty
+        if self.check_cancelled():
+            return results
+        if bitplane_check_enabled:
+            bitplane_results = self._check_bitplane_noise()
+            results['bitplane_check'] = bitplane_results
+            if signals and hasattr(signals, 'step_completed'):
+                signals.step_completed.emit('Frame Analysis - Bitplane Check')
+
         # Step 1: Detect color bars (always run if skip_color_bars is True, as it's a prerequisite)
         if skip_color_bars:
             if color_bars_end_time is None:

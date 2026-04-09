@@ -142,10 +142,36 @@ class ComplexWindow(QWidget, ThemeableMixin):
     # Frame Analysis Sections (restructured)
     def setup_frame_analysis_sections(self, main_layout):
         """Set up the individual frame analysis sections"""
+        self.setup_bitplane_check_section(main_layout)
         self.setup_analysis_periods_section(main_layout)
         self.setup_border_detection_section(main_layout)
         self.setup_signalstats_section(main_layout)
         self.setup_brng_analysis_section(main_layout)
+
+    def setup_bitplane_check_section(self, main_layout):
+        """Set up the bitplane check section with enable checkbox"""
+        theme_manager = ThemeManager.instance()
+
+        self.bitplane_check_group = QGroupBox("Bitplane Check")
+        theme_manager.style_groupbox(self.bitplane_check_group, "top left")
+        self.themed_group_boxes['bitplane_check'] = self.bitplane_check_group
+
+        bitplane_layout = QVBoxLayout()
+
+        self.enable_bitplane_check_cb = QCheckBox("Enable Bitplane Check")
+        self.enable_bitplane_check_cb.setStyleSheet("font-weight: bold;")
+        bitplane_desc = QLabel(
+            "Verify that the 9th and 10th bits of 10-bit video contain data. "
+            "Some TBC/framesync devices truncate these bits, producing effectively 8-bit video."
+        )
+        bitplane_desc.setWordWrap(True)
+        bitplane_desc.setIndent(20)
+
+        bitplane_layout.addWidget(self.enable_bitplane_check_cb)
+        bitplane_layout.addWidget(bitplane_desc)
+
+        self.bitplane_check_group.setLayout(bitplane_layout)
+        main_layout.addWidget(self.bitplane_check_group)
 
     def setup_analysis_periods_section(self, main_layout):
         """Set up the analysis periods section (shared by signalstats and BRNG analysis)"""
@@ -510,6 +536,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.qctools_ext_combo.currentTextChanged.connect(self.on_qctools_ext_changed)
 
         # Sub-step enable checkboxes
+        self.enable_bitplane_check_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_bitplane_check'])
+        )
         self.enable_border_detection_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_border_detection'])
         )
@@ -598,6 +627,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
             frame_config = checks_config.outputs.frame_analysis
             
             # Load sub-step enable states
+            self.enable_bitplane_check_cb.setChecked(bool(frame_config.enable_bitplane_check))
             self.enable_border_detection_cb.setChecked(bool(frame_config.enable_border_detection))
             self.enable_brng_analysis_cb.setChecked(bool(frame_config.enable_brng_analysis))
             self.enable_signalstats_cb.setChecked(bool(frame_config.enable_signalstats))
