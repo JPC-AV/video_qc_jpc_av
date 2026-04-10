@@ -1754,7 +1754,9 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 <li style="margin-bottom: 4px;"><strong>Sophisticated (quality-based)</strong> — samples 
                     multiple frames across the video, selecting high-quality frames with good contrast. 
                     Analyzes luminance gradients at frame edges to find where active picture content begins. 
-                    Also detects head switching artifacts in the bottom rows of the frame.</li>
+                    Also detects head switching artifacts in the bottom rows of the frame. If the
+                    average head switching artifact height exceeds the luminance-based bottom border crop,
+                    the bottom crop is expanded to match the artifact height.</li>
                 <li style="margin-bottom: 4px;"><strong>Simple (fixed)</strong> — applies a uniform border 
                     crop (default 25 pixels) on all sides. Used as a fallback when sophisticated detection 
                     is not possible.</li>
@@ -1865,10 +1867,15 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 severity = hs_data.get('severity', 'none')
                 if severity not in ('none', 'error', None):
                     artifact_pct = hs_data.get('percentage', 0)
+                    avg_height = hs_data.get('avg_height_px', 0)
+                    height_info = ""
+                    if avg_height:
+                        height_info = f"<p>Average artifact height: {avg_height}px</p>"
                     html += f"""
-                    <div style="background-color: #ffbaba; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                        <p><strong>⚠️ Head Switching Artifacts Detected</strong></p>
+                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                        <p><strong>Head Switching Artifacts Detected</strong></p>
                         <p>Affected frames: {artifact_pct:.1f}%</p>
+                        {height_info}
                     </div>
                     """
         

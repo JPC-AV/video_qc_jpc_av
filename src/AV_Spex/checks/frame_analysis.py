@@ -617,14 +617,21 @@ class SophisticatedBorderDetector:
         
         cap.release()
         
-        # Calculate active area
+        # Calculate active area, using head switching height for bottom crop if larger
+        bottom_crop = borders['bottom']
+        if head_switching and head_switching.get('detected'):
+            hs_avg = head_switching.get('avg_height_px', 0)
+            if hs_avg > bottom_crop:
+                bottom_crop = hs_avg
+                logger.debug(f"  Bottom crop expanded from {borders['bottom']}px to {hs_avg}px based on head switching artifact height")
+
         active_x = borders['left']
         active_y = borders['top']
         active_width = self.width - borders['left'] - borders['right']
-        active_height = self.height - borders['top'] - borders['bottom']
+        active_height = self.height - borders['top'] - bottom_crop
 
         # Log the detection results
-        logger.debug(f"  Detected borders - L:{borders['left']}px R:{borders['right']}px T:{borders['top']}px B:{borders['bottom']}px")
+        logger.debug(f"  Detected borders - L:{borders['left']}px R:{borders['right']}px T:{borders['top']}px B:{bottom_crop}px")
         logger.debug(f"  Active picture area: {active_width}x{active_height} (from {self.width}x{self.height})")
         logger.debug(f"  Using {len(quality_frames)} quality frames for detection\n")
         
@@ -812,11 +819,17 @@ class SophisticatedBorderDetector:
         return borders
     
     def _detect_head_switching(self, cap, borders: Dict) -> Optional[Dict]:
-        """Detect head switching artifacts at bottom of frame"""
+        """Detect head switching artifacts at bottom of frame.
+
+        Measures the height of the artifact region by scanning upward from the
+        bottom of the frame to find where the asymmetry pattern ends.
+        """
         # Sample frames for analysis
+        max_scan_lines = 30  # scan up to 30 lines from the bottom
         sample_frames = np.linspace(0, self.total_frames - 1, 20, dtype=int)
         artifact_count = 0
-        
+        artifact_heights = []
+
         for frame_idx in sample_frames:
             if self.check_cancelled():
                 break
@@ -827,30 +840,48 @@ class SophisticatedBorderDetector:
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            # Analyze bottom 15 lines
-            bottom_region = gray[-15:, :]
-            
-            # Check for asymmetry (characteristic of head switching)
-            for line in bottom_region:
+            # Analyze bottom lines for asymmetry (characteristic of head switching)
+            bottom_region = gray[-max_scan_lines:, :]
+            frame_has_artifact = False
+            artifact_height = 0
+
+            # Scan from bottom up to find extent of artifact
+            for i in range(len(bottom_region) - 1, -1, -1):
+                line = bottom_region[i]
                 left_half = line[:len(line)//2]
                 right_half = line[len(line)//2:]
-                
+
                 left_mean = np.mean(left_half)
                 right_mean = np.mean(right_half)
-                
+
                 if left_mean > 10:
                     asymmetry = abs(left_mean - right_mean) / left_mean
                     if asymmetry > 0.5:
-                        artifact_count += 1
+                        frame_has_artifact = True
+                        artifact_height = len(bottom_region) - i
+                    else:
+                        # Stop scanning once we hit a non-artifact line
+                        if frame_has_artifact:
+                            break
+                else:
+                    if frame_has_artifact:
                         break
-        
+
+            if frame_has_artifact:
+                artifact_count += 1
+                artifact_heights.append(artifact_height)
+
         if artifact_count > len(sample_frames) * 0.2:
+            avg_height = int(round(np.mean(artifact_heights))) if artifact_heights else 0
+            max_height = int(max(artifact_heights)) if artifact_heights else 0
             return {
                 'detected': True,
                 'severity': 'high' if artifact_count > len(sample_frames) * 0.5 else 'moderate',
-                'percentage': (artifact_count / len(sample_frames)) * 100
+                'percentage': (artifact_count / len(sample_frames)) * 100,
+                'avg_height_px': avg_height,
+                'max_height_px': max_height,
             }
-        
+
         return None
     
     def _calculate_border_regions(self, x: int, y: int, w: int, h: int) -> Dict:
@@ -1113,33 +1144,32 @@ class SophisticatedBorderDetector:
             
             # Highlight head switching artifacts if detected
             if head_switching_results and head_switching_results.get('detected'):
-                # Draw orange line at bottom to indicate head switching artifacts
-                # The current _detect_head_switching doesn't return detailed region info,
-                # so we'll draw a line across the bottom of the frame
-                line_y = self.height - 1
-                ax1.plot([0, self.width], [line_y, line_y], 
-                        color='orange', linewidth=3, alpha=0.9, 
-                        label='Head Switching Artifacts')
-            
+                hs_height = head_switching_results.get('avg_height_px', 1)
+                hs_rect = patches.Rectangle(
+                    (0, self.height - hs_height), self.width, hs_height,
+                    linewidth=2, edgecolor='orange', facecolor='orange', alpha=0.35,
+                    label=f'Head Switching Region ({hs_height}px)')
+                ax1.add_patch(hs_rect)
+
             if border_added or (head_switching_results and head_switching_results.get('detected')):
                 ax1.legend()
-            
+
             # Active area only
             active_frame = frame_rgb[y:y+h, x:x+w]
             ax2.imshow(active_frame)
             ax2.set_title('Active Picture Area Only')
             ax2.axis('off')
-            
+
             # Add text annotations
             border_info = f'Border sizes: L={x}px, R={self.width-x-w}px, T={y}px, B={self.height-y-h}px'
             fig.text(0.5, 0.02, border_info, ha='center', fontsize=10)
-            
+
             # Add head switching info
             if head_switching_results and head_switching_results.get('detected'):
-                severity = head_switching_results.get('severity', 'unknown')
                 percentage = head_switching_results.get('percentage', 0)
-                hs_info = f"Head switching artifacts: {severity} ({percentage:.1f}% of frames)"
-                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=12, weight='bold', color='orange')
+                avg_h = head_switching_results.get('avg_height_px', 0)
+                hs_info = f"Head switching: {percentage:.1f}% of frames, avg height {avg_h}px"
+                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=11, weight='bold', color='orange')
             else:
                 fig.text(0.5, 0.95, 'No head switching artifacts detected', ha='center', fontsize=12, weight='bold', color='green')
         else:
@@ -1149,17 +1179,18 @@ class SophisticatedBorderDetector:
             
             # Still show head switching info even without borders
             if head_switching_results and head_switching_results.get('detected'):
-                # Draw orange line at bottom
-                line_y = self.height - 1
-                ax1.plot([0, self.width], [line_y, line_y], 
-                        color='orange', linewidth=3, alpha=0.9, 
-                        label='Head Switching Artifacts')
+                hs_height = head_switching_results.get('avg_height_px', 1)
+                hs_rect = patches.Rectangle(
+                    (0, self.height - hs_height), self.width, hs_height,
+                    linewidth=2, edgecolor='orange', facecolor='orange', alpha=0.35,
+                    label=f'Head Switching Region ({hs_height}px)')
+                ax1.add_patch(hs_rect)
                 ax1.legend()
-                
-                severity = head_switching_results.get('severity', 'unknown')
+
                 percentage = head_switching_results.get('percentage', 0)
-                hs_info = f"Head switching artifacts: {severity} ({percentage:.1f}% of frames)"
-                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=12, weight='bold', color='orange')
+                avg_h = head_switching_results.get('avg_height_px', 0)
+                hs_info = f"Head switching: {percentage:.1f}% of frames, avg height {avg_h}px"
+                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=11, weight='bold', color='orange')
             else:
                 fig.text(0.5, 0.95, 'No head switching artifacts detected', ha='center', fontsize=12, weight='bold', color='green')
             
