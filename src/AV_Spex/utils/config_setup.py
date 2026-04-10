@@ -238,6 +238,7 @@ class FrameAnalysisConfig:
     '''Configuration for frame analysis (borders, BRNG violations, signalstats)'''
     
     # Individual sub-step enable flags (now using bool to match JSON config)
+    enable_bitplane_check: bool = True
     enable_border_detection: bool = True
     enable_brng_analysis: bool = True
     enable_signalstats: bool = True
@@ -311,6 +312,8 @@ class QCTParseToolConfig:
     barsDetection: bool
     evaluateBars: bool
     thumbExport: bool
+    detect_audio_clipping: bool = False
+    detect_channel_imbalance: bool = False
 
 @dataclass
 class ToolsConfig:
@@ -384,7 +387,9 @@ class ChecksProfile:
             run_tool=False,
             barsDetection=False,
             evaluateBars=False,
-            thumbExport=False
+            thumbExport=False,
+            detect_audio_clipping=False,
+            detect_channel_imbalance=False
         )
     ))
 

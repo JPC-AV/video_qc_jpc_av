@@ -7,6 +7,7 @@ Combines the efficiency of the refactored version with the sophistication of the
 import os
 import json
 import gzip
+import time
 import cv2
 import numpy as np
 import subprocess
@@ -75,6 +76,32 @@ class SignalstatsResult:
     diagnosis: str
     used_qctools: bool
     comparison_results: List[Dict] = None
+
+@dataclass
+class UpstreamAnalysisContext:
+    """
+    Packages findings from border detection and signalstats
+    that should inform BRNG analysis decisions.
+    
+    Built by EnhancedFrameAnalysis.analyze() after signalstats completes,
+    passed to DifferentialBRNGAnalyzer to adapt sensitivity, sampling
+    density, edge detection, and thumbnail selection.
+    """
+    # Per-period signalstats findings (keyed by 0-based period index)
+    period_diagnoses: Dict[int, str]          # 'border_violations' | 'content_violations' | 'minimal_violations'
+    period_active_area_brng: Dict[int, Dict]  # {'max_brng': float, 'violation_pct': float}
+    period_full_frame_brng: Dict[int, Dict]   # {'max_brng': float, 'violation_pct': float}
+    
+    # Aggregate signalstats findings
+    avg_active_area_brng: float
+    overall_diagnosis: str
+    
+    # Border detection findings relevant to BRNG
+    head_switching: Optional[Dict] = None
+    border_widths: Optional[Dict] = None      # {'left': px, 'right': px, 'top': px, 'bottom': px}
+    
+    # How much of the violation budget is border vs content (0.0–1.0)
+    border_violation_fraction: float = 0.0
 
 
 class QCToolsParser:
@@ -590,14 +617,21 @@ class SophisticatedBorderDetector:
         
         cap.release()
         
-        # Calculate active area
+        # Calculate active area, using head switching height for bottom crop if larger
+        bottom_crop = borders['bottom']
+        if head_switching and head_switching.get('detected'):
+            hs_avg = head_switching.get('avg_height_px', 0)
+            if hs_avg > bottom_crop:
+                bottom_crop = hs_avg
+                logger.debug(f"  Bottom crop expanded from {borders['bottom']}px to {hs_avg}px based on head switching artifact height")
+
         active_x = borders['left']
         active_y = borders['top']
         active_width = self.width - borders['left'] - borders['right']
-        active_height = self.height - borders['top'] - borders['bottom']
+        active_height = self.height - borders['top'] - bottom_crop
 
         # Log the detection results
-        logger.debug(f"  Detected borders - L:{borders['left']}px R:{borders['right']}px T:{borders['top']}px B:{borders['bottom']}px")
+        logger.debug(f"  Detected borders - L:{borders['left']}px R:{borders['right']}px T:{borders['top']}px B:{bottom_crop}px")
         logger.debug(f"  Active picture area: {active_width}x{active_height} (from {self.width}x{self.height})")
         logger.debug(f"  Using {len(quality_frames)} quality frames for detection\n")
         
@@ -785,11 +819,17 @@ class SophisticatedBorderDetector:
         return borders
     
     def _detect_head_switching(self, cap, borders: Dict) -> Optional[Dict]:
-        """Detect head switching artifacts at bottom of frame"""
+        """Detect head switching artifacts at bottom of frame.
+
+        Measures the height of the artifact region by scanning upward from the
+        bottom of the frame to find where the asymmetry pattern ends.
+        """
         # Sample frames for analysis
+        max_scan_lines = 30  # scan up to 30 lines from the bottom
         sample_frames = np.linspace(0, self.total_frames - 1, 20, dtype=int)
         artifact_count = 0
-        
+        artifact_heights = []
+
         for frame_idx in sample_frames:
             if self.check_cancelled():
                 break
@@ -800,30 +840,48 @@ class SophisticatedBorderDetector:
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            # Analyze bottom 15 lines
-            bottom_region = gray[-15:, :]
-            
-            # Check for asymmetry (characteristic of head switching)
-            for line in bottom_region:
+            # Analyze bottom lines for asymmetry (characteristic of head switching)
+            bottom_region = gray[-max_scan_lines:, :]
+            frame_has_artifact = False
+            artifact_height = 0
+
+            # Scan from bottom up to find extent of artifact
+            for i in range(len(bottom_region) - 1, -1, -1):
+                line = bottom_region[i]
                 left_half = line[:len(line)//2]
                 right_half = line[len(line)//2:]
-                
+
                 left_mean = np.mean(left_half)
                 right_mean = np.mean(right_half)
-                
+
                 if left_mean > 10:
                     asymmetry = abs(left_mean - right_mean) / left_mean
                     if asymmetry > 0.5:
-                        artifact_count += 1
+                        frame_has_artifact = True
+                        artifact_height = len(bottom_region) - i
+                    else:
+                        # Stop scanning once we hit a non-artifact line
+                        if frame_has_artifact:
+                            break
+                else:
+                    if frame_has_artifact:
                         break
-        
+
+            if frame_has_artifact:
+                artifact_count += 1
+                artifact_heights.append(artifact_height)
+
         if artifact_count > len(sample_frames) * 0.2:
+            avg_height = int(round(np.mean(artifact_heights))) if artifact_heights else 0
+            max_height = int(max(artifact_heights)) if artifact_heights else 0
             return {
                 'detected': True,
                 'severity': 'high' if artifact_count > len(sample_frames) * 0.5 else 'moderate',
-                'percentage': (artifact_count / len(sample_frames)) * 100
+                'percentage': (artifact_count / len(sample_frames)) * 100,
+                'avg_height_px': avg_height,
+                'max_height_px': max_height,
             }
-        
+
         return None
     
     def _calculate_border_regions(self, x: int, y: int, w: int, h: int) -> Dict:
@@ -1086,33 +1144,32 @@ class SophisticatedBorderDetector:
             
             # Highlight head switching artifacts if detected
             if head_switching_results and head_switching_results.get('detected'):
-                # Draw orange line at bottom to indicate head switching artifacts
-                # The current _detect_head_switching doesn't return detailed region info,
-                # so we'll draw a line across the bottom of the frame
-                line_y = self.height - 1
-                ax1.plot([0, self.width], [line_y, line_y], 
-                        color='orange', linewidth=3, alpha=0.9, 
-                        label='Head Switching Artifacts')
-            
+                hs_height = head_switching_results.get('avg_height_px', 1)
+                hs_rect = patches.Rectangle(
+                    (0, self.height - hs_height), self.width, hs_height,
+                    linewidth=2, edgecolor='orange', facecolor='orange', alpha=0.35,
+                    label=f'Head Switching Region ({hs_height}px)')
+                ax1.add_patch(hs_rect)
+
             if border_added or (head_switching_results and head_switching_results.get('detected')):
                 ax1.legend()
-            
+
             # Active area only
             active_frame = frame_rgb[y:y+h, x:x+w]
             ax2.imshow(active_frame)
             ax2.set_title('Active Picture Area Only')
             ax2.axis('off')
-            
+
             # Add text annotations
             border_info = f'Border sizes: L={x}px, R={self.width-x-w}px, T={y}px, B={self.height-y-h}px'
             fig.text(0.5, 0.02, border_info, ha='center', fontsize=10)
-            
+
             # Add head switching info
             if head_switching_results and head_switching_results.get('detected'):
-                severity = head_switching_results.get('severity', 'unknown')
                 percentage = head_switching_results.get('percentage', 0)
-                hs_info = f"Head switching artifacts: {severity} ({percentage:.1f}% of frames)"
-                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=12, weight='bold', color='orange')
+                avg_h = head_switching_results.get('avg_height_px', 0)
+                hs_info = f"Head switching: {percentage:.1f}% of frames, avg height {avg_h}px"
+                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=11, weight='bold', color='orange')
             else:
                 fig.text(0.5, 0.95, 'No head switching artifacts detected', ha='center', fontsize=12, weight='bold', color='green')
         else:
@@ -1122,17 +1179,18 @@ class SophisticatedBorderDetector:
             
             # Still show head switching info even without borders
             if head_switching_results and head_switching_results.get('detected'):
-                # Draw orange line at bottom
-                line_y = self.height - 1
-                ax1.plot([0, self.width], [line_y, line_y], 
-                        color='orange', linewidth=3, alpha=0.9, 
-                        label='Head Switching Artifacts')
+                hs_height = head_switching_results.get('avg_height_px', 1)
+                hs_rect = patches.Rectangle(
+                    (0, self.height - hs_height), self.width, hs_height,
+                    linewidth=2, edgecolor='orange', facecolor='orange', alpha=0.35,
+                    label=f'Head Switching Region ({hs_height}px)')
+                ax1.add_patch(hs_rect)
                 ax1.legend()
-                
-                severity = head_switching_results.get('severity', 'unknown')
+
                 percentage = head_switching_results.get('percentage', 0)
-                hs_info = f"Head switching artifacts: {severity} ({percentage:.1f}% of frames)"
-                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=12, weight='bold', color='orange')
+                avg_h = head_switching_results.get('avg_height_px', 0)
+                hs_info = f"Head switching: {percentage:.1f}% of frames, avg height {avg_h}px"
+                fig.text(0.5, 0.95, hs_info, ha='center', fontsize=11, weight='bold', color='orange')
             else:
                 fig.text(0.5, 0.95, 'No head switching artifacts detected', ha='center', fontsize=12, weight='bold', color='green')
             
@@ -1183,13 +1241,21 @@ class DifferentialBRNGAnalyzer:
                                        duration_limit: int = 300,
                                        skip_start_seconds: float = 0,
                                        qctools_violations: List[FrameViolation] = None,
-                                       analysis_periods: List[Tuple[float, int]] = None) -> BRNGAnalysisResult:
+                                       analysis_periods: List[Tuple[float, int]] = None,
+                                       upstream_context: 'UpstreamAnalysisContext' = None) -> BRNGAnalysisResult:
         """
         Perform differential BRNG detection by creating highlighted and original versions.
         Now supports analyzing specific periods from signalstats.
+        
+        Args:
+            upstream_context: Findings from border detection and signalstats that
+                inform sensitivity, sampling density, and thumbnail selection.
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True)
+        
+        # Store upstream context for use in submethods
+        self.upstream_context = upstream_context
         
         # Store paths to temporary videos for thumbnail creation
         temp_video_paths = []
@@ -1207,6 +1273,35 @@ class DifferentialBRNGAnalyzer:
                 if self.check_cancelled():
                     break
                 logger.info(f"  Analyzing period {i+1}: {start_time:.1f}s - {start_time+duration:.1f}s")
+                
+                # Determine sensitivity and sampling density from upstream context
+                period_sensitivity = 'normal'
+                period_target_samples = None  # None = use default logic
+                if self.upstream_context and i in self.upstream_context.period_diagnoses:
+                    diagnosis = self.upstream_context.period_diagnoses[i]
+                    active_data = self.upstream_context.period_active_area_brng.get(i, {})
+                    active_pct = active_data.get('violation_pct', 0)
+                    active_max = active_data.get('max_brng', 0)
+                    
+                    if diagnosis == 'border_violations':
+                        period_sensitivity = 'strict'
+                        logger.debug(f"    Strict sensitivity (signalstats: border violations)")
+                    elif diagnosis == 'content_violations':
+                        period_sensitivity = 'normal'
+                        logger.debug(f"    Normal sensitivity (signalstats: content violations)")
+                    elif diagnosis == 'minimal_violations':
+                        period_sensitivity = 'strict'
+                        logger.debug(f"    Strict sensitivity (signalstats: minimal violations)")
+                    
+                    # Adapt sampling density based on active-area BRNG magnitude
+                    if active_pct < 1.0 and active_max < 0.01:
+                        period_target_samples = 30
+                        logger.debug(f"    Light sampling ({period_target_samples} frames): "
+                                   f"active area BRNG negligible ({active_pct:.1f}%)")
+                    elif active_pct > 30 or active_max > 1.0:
+                        period_target_samples = 200
+                        logger.debug(f"    Dense sampling ({period_target_samples} frames): "
+                                   f"significant active area BRNG ({active_pct:.1f}%)")
                 
                 # Calculate progress range for this period (each period gets equal share of 0-85%)
                 period_base = int(i / total_periods * 85)
@@ -1245,11 +1340,14 @@ class DifferentialBRNGAnalyzer:
                 period_violations, period_stats = self._analyze_differential_violations(
                     highlighted_path, original_path, start_time,
                     qctools_violations=qctools_violations,
-                    progress_range=(period_analysis_start, period_end)
+                    progress_range=(period_analysis_start, period_end),
+                    sensitivity=period_sensitivity,
+                    target_samples=period_target_samples,
+                    period_index=i
                 )
                 
                 # Track per-period summary
-                period_summaries.append({
+                period_summary = {
                     'period_num': i + 1,
                     'start_time': start_time,
                     'end_time': start_time + duration,
@@ -1257,8 +1355,18 @@ class DifferentialBRNGAnalyzer:
                     'frames_mapped': period_stats['frames_mapped_to_period'],
                     'total_samples': period_stats['total_samples_analyzed'],
                     'frames_checked': period_stats['frames_checked'],
-                    'violations_found': period_stats['violations_found']
-                })
+                    'violations_found': period_stats['violations_found'],
+                    'sensitivity_used': period_sensitivity,
+                }
+                
+                # Include signalstats diagnosis if available from upstream context
+                if self.upstream_context and i in self.upstream_context.period_diagnoses:
+                    period_summary['signalstats_diagnosis'] = self.upstream_context.period_diagnoses[i]
+                    active_data = self.upstream_context.period_active_area_brng.get(i, {})
+                    period_summary['signalstats_active_area_pct'] = active_data.get('violation_pct', 0)
+                    period_summary['signalstats_active_area_max'] = active_data.get('max_brng', 0)
+                
+                period_summaries.append(period_summary)
                 
                 all_violations.extend(period_violations)
                 
@@ -1337,11 +1445,12 @@ class DifferentialBRNGAnalyzer:
                 except Exception as e:
                     logger.warning(f"  Could not remove old thumbnail {old_thumb.name}: {e}")
             
-            # Select violations with temporal spacing
+            # Select violations with temporal spacing and upstream-context-aware priority
             selected_violations = self._select_diverse_violations_for_thumbnails(
                 violations, 
                 max_thumbnails=5, 
-                min_time_separation=5.0
+                min_time_separation=5.0,
+                analysis_periods=analysis_periods
             )
             
             logger.debug(f"  Creating diagnostic thumbnails for {len(selected_violations)} temporally diverse violations\n")
@@ -1426,8 +1535,19 @@ class DifferentialBRNGAnalyzer:
                         original_path: Path,
                         period_start_time: float,  # Renamed for clarity
                         qctools_violations: List[FrameViolation] = None,
-                        progress_range: Tuple[int, int] = None) -> List[FrameViolation]:
-        """Analyze violations using differential detection"""
+                        progress_range: Tuple[int, int] = None,
+                        sensitivity: str = 'normal',
+                        target_samples: int = None,
+                        period_index: int = None) -> List[FrameViolation]:
+        """Analyze violations using differential detection.
+        
+        Args:
+            sensitivity: 'strict', 'normal', or 'visualization' — controls detection
+                thresholds in _detect_differential_violations_frame.
+            target_samples: Override for how many frames to analyze. None = default logic.
+                Set by upstream context based on active-area BRNG magnitude.
+            period_index: 0-based index of this period, used for upstream context lookups.
+        """
         violations = []
         
         cap_h = cv2.VideoCapture(str(highlighted_path))
@@ -1440,6 +1560,11 @@ class DifferentialBRNGAnalyzer:
         
         # Calculate the time range this video segment represents
         period_end_time = period_start_time + duration
+        
+        # Sampling thresholds — adapt based on upstream context
+        min_qctools_samples = target_samples or 50
+        distributed_fill_count = target_samples or 100
+        max_sample_cap = target_samples or 200
         
         # Use QCTools violations to target specific frames
         if qctools_violations and len(qctools_violations) > 0:
@@ -1458,17 +1583,17 @@ class DifferentialBRNGAnalyzer:
             logger.debug(f"  Mapped {len(sample_indices)} violation frames to processed video positions")
             
             # If we didn't get enough samples from QCTools, add some distributed samples
-            if len(sample_indices) < 50:
-                logger.debug(f"  Adding distributed samples to reach minimum coverage")
-                additional_samples = np.linspace(0, total_frames - 1, 100, dtype=int)
+            if len(sample_indices) < min_qctools_samples:
+                logger.debug(f"  Adding distributed samples to reach minimum coverage ({min_qctools_samples})")
+                additional_samples = np.linspace(0, total_frames - 1, distributed_fill_count, dtype=int)
                 for sample in additional_samples:
                     if sample not in sample_indices:
                         sample_indices.append(sample)
-                sample_indices = sorted(sample_indices)[:200]
+                sample_indices = sorted(sample_indices)[:max_sample_cap]
         else:
             # Fallback to distributed sampling
             logger.info(f"  No QCTools violations provided, using distributed sampling")
-            num_samples = min(500, total_frames)
+            num_samples = min(target_samples or 500, total_frames)
             sample_indices = np.linspace(0, total_frames - 1, num_samples, dtype=int).tolist()
         
         logger.debug(f"  Analyzing {len(sample_indices)} frame samples...")
@@ -1499,8 +1624,8 @@ class DifferentialBRNGAnalyzer:
                 pct = p_start + int((sample_num + 1) / total_samples * (p_end - p_start))
                 self._emit_progress(pct)
             
-            # Detect violations differentially with lower threshold
-            violation_mask = self._detect_differential_violations_frame(frame_h, frame_o)
+            # Detect violations differentially using period-appropriate sensitivity
+            violation_mask = self._detect_differential_violations_frame(frame_h, frame_o, sensitivity=sensitivity)
             violation_pixels = int(np.sum(violation_mask > 0))
             
             # Lower threshold for detection (was 5, now 2)
@@ -1734,14 +1859,21 @@ class DifferentialBRNGAnalyzer:
     
     def _select_diverse_violations_for_thumbnails(self, violations: List[FrameViolation], 
                                                 max_thumbnails: int = 5, 
-                                                min_time_separation: float = 10.0) -> List[FrameViolation]:
+                                                min_time_separation: float = 10.0,
+                                                analysis_periods: List[Tuple[float, int]] = None) -> List[FrameViolation]:
         """
-        Select violations for thumbnails ensuring temporal diversity.
+        Select violations for thumbnails ensuring temporal diversity and diagnostic value.
+        
+        When upstream context is available, prioritizes violations from periods that
+        signalstats diagnosed as 'content_violations' — these are the actionable findings
+        a conservator needs to see. Border-dominated violations are deprioritized since
+        they're already documented in the border detection section of the report.
         
         Args:
             violations: List of violations sorted by violation_score (highest first)
             max_thumbnails: Maximum number of thumbnails to create
             min_time_separation: Minimum time separation between selected frames (seconds)
+            analysis_periods: List of (start_time, duration) tuples for period lookups
         
         Returns:
             List of violations for thumbnail creation
@@ -1749,14 +1881,46 @@ class DifferentialBRNGAnalyzer:
         if not violations:
             return []
         
+        # If we have upstream context, reorder violations to prioritize content violations
+        priority_ordered = violations
+        if (hasattr(self, 'upstream_context') and self.upstream_context 
+            and self.upstream_context.period_diagnoses and analysis_periods):
+            
+            # Build a lookup: which period does each violation belong to?
+            def _get_period_diagnosis(timestamp):
+                for idx, (start, dur) in enumerate(analysis_periods):
+                    if start <= timestamp < start + dur:
+                        return self.upstream_context.period_diagnoses.get(idx, '')
+                return ''
+            
+            content_violations = []
+            border_violations = []
+            other_violations = []
+            
+            for v in violations:
+                diag = _get_period_diagnosis(v.timestamp)
+                if diag == 'content_violations':
+                    content_violations.append(v)
+                elif diag == 'border_violations':
+                    border_violations.append(v)
+                else:
+                    other_violations.append(v)
+            
+            # Content first, then unclassified, then border
+            priority_ordered = content_violations + other_violations + border_violations
+            
+            if content_violations:
+                logger.debug(f"  Thumbnail priority: {len(content_violations)} content, "
+                           f"{len(other_violations)} other, {len(border_violations)} border violations")
+        
         selected_violations = []
         
-        # Always include the highest scoring violation
-        selected_violations.append(violations[0])
-        logger.info(f"\n  Selected thumbnail 1: Frame {violations[0].frame_num} at {violations[0].timestamp:.1f}s (score: {violations[0].violation_score:.4f})")
+        # Always include the highest-priority violation
+        selected_violations.append(priority_ordered[0])
+        logger.info(f"\n  Selected thumbnail 1: Frame {priority_ordered[0].frame_num} at {priority_ordered[0].timestamp:.1f}s (score: {priority_ordered[0].violation_score:.4f})")
         
         # Select additional violations with time separation constraint
-        for violation in violations[1:]:
+        for violation in priority_ordered[1:]:
             if len(selected_violations) >= max_thumbnails:
                 break
                 
@@ -1774,12 +1938,12 @@ class DifferentialBRNGAnalyzer:
         
         # If we couldn't find enough diverse violations, fill in with the best remaining ones
         # (but log this situation)
-        if len(selected_violations) < max_thumbnails and len(violations) > len(selected_violations):
+        if len(selected_violations) < max_thumbnails and len(priority_ordered) > len(selected_violations):
             remaining_needed = max_thumbnails - len(selected_violations)
             logger.info(f"  Only found {len(selected_violations)} violations with {min_time_separation}s separation")
             
             # Add the best remaining violations regardless of time separation
-            for violation in violations:
+            for violation in priority_ordered:
                 if violation not in selected_violations:
                     selected_violations.append(violation)
                     logger.info(f"  Added thumbnail {len(selected_violations)} (relaxed spacing): Frame {violation.frame_num} at {violation.timestamp:.1f}s\n")
@@ -1787,7 +1951,8 @@ class DifferentialBRNGAnalyzer:
                     if remaining_needed <= 0:
                         break
         
-        logger.debug(f"  Final selection: {len(selected_violations)} thumbnails spanning {selected_violations[-1].timestamp - selected_violations[0].timestamp:.1f} seconds")
+        if len(selected_violations) > 1:
+            logger.debug(f"  Final selection: {len(selected_violations)} thumbnails spanning {selected_violations[-1].timestamp - selected_violations[0].timestamp:.1f} seconds")
         
         return selected_violations
     
@@ -1851,18 +2016,32 @@ class DifferentialBRNGAnalyzer:
             'interior_density': 0.0
         }
         
+        # Determine per-edge widths. Widen bottom edge if head switching was detected
+        # upstream — head switching noise produces expected BRNG violations that should
+        # be classified as edge artifacts, not content issues.
+        bottom_edge_width = edge_width
+        if (hasattr(self, 'upstream_context') and self.upstream_context 
+            and self.upstream_context.head_switching):
+            hs = self.upstream_context.head_switching
+            hs_height = hs.get('artifact_height', 0)
+            hs_pct = hs.get('affected_percentage', 0)
+            if hs_pct > 30 and hs_height > edge_width:
+                bottom_edge_width = min(hs_height + 5, 40)  # Cap at 40px
+                logger.debug(f"    Bottom edge width expanded to {bottom_edge_width}px "
+                           f"(head switching: {hs_height}px in {hs_pct:.0f}% of frames)")
+        
         # Calculate interior violation density as baseline for comparison.
-        # This is the region inset by edge_width on all sides.
-        interior = violation_mask[edge_width:-edge_width, edge_width:-edge_width]
+        # This is the region inset by edge_width on all sides (using bottom_edge_width for bottom).
+        interior = violation_mask[edge_width:-bottom_edge_width, edge_width:-edge_width] if bottom_edge_width < h else violation_mask[edge_width:-edge_width, edge_width:-edge_width]
         interior_density = (np.sum(interior > 0) / interior.size * 100) if interior.size > 0 else 0
         edge_info['interior_density'] = interior_density
         
-        # Define edges with increased scan depth
+        # Define edges with increased scan depth (bottom uses head-switching-aware width)
         edges_to_check = [
             ('left', violation_mask[:, :edge_width], 'vertical'),
             ('right', violation_mask[:, -edge_width:], 'vertical'),
             ('top', violation_mask[:edge_width, :], 'horizontal'),
-            ('bottom', violation_mask[-edge_width:, :], 'horizontal')
+            ('bottom', violation_mask[-bottom_edge_width:, :], 'horizontal')
         ]
         
         for edge_name, edge_region, orientation in edges_to_check:
@@ -2589,7 +2768,7 @@ class IntegratedSignalstatsAnalyzer:
                         full_violations = period_comparison['qctools_full_frame']['violations_pct']
                         active_violations = period_comparison['ffprobe_active_area']['violations_pct']
                         
-                        if full_violations > active_violations + 5:
+                        if full_violations > active_violations + 5 and active_violations < 30:
                             logger.info(f"    → Border violations detected: Full frame has {full_violations - active_violations:.1f}% more violations\n")
                             period_comparison['diagnosis'] = 'border_violations'
                         elif active_violations > 10:
@@ -3094,8 +3273,244 @@ class EnhancedFrameAnalysis:
         except Exception as e:
             logger.warning(f"Could not get video duration: {e}")
         return None
-    
-    def analyze(self, 
+
+    def _check_bitplane_noise(self, num_samples: int = 20) -> Dict:
+        """
+        Check if the 9th and 10th bits (two least significant bits) of a 10-bit
+        video contain actual data by running ffprobe's bitplanenoise filter on
+        sampled frames.
+
+        TBC and framesync devices can truncate these bits, producing a file that
+        is technically 10-bit but effectively 8-bit. When bits are truncated,
+        the bitplanenoise value for those bitplanes will be 0.
+
+        Uses -read_intervals to seek to evenly-spaced timestamps (fast) rather
+        than decoding every frame sequentially.
+
+        Args:
+            num_samples: Number of frames to sample (evenly distributed)
+
+        Returns:
+            Dict with check results including per-channel, per-bitplane findings
+        """
+        # Get video duration to calculate sample timestamps
+        duration = self._get_video_duration()
+        if duration is None or duration == 0:
+            logger.warning("Could not determine video duration for bitplane check")
+            return {'status': 'error', 'message': 'Could not determine video duration'}
+
+        logger.debug(f"Checking bitplane noise on {num_samples} sampled frames across {duration:.1f}s...")
+
+        if self.check_cancelled():
+            return {'status': 'cancelled', 'message': 'Cancelled before bitplane check started'}
+
+        # Sample frames by seeking with -ss (input seeking, instant) and
+        # decoding just 1 frame per position. Each ffmpeg call takes ~0.1-0.2s,
+        # so 20 calls ≈ 2-4 seconds total regardless of video length.
+        timestamps = [i * duration / num_samples for i in range(num_samples)]
+
+        tag_keys = [
+            'lavfi.bitplanenoise.0.1', 'lavfi.bitplanenoise.1.1', 'lavfi.bitplanenoise.2.1',
+            'lavfi.bitplanenoise.0.2', 'lavfi.bitplanenoise.1.2', 'lavfi.bitplanenoise.2.2',
+            'lavfi.bitplanenoise.0.3', 'lavfi.bitplanenoise.1.3', 'lavfi.bitplanenoise.2.3',
+            'lavfi.bitplanenoise.0.4', 'lavfi.bitplanenoise.1.4', 'lavfi.bitplanenoise.2.4'
+        ]
+
+        vf = (
+            'bitplanenoise=bitplane=1,'
+            'bitplanenoise=bitplane=2,'
+            'bitplanenoise=bitplane=3,'
+            'bitplanenoise=bitplane=4,'
+            'metadata=print:file=-'
+        )
+
+        frames = []
+        for ts in timestamps:
+            if self.check_cancelled():
+                logger.info("Bitplane noise check cancelled")
+                return {'status': 'cancelled', 'message': 'Bitplane check was cancelled'}
+
+            cmd = [
+                'ffmpeg', '-nostdin', '-hide_banner', '-v', 'quiet',
+                '-ss', f'{ts:.3f}',
+                '-i', str(self.video_path),
+                '-vf', vf,
+                '-an',
+                '-frames:v', '1',
+                '-f', 'null',
+                '-'
+            ]
+
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=30
+                )
+                # Parse metadata=print output from stdout
+                current_tags = {}
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if '=' in line:
+                        key, _, val = line.partition('=')
+                        if key in tag_keys:
+                            current_tags[key] = val
+                if current_tags:
+                    frames.append({'tags': current_tags})
+            except subprocess.TimeoutExpired:
+                logger.debug(f"Bitplane probe timed out at {ts:.1f}s")
+                continue
+            except Exception as e:
+                logger.debug(f"Bitplane probe error at {ts:.1f}s: {e}")
+                continue
+
+        if not frames:
+            logger.warning("No frames returned from bitplane noise check")
+            return {'status': 'error', 'message': 'No frames analyzed'}
+
+        logger.info(f"Bitplane check analyzed {len(frames)} frames")
+
+        # Channel names for reporting
+        channel_names = {0: 'Y', 1: 'Cb', 2: 'Cr'}
+        bitplane_names = {1: '9th bit (bit 1)', 2: '10th bit (bit 2)', 3: '8th bit (bit 3)', 4: '7th bit (bit 4)'}
+
+        # Collect per-channel, per-bitplane values
+        values = {}
+        for plane in range(3):
+            for bitplane in [1, 2, 3, 4]:
+                key = f'lavfi.bitplanenoise.{plane}.{bitplane}'
+                frame_values = []
+                for frame in frames:
+                    frame_tags = frame.get('tags', {})
+                    val_str = frame_tags.get(key)
+                    if val_str is not None:
+                        frame_values.append(float(val_str))
+                values[(plane, bitplane)] = frame_values
+
+        # Analyze results: check if all sampled frames have zero noise for each channel/bitplane
+        channel_results = {}
+        all_empty = True
+        any_empty = False
+
+        for plane in range(3):
+            ch_name = channel_names[plane]
+            channel_results[ch_name] = {}
+            for bitplane in [1, 2, 3, 4]:
+                bp_name = bitplane_names[bitplane]
+                frame_values = values[(plane, bitplane)]
+
+                if not frame_values:
+                    channel_results[ch_name][bp_name] = {
+                        'status': 'no_data',
+                        'frames_sampled': 0
+                    }
+                    continue
+
+                zero_count = sum(1 for v in frame_values if v == 0.0)
+                total = len(frame_values)
+                zero_pct = (zero_count / total) * 100
+                avg_noise = sum(frame_values) / total
+                max_noise = max(frame_values)
+
+                is_empty = zero_count == total
+                if is_empty:
+                    any_empty = True
+                else:
+                    all_empty = False
+
+                channel_results[ch_name][bp_name] = {
+                    'status': 'empty' if is_empty else 'active',
+                    'frames_sampled': total,
+                    'zero_frames': zero_count,
+                    'zero_percentage': round(zero_pct, 1),
+                    'average_noise': round(avg_noise, 6),
+                    'max_noise': round(max_noise, 6)
+                }
+
+        if not any_empty:
+            all_empty = False
+
+        # Compute overall average noise per bitplane (across all channels)
+        overall_bitplane_avg = {}
+        for bitplane in [1, 2, 3, 4]:
+            bp_name = bitplane_names[bitplane]
+            all_values = []
+            for plane in range(3):
+                all_values.extend(values[(plane, bitplane)])
+            if all_values:
+                avg = sum(all_values) / len(all_values)
+                overall_bitplane_avg[bp_name] = round(avg, 6)
+            else:
+                overall_bitplane_avg[bp_name] = None
+
+        for bp_name, avg in overall_bitplane_avg.items():
+            if avg is not None:
+                logger.info(f"  Avg bitplanenoise {bp_name}: {avg}")
+
+        # Compare less significant bits (9th/10th) against more significant bits (7th/8th)
+        # The 9th and 10th bits should have noise values closer to 1.0 than the 7th and 8th
+        bit_order_check = None
+        avg_9th = overall_bitplane_avg.get(bitplane_names[1])   # 9th bit
+        avg_10th = overall_bitplane_avg.get(bitplane_names[2])  # 10th bit
+        avg_8th = overall_bitplane_avg.get(bitplane_names[3])   # 8th bit
+        avg_7th = overall_bitplane_avg.get(bitplane_names[4])   # 7th bit
+
+        if all(v is not None for v in [avg_9th, avg_10th, avg_8th, avg_7th]):
+            avg_lsb = (avg_9th + avg_10th) / 2   # average of less significant bits
+            avg_msb = (avg_7th + avg_8th) / 2     # average of more significant bits
+
+            if avg_lsb >= avg_msb:
+                bit_order_check = {
+                    'status': 'expected',
+                    'message': 'Less significant bits (9th/10th) have higher noise than more significant bits (7th/8th), as expected',
+                    'avg_9th_10th': round(avg_lsb, 6),
+                    'avg_7th_8th': round(avg_msb, 6)
+                }
+                logger.info(f"  Bit order check: expected (9th/10th avg: {avg_lsb:.6f} >= 7th/8th avg: {avg_msb:.6f})")
+            else:
+                bit_order_check = {
+                    'status': 'unexpected',
+                    'message': 'Less significant bits (9th/10th) have lower noise than more significant bits (7th/8th) — possible bit truncation or unusual encoding',
+                    'avg_9th_10th': round(avg_lsb, 6),
+                    'avg_7th_8th': round(avg_msb, 6)
+                }
+                logger.warning(f"  Bit order check: unexpected (9th/10th avg: {avg_lsb:.6f} < 7th/8th avg: {avg_msb:.6f})")
+
+        # Determine overall status
+        if all_empty:
+            overall_status = 'truncated'
+            overall_message = (
+                'All channels show empty 7th–10th bits — '
+                'video appears to have significant bit truncation'
+            )
+            logger.warning(f"Bitplane check: {overall_message}")
+        elif any_empty:
+            # Find which specific channels/bitplanes are empty
+            empty_parts = []
+            for ch_name, bp_data in channel_results.items():
+                for bp_name, bp_result in bp_data.items():
+                    if bp_result.get('status') == 'empty':
+                        empty_parts.append(f"{ch_name} {bp_name}")
+            overall_status = 'partial_truncation'
+            overall_message = (
+                f'Some bitplanes appear empty: {", ".join(empty_parts)} — '
+                f'possible partial bit truncation'
+            )
+            logger.warning(f"Bitplane check: {overall_message}")
+        else:
+            overall_status = 'valid'
+            overall_message = '7th–10th bits contain data across all channels'
+            logger.info(f"Bitplane check: {overall_message}")
+
+        return {
+            'status': overall_status,
+            'message': overall_message,
+            'frames_sampled': len(frames),
+            'video_duration': duration,
+            'overall_bitplane_averages': overall_bitplane_avg,
+            'channels': channel_results,
+            'bit_order_check': bit_order_check
+        }
+
+    def analyze(self,
         method: str = 'sophisticated',
         duration_limit: int = 300,
         skip_color_bars: bool = True,
@@ -3130,23 +3545,35 @@ class EnhancedFrameAnalysis:
         frame_config = self.checks_config.outputs.frame_analysis
         
         # Check which steps are enabled (handle both bool and str types)
+        bitplane_check_enabled = self._is_step_enabled(frame_config.enable_bitplane_check)
         border_detection_enabled = self._is_step_enabled(frame_config.enable_border_detection)
         brng_analysis_enabled = self._is_step_enabled(frame_config.enable_brng_analysis)
         signalstats_enabled = self._is_step_enabled(frame_config.enable_signalstats)
-        
+
         # Log which steps will run
         logger.info(f"Frame analysis configuration:")
+        logger.debug(f"  Bitplane check: {'enabled' if bitplane_check_enabled else 'disabled'}")
         logger.debug(f"  Border detection: {'enabled' if border_detection_enabled else 'disabled'}")
         logger.debug(f"  BRNG analysis: {'enabled' if brng_analysis_enabled else 'disabled'}")
         logger.debug(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}\n")
-        
+
         # Track what was actually run
         results['steps_enabled'] = {
+            'bitplane_check': bitplane_check_enabled,
             'border_detection': border_detection_enabled,
             'brng_analysis': brng_analysis_enabled,
             'signalstats': signalstats_enabled
         }
-        
+
+        # Step 0: Bitplane check — verify 9th and 10th bits are not empty
+        if self.check_cancelled():
+            return results
+        if bitplane_check_enabled:
+            bitplane_results = self._check_bitplane_noise()
+            results['bitplane_check'] = bitplane_results
+            if signals and hasattr(signals, 'step_completed'):
+                signals.step_completed.emit('Frame Analysis - Bitplane Check')
+
         # Step 1: Detect color bars (always run if skip_color_bars is True, as it's a prerequisite)
         if skip_color_bars:
             if color_bars_end_time is None:
@@ -3328,6 +3755,24 @@ class EnhancedFrameAnalysis:
         else:
             logger.warning("Skipping signalstats analysis (disabled in config)\n")
         
+        # Build upstream context from border detection + signalstats for BRNG analyzer
+        upstream_context = None
+        if signalstats_results and border_results:
+            upstream_context = self._build_upstream_context(
+                signalstats_results, border_results
+            )
+            
+            # Refine analysis periods: replace low-value periods with better candidates
+            if analysis_periods and qctools_suggested_periods:
+                analysis_periods = self._refine_periods_from_signalstats(
+                    current_periods=analysis_periods,
+                    signalstats_results=signalstats_results,
+                    qctools_candidate_periods=qctools_suggested_periods,
+                    black_segments=black_segments,
+                    period_duration=frame_config.analysis_period_duration,
+                    color_bars_end_time=color_bars_end_time
+                )
+        
         # Step 5: BRNG analysis (conditional)
         brng_results = None
         if self.check_cancelled():
@@ -3371,7 +3816,8 @@ class EnhancedFrameAnalysis:
                 duration_limit=duration_limit,
                 skip_start_seconds=color_bars_end_time,
                 qctools_violations=violations,
-                analysis_periods=analysis_periods 
+                analysis_periods=analysis_periods,
+                upstream_context=upstream_context
             )
             results['brng_analysis'] = asdict(brng_results) if brng_results else None
             
@@ -3507,12 +3953,19 @@ class EnhancedFrameAnalysis:
                                                                   check_cancelled_fn=self.check_cancelled,
                                                                   signals=self.signals)
 
+                    # Rebuild upstream context with updated signalstats/border results
+                    if signalstats_results and border_results:
+                        upstream_context = self._build_upstream_context(
+                            signalstats_results, border_results
+                        )
+
                     brng_results = self.brng_analyzer.analyze_with_differential_detection(
                         output_dir=self.output_dir,
                         duration_limit=duration_limit,
                         skip_start_seconds=color_bars_end_time,
                         qctools_violations=violations,
-                        analysis_periods=analysis_periods
+                        analysis_periods=analysis_periods,
+                        upstream_context=upstream_context
                     )
 
                     if self.check_cancelled():
@@ -4209,6 +4662,143 @@ class EnhancedFrameAnalysis:
                 logger.info("    → Mixed violation distribution - review thumbnails for details")
             logger.info("")
     
+    def _build_upstream_context(self, signalstats_results: SignalstatsResult,
+                                border_results: BorderDetectionResult) -> UpstreamAnalysisContext:
+        """
+        Package findings from border detection and signalstats into a context
+        object that informs BRNG analyzer decisions.
+        """
+        period_diagnoses = {}
+        period_active_brng = {}
+        period_full_brng = {}
+        
+        for comp in (signalstats_results.comparison_results or []):
+            idx = comp.get('period', 1) - 1  # 0-indexed
+            period_diagnoses[idx] = comp.get('diagnosis', '')
+            
+            ff_data = comp.get('ffprobe_active_area', {})
+            qc_data = comp.get('qctools_full_frame', {})
+            
+            period_active_brng[idx] = {
+                'max_brng': ff_data.get('max_brng', 0),
+                'violation_pct': ff_data.get('violations_pct', 0)
+            }
+            period_full_brng[idx] = {
+                'max_brng': qc_data.get('max_brng', 0),
+                'violation_pct': qc_data.get('violations_pct', 0)
+            }
+        
+        # Calculate border violation fraction from full-frame vs active-area delta
+        total_full = sum(d.get('violation_pct', 0) for d in period_full_brng.values())
+        total_active = sum(d.get('violation_pct', 0) for d in period_active_brng.values())
+        border_fraction = ((total_full - total_active) / total_full) if total_full > 0 else 0.0
+        
+        # Extract border widths from active area
+        active = border_results.active_area  # (x, y, w, h)
+        border_widths = {
+            'left': active[0],
+            'right': max(0, self.border_detector.width - active[0] - active[2]),
+            'top': active[1],
+            'bottom': max(0, self.border_detector.height - active[1] - active[3])
+        }
+        
+        context = UpstreamAnalysisContext(
+            period_diagnoses=period_diagnoses,
+            period_active_area_brng=period_active_brng,
+            period_full_frame_brng=period_full_brng,
+            avg_active_area_brng=signalstats_results.avg_brng,
+            overall_diagnosis=signalstats_results.diagnosis,
+            head_switching=border_results.head_switching_artifacts,
+            border_widths=border_widths,
+            border_violation_fraction=max(0.0, min(1.0, border_fraction))
+        )
+        
+        logger.debug(f"  Built upstream context for BRNG analyzer:")
+        logger.debug(f"    Period diagnoses: {period_diagnoses}")
+        logger.debug(f"    Border violation fraction: {border_fraction:.2f}")
+        if border_results.head_switching_artifacts:
+            logger.debug(f"    Head switching: detected")
+        
+        return context
+    
+    def _refine_periods_from_signalstats(self, current_periods, signalstats_results,
+                                          qctools_candidate_periods, black_segments,
+                                          period_duration, color_bars_end_time):
+        """
+        Replace low-value periods with better candidates based on signalstats findings.
+        
+        A period is "low-value" for BRNG analysis if signalstats diagnosed it as 
+        'minimal_violations' with near-zero active-area BRNG — meaning there's 
+        nothing meaningful for the differential detector to find there.
+        """
+        comparison_results = signalstats_results.comparison_results or []
+        
+        if not comparison_results:
+            return current_periods
+        
+        # Score each current period by how useful it is for BRNG analysis
+        period_scores = []
+        for i, (start, dur) in enumerate(current_periods):
+            comp = comparison_results[i] if i < len(comparison_results) else {}
+            diagnosis = comp.get('diagnosis', '')
+            
+            ff_data = comp.get('ffprobe_active_area', {})
+            active_pct = ff_data.get('violations_pct', 0)
+            
+            # Score: content_violations > border_violations > minimal
+            if diagnosis == 'content_violations':
+                score = 100 + active_pct
+            elif diagnosis == 'border_violations':
+                score = 50 + active_pct
+            else:
+                score = active_pct
+            
+            period_scores.append((i, score, start, dur))
+        
+        # Find periods worth replacing (score < 5 means essentially no active-area signal)
+        replaceable = [(i, s, start, dur) for i, s, start, dur in period_scores if s < 5]
+        
+        if not replaceable:
+            return current_periods
+        
+        # Find candidate replacement periods from QCTools that aren't already selected
+        current_ranges = [(start, start + dur) for start, dur in current_periods]
+        
+        candidates = []
+        for qct_start, qct_dur in qctools_candidate_periods:
+            overlaps = False
+            for cs, ce in current_ranges:
+                if not (qct_start + qct_dur < cs or qct_start > ce):
+                    overlaps = True
+                    break
+            if not overlaps:
+                candidates.append((qct_start, qct_dur))
+        
+        if not candidates:
+            return current_periods
+        
+        # Replace low-value periods with candidates
+        refined = list(current_periods)
+        replacements_made = 0
+        for (idx, _, old_start, _), candidate in zip(replaceable, candidates):
+            refined[idx] = candidate
+            replacements_made += 1
+            logger.info(f"  Replaced period {idx+1} ({old_start:.1f}s, minimal active-area BRNG) "
+                       f"with QCTools candidate at {candidate[0]:.1f}s")
+        
+        # Validate replacements against black segments
+        if black_segments and replacements_made > 0:
+            refined = self.signalstats_analyzer._validate_periods_against_black_segments(
+                refined, black_segments,
+                effective_start=(color_bars_end_time or 0) + 10,
+                period_duration=period_duration
+            )
+        
+        if replacements_made > 0:
+            logger.info(f"  Refined {replacements_made} analysis period(s) based on signalstats findings\n")
+        
+        return refined
+
     def _save_results(self, results: Dict):
         """Save analysis results to JSON"""
         import copy

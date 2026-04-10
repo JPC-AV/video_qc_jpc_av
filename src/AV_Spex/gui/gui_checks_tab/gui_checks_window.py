@@ -632,35 +632,28 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Get list of dependent checkboxes
         dependent_checkboxes = [
             self.bars_detection_cb,
-            self.evaluate_bars_cb, 
-            self.thumb_export_cb
+            self.evaluate_bars_cb,
+            self.thumb_export_cb,
+            self.detect_audio_clipping_cb,
+            self.detect_channel_imbalance_cb
         ]
-        
+
         if Qt.CheckState(state) == Qt.CheckState.Checked:
-            # If run_tool is checked, enable bars detection first
-            self.bars_detection_cb.setEnabled(True)
-            self.bars_detection_cb.blockSignals(True)
-            self.bars_detection_cb.setChecked(True)
-            self.bars_detection_cb.blockSignals(False)
-            
-            # Enable and check evaluate bars and thumbnail export
-            self.evaluate_bars_cb.setEnabled(True)
-            self.evaluate_bars_cb.blockSignals(True)
-            self.evaluate_bars_cb.setChecked(True)
-            self.evaluate_bars_cb.blockSignals(False)
-            
-            self.thumb_export_cb.setEnabled(True)
-            self.thumb_export_cb.blockSignals(True)
-            self.thumb_export_cb.setChecked(True)
-            self.thumb_export_cb.blockSignals(False)
-            
+            for cb in dependent_checkboxes:
+                cb.setEnabled(True)
+                cb.blockSignals(True)
+                cb.setChecked(True)
+                cb.blockSignals(False)
+
             # Update the config for all dependent options
             dependent_updates = {
                 'tools': {
                     'qct_parse': {
                         'barsDetection': True,
                         'evaluateBars': True,
-                        'thumbExport': True
+                        'thumbExport': True,
+                        'detect_audio_clipping': True,
+                        'detect_channel_imbalance': True
                     }
                 }
             }
@@ -729,17 +722,23 @@ class ChecksWindow(QWidget, ThemeableMixin):
         """Check and enforce QCT Parse dependencies"""
         # If bars detection is off, then evaluate bars and thumbnail should already be disabled
         # This check is for the case where both bars detection and evaluate bars are unchecked
-        if not self.bars_detection_cb.isChecked() and not self.evaluate_bars_cb.isChecked():
+        # Audio clipping is independent, so only auto-uncheck run_tool if nothing is active
+        if (not self.bars_detection_cb.isChecked() and
+            not self.evaluate_bars_cb.isChecked() and
+            not self.detect_audio_clipping_cb.isChecked() and
+            not self.detect_channel_imbalance_cb.isChecked()):
             # Uncheck run tool since no detection methods are active
             self.run_qctparse_cb.blockSignals(True)
             self.run_qctparse_cb.setChecked(False)
             self.run_qctparse_cb.blockSignals(False)
-            
+
             # Disable all dependent options since run tool is now off
             self.bars_detection_cb.setEnabled(False)
             self.evaluate_bars_cb.setEnabled(False)
             self.thumb_export_cb.setEnabled(False)
-            
+            self.detect_audio_clipping_cb.setEnabled(False)
+            self.detect_channel_imbalance_cb.setEnabled(False)
+
             # Update config for run_tool change
             run_tool_updates = {
                 'tools': {

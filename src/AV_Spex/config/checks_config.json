@@ -4,6 +4,7 @@
     "report": false,
     "qctools_ext": "qctools.xml.gz",
     "frame_analysis": {
+      "enable_bitplane_check": true,
       "enable_border_detection": true,
       "enable_brng_analysis": true,
       "enable_signalstats": true,
@@ -60,6 +61,8 @@
       "barsDetection": true,
       "evaluateBars": true,
       "thumbExport": true,
+      "detect_audio_clipping": false,
+      "detect_channel_imbalance": false,
       "tagname": ""
     }
   },
