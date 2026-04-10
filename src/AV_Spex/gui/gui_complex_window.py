@@ -94,7 +94,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Checkboxes with descriptions on second line
         self.run_qctparse_cb = QCheckBox("Run Tool")
         self.run_qctparse_cb.setStyleSheet("font-weight: bold;")
-        run_qctparse_desc = QLabel("Run qct-parse tool on input video file")
+        run_qctparse_desc = QLabel("Run qct-parse tool on QCtools report of input video file")
         run_qctparse_desc.setIndent(20)
 
         self.bars_detection_cb = QCheckBox("Detect Color Bars")
