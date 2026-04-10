@@ -1583,19 +1583,18 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         return None
 
     ######## Audio Analysis (Clipping Detection / Channel Imbalance) ########
-    do_clipping = qct_parse.get('detect_audio_clipping', False)
-    do_imbalance = qct_parse.get('detect_channel_imbalance', False)
-    if do_clipping or do_imbalance:
+    do_audio_analysis = qct_parse.get('audio_analysis', False)
+    if do_audio_analysis:
         logger.debug(f"Starting audio analysis on {baseName}\n")
         clipping_results, imbalance_results = analyzeAudio(
             startObj, pkt, report_directory,
-            detect_clipping=do_clipping,
-            detect_imbalance=do_imbalance,
+            detect_clipping=True,
+            detect_imbalance=True,
             signals=signals, total_duration=total_duration
         )
-        if do_clipping and clipping_results is None:
+        if clipping_results is None:
             logger.warning("Audio clipping detection could not be performed\n")
-        if do_imbalance and imbalance_results is None:
+        if imbalance_results is None:
             logger.warning("Channel imbalance analysis could not be performed\n")
 
     if check_cancelled():
