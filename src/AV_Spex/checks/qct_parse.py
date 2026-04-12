@@ -9,6 +9,7 @@
 # Summary of that event here: https://wiki.curatecamp.org/index.php/Association_of_Moving_Image_Archivists_%26_Digital_Library_Federation_Hack_Day_2016
 
 import gzip
+import math
 import os
 import subprocess
 import shutil
@@ -19,7 +20,8 @@ import collections      # for circular buffer
 import csv
 import datetime as dt
 import io
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
+from collections import defaultdict
 
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
@@ -1052,12 +1054,66 @@ def detectBitdepth(startObj,pkt,framesList,buffSize):
 AUDIO_CLIPPING_THRESHOLD_DB = -0.5
 SILENCE_THRESHOLD_DB = -60.0
 
+# ---------------------------------------------------------------------------
+# Audible timecode detection thresholds
+# ---------------------------------------------------------------------------
 
-def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, signals=None, total_duration=None):
+# R128 thresholds (derived from analysis of known TC files)
+_TC_R128_WINDOW_SEC = 30          # rolling window size in seconds
+_TC_R128_MIN_WINDOWS = 6          # minimum consecutive windows to confirm TC (~3 min)
+
+# Criterion A: dual-channel TC (both channels carry TC)
+_TC_R128_A_M_STDEV_MAX = 2.0
+_TC_R128_A_M_MEAN_MIN = -25.0
+_TC_R128_A_LRA_MEDIAN_MAX = 5.0
+
+# Criterion B: TC + silence (one channel TC, other near-silent)
+_TC_R128_B_LRA_HIGH_MIN = -30.0
+_TC_R128_B_LRA_HIGH_MAX = -10.0
+_TC_R128_B_LRA_HIGH_STDEV_MAX = 2.0
+_TC_R128_B_M_I_DIFF_MIN = 20.0
+_TC_R128_B_LRA_MIN = 13.0
+
+# Criterion C: TC + program audio
+_TC_R128_C_MS_DIFF_MEDIAN_MIN = 1.5
+_TC_R128_C_M_STDEV_MIN = 8.0
+_TC_R128_C_LRA_HIGH_MIN = -30.0
+_TC_R128_C_LRA_HIGH_MAX = -10.0
+_TC_R128_C_LRA_HIGH_STDEV_MAX = 3.0
+_TC_R128_C_LRA_HIGH_UPPER = -24.0
+_TC_R128_C_M_MIN = -60.0
+
+# astats thresholds (per-channel detection)
+_TC_ASTATS_WINDOW_FRAMES = 7     # ~7 frames at ~4.6s each ~ 30s window
+_TC_ASTATS_MIN_WINDOWS = 2       # minimum consecutive windows to confirm TC
+
+# Per-channel TC indicators in astats
+_TC_ASTATS_RMS_LEVEL_MIN = -30.0
+_TC_ASTATS_RMS_LEVEL_MAX = -5.0
+_TC_ASTATS_RMS_STDEV_MAX = 3.0
+_TC_ASTATS_CREST_FACTOR_MAX = 2.0
+_TC_ASTATS_DYNAMIC_RANGE_MAX = 20.0
+_TC_ASTATS_ZERO_CROSSINGS_RATE_MIN = 0.06
+_TC_ASTATS_ZERO_CROSSINGS_RATE_MAX = 0.15
+_TC_ASTATS_ENTROPY_MAX = 0.35
+
+
+@dataclass
+class _TCDetection:
+    """A detected region of audible timecode."""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    criterion: str = ""
+    channel: str = ""
+    confidence: str = ""
+    details: str = ""
+
+
+def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, signals=None, total_duration=None):
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
-    audio clipping (Peak_level >= threshold) and/or channel imbalance (comparing
-    per-channel RMS_level values).
+    audio clipping (Peak_level >= threshold), channel imbalance (comparing
+    per-channel RMS_level values), and/or audible timecode (LTC artifacts).
 
     Parameters:
         startObj (str): Path to the QCTools report file (.qctools.xml.gz)
@@ -1065,11 +1121,12 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
         report_directory (str): Path to {video_id}_report_csvs directory for CSV output.
         detect_clipping (bool): Whether to run audio clipping detection.
         detect_imbalance (bool): Whether to run channel imbalance detection.
+        detect_timecode (bool): Whether to run audible timecode detection.
         signals: Optional signals object for emitting progress updates.
         total_duration (float or None): Total video duration in seconds for progress reporting.
 
     Returns:
-        tuple: (clipping_results, imbalance_results)
+        tuple: (clipping_results, imbalance_results, timecode_results)
             Each is a dict with analysis results, or None if that analysis was
             not requested or no audio frames were found.
     """
@@ -1097,6 +1154,10 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     # Channel imbalance state — dict keyed by channel number (int), values are lists of RMS levels
     channel_rms_values = {}
 
+    # Timecode detection state — per-frame data collected during parse
+    tc_frames = []  # list of dicts: {time, tags}
+    tc_metric_type = 'unknown'
+
     try:
         for event, elem in parser_iter:
             if elem.attrib.get('media_type') == "audio":
@@ -1116,6 +1177,7 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                 peak_level = None
                 flat_factor = None
                 frame_channel_rms = {}
+                tc_frame_tags = {} if detect_timecode else None
 
                 for t in list(elem):
                     key = t.attrib.get('key', '')
@@ -1137,6 +1199,16 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                             if match:
                                 ch_num = int(match.group(1))
                                 frame_channel_rms[ch_num] = val
+
+                    if detect_timecode:
+                        # Collect r128 and astats tags for timecode detection
+                        if key.startswith('lavfi.r128') or key.startswith('lavfi.astats'):
+                            tc_frame_tags[key] = val
+                            if tc_metric_type == 'unknown':
+                                if key.startswith('lavfi.r128'):
+                                    tc_metric_type = 'r128'
+                                elif key.startswith('lavfi.astats'):
+                                    tc_metric_type = 'astats'
 
                 # Clipping analysis
                 if detect_clipping and peak_level is not None:
@@ -1162,13 +1234,21 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                             channel_rms_values[ch_num] = []
                         channel_rms_values[ch_num].append(rms_val)
 
+                # Timecode frame collection
+                if detect_timecode and tc_frame_tags:
+                    try:
+                        frame_time = float(frame_pkt_dts_time)
+                    except ValueError:
+                        frame_time = 0.0
+                    tc_frames.append({'time': frame_time, 'tags': tc_frame_tags})
+
             elem.clear()
     except Exception as e:
         logger.error(f"Error during audio analysis: {e}")
 
     if total_audio_frames == 0:
         logger.warning("No audio frames found in QCTools report for audio analysis\n")
-        return None, None
+        return None, None, None
 
     # Build clipping results
     clipping_results = None
@@ -1185,7 +1265,14 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
             report_directory, total_audio_frames, channel_rms_values
         )
 
-    return clipping_results, imbalance_results
+    # Run audible timecode detection
+    timecode_results = None
+    if detect_timecode:
+        timecode_results = _detect_and_write_timecode_results(
+            tc_frames, tc_metric_type, report_directory
+        )
+
+    return clipping_results, imbalance_results, timecode_results
 
 
 def _write_clipping_results(report_directory, total_audio_frames, clipped_frames, max_peak_level, max_flat_factor, clipping_events):
@@ -1377,9 +1464,436 @@ def _write_imbalance_results(report_directory, total_audio_frames, channel_rms_v
     return results
 
 
+# ---------------------------------------------------------------------------
+# Audible timecode detection
+# ---------------------------------------------------------------------------
+
+def _tc_mean(values):
+    if not values:
+        return float('nan')
+    return sum(values) / len(values)
+
+
+def _tc_median(values):
+    if not values:
+        return float('nan')
+    s = sorted(values)
+    n = len(s)
+    if n % 2 == 0:
+        return (s[n // 2 - 1] + s[n // 2]) / 2
+    return s[n // 2]
+
+
+def _tc_stdev(values):
+    if len(values) < 2:
+        return 0.0
+    m = _tc_mean(values)
+    return math.sqrt(sum((v - m) ** 2 for v in values) / (len(values) - 1))
+
+
+def _tc_format_time(seconds):
+    """Format seconds as HH:MM:SS.s"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    if h > 0:
+        return f'{h:d}:{m:02d}:{s:04.1f}'
+    return f'{m:d}:{s:04.1f}'
+
+
+def _tc_filter_by_consecutive(detections, min_consecutive):
+    """Keep only detections that are part of a consecutive run of sufficient length."""
+    if len(detections) < min_consecutive:
+        return []
+
+    by_crit = defaultdict(list)
+    for d in detections:
+        by_crit[d.criterion].append(d)
+
+    result = []
+    for crit, dets in by_crit.items():
+        dets.sort(key=lambda d: d.start_time)
+        run = [dets[0]]
+        for d in dets[1:]:
+            gap = d.start_time - run[-1].end_time
+            if gap <= _TC_R128_WINDOW_SEC * 1.5:
+                run.append(d)
+            else:
+                if len(run) >= min_consecutive:
+                    result.extend(run)
+                run = [d]
+        if len(run) >= min_consecutive:
+            result.extend(run)
+
+    return result
+
+
+def _tc_merge_detections(detections):
+    """Merge overlapping detections with the same criterion into spans."""
+    if not detections:
+        return []
+
+    by_crit = defaultdict(list)
+    for d in detections:
+        by_crit[d.criterion].append(d)
+
+    merged = []
+    for crit, dets in by_crit.items():
+        dets.sort(key=lambda d: d.start_time)
+        current = _TCDetection(
+            start_time=dets[0].start_time,
+            end_time=dets[0].end_time,
+            criterion=dets[0].criterion,
+            channel=dets[0].channel,
+            confidence=dets[0].confidence,
+            details=dets[0].details
+        )
+        for d in dets[1:]:
+            if d.start_time <= current.end_time + _TC_R128_WINDOW_SEC:
+                current.end_time = max(current.end_time, d.end_time)
+                if d.confidence == 'high':
+                    current.confidence = 'high'
+            else:
+                merged.append(current)
+                current = _TCDetection(
+                    start_time=d.start_time,
+                    end_time=d.end_time,
+                    criterion=d.criterion,
+                    channel=d.channel,
+                    confidence=d.confidence,
+                    details=d.details
+                )
+        merged.append(current)
+
+    merged.sort(key=lambda d: d.start_time)
+    return merged
+
+
+def _detect_r128_timecode(frames):
+    """Detect audible timecode using EBU R128 measurements."""
+    if not frames:
+        return []
+
+    times = [f['time'] for f in frames]
+    m_vals = [f['tags'].get('lavfi.r128.M', float('nan')) for f in frames]
+    s_vals = [f['tags'].get('lavfi.r128.S', float('nan')) for f in frames]
+    lra_vals = [f['tags'].get('lavfi.r128.LRA', float('nan')) for f in frames]
+    lra_high_vals = [f['tags'].get('lavfi.r128.LRA.high', float('nan')) for f in frames]
+
+    # Get integrated loudness from last valid frame
+    i_val = float('nan')
+    for frame in reversed(frames):
+        candidate = frame['tags'].get('lavfi.r128.I', float('nan'))
+        if not math.isnan(candidate) and candidate < -1.0:
+            i_val = candidate
+            break
+
+    # Determine frame interval
+    if len(times) >= 2:
+        dt_sec = times[1] - times[0]
+    else:
+        dt_sec = 0.1
+    window_size = max(1, int(_TC_R128_WINDOW_SEC / dt_sec))
+
+    detections = []
+    detections.extend(_detect_r128_criterion_a(times, m_vals, lra_vals, window_size))
+    detections.extend(_detect_r128_criterion_b(times, m_vals, lra_vals, lra_high_vals, i_val, window_size))
+    detections.extend(_detect_r128_criterion_c(times, m_vals, s_vals, lra_high_vals, window_size))
+
+    return _tc_merge_detections(detections)
+
+
+def _detect_r128_criterion_a(times, m_vals, lra_vals, window_size):
+    """Criterion A: detect dual-channel TC via rolling windows."""
+    detections = []
+    for i in range(0, len(times) - window_size + 1, window_size // 2):
+        end = min(i + window_size, len(times))
+        w_m = [v for v in m_vals[i:end] if not math.isnan(v)]
+        w_lra = [v for v in lra_vals[i:end] if not math.isnan(v)]
+
+        if not w_m or not w_lra:
+            continue
+
+        m_std = _tc_stdev(w_m)
+        m_mean = _tc_mean(w_m)
+        lra_med = _tc_median(w_lra)
+
+        if (m_std < _TC_R128_A_M_STDEV_MAX
+                and m_mean > _TC_R128_A_M_MEAN_MIN
+                and lra_med < _TC_R128_A_LRA_MEDIAN_MAX):
+            detections.append(_TCDetection(
+                start_time=times[i],
+                end_time=times[min(end - 1, len(times) - 1)],
+                criterion='R128-A (dual-channel TC)',
+                channel='both',
+                confidence='high' if m_std < 1.0 else 'medium',
+                details=f'M_stdev={m_std:.2f}, M_mean={m_mean:.1f}, LRA_med={lra_med:.1f}'
+            ))
+
+    return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
+
+
+def _detect_r128_criterion_b(times, m_vals, lra_vals, lra_high_vals, i_val, window_size):
+    """Criterion B: TC + silence."""
+    detections = []
+    for i in range(0, len(times) - window_size + 1, window_size // 2):
+        end = min(i + window_size, len(times))
+        w_m = [v for v in m_vals[i:end] if not math.isnan(v)]
+        w_lra = [v for v in lra_vals[i:end] if not math.isnan(v)]
+        w_lra_h = [v for v in lra_high_vals[i:end] if not math.isnan(v)]
+
+        if not w_m or not w_lra_h or not w_lra:
+            continue
+
+        lra_h_mean = _tc_mean(w_lra_h)
+        lra_h_std = _tc_stdev(w_lra_h)
+        m_med = _tc_median(w_m)
+        lra_med = _tc_median(w_lra)
+
+        if math.isnan(i_val):
+            m_i_diff = 0
+        else:
+            m_i_diff = abs(m_med - i_val)
+
+        if (_TC_R128_B_LRA_HIGH_MIN <= lra_h_mean <= _TC_R128_B_LRA_HIGH_MAX
+                and lra_h_std < _TC_R128_B_LRA_HIGH_STDEV_MAX
+                and m_i_diff > _TC_R128_B_M_I_DIFF_MIN
+                and lra_med > _TC_R128_B_LRA_MIN):
+            detections.append(_TCDetection(
+                start_time=times[i],
+                end_time=times[min(end - 1, len(times) - 1)],
+                criterion='R128-B (TC + silence)',
+                channel='one channel',
+                confidence='high' if lra_h_std < 0.5 else 'medium',
+                details=f'LRA.high={lra_h_mean:.1f}(+/-{lra_h_std:.2f}), |M-I|={m_i_diff:.1f}, LRA={lra_med:.1f}'
+            ))
+
+    return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
+
+
+def _detect_r128_criterion_c(times, m_vals, s_vals, lra_high_vals, window_size):
+    """Criterion C: TC + program audio."""
+    detections = []
+    for i in range(0, len(times) - window_size + 1, window_size // 2):
+        end = min(i + window_size, len(times))
+        w_m = [v for v in m_vals[i:end] if not math.isnan(v)]
+        w_s = [v for v in s_vals[i:end] if not math.isnan(v)]
+        w_lra_h = [v for v in lra_high_vals[i:end] if not math.isnan(v)]
+
+        if not w_m or not w_s or not w_lra_h:
+            continue
+
+        ms_diffs = [abs(m - s) for m, s in zip(w_m, w_s)]
+        ms_diff_med = _tc_median(ms_diffs)
+        m_std = _tc_stdev(w_m)
+        lra_h_mean = _tc_mean(w_lra_h)
+        lra_h_std = _tc_stdev(w_lra_h)
+        m_min = min(w_m)
+
+        if (ms_diff_med > _TC_R128_C_MS_DIFF_MEDIAN_MIN
+                and m_std > _TC_R128_C_M_STDEV_MIN
+                and _TC_R128_C_LRA_HIGH_MIN <= lra_h_mean <= _TC_R128_C_LRA_HIGH_UPPER
+                and lra_h_std < _TC_R128_C_LRA_HIGH_STDEV_MAX
+                and m_min > _TC_R128_C_M_MIN):
+            detections.append(_TCDetection(
+                start_time=times[i],
+                end_time=times[min(end - 1, len(times) - 1)],
+                criterion='R128-C (TC + program audio)',
+                channel='one channel',
+                confidence='high' if ms_diff_med > 2.0 else 'medium',
+                details=f'|M-S|_med={ms_diff_med:.2f}, M_stdev={m_std:.1f}, LRA.high={lra_h_mean:.1f}(+/-{lra_h_std:.2f})'
+            ))
+
+    return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
+
+
+def _detect_astats_timecode(frames):
+    """Detect audible timecode using FFmpeg astats per-channel measurements."""
+    if not frames:
+        return []
+
+    # Determine available channels
+    channels = set()
+    for frame in frames[:5]:
+        for key in frame['tags']:
+            if key.startswith('lavfi.astats.1.'):
+                channels.add('1')
+            elif key.startswith('lavfi.astats.2.'):
+                channels.add('2')
+
+    if not channels:
+        return []
+
+    times = [f['time'] for f in frames]
+    detections = []
+
+    for ch in sorted(channels):
+        detections.extend(_detect_astats_channel_tc(frames, times, ch))
+
+    # Label dual-channel if both channels flagged at the same time
+    ch1 = [d for d in detections if d.channel == 'ch1']
+    ch2 = [d for d in detections if d.channel == 'ch2']
+    for d1 in ch1:
+        for d2 in ch2:
+            if d1.start_time <= d2.end_time and d2.start_time <= d1.end_time:
+                d1.channel = 'both (ch1)'
+                d2.channel = 'both (ch2)'
+
+    return _tc_merge_detections(detections)
+
+
+def _detect_astats_channel_tc(frames, times, channel):
+    """Detect TC on a single channel using rolling windows of astats data."""
+    prefix = f'lavfi.astats.{channel}.'
+    detections = []
+    window = _TC_ASTATS_WINDOW_FRAMES
+
+    for i in range(0, len(frames) - window + 1, max(1, window // 2)):
+        end = min(i + window, len(frames))
+        w_frames = frames[i:end]
+
+        rms_levels = []
+        crest_factors = []
+        zcr_rates = []
+        entropies = []
+
+        for f in w_frames:
+            tags = f['tags']
+            rms = tags.get(prefix + 'RMS_level', float('nan'))
+            crest = tags.get(prefix + 'Crest_factor', float('nan'))
+            zcr = tags.get(prefix + 'Zero_crossings_rate', float('nan'))
+            ent = tags.get(prefix + 'Entropy', float('nan'))
+
+            if not math.isnan(rms):
+                rms_levels.append(rms)
+            if not math.isnan(crest):
+                crest_factors.append(crest)
+            if not math.isnan(zcr):
+                zcr_rates.append(zcr)
+            if not math.isnan(ent):
+                entropies.append(ent)
+
+        if not rms_levels:
+            continue
+
+        rms_mean = _tc_mean(rms_levels)
+        rms_std = _tc_stdev(rms_levels)
+        crest_med = _tc_median(crest_factors) if crest_factors else float('nan')
+        zcr_med = _tc_median(zcr_rates) if zcr_rates else float('nan')
+        ent_med = _tc_median(entropies) if entropies else float('nan')
+
+        reasons = []
+        passes = True
+
+        if _TC_ASTATS_RMS_LEVEL_MIN <= rms_mean <= _TC_ASTATS_RMS_LEVEL_MAX and rms_std < _TC_ASTATS_RMS_STDEV_MAX:
+            reasons.append(f'RMS={rms_mean:.1f}dB(+/-{rms_std:.1f})')
+        else:
+            passes = False
+
+        if not math.isnan(crest_med) and crest_med < _TC_ASTATS_CREST_FACTOR_MAX:
+            reasons.append(f'Crest={crest_med:.1f}dB')
+        else:
+            passes = False
+
+        if not math.isnan(ent_med) and ent_med < _TC_ASTATS_ENTROPY_MAX:
+            reasons.append(f'Entropy={ent_med:.3f}')
+        else:
+            passes = False
+
+        if not math.isnan(zcr_med) and _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN <= zcr_med <= _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX:
+            reasons.append(f'ZCR={zcr_med:.3f}')
+        else:
+            passes = False
+
+        if passes:
+            confidence = 'high' if crest_med < 1.5 and ent_med < 0.25 else 'medium'
+            detections.append(_TCDetection(
+                start_time=times[i],
+                end_time=times[min(end - 1, len(times) - 1)],
+                criterion=f'astats (ch{channel})',
+                channel=f'ch{channel}',
+                confidence=confidence,
+                details=', '.join(reasons)
+            ))
+
+    return _tc_filter_by_consecutive(detections, _TC_ASTATS_MIN_WINDOWS)
+
+
+def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directory):
+    """Run audible timecode detection and write results to CSV."""
+    if not tc_frames:
+        logger.debug("No audio frame data available for audible timecode detection\n")
+        return None
+
+    if tc_metric_type == 'r128':
+        detections = _detect_r128_timecode(tc_frames)
+    elif tc_metric_type == 'astats':
+        detections = _detect_astats_timecode(tc_frames)
+    else:
+        logger.debug("No recognized audio metrics (r128 or astats) found for timecode detection\n")
+        return None
+
+    tc_detected = len(detections) > 0
+    duration = tc_frames[-1]['time'] if tc_frames else 0
+
+    results = {
+        'timecode_detected': tc_detected,
+        'metric_type': tc_metric_type,
+        'total_audio_frames': len(tc_frames),
+        'duration': duration,
+        'detections': [
+            {
+                'start_time': d.start_time,
+                'end_time': d.end_time,
+                'criterion': d.criterion,
+                'channel': d.channel,
+                'confidence': d.confidence,
+                'details': d.details,
+            }
+            for d in detections
+        ],
+    }
+
+    # Write CSV
+    tc_csv = os.path.join(report_directory, "qct-parse_audible_timecode.csv")
+    with open(tc_csv, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Audible Timecode Detection Results"])
+        writer.writerow(["Metric Type", tc_metric_type])
+        writer.writerow(["Total Audio Frames", len(tc_frames)])
+        writer.writerow(["Duration", _tc_format_time(duration)])
+        writer.writerow(["Audible Timecode Detected", "Yes" if tc_detected else "No"])
+        writer.writerow(["Regions Detected", len(detections)])
+        writer.writerow([])
+
+        if detections:
+            writer.writerow(["Start Time", "End Time", "Criterion", "Channel", "Confidence", "Details"])
+            for d in detections:
+                writer.writerow([
+                    _tc_format_time(d.start_time),
+                    _tc_format_time(d.end_time),
+                    d.criterion,
+                    d.channel,
+                    d.confidence,
+                    d.details,
+                ])
+
+    # Log summary
+    if tc_detected:
+        regions = "; ".join(
+            f"{_tc_format_time(d.start_time)}-{_tc_format_time(d.end_time)} [{d.confidence}] {d.criterion}"
+            for d in detections
+        )
+        logger.warning(f"Audible timecode detected: {len(detections)} region(s) — {regions}\n")
+    else:
+        logger.debug("No audible timecode detected\n")
+
+    return results
+
+
 def _get_video_duration(video_path):
     """Get video duration in seconds using ffprobe.
-    
+
     Returns:
         float or None: Duration in seconds, or None if unavailable.
     """
@@ -1582,20 +2096,23 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     if check_cancelled():
         return None
 
-    ######## Audio Analysis (Clipping Detection / Channel Imbalance) ########
+    ######## Audio Analysis (Clipping Detection / Channel Imbalance / Audible Timecode) ########
     do_audio_analysis = qct_parse.get('audio_analysis', False)
     if do_audio_analysis:
         logger.debug(f"Starting audio analysis on {baseName}\n")
-        clipping_results, imbalance_results = analyzeAudio(
+        clipping_results, imbalance_results, timecode_results = analyzeAudio(
             startObj, pkt, report_directory,
             detect_clipping=True,
             detect_imbalance=True,
+            detect_timecode=True,
             signals=signals, total_duration=total_duration
         )
         if clipping_results is None:
             logger.warning("Audio clipping detection could not be performed\n")
         if imbalance_results is None:
             logger.warning("Channel imbalance analysis could not be performed\n")
+        if timecode_results is None:
+            logger.warning("Audible timecode detection could not be performed\n")
 
     if check_cancelled():
         return None

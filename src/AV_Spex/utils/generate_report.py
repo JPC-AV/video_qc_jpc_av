@@ -317,6 +317,7 @@ def find_report_csvs(report_directory):
     colorbars_eval_fails_csv = None
     audio_clipping_csv = None
     channel_imbalance_csv = None
+    audible_timecode_csv = None
     difference_csv = None
 
     if os.path.isdir(report_directory):
@@ -346,10 +347,12 @@ def find_report_csvs(report_directory):
                         audio_clipping_csv = file_path
                     elif "qct-parse_channel_imbalance" in file:
                         channel_imbalance_csv = file_path
+                    elif "qct-parse_audible_timecode" in file:
+                        audible_timecode_csv = file_path
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -1210,9 +1213,122 @@ def make_channel_imbalance_html(channel_imbalance_csv):
     return html
 
 
+def make_audible_timecode_html(audible_timecode_csv):
+    """
+    Generates an HTML section summarizing audible timecode detection results.
+
+    Args:
+        audible_timecode_csv (str): Path to the audible timecode CSV file.
+
+    Returns:
+        str: HTML string with audible timecode results, or None if file cannot be read.
+    """
+    if not audible_timecode_csv or not os.path.isfile(audible_timecode_csv):
+        return None
+
+    try:
+        with open(audible_timecode_csv, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    except Exception as e:
+        logger.error(f"Error reading audible timecode CSV: {e}")
+        return None
+
+    if len(rows) < 6:
+        return None
+
+    # Parse summary rows
+    metric_type = rows[1][1] if len(rows[1]) > 1 else "N/A"
+    total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
+    duration = rows[3][1] if len(rows[3]) > 1 else "N/A"
+    tc_detected = rows[4][1] if len(rows[4]) > 1 else "No"
+    num_regions = rows[5][1] if len(rows[5]) > 1 else "0"
+
+    if tc_detected == "Yes":
+        status_color = "#dc3545"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+        status_text = "Audible Timecode Detected"
+    else:
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+        status_text = "No Audible Timecode Detected"
+
+    html = f'''
+    <a id="link_timecode_methodology" href="javascript:void(0);"
+       onclick="toggleContent('timecode_methodology', 'What is audible timecode detection? ▼', 'What is audible timecode detection? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is audible timecode detection? ▼</a>
+    <div id="timecode_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Audible timecode detection</strong> scans the audio frames of the QCTools report to
+            identify the presence of Linear Timecode (LTC) artifacts &mdash; a biphase-modulated square
+            wave (~2400 Hz for 30fps NTSC) that was recorded on an audio track during the original
+            production or dubbing process.
+        </p>
+        <p style="margin: 0 0 10px 0;">
+            The analysis uses rolling windows over the audio measurements to detect the characteristic
+            statistical fingerprint of LTC: steady RMS level, low crest factor (square wave), narrow
+            dynamic range, and a zero-crossing rate consistent with the LTC carrier frequency.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Detection criteria:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>Dual-channel TC</strong> &mdash; both audio channels carry timecode (stable loudness, narrow dynamic range).</li>
+            <li style="margin-bottom: 4px;"><strong>TC + silence</strong> &mdash; one channel carries timecode while the other is near-silent (large gap between momentary and integrated loudness).</li>
+            <li style="margin-bottom: 4px;"><strong>TC + program audio</strong> &mdash; timecode is present alongside program audio on separate channels (divergence between M and S loudness, high M variance).</li>
+        </ul>
+        <p style="margin: 0;">
+            Detections must persist across multiple consecutive windows to be reported, reducing
+            false positives from transient audio events.
+        </p>
+    </div>
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Metric Type</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{metric_type}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Duration</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{duration}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Regions Detected</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{num_regions}</td></tr>
+    </table>
+    '''
+
+    # Add detection regions table if there are any
+    detection_rows = [r for r in rows[8:] if len(r) >= 5]
+    if detection_rows:
+        html += f'''
+        <a href="javascript:void(0);" onclick="toggleContent('timecode_regions', 'Show detected regions ({len(detection_rows)}) ▼', 'Hide detected regions ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show detected regions ({len(detection_rows)}) ▼</a>
+        <div id="timecode_regions" style="display: none;">
+        <table style="border-collapse: collapse; margin: 10px 0;">
+            <tr>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start Time</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End Time</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Criterion</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Confidence</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Details</th>
+            </tr>
+        '''
+        for row in detection_rows:
+            details = row[5] if len(row) > 5 else ""
+            html += f'''<tr>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[0]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[1]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[2]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[3]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[4]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{details}</td>
+            </tr>\n'''
+        html += '</table></div>\n'
+
+    return html
+
+
 def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict):
     """
-    Creates HTML visualizations for color bars analysis, including bar charts comparing 
+    Creates HTML visualizations for color bars analysis, including bar charts comparing
     SMPTE color bars with the video's color bars values.
 
     Args:
@@ -3025,7 +3141,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
         return
@@ -3202,6 +3318,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
+    audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
 
     existing_thumbs = find_qct_thumbs(report_directory)
     no_qct_parse_files = (
@@ -3210,6 +3327,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         not colorbars_eval_fails_csv and
         not audio_clipping_csv and
         not channel_imbalance_csv and
+        not audible_timecode_csv and
         not existing_thumbs
     )
 
@@ -3497,6 +3615,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h3>Channel Imbalance Analysis</h3>
         {channel_imbalance_html}
         """
+
+    if audible_timecode_html:
+        html_template += f"""
+        <h3>Audible Timecode Detection</h3>
+        {audible_timecode_html}
+        """
+
+    if audio_clipping_html or channel_imbalance_html or audible_timecode_html:
         html_template += waveform_divider
 
     if difference_csv:

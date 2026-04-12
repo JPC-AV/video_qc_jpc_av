@@ -114,7 +114,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
 
         self.audio_analysis_cb = QCheckBox("Perform Audio Analysis")
         self.audio_analysis_cb.setStyleSheet("font-weight: bold;")
-        audio_analysis_desc = QLabel("Detect audio clipping and channel imbalance")
+        audio_analysis_desc = QLabel("Detect audio clipping, channel imbalance, and audible timecode")
         audio_analysis_desc.setIndent(20)
 
         # Add all widgets to the qct layout
