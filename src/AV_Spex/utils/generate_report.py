@@ -549,18 +549,24 @@ _WAVEFORM_CHANNEL_COLORS = [
 
 
 def _build_waveform_filter(num_channels, width, height):
-    """Build an FFmpeg filter_complex string for N-channel waveform overlay.
+    """Build an FFmpeg filter_complex string that renders each audio channel
+    as a separate waveform strip stacked vertically.
+
+    A thin separator line is inserted between channels so they are easy to
+    distinguish regardless of the number of channels.
 
     Args:
         num_channels (int): Number of audio channels.
         width (int): Image width.
-        height (int): Image height.
+        height (int): Height per channel in pixels.
 
     Returns:
         str: filter_complex string for FFmpeg.
     """
     colors = _WAVEFORM_CHANNEL_COLORS
-    opacity = 0.6
+    opacity = 0.8
+    separator_height = 2
+    separator_color = "333333"
 
     if num_channels == 1:
         # Mono — single waveform, no split needed
@@ -570,9 +576,14 @@ def _build_waveform_filter(num_channels, width, height):
     layout_map = {2: "stereo", 3: "2.1", 4: "quad", 6: "5.1", 8: "7.1"}
     layout_arg = layout_map.get(num_channels, f"{num_channels}c")
 
-    # Build channelsplit → per-channel showwavespic → overlay chain
+    # Build channelsplit → per-channel showwavespic → vstack
     split_outputs = "".join(f"[ch{i}]" for i in range(num_channels))
     lines = [f"[0:a]channelsplit=channel_layout={layout_arg}{split_outputs};"]
+
+    # Create a thin separator strip
+    lines.append(
+        f"color=c=#{separator_color}:s={width}x{separator_height}:d=1[sep];"
+    )
 
     for i in range(num_channels):
         color = colors[i % len(colors)]
@@ -580,16 +591,23 @@ def _build_waveform_filter(num_channels, width, height):
             f"[ch{i}]showwavespic=s={width}x{height}:colors={color}@{opacity}:draw=full:scale=sqrt[w{i}];"
         )
 
-    # Chain overlays: overlay w0 + w1 → t0, t0 + w2 → t1, ...
-    if num_channels == 2:
-        lines.append(f"[w0][w1]overlay=format=auto")
+    # Interleave waveform strips with separator copies, then vstack
+    # We need (num_channels - 1) copies of the separator
+    if num_channels > 2:
+        lines.append(f"[sep]split={num_channels - 1}" + "".join(f"[s{i}]" for i in range(num_channels - 1)) + ";")
     else:
-        lines.append(f"[w0][w1]overlay=format=auto[t0];")
-        for i in range(2, num_channels):
-            if i == num_channels - 1:
-                lines.append(f"[t{i - 2}][w{i}]overlay=format=auto")
-            else:
-                lines.append(f"[t{i - 2}][w{i}]overlay=format=auto[t{i - 1}];")
+        # For stereo, the single [sep] can be used directly
+        lines.append("[sep]copy[s0];")
+
+    # Build the vstack input list: w0, s0, w1, s1, w2, ..., w(N-1)
+    vstack_inputs = ""
+    for i in range(num_channels):
+        vstack_inputs += f"[w{i}]"
+        if i < num_channels - 1:
+            vstack_inputs += f"[s{i}]"
+
+    total_inputs = num_channels + (num_channels - 1)  # waveforms + separators
+    lines.append(f"{vstack_inputs}vstack=inputs={total_inputs}")
 
     return "\n".join(lines)
 
@@ -1947,13 +1965,14 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                         # Use border_regions if available
                         pass
                 
+                # Build active area HTML
+                active_area_html = ""
                 if video_width > 0 and video_height > 0:
                     active_percentage = (w * h) / (video_width * video_height) * 100
                     right_border = video_width - x - w
                     bottom_border = video_height - y - h
-                    
-                    html += f"""
-                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+
+                    active_area_html = f"""
                         <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
                             <tr>
                                 <td style="padding: 4px 10px; font-weight: bold; width: 200px;">Active picture area</td>
@@ -1968,16 +1987,16 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                                 <td style="padding: 4px 10px;">Left={x}px, Right={right_border}px, Top={y}px, Bottom={bottom_border}px</td>
                             </tr>
                         </table>
-                    </div>
                     """
                 else:
-                    html += f"""
-                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    active_area_html = f"""
                         <p><strong>Active Picture Area:</strong> {w}×{h} pixels at ({x}, {y})</p>
-                    </div>
                     """
-            
+            else:
+                active_area_html = ""
+
             # Head switching artifacts
+            hs_html = ""
             hs_data = display_borders.get('head_switching_artifacts')
             if hs_data and isinstance(hs_data, dict):
                 severity = hs_data.get('severity', 'none')
@@ -1987,13 +2006,36 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     height_info = ""
                     if avg_height:
                         height_info = f"<p>Average artifact height: {avg_height}px</p>"
-                    html += f"""
-                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    hs_html = f"""
                         <p><strong>Head Switching Artifacts Detected</strong></p>
                         <p>Affected frames: {artifact_pct:.1f}%</p>
                         {height_info}
-                    </div>
                     """
+
+            # Render active area and head switching side by side using flexbox
+            if active_area_html and hs_html:
+                html += f"""
+                <div style="display: flex; gap: 12px; margin: 10px 0; align-items: stretch;">
+                    <div style="background-color: #f5e9e3; padding: 10px; border-radius: 4px; flex: 1; min-width: 0;">
+                        {active_area_html}
+                    </div>
+                    <div style="background-color: #f5e9e3; padding: 10px; border-radius: 4px; flex: 1; min-width: 0;">
+                        {hs_html}
+                    </div>
+                </div>
+                """
+            elif active_area_html:
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    {active_area_html}
+                </div>
+                """
+            elif hs_html:
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    {hs_html}
+                </div>
+                """
         
         # Display initial border visualization image
         if frame_outputs['border_visualization']:
