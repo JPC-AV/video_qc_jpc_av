@@ -396,7 +396,7 @@ class CustomProfileDialog(QDialog, ThemeableMixin):
         # Perform Audio Analysis
         self.audio_analysis_check = QCheckBox("Perform Audio Analysis")
         self.audio_analysis_check.setStyleSheet("font-weight: bold;")
-        audio_analysis_desc = QLabel("Detect audio clipping, channel imbalance, and audible timecode")
+        audio_analysis_desc = QLabel("Detect audio clipping, channel imbalance, audible timecode, and audio dropout")
         audio_analysis_desc.setIndent(20)
 
         # Add all widgets

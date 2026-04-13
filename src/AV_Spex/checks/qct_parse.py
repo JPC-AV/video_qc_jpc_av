@@ -1097,6 +1097,19 @@ _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN = 0.06
 _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX = 0.15
 _TC_ASTATS_ENTROPY_MAX = 0.35
 
+# ---------------------------------------------------------------------------
+# Audio dropout detection thresholds
+# ---------------------------------------------------------------------------
+
+DROPOUT_ROLLING_WINDOW_SIZE = 7       # ~11s of audio at ~1.6s/frame
+DROPOUT_RMS_DROP_THRESHOLD_DB = 20.0  # dB drop below rolling median to trigger
+DROPOUT_SILENCE_FLOOR_DB = -55.0      # ignore frames where median is below this (natural silence)
+DROPOUT_MAX_DIFF_SPIKE_FACTOR = 2.0   # Max_difference must exceed 2x rolling median
+DROPOUT_RMS_DIFF_SPIKE_FACTOR = 2.0   # RMS_difference must exceed 2x rolling median
+DROPOUT_ZCR_LOW = 0.01                # Zero_crossings_rate below this is abnormal
+DROPOUT_ZCR_HIGH = 0.45               # Zero_crossings_rate above this is abnormal
+DROPOUT_MERGE_GAP_SEC = 3.5           # merge candidates within this gap on same channel
+
 
 @dataclass
 class _TCDetection:
@@ -1109,11 +1122,34 @@ class _TCDetection:
     details: str = ""
 
 
-def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, signals=None, total_duration=None):
+@dataclass
+class _DropoutCandidate:
+    """A single-frame dropout candidate before merging."""
+    time: float = 0.0
+    channel: int = 0
+    rms_level: float = 0.0
+    median_rms: float = 0.0
+    corroborating: list = field(default_factory=list)
+
+
+@dataclass
+class _DropoutEvent:
+    """A merged dropout event (one or more consecutive candidates)."""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    channel: int = 0
+    worst_rms_level: float = 0.0
+    median_rms_level: float = 0.0
+    confidence: str = ""
+    corroborating: list = field(default_factory=list)
+
+
+def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None):
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
     audio clipping (Peak_level >= threshold), channel imbalance (comparing
-    per-channel RMS_level values), and/or audible timecode (LTC artifacts).
+    per-channel RMS_level values), audible timecode (LTC artifacts), and/or
+    audio dropout (sudden RMS drops indicative of tape dropout).
 
     Parameters:
         startObj (str): Path to the QCTools report file (.qctools.xml.gz)
@@ -1122,22 +1158,23 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
         detect_clipping (bool): Whether to run audio clipping detection.
         detect_imbalance (bool): Whether to run channel imbalance detection.
         detect_timecode (bool): Whether to run audible timecode detection.
+        detect_dropout (bool): Whether to run audio dropout detection.
         signals: Optional signals object for emitting progress updates.
         total_duration (float or None): Total video duration in seconds for progress reporting.
 
     Returns:
-        tuple: (clipping_results, imbalance_results, timecode_results)
+        tuple: (clipping_results, imbalance_results, timecode_results, dropout_results)
             Each is a dict with analysis results, or None if that analysis was
             not requested or no audio frames were found.
     """
     etree = load_etree()
     if etree is None:
-        return None, None
+        return None, None, None, None
 
     parser_iter = safe_gzip_iterparse(startObj, etree)
     if parser_iter is None:
         logger.error(f"Failed to parse {startObj} for audio analysis")
-        return None, None
+        return None, None, None, None
 
     total_audio_frames = 0
 
@@ -1157,6 +1194,13 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     # Timecode detection state — per-frame data collected during parse
     tc_frames = []  # list of dicts: {time, tags}
     tc_metric_type = 'unknown'
+
+    # Dropout detection state — per-channel rolling windows and candidates
+    dropout_candidates = []  # list of _DropoutCandidate
+    # Per-channel rolling windows: {ch_num: deque of values}
+    dropout_rms_windows = {}
+    dropout_max_diff_windows = {}
+    dropout_rms_diff_windows = {}
 
     try:
         for event, elem in parser_iter:
@@ -1178,6 +1222,8 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                 flat_factor = None
                 frame_channel_rms = {}
                 tc_frame_tags = {} if detect_timecode else None
+                # Dropout per-frame state: {ch_num: {metric: value}}
+                dropout_frame_data = {} if detect_dropout else None
 
                 for t in list(elem):
                     key = t.attrib.get('key', '')
@@ -1209,6 +1255,18 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                                     tc_metric_type = 'r128'
                                 elif key.startswith('lavfi.astats'):
                                     tc_metric_type = 'astats'
+
+                    if detect_dropout and 'Overall' not in key:
+                        # Extract per-channel dropout metrics
+                        for metric in ('RMS_level', 'Max_difference', 'RMS_difference', 'Zero_crossings_rate'):
+                            if key.endswith(f'.{metric}'):
+                                match = re.search(r'\.(\d+)\.' + metric + '$', key)
+                                if match:
+                                    ch_num = int(match.group(1))
+                                    if ch_num not in dropout_frame_data:
+                                        dropout_frame_data[ch_num] = {}
+                                    dropout_frame_data[ch_num][metric] = val
+                                break
 
                 # Clipping analysis
                 if detect_clipping and peak_level is not None:
@@ -1242,13 +1300,78 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                         frame_time = 0.0
                     tc_frames.append({'time': frame_time, 'tags': tc_frame_tags})
 
+                # Dropout detection — rolling window analysis per channel
+                if detect_dropout and dropout_frame_data:
+                    try:
+                        frame_time = float(frame_pkt_dts_time)
+                    except ValueError:
+                        frame_time = 0.0
+
+                    for ch_num, metrics in dropout_frame_data.items():
+                        rms = metrics.get('RMS_level')
+                        if rms is None:
+                            continue
+
+                        # Initialize rolling windows for this channel
+                        if ch_num not in dropout_rms_windows:
+                            dropout_rms_windows[ch_num] = collections.deque(maxlen=DROPOUT_ROLLING_WINDOW_SIZE)
+                            dropout_max_diff_windows[ch_num] = collections.deque(maxlen=DROPOUT_ROLLING_WINDOW_SIZE)
+                            dropout_rms_diff_windows[ch_num] = collections.deque(maxlen=DROPOUT_ROLLING_WINDOW_SIZE)
+
+                        rms_win = dropout_rms_windows[ch_num]
+                        max_diff_win = dropout_max_diff_windows[ch_num]
+                        rms_diff_win = dropout_rms_diff_windows[ch_num]
+
+                        # Only analyze once window is full
+                        if len(rms_win) >= DROPOUT_ROLLING_WINDOW_SIZE:
+                            median_rms = sorted(rms_win)[len(rms_win) // 2]
+
+                            # Skip if content is near-silent (avoids false positives)
+                            if median_rms >= DROPOUT_SILENCE_FLOOR_DB:
+                                rms_drop = median_rms - rms
+                                if rms_drop >= DROPOUT_RMS_DROP_THRESHOLD_DB:
+                                    # Check corroborating metrics
+                                    corroborating = []
+                                    max_diff = metrics.get('Max_difference')
+                                    if max_diff is not None and len(max_diff_win) >= DROPOUT_ROLLING_WINDOW_SIZE:
+                                        median_max_diff = sorted(max_diff_win)[len(max_diff_win) // 2]
+                                        if median_max_diff > 0 and max_diff > median_max_diff * DROPOUT_MAX_DIFF_SPIKE_FACTOR:
+                                            corroborating.append('Max_difference spike')
+
+                                    rms_diff = metrics.get('RMS_difference')
+                                    if rms_diff is not None and len(rms_diff_win) >= DROPOUT_ROLLING_WINDOW_SIZE:
+                                        median_rms_diff = sorted(rms_diff_win)[len(rms_diff_win) // 2]
+                                        if median_rms_diff > 0 and rms_diff > median_rms_diff * DROPOUT_RMS_DIFF_SPIKE_FACTOR:
+                                            corroborating.append('RMS_difference spike')
+
+                                    zcr = metrics.get('Zero_crossings_rate')
+                                    if zcr is not None and (zcr < DROPOUT_ZCR_LOW or zcr > DROPOUT_ZCR_HIGH):
+                                        corroborating.append('Zero_crossings_rate')
+
+                                    dropout_candidates.append(_DropoutCandidate(
+                                        time=frame_time,
+                                        channel=ch_num,
+                                        rms_level=rms,
+                                        median_rms=median_rms,
+                                        corroborating=corroborating,
+                                    ))
+
+                        # Update rolling windows (after analysis, so current frame doesn't influence its own detection)
+                        rms_win.append(rms)
+                        max_diff = metrics.get('Max_difference')
+                        if max_diff is not None:
+                            max_diff_win.append(max_diff)
+                        rms_diff = metrics.get('RMS_difference')
+                        if rms_diff is not None:
+                            rms_diff_win.append(rms_diff)
+
             elem.clear()
     except Exception as e:
         logger.error(f"Error during audio analysis: {e}")
 
     if total_audio_frames == 0:
         logger.warning("No audio frames found in QCTools report for audio analysis\n")
-        return None, None, None
+        return None, None, None, None
 
     # Build clipping results
     clipping_results = None
@@ -1272,7 +1395,14 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
             tc_frames, tc_metric_type, report_directory
         )
 
-    return clipping_results, imbalance_results, timecode_results
+    # Run dropout detection
+    dropout_results = None
+    if detect_dropout:
+        dropout_results = _detect_and_write_dropout_results(
+            dropout_candidates, report_directory, total_audio_frames
+        )
+
+    return clipping_results, imbalance_results, timecode_results, dropout_results
 
 
 def _write_clipping_results(report_directory, total_audio_frames, clipped_frames, max_peak_level, max_flat_factor, clipping_events):
@@ -1913,6 +2043,145 @@ def _get_video_duration(video_path):
     return None
 
 
+def _merge_dropout_candidates(candidates):
+    """Merge consecutive dropout candidates into events.
+
+    Candidates on the same channel within DROPOUT_MERGE_GAP_SEC of each other
+    are merged into a single _DropoutEvent.
+    """
+    if not candidates:
+        return []
+
+    # Sort by channel then time
+    sorted_cands = sorted(candidates, key=lambda c: (c.channel, c.time))
+
+    events = []
+    current = sorted_cands[0]
+    event_start = current.time
+    event_end = current.time
+    event_channel = current.channel
+    worst_rms = current.rms_level
+    best_median = current.median_rms
+    all_corroborating = set(current.corroborating)
+    frames_in_event = 1
+
+    for cand in sorted_cands[1:]:
+        if cand.channel == event_channel and (cand.time - event_end) <= DROPOUT_MERGE_GAP_SEC:
+            # Merge into current event
+            event_end = cand.time
+            if cand.rms_level < worst_rms:
+                worst_rms = cand.rms_level
+            best_median = max(best_median, cand.median_rms)
+            all_corroborating.update(cand.corroborating)
+            frames_in_event += 1
+        else:
+            # Finalize current event
+            n_corr = len(all_corroborating)
+            if n_corr >= 2:
+                confidence = 'high'
+            elif n_corr == 1:
+                confidence = 'medium'
+            else:
+                confidence = 'low'
+            events.append(_DropoutEvent(
+                start_time=event_start,
+                end_time=event_end,
+                channel=event_channel,
+                worst_rms_level=worst_rms,
+                median_rms_level=best_median,
+                confidence=confidence,
+                corroborating=sorted(all_corroborating),
+            ))
+            # Start new event
+            event_start = cand.time
+            event_end = cand.time
+            event_channel = cand.channel
+            worst_rms = cand.rms_level
+            best_median = cand.median_rms
+            all_corroborating = set(cand.corroborating)
+            frames_in_event = 1
+
+    # Finalize last event
+    n_corr = len(all_corroborating)
+    if n_corr >= 2:
+        confidence = 'high'
+    elif n_corr == 1:
+        confidence = 'medium'
+    else:
+        confidence = 'low'
+    events.append(_DropoutEvent(
+        start_time=event_start,
+        end_time=event_end,
+        channel=event_channel,
+        worst_rms_level=worst_rms,
+        median_rms_level=best_median,
+        confidence=confidence,
+        corroborating=sorted(all_corroborating),
+    ))
+
+    return events
+
+
+def _detect_and_write_dropout_results(dropout_candidates, report_directory, total_audio_frames):
+    """Merge dropout candidates into events, write CSV, and return results dict."""
+
+    events = _merge_dropout_candidates(dropout_candidates)
+    dropout_detected = len(events) > 0
+    frames_flagged = len(dropout_candidates)
+
+    results = {
+        'dropout_detected': dropout_detected,
+        'dropout_events': len(events),
+        'frames_flagged': frames_flagged,
+        'total_audio_frames': total_audio_frames,
+        'events': events,
+    }
+
+    audio_dropout_csv = os.path.join(report_directory, "qct-parse_audio_dropout.csv")
+    with open(audio_dropout_csv, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Audio Dropout Detection Results"])
+        writer.writerow(["Rolling Window Size (frames)", DROPOUT_ROLLING_WINDOW_SIZE])
+        writer.writerow(["RMS Drop Threshold (dB)", DROPOUT_RMS_DROP_THRESHOLD_DB])
+        writer.writerow(["Silence Floor (dBFS)", DROPOUT_SILENCE_FLOOR_DB])
+        writer.writerow(["Total Audio Frames", total_audio_frames])
+        writer.writerow(["Dropout Events Detected", len(events)])
+        writer.writerow(["Frames Flagged", frames_flagged])
+        writer.writerow(["Dropout Detected", "Yes" if dropout_detected else "No"])
+        writer.writerow([])
+
+        if events:
+            writer.writerow(["Timestamp Start", "Timestamp End", "Channel",
+                             "Worst RMS (dBFS)", "Median RMS (dBFS)", "Drop (dB)",
+                             "Confidence", "Corroborating Metrics"])
+            for ev in events:
+                drop_db = ev.median_rms_level - ev.worst_rms_level
+                writer.writerow([
+                    dts2ts(str(ev.start_time)),
+                    dts2ts(str(ev.end_time)),
+                    ev.channel,
+                    f"{ev.worst_rms_level:.1f}",
+                    f"{ev.median_rms_level:.1f}",
+                    f"{drop_db:.1f}",
+                    ev.confidence,
+                    ", ".join(ev.corroborating) if ev.corroborating else "None",
+                ])
+
+    if dropout_detected:
+        high_count = sum(1 for e in events if e.confidence == 'high')
+        med_count = sum(1 for e in events if e.confidence == 'medium')
+        low_count = sum(1 for e in events if e.confidence == 'low')
+        logger.warning(
+            f"Audio dropout detected: {len(events)} event(s) "
+            f"({high_count} high, {med_count} medium, {low_count} low confidence), "
+            f"{frames_flagged} frame(s) flagged\n"
+        )
+    else:
+        logger.debug("No audio dropout detected\n")
+
+    return results
+
+
 def run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=None, signals=None):
     """
     Executes the qct-parse analysis on a given video file, exporting relevant data and thumbnails based on specified thresholds and profiles.
@@ -2100,11 +2369,12 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     do_audio_analysis = qct_parse.get('audio_analysis', False)
     if do_audio_analysis:
         logger.debug(f"Starting audio analysis on {baseName}\n")
-        clipping_results, imbalance_results, timecode_results = analyzeAudio(
+        clipping_results, imbalance_results, timecode_results, dropout_results = analyzeAudio(
             startObj, pkt, report_directory,
             detect_clipping=True,
             detect_imbalance=True,
             detect_timecode=True,
+            detect_dropout=True,
             signals=signals, total_duration=total_duration
         )
         if clipping_results is None:
@@ -2113,6 +2383,8 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             logger.warning("Channel imbalance analysis could not be performed\n")
         if timecode_results is None:
             logger.warning("Audible timecode detection could not be performed\n")
+        if dropout_results is None:
+            logger.warning("Audio dropout detection could not be performed\n")
 
     if check_cancelled():
         return None

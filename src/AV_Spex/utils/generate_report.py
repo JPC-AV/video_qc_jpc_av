@@ -318,6 +318,7 @@ def find_report_csvs(report_directory):
     audio_clipping_csv = None
     channel_imbalance_csv = None
     audible_timecode_csv = None
+    audio_dropout_csv = None
     difference_csv = None
 
     if os.path.isdir(report_directory):
@@ -349,10 +350,12 @@ def find_report_csvs(report_directory):
                         channel_imbalance_csv = file_path
                     elif "qct-parse_audible_timecode" in file:
                         audible_timecode_csv = file_path
+                    elif "qct-parse_audio_dropout" in file:
+                        audio_dropout_csv = file_path
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -1338,6 +1341,141 @@ def make_audible_timecode_html(audible_timecode_csv):
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[3]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[4]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{details}</td>
+            </tr>\n'''
+        html += '</table></div>\n'
+
+    return html
+
+
+def make_audio_dropout_html(audio_dropout_csv):
+    """
+    Generates an HTML section summarizing audio dropout detection results.
+
+    Args:
+        audio_dropout_csv (str): Path to the audio dropout CSV file.
+
+    Returns:
+        str: HTML string with audio dropout results, or None if file cannot be read.
+    """
+    if not audio_dropout_csv or not os.path.isfile(audio_dropout_csv):
+        return None
+
+    try:
+        with open(audio_dropout_csv, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    except Exception as e:
+        logger.error(f"Error reading audio dropout CSV: {e}")
+        return None
+
+    if len(rows) < 8:
+        return None
+
+    # Parse summary rows
+    window_size = rows[1][1] if len(rows[1]) > 1 else "N/A"
+    rms_threshold = rows[2][1] if len(rows[2]) > 1 else "N/A"
+    silence_floor = rows[3][1] if len(rows[3]) > 1 else "N/A"
+    total_frames = rows[4][1] if len(rows[4]) > 1 else "N/A"
+    events_detected = rows[5][1] if len(rows[5]) > 1 else "N/A"
+    frames_flagged = rows[6][1] if len(rows[6]) > 1 else "N/A"
+    dropout_detected = rows[7][1] if len(rows[7]) > 1 else "N/A"
+
+    if dropout_detected == "Yes":
+        status_color = "#dc3545"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+        status_text = "Audio Dropout Detected"
+    else:
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+        status_text = "No Audio Dropout Detected"
+
+    html = f'''
+    <a id="link_dropout_methodology" href="javascript:void(0);"
+       onclick="toggleContent('dropout_methodology', 'What is audio dropout detection? ▼', 'What is audio dropout detection? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is audio dropout detection? ▼</a>
+    <div id="dropout_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Audio dropout detection</strong> identifies moments where the audio signal level
+            drops suddenly and significantly, which is characteristic of tape dropout during analog
+            playback. A rolling window of audio frames is used to establish a local baseline, and
+            frames that fall far below that baseline are flagged.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Metrics used:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>RMS Level (dBFS)</strong> &mdash; the primary trigger.
+                A frame is flagged when its RMS level drops more than {rms_threshold} dB below the rolling
+                median of the preceding {window_size} frames. Frames where the median itself is below
+                {silence_floor} dBFS are ignored to avoid false positives in naturally quiet content.</li>
+            <li style="margin-bottom: 4px;"><strong>Max Difference</strong> &mdash; the maximum sample-to-sample
+                jump within a frame. A spike above 2x the rolling median suggests a click or discontinuity
+                at the dropout boundary.</li>
+            <li style="margin-bottom: 4px;"><strong>RMS Difference</strong> &mdash; the RMS of sample-to-sample
+                differences. A spike corroborates signal discontinuity.</li>
+            <li style="margin-bottom: 4px;"><strong>Zero Crossings Rate</strong> &mdash; the proportion of
+                sign changes in the audio signal. Very low values indicate silence; very high values may
+                indicate noise bursts.</li>
+        </ul>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Confidence levels:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>High</strong> &mdash; RMS drop plus two or more corroborating metrics.</li>
+            <li style="margin-bottom: 4px;"><strong>Medium</strong> &mdash; RMS drop plus one corroborating metric.</li>
+            <li style="margin-bottom: 4px;"><strong>Low</strong> &mdash; RMS drop only, no corroboration.</li>
+        </ul>
+        <p style="margin: 0;">
+            All metrics are derived from FFmpeg's <code>astats</code> filter as recorded in the QCTools
+            report. Detection is performed per audio channel to catch single-channel dropouts.
+        </p>
+    </div>
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Dropout Events</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{events_detected}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Frames Flagged</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{frames_flagged}</td></tr>
+    </table>
+    '''
+
+    # Add dropout events table if there are any
+    dropout_events = [r for r in rows[9:] if len(r) >= 7]
+    if dropout_events:
+        confidence_colors = {
+            'high': '#dc3545',
+            'medium': '#fd7e14',
+            'low': '#ffc107',
+        }
+        html += f'''
+        <a href="javascript:void(0);" onclick="toggleContent('audio_dropout_events', 'Show dropout events ({len(dropout_events)}) ▼', 'Hide dropout events ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show dropout events ({len(dropout_events)}) ▼</a>
+        <div id="audio_dropout_events" style="display: none;">
+        <table style="border-collapse: collapse; margin: 10px 0;">
+            <tr>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Worst RMS (dBFS)</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Median RMS (dBFS)</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Drop (dB)</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Confidence</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Corroborating</th>
+            </tr>
+        '''
+        for event in dropout_events:
+            conf = event[6].strip().lower() if len(event) > 6 else 'low'
+            conf_color = confidence_colors.get(conf, '#ffc107')
+            corr = event[7] if len(event) > 7 else ""
+            html += f'''<tr>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[0]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[1]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[2]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[3]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[4]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[5]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; color: {conf_color}; font-weight: bold;">{event[6]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{corr}</td>
             </tr>\n'''
         html += '</table></div>\n'
 
@@ -3183,7 +3321,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
         return
@@ -3361,6 +3499,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
     audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
+    audio_dropout_html = make_audio_dropout_html(audio_dropout_csv) if audio_dropout_csv else None
 
     existing_thumbs = find_qct_thumbs(report_directory)
     no_qct_parse_files = (
@@ -3370,6 +3509,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         not audio_clipping_csv and
         not channel_imbalance_csv and
         not audible_timecode_csv and
+        not audio_dropout_csv and
         not existing_thumbs
     )
 
@@ -3664,7 +3804,13 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         {audible_timecode_html}
         """
 
-    if audio_clipping_html or channel_imbalance_html or audible_timecode_html:
+    if audio_dropout_html:
+        html_template += f"""
+        <h3>Audio Dropout Detection</h3>
+        {audio_dropout_html}
+        """
+
+    if audio_clipping_html or channel_imbalance_html or audible_timecode_html or audio_dropout_html:
         html_template += waveform_divider
 
     if difference_csv:
