@@ -1102,13 +1102,13 @@ _TC_ASTATS_ENTROPY_MAX = 0.35
 # ---------------------------------------------------------------------------
 
 DROPOUT_ROLLING_WINDOW_SIZE = 7       # ~11s of audio at ~1.6s/frame
-DROPOUT_RMS_DROP_THRESHOLD_DB = 20.0  # dB drop below rolling median to trigger
+DROPOUT_RMS_DROP_THRESHOLD_DB = 40.0  # dB drop below rolling median to trigger
 DROPOUT_SILENCE_FLOOR_DB = -55.0      # ignore frames where median is below this (natural silence)
-DROPOUT_MAX_DIFF_SPIKE_FACTOR = 2.0   # Max_difference must exceed 2x rolling median
-DROPOUT_RMS_DIFF_SPIKE_FACTOR = 2.0   # RMS_difference must exceed 2x rolling median
-DROPOUT_ZCR_LOW = 0.01                # Zero_crossings_rate below this is abnormal
-DROPOUT_ZCR_HIGH = 0.45               # Zero_crossings_rate above this is abnormal
+DROPOUT_DIFF_DROP_FACTOR = 0.1        # Max/RMS_difference must drop below 10% of rolling median
+DROPOUT_ZCR_SPIKE_FACTOR = 3.0        # Zero_crossings_rate must exceed 3x rolling median
 DROPOUT_MERGE_GAP_SEC = 3.5           # merge candidates within this gap on same channel
+DROPOUT_LONG_EVENT_SEC = 2.0          # events longer than this require high confidence
+DROPOUT_LONG_EVENT_MIN_CORR = 2       # minimum corroborating metrics for long events
 
 
 @dataclass
@@ -1201,6 +1201,7 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     dropout_rms_windows = {}
     dropout_max_diff_windows = {}
     dropout_rms_diff_windows = {}
+    dropout_zcr_windows = {}
 
     try:
         for event, elem in parser_iter:
@@ -1317,10 +1318,12 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                             dropout_rms_windows[ch_num] = collections.deque(maxlen=DROPOUT_ROLLING_WINDOW_SIZE)
                             dropout_max_diff_windows[ch_num] = collections.deque(maxlen=DROPOUT_ROLLING_WINDOW_SIZE)
                             dropout_rms_diff_windows[ch_num] = collections.deque(maxlen=DROPOUT_ROLLING_WINDOW_SIZE)
+                            dropout_zcr_windows[ch_num] = collections.deque(maxlen=DROPOUT_ROLLING_WINDOW_SIZE)
 
                         rms_win = dropout_rms_windows[ch_num]
                         max_diff_win = dropout_max_diff_windows[ch_num]
                         rms_diff_win = dropout_rms_diff_windows[ch_num]
+                        zcr_win = dropout_zcr_windows[ch_num]
 
                         # Only analyze once window is full
                         if len(rms_win) >= DROPOUT_ROLLING_WINDOW_SIZE:
@@ -1330,23 +1333,29 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                             if median_rms >= DROPOUT_SILENCE_FLOOR_DB:
                                 rms_drop = median_rms - rms
                                 if rms_drop >= DROPOUT_RMS_DROP_THRESHOLD_DB:
-                                    # Check corroborating metrics
+                                    # Check corroborating metrics.
+                                    # During dropout the signal drops to near-silence, so:
+                                    #   - Max_difference DROPS (tiny sample-to-sample jumps)
+                                    #   - RMS_difference DROPS (tiny sample-to-sample variation)
+                                    #   - Zero_crossings_rate INCREASES (noise hovers around zero)
                                     corroborating = []
                                     max_diff = metrics.get('Max_difference')
                                     if max_diff is not None and len(max_diff_win) >= DROPOUT_ROLLING_WINDOW_SIZE:
                                         median_max_diff = sorted(max_diff_win)[len(max_diff_win) // 2]
-                                        if median_max_diff > 0 and max_diff > median_max_diff * DROPOUT_MAX_DIFF_SPIKE_FACTOR:
-                                            corroborating.append('Max_difference spike')
+                                        if median_max_diff > 0 and max_diff < median_max_diff * DROPOUT_DIFF_DROP_FACTOR:
+                                            corroborating.append('Max_difference drop')
 
                                     rms_diff = metrics.get('RMS_difference')
                                     if rms_diff is not None and len(rms_diff_win) >= DROPOUT_ROLLING_WINDOW_SIZE:
                                         median_rms_diff = sorted(rms_diff_win)[len(rms_diff_win) // 2]
-                                        if median_rms_diff > 0 and rms_diff > median_rms_diff * DROPOUT_RMS_DIFF_SPIKE_FACTOR:
-                                            corroborating.append('RMS_difference spike')
+                                        if median_rms_diff > 0 and rms_diff < median_rms_diff * DROPOUT_DIFF_DROP_FACTOR:
+                                            corroborating.append('RMS_difference drop')
 
                                     zcr = metrics.get('Zero_crossings_rate')
-                                    if zcr is not None and (zcr < DROPOUT_ZCR_LOW or zcr > DROPOUT_ZCR_HIGH):
-                                        corroborating.append('Zero_crossings_rate')
+                                    if zcr is not None and len(zcr_win) >= DROPOUT_ROLLING_WINDOW_SIZE:
+                                        median_zcr = sorted(zcr_win)[len(zcr_win) // 2]
+                                        if median_zcr > 0 and zcr > median_zcr * DROPOUT_ZCR_SPIKE_FACTOR:
+                                            corroborating.append('Zero_crossings_rate spike')
 
                                     dropout_candidates.append(_DropoutCandidate(
                                         time=frame_time,
@@ -1364,6 +1373,9 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                         rms_diff = metrics.get('RMS_difference')
                         if rms_diff is not None:
                             rms_diff_win.append(rms_diff)
+                        zcr = metrics.get('Zero_crossings_rate')
+                        if zcr is not None:
+                            zcr_win.append(zcr)
 
             elem.clear()
     except Exception as e:
@@ -2126,6 +2138,16 @@ def _detect_and_write_dropout_results(dropout_candidates, report_directory, tota
     """Merge dropout candidates into events, write CSV, and return results dict."""
 
     events = _merge_dropout_candidates(dropout_candidates)
+
+    # Filter out long events without strong corroboration.
+    # Real tape dropout is very brief; multi-second events with no
+    # corroborating metrics are almost certainly false positives.
+    events = [
+        ev for ev in events
+        if (ev.end_time - ev.start_time) <= DROPOUT_LONG_EVENT_SEC
+        or len(ev.corroborating) >= DROPOUT_LONG_EVENT_MIN_CORR
+    ]
+
     dropout_detected = len(events) > 0
     frames_flagged = len(dropout_candidates)
 
