@@ -257,7 +257,8 @@ class ProcessingManager:
             frame_config.enable_bitplane_check,
             frame_config.enable_border_detection,
             frame_config.enable_brng_analysis,
-            frame_config.enable_signalstats
+            frame_config.enable_signalstats,
+            frame_config.enable_dropped_sample_detection
         ]):
             if self.signals:
                 self.signals.output_progress.emit("Performing enhanced frame analysis...")
@@ -312,7 +313,8 @@ class ProcessingManager:
             frame_config.enable_bitplane_check,
             frame_config.enable_border_detection,
             frame_config.enable_brng_analysis,
-            frame_config.enable_signalstats
+            frame_config.enable_signalstats,
+            frame_config.enable_dropped_sample_detection
         ]):
             logger.info("No frame analysis sub-steps enabled")
             return None
@@ -362,6 +364,7 @@ class ProcessingManager:
             'border_results': None,
             'brng_results': None,
             'signalstats_results': None,
+            'dropped_sample_results': None,
             'analysis_decisions': []
         }
         
@@ -411,6 +414,21 @@ class ProcessingManager:
                 'used_qctools': stats.get('used_qctools', False)
             }
         
+        # Extract dropped sample detection results
+        if 'dropped_sample_detection' in analysis_results:
+            ds = analysis_results['dropped_sample_detection']
+            formatted['dropped_sample_results'] = {
+                'status': ds.get('status'),
+                'message': ds.get('message', ''),
+                'spike_count': ds.get('spike_count', 0),
+                'duration_diff_ms': ds.get('duration_diff_ms', 0.0),
+                'audio_duration': ds.get('audio_duration', 0.0),
+                'video_duration': ds.get('video_duration', 0.0),
+                'combined_score': ds.get('combined_score', 0.0),
+                'spectrogram_path': ds.get('spectrogram_path'),
+                'spike_timestamps': ds.get('spike_timestamps', [])
+            }
+
         # Add any analysis decisions
         if 'refinement_iterations' in analysis_results:
             formatted['analysis_decisions'].append(

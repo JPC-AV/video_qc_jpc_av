@@ -263,6 +263,9 @@ class FrameAnalysisConfig:
     analysis_period_duration: int = 60
     analysis_period_count: int = 3
 
+    # Dropped sample detection settings
+    enable_dropped_sample_detection: bool = True
+
 # Output configuration
 VALID_QCTOOLS_EXTENSIONS = ("qctools.xml.gz", "qctools.mkv")
 

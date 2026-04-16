@@ -78,6 +78,19 @@ class SignalstatsResult:
     comparison_results: List[Dict] = None
 
 @dataclass
+class DroppedSampleResult:
+    """Results from dropped sample detection analysis"""
+    status: str  # 'clean', 'warning', 'critical'
+    message: str
+    spike_count: int
+    duration_diff_ms: float
+    audio_duration: float
+    video_duration: float
+    combined_score: float  # weighted risk score 0.0-1.0
+    spectrogram_path: Optional[str] = None
+    spike_timestamps: List[float] = None
+
+@dataclass
 class UpstreamAnalysisContext:
     """
     Packages findings from border detection and signalstats
@@ -3274,6 +3287,426 @@ class EnhancedFrameAnalysis:
             logger.warning(f"Could not get video duration: {e}")
         return None
 
+    def _detect_dropped_samples(self, color_bars_end_time: float = None) -> Optional[DroppedSampleResult]:
+        """
+        Detect potential dropped audio samples by:
+        1. Generating a spectrogram image via FFmpeg showspectrumpic and analyzing it for vertical spikes
+        2. Comparing audio and video stream durations from the ffprobe sidecar
+        3. Combining both signals into a weighted risk score
+
+        Args:
+            color_bars_end_time: End time of color bars (unused for now, reserved for future filtering)
+
+        Returns:
+            DroppedSampleResult or None if detection fails
+        """
+        logger.info("Running dropped sample detection...")
+
+        # Step 1: Generate spectrogram image
+        spectrogram_path = self._generate_spectrogram()
+
+        # Step 2: Analyze spectrogram for vertical spikes
+        spike_count = 0
+        spike_timestamps = []
+        if spectrogram_path:
+            spike_count, spike_timestamps = self._analyze_spectrogram_spikes(spectrogram_path)
+            if spike_count > 0:
+                logger.warning(f"Detected {spike_count} potential dropped sample spike(s) in spectrogram")
+            else:
+                logger.info("No dropped sample spikes detected in spectrogram")
+
+        # Step 3: Compare audio/video durations
+        audio_duration, video_duration = self._get_av_durations()
+        duration_diff_ms = 0.0
+        if audio_duration is not None and video_duration is not None:
+            duration_diff_ms = abs(audio_duration - video_duration) * 1000.0
+            if duration_diff_ms > 0:
+                logger.warning(f"Audio/video duration mismatch: {duration_diff_ms:.3f}ms")
+                logger.debug(f"  Audio duration: {audio_duration:.6f}s")
+                logger.debug(f"  Video duration: {video_duration:.6f}s")
+            else:
+                logger.info("Audio and video durations match")
+        else:
+            logger.warning("Could not determine audio and/or video duration for comparison")
+            audio_duration = audio_duration or 0.0
+            video_duration = video_duration or 0.0
+
+        # Step 4: Compute combined score and status
+        combined_score, status = self._compute_dropped_sample_score(spike_count, duration_diff_ms)
+
+        # Build message
+        parts = []
+        if spike_count > 0:
+            parts.append(f"{spike_count} spectrogram spike(s) detected")
+        if duration_diff_ms > 0:
+            parts.append(f"{duration_diff_ms:.3f}ms audio/video duration difference")
+        if not parts:
+            message = "No indicators of dropped samples detected"
+        else:
+            message = "; ".join(parts)
+
+        logger.info(f"Dropped sample detection result: {status} — {message}\n")
+
+        return DroppedSampleResult(
+            status=status,
+            message=message,
+            spike_count=spike_count,
+            duration_diff_ms=duration_diff_ms,
+            audio_duration=audio_duration,
+            video_duration=video_duration,
+            combined_score=combined_score,
+            spectrogram_path=str(spectrogram_path) if spectrogram_path else None,
+            spike_timestamps=spike_timestamps
+        )
+
+    def _generate_spectrogram(self) -> Optional[Path]:
+        """Generate a spectrogram image using FFmpeg's showspectrumpic filter."""
+        output_path = self.output_dir / f"{self.video_id}_spectrogram.png"
+
+        cmd = [
+            'ffmpeg', '-y', '-i', str(self.video_path),
+            '-vn', '-lavfi', 'showspectrumpic=s=1280x480',
+            str(output_path)
+        ]
+
+        try:
+            logger.debug(f"Generating spectrogram: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0 and output_path.exists():
+                logger.info(f"Spectrogram saved to: {output_path.name}")
+                return output_path
+            else:
+                logger.warning(f"FFmpeg spectrogram generation failed (exit code {result.returncode})")
+                if result.stderr:
+                    logger.debug(f"FFmpeg stderr: {result.stderr[-500:]}")
+        except subprocess.TimeoutExpired:
+            logger.warning("Spectrogram generation timed out (300s limit)")
+        except Exception as e:
+            logger.warning(f"Error generating spectrogram: {e}")
+
+        return None
+
+    def _analyze_spectrogram_spikes(self, spectrogram_path: Path) -> Tuple[int, List[float]]:
+        """
+        Analyze a spectrogram PNG for vertical bright lines (spikes) that indicate
+        dropped audio samples. These appear as bright columns spanning the full
+        frequency range.
+
+        Returns:
+            Tuple of (spike_count, estimated_timestamps)
+        """
+        try:
+            img = cv2.imread(str(spectrogram_path))
+            if img is None:
+                logger.warning("Could not load spectrogram image for analysis")
+                return 0, []
+
+            height, width = img.shape[:2]
+            gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+            # Dynamically find the actual spectrogram plot area.
+            # showspectrumpic adds: left axis labels, right colorbar + dBFS scale,
+            # and top/bottom time/frequency labels around the plot.
+            #
+            # Strategy: use a narrow horizontal band (40-60% height) to avoid text,
+            # then find gaps of >= 10 dark columns that separate the plot from
+            # the axis labels (left) and colorbar (right).
+
+            band_top = int(height * 0.4)
+            band_bottom = int(height * 0.6)
+            band = gray_full[band_top:band_bottom, :]
+            col_means = np.mean(band, axis=0)
+
+            gap_threshold = 10  # Minimum dark columns to count as a structural gap
+
+            # Find left edge: scan from left, skip dark margin, skip axis labels,
+            # find the first sustained gap, then the plot starts after it
+            plot_left = 0
+            c = 0
+            while c < width and col_means[c] < 2:
+                c += 1
+            # Now in axis labels region — scan for the first gap of >= gap_threshold
+            while c < width // 2:
+                if col_means[c] < 2:
+                    gap_start = c
+                    while c < width and col_means[c] < 2:
+                        c += 1
+                    gap_len = c - gap_start
+                    if gap_len >= gap_threshold:
+                        plot_left = c
+                        break
+                else:
+                    c += 1
+
+            # Find right edge: scan from right, skip dark margin, skip colorbar/labels,
+            # find the first sustained gap, then the plot ends before it
+            plot_right = width - 1
+            c = width - 1
+            while c > 0 and col_means[c] < 2:
+                c -= 1
+            # Now in colorbar/labels region — scan for the first gap
+            while c > width // 2:
+                if col_means[c] < 2:
+                    gap_end = c
+                    while c > 0 and col_means[c] < 2:
+                        c -= 1
+                    gap_start = c + 1
+                    gap_len = gap_end - gap_start + 1
+                    if gap_len >= gap_threshold:
+                        plot_right = gap_start - 1
+                        # Skip any bright axis border line at the edge
+                        while plot_right > plot_left and col_means[plot_right] > 150:
+                            plot_right -= 1
+                        break
+                else:
+                    c -= 1
+
+            # Find top/bottom edges using the plot column range
+            top_edges = []
+            bottom_edges = []
+            for col in range(plot_left, plot_right, max(1, (plot_right - plot_left) // 20)):
+                col_data = gray_full[:, col]
+                for r in range(height):
+                    if col_data[r] > 15:
+                        top_edges.append(r)
+                        break
+                for r in range(height - 1, 0, -1):
+                    if col_data[r] > 15:
+                        bottom_edges.append(r)
+                        break
+
+            plot_top = int(np.median(top_edges)) if top_edges else 0
+            plot_bottom = int(np.median(bottom_edges)) if bottom_edges else height
+
+            plot_area = img[plot_top:plot_bottom, plot_left:plot_right]
+
+            if plot_area.size == 0:
+                logger.warning("Spectrogram plot area is empty after cropping")
+                return 0, []
+
+            # Convert to grayscale and compute mean brightness per column
+            gray = cv2.cvtColor(plot_area, cv2.COLOR_BGR2GRAY)
+            plot_height, plot_width = gray.shape
+
+            logger.debug(f"Spectrogram plot area: ({plot_left},{plot_top}) to ({plot_right},{plot_bottom}), "
+                         f"size {plot_width}x{plot_height}")
+
+            column_means = np.mean(gray, axis=0)
+
+            # Use a rolling median with a wide window to establish local baseline
+            window_size = max(51, plot_width // 20)
+            if window_size % 2 == 0:
+                window_size += 1
+
+            # Pad for rolling computation
+            padded = np.pad(column_means, window_size // 2, mode='edge')
+            rolling_median = np.array([
+                np.median(padded[i:i + window_size])
+                for i in range(len(column_means))
+            ])
+
+            # Compute deviation from local median
+            deviations = column_means - rolling_median
+
+            # Use MAD (median absolute deviation) for robust threshold
+            mad = np.median(np.abs(deviations))
+            if mad == 0:
+                mad = np.std(deviations)
+            if mad == 0:
+                return 0, []
+
+            threshold = 3.0 * mad  # 3x MAD for spike detection
+
+            # Also require the column to be bright across most of the frequency range
+            # A true dropped sample spike lights up the full spectrum
+            spike_columns = []
+            for col_idx in range(plot_width):
+                if deviations[col_idx] > threshold:
+                    # Check that the brightness spans most of the frequency range
+                    col_data = gray[:, col_idx]
+                    # Count rows above the overall median brightness
+                    overall_median = np.median(gray)
+                    bright_fraction = np.sum(col_data > overall_median + threshold) / plot_height
+                    if bright_fraction > 0.3:  # At least 30% of frequency range is bright
+                        spike_columns.append(col_idx)
+
+            if not spike_columns:
+                return 0, []
+
+            # Group adjacent spike columns into single events
+            spikes = []
+            current_group = [spike_columns[0]]
+            for i in range(1, len(spike_columns)):
+                if spike_columns[i] - spike_columns[i-1] <= 3:  # Adjacent within 3px
+                    current_group.append(spike_columns[i])
+                else:
+                    spikes.append(current_group)
+                    current_group = [spike_columns[i]]
+            spikes.append(current_group)
+
+            # Estimate timestamps by mapping column position to video duration
+            video_duration = self._get_video_duration() or 0
+            spike_timestamps = []
+            for group in spikes:
+                center_col = sum(group) / len(group)
+                timestamp = (center_col / plot_width) * video_duration
+                spike_timestamps.append(round(timestamp, 2))
+
+            logger.debug(f"Spike detection: {len(spikes)} spike(s) found at columns {[g[0] for g in spikes]}")
+            if spike_timestamps:
+                logger.debug(f"Estimated timestamps: {spike_timestamps}")
+
+            return len(spikes), spike_timestamps
+
+        except Exception as e:
+            logger.warning(f"Error analyzing spectrogram: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return 0, []
+
+    def _get_av_durations(self) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Get audio and video stream durations from the ffprobe sidecar JSON.
+        Falls back to a fresh ffprobe call if the sidecar is not found.
+
+        Handles both standard duration fields and Matroska containers where
+        per-stream durations are stored in tags.DURATION as HH:MM:SS.nnnnnnnnn.
+
+        Returns:
+            Tuple of (audio_duration, video_duration) in seconds, or None if unavailable
+        """
+        audio_duration = None
+        video_duration = None
+
+        # Try reading from ffprobe sidecar JSON
+        sidecar_path = self.video_path.parent / f"{self.video_id}_qc_metadata" / f"{self.video_id}_ffprobe_output.json"
+        if not sidecar_path.exists():
+            # Also check the destination output dir
+            sidecar_path = self.output_dir / f"{self.video_id}_ffprobe_output.json"
+
+        if sidecar_path.exists():
+            try:
+                with open(sidecar_path, 'r') as f:
+                    ffprobe_data = json.load(f)
+
+                audio_duration, video_duration = self._extract_stream_durations(
+                    ffprobe_data.get('streams', [])
+                )
+                logger.debug(f"Durations from ffprobe sidecar: audio={audio_duration}, video={video_duration}")
+                if audio_duration is not None and video_duration is not None:
+                    return audio_duration, video_duration
+            except Exception as e:
+                logger.debug(f"Could not read ffprobe sidecar: {e}")
+
+        # Fallback: run ffprobe directly, requesting both duration and DURATION tag
+        logger.debug("Falling back to fresh ffprobe call for stream durations")
+        try:
+            cmd = [
+                'ffprobe', '-v', 'quiet',
+                '-show_entries', 'stream=codec_type,duration:stream_tags=DURATION',
+                '-of', 'json',
+                str(self.video_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                audio_duration, video_duration = self._extract_stream_durations(
+                    data.get('streams', [])
+                )
+        except Exception as e:
+            logger.warning(f"Could not get stream durations via ffprobe: {e}")
+
+        return audio_duration, video_duration
+
+    @staticmethod
+    def _extract_stream_durations(streams: list) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Extract audio and video durations from ffprobe stream data.
+        Checks the 'duration' field first, then falls back to tags.DURATION
+        (used by Matroska/WebM containers which store duration as HH:MM:SS.nnnnnnnnn).
+        """
+        audio_duration = None
+        video_duration = None
+
+        for stream in streams:
+            codec_type = stream.get('codec_type', '')
+            if codec_type not in ('video', 'audio'):
+                continue
+
+            duration = None
+            # Try direct duration field first
+            duration_str = stream.get('duration')
+            if duration_str is not None:
+                try:
+                    duration = float(duration_str)
+                except (ValueError, TypeError):
+                    pass
+
+            # Fall back to tags.DURATION (Matroska format: HH:MM:SS.nnnnnnnnn)
+            if duration is None:
+                tags = stream.get('tags', {})
+                tag_duration = tags.get('DURATION') or tags.get('duration')
+                if tag_duration:
+                    duration = EnhancedFrameAnalysis._parse_duration_tag(tag_duration)
+
+            if duration is not None:
+                if codec_type == 'video' and video_duration is None:
+                    video_duration = duration
+                elif codec_type == 'audio' and audio_duration is None:
+                    audio_duration = duration
+
+        return audio_duration, video_duration
+
+    @staticmethod
+    def _parse_duration_tag(duration_str: str) -> Optional[float]:
+        """Parse a duration string in HH:MM:SS.nnnnnnnnn format to seconds."""
+        try:
+            parts = duration_str.split(':')
+            if len(parts) == 3:
+                hours = int(parts[0])
+                minutes = int(parts[1])
+                seconds = float(parts[2])
+                return hours * 3600 + minutes * 60 + seconds
+            else:
+                return float(duration_str)
+        except (ValueError, TypeError):
+            return None
+
+    def _compute_dropped_sample_score(self, spike_count: int, duration_diff_ms: float) -> Tuple[float, str]:
+        """
+        Compute a combined risk score from spectrogram spikes and duration mismatch.
+
+        Scoring:
+        - Spike score: 0 spikes = 0.0, 1-5 = 0.3-0.5, 6+ = 0.6-0.8
+        - Duration score: 0ms = 0.0, >0ms = 0.3
+        - If both present, escalate
+
+        Returns:
+            Tuple of (score 0.0-1.0, status string)
+        """
+        spike_score = 0.0
+        if spike_count > 0:
+            spike_score = min(0.8, 0.2 + spike_count * 0.06)
+
+        duration_score = 0.0
+        if duration_diff_ms > 0:
+            duration_score = 0.3
+
+        # Combined score: weighted sum with escalation when both are present
+        combined = spike_score * 0.7 + duration_score * 0.3
+        if spike_count > 0 and duration_diff_ms > 0:
+            combined = min(1.0, combined + 0.15)  # escalation bonus
+
+        # Determine status
+        if combined == 0:
+            status = 'clean'
+        elif combined < 0.4:
+            status = 'warning'
+        else:
+            status = 'critical'
+
+        return round(combined, 3), status
+
     def _check_bitplane_noise(self, num_samples: int = 20) -> Dict:
         """
         Check if the 9th and 10th bits (two least significant bits) of a 10-bit
@@ -3549,20 +3982,23 @@ class EnhancedFrameAnalysis:
         border_detection_enabled = self._is_step_enabled(frame_config.enable_border_detection)
         brng_analysis_enabled = self._is_step_enabled(frame_config.enable_brng_analysis)
         signalstats_enabled = self._is_step_enabled(frame_config.enable_signalstats)
+        dropped_sample_enabled = self._is_step_enabled(frame_config.enable_dropped_sample_detection)
 
         # Log which steps will run
         logger.info(f"Frame analysis configuration:")
         logger.debug(f"  Bitplane check: {'enabled' if bitplane_check_enabled else 'disabled'}")
         logger.debug(f"  Border detection: {'enabled' if border_detection_enabled else 'disabled'}")
         logger.debug(f"  BRNG analysis: {'enabled' if brng_analysis_enabled else 'disabled'}")
-        logger.debug(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}\n")
+        logger.debug(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}")
+        logger.debug(f"  Dropped sample detection: {'enabled' if dropped_sample_enabled else 'disabled'}\n")
 
         # Track what was actually run
         results['steps_enabled'] = {
             'bitplane_check': bitplane_check_enabled,
             'border_detection': border_detection_enabled,
             'brng_analysis': brng_analysis_enabled,
-            'signalstats': signalstats_enabled
+            'signalstats': signalstats_enabled,
+            'dropped_sample_detection': dropped_sample_enabled
         }
 
         # Step 0: Bitplane check — verify 9th and 10th bits are not empty
@@ -4082,7 +4518,27 @@ class EnhancedFrameAnalysis:
                 
                 logger.debug(f"{'='*60}\n")
         
-        # Step 7: Generate comprehensive summary
+        # Step 7: Dropped sample detection (conditional)
+        dropped_sample_enabled = self._is_step_enabled(frame_config.enable_dropped_sample_detection)
+        if self.check_cancelled():
+            return results
+        if dropped_sample_enabled:
+            logger.info("Starting dropped sample detection...")
+            if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+                self.signals.frame_analysis_progress.emit(0)
+
+            dropped_sample_result = self._detect_dropped_samples(
+                color_bars_end_time=color_bars_end_time
+            )
+            if dropped_sample_result:
+                results['dropped_sample_detection'] = asdict(dropped_sample_result)
+
+            if signals and frame_config.enable_dropped_sample_detection:
+                signals.step_completed.emit("Frame Analysis - Dropped Sample Detection")
+        else:
+            logger.warning("Skipping dropped sample detection (disabled in config)\n")
+
+        # Step 8: Generate comprehensive summary
         if self.check_cancelled():
             return results
         results['summary'] = self._generate_summary(results)

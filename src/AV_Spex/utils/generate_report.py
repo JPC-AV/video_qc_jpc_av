@@ -209,7 +209,9 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
         'brng_analysis': None,
         'brng_thumbnails': [],
         'signalstats_analysis': None,
-        'enhanced_frame_analysis': None
+        'enhanced_frame_analysis': None,
+        'dropped_sample_spectrogram': None,
+        'dropped_sample_detection': None
     }
     
     # Check for border detection outputs
@@ -290,7 +292,15 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
                 frame_outputs['qctools_violations_found'] = enhanced_data['qctools_violations_found']
             if enhanced_data.get('color_bars_end_time'):
                 frame_outputs['color_bars_end_time'] = enhanced_data['color_bars_end_time']
-                    
+
+            # Extract dropped sample detection data
+            if enhanced_data.get('dropped_sample_detection'):
+                frame_outputs['dropped_sample_detection'] = enhanced_data['dropped_sample_detection']
+                # Check for spectrogram image
+                spec_path = enhanced_data['dropped_sample_detection'].get('spectrogram_path')
+                if spec_path and os.path.exists(spec_path):
+                    frame_outputs['dropped_sample_spectrogram'] = spec_path
+
         except Exception as e:
             logger.warning(f"Could not read signalstats from enhanced frame analysis: {e}")
     
@@ -299,7 +309,13 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
         signalstats = os.path.join(destination_directory, f"{video_id}_signalstats_analysis.json")
         if os.path.exists(signalstats):
             frame_outputs['signalstats_analysis'] = signalstats
-    
+
+    # Check for spectrogram image (if not already found from enhanced JSON)
+    if not frame_outputs['dropped_sample_spectrogram']:
+        spectrogram = os.path.join(destination_directory, f"{video_id}_spectrogram.png")
+        if os.path.exists(spectrogram):
+            frame_outputs['dropped_sample_spectrogram'] = spectrogram
+
     return frame_outputs
 
 def find_report_csvs(report_directory):
@@ -3219,6 +3235,136 @@ def generate_frame_analysis_html(frame_outputs, video_id):
         if num_thumbs > 6:
             html += f"<p style='font-style: italic; font-size: 13px;'>Showing 6 of {num_thumbs} diagnostic thumbnails</p>"
     
+    # Dropped Sample Detection Section
+    dropped_sample_data = frame_outputs.get('dropped_sample_detection')
+    if dropped_sample_data:
+        html += "<h3 style='color: #bf971b;'>Dropped Sample Detection</h3>"
+
+        # Collapsible methodology explanation
+        html += """
+        <a id="link_dropped_sample_methodology" href="javascript:void(0);"
+           onclick="toggleContent('dropped_sample_methodology', 'What is dropped sample detection? ▼', 'What is dropped sample detection? ▲')"
+           style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+           What is dropped sample detection? ▼</a>
+        <div id="dropped_sample_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+             margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+            <p style="margin: 0 0 10px 0;">
+                <strong>Dropped sample detection</strong> identifies potential audio sample drops caused by
+                TBC/framesync devices or analog-to-digital converters during digitization. Two indicators are analyzed:
+            </p>
+            <ul style="margin: 4px 0 10px 20px; padding: 0;">
+                <li style="margin-bottom: 4px;"><strong>Spectrogram spike analysis</strong> &mdash; A spectrogram
+                    of the full audio is generated using FFmpeg. Bright vertical lines spanning the entire frequency
+                    range indicate audible pops/clicks from dropped samples. The spectrogram image is analyzed
+                    programmatically to detect and count these spikes.</li>
+                <li style="margin-bottom: 4px;"><strong>Audio/video duration mismatch</strong> &mdash; Dropped
+                    samples cause the audio stream to be slightly shorter than the video stream. Any measurable
+                    difference (&gt;0ms) between audio and video stream durations is flagged.</li>
+            </ul>
+            <p style="margin: 0;">
+                Both signals are combined into a weighted risk score. When both indicators are present,
+                the score is escalated to reflect higher confidence that samples were dropped.
+            </p>
+        </div>
+        """
+
+        status = dropped_sample_data.get('status', 'unknown')
+        message = dropped_sample_data.get('message', '')
+        spike_count = dropped_sample_data.get('spike_count', 0)
+        duration_diff_ms = dropped_sample_data.get('duration_diff_ms', 0.0)
+        audio_duration = dropped_sample_data.get('audio_duration', 0.0)
+        video_duration = dropped_sample_data.get('video_duration', 0.0)
+        combined_score = dropped_sample_data.get('combined_score', 0.0)
+        spike_timestamps = dropped_sample_data.get('spike_timestamps', [])
+
+        if status == 'critical':
+            status_color = '#cc0000'
+            status_icon = '&#x26A0;'
+        elif status == 'warning':
+            status_color = '#cc6600'
+            status_icon = '&#x26A0;'
+        elif status == 'clean':
+            status_color = '#0a5f1c'
+            status_icon = '&#x2705;'
+        else:
+            status_color = '#666666'
+            status_icon = '&#x2753;'
+
+        html += f"""
+        <p style="font-size: 14px; color: {status_color}; font-weight: bold;">
+            {status_icon} {message}
+        </p>
+        """
+
+        # Results table
+        html += """
+        <table style="border-collapse: collapse; margin: 10px 0; font-size: 13px;">
+            <tr style="background-color: #f0ebe4;">
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: left;">Metric</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Value</th>
+            </tr>
+        """
+        html += f"""
+            <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">Spectrogram spikes detected</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{spike_count}</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">Audio/video duration difference</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{duration_diff_ms:.3f} ms</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">Audio stream duration</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{audio_duration:.6f} s</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">Video stream duration</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{video_duration:.6f} s</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">Combined risk score</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{combined_score:.3f}</td>
+            </tr>
+        </table>
+        """
+
+        # Spike timestamps (collapsible, if any)
+        if spike_timestamps:
+            html += f"""
+            <a id="link_spike_timestamps" href="javascript:void(0);"
+               onclick="toggleContent('spike_timestamps', 'Estimated spike timestamps ({len(spike_timestamps)}) ▼', 'Estimated spike timestamps ▲')"
+               style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block; font-size: 13px;">
+               Estimated spike timestamps ({len(spike_timestamps)}) ▼</a>
+            <div id="spike_timestamps" style="display: none; margin: 0 0 16px 0;">
+            <table style="border-collapse: collapse; font-size: 13px;">
+                <tr style="background-color: #f0ebe4;">
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">#</th>
+                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Timestamp (s)</th>
+                </tr>
+            """
+            for i, ts in enumerate(spike_timestamps, 1):
+                html += f"""
+                <tr>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{i}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{ts:.2f}</td>
+                </tr>
+                """
+            html += "</table></div>"
+
+        # Embed spectrogram image
+        spectrogram_path = frame_outputs.get('dropped_sample_spectrogram')
+        if spectrogram_path:
+            try:
+                with open(spectrogram_path, "rb") as img_file:
+                    encoded_img = b64encode(img_file.read()).decode()
+                html += f"""
+                <p style="font-size: 13px; font-weight: bold; margin: 16px 0 6px 0;">Audio Spectrogram:</p>
+                <img src="data:image/png;base64,{encoded_img}"
+                     style="max-width: 100%; height: auto; margin: 0 0 10px 0; border: 1px solid #d0c0b0;" />
+                """
+            except Exception as e:
+                logger.warning(f"Could not embed spectrogram image: {e}")
+
     html += "</div>"
     return html
 

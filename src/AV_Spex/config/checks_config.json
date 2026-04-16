@@ -22,7 +22,8 @@
       "brng_skip_color_bars": true,
       "signalstats_start_time": 120,
       "signalstats_duration": 60,
-      "signalstats_periods": 3
+      "signalstats_periods": 3,
+      "enable_dropped_sample_detection": true
     }
   },
   "fixity": {

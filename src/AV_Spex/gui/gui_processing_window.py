@@ -339,6 +339,8 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
                     self._add_step_item("Frame Analysis - Signalstats")
                 if frame_config.enable_brng_analysis:
                     self._add_step_item("Frame Analysis - BRNG Analysis")
+                if frame_config.enable_dropped_sample_detection:
+                    self._add_step_item("Frame Analysis - Dropped Sample Detection")
             
             # Output files
             if checks_config.outputs.access_file == "yes":

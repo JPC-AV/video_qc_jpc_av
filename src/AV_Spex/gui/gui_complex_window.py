@@ -140,6 +140,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.setup_border_detection_section(main_layout)
         self.setup_signalstats_section(main_layout)
         self.setup_brng_analysis_section(main_layout)
+        self.setup_dropped_sample_detection_section(main_layout)
 
     def setup_bitplane_check_section(self, main_layout):
         """Set up the bitplane check section with enable checkbox"""
@@ -466,6 +467,31 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Connect enable/disable logic
         self.enable_brng_analysis_cb.stateChanged.connect(self.update_brng_analysis_visibility)
 
+    def setup_dropped_sample_detection_section(self, main_layout):
+        """Set up the dropped sample detection section with enable checkbox"""
+        theme_manager = ThemeManager.instance()
+
+        self.dropped_sample_group = QGroupBox("Dropped Sample Detection")
+        theme_manager.style_groupbox(self.dropped_sample_group, "top left")
+        self.themed_group_boxes['dropped_sample'] = self.dropped_sample_group
+
+        ds_layout = QVBoxLayout()
+
+        self.enable_dropped_sample_cb = QCheckBox("Enable Dropped Sample Detection")
+        self.enable_dropped_sample_cb.setStyleSheet("font-weight: bold;")
+        ds_desc = QLabel(
+            "Detect potential audio sample drops from TBC/framesync or ADC devices. "
+            "Generates a spectrogram to identify audible pops and compares audio/video durations."
+        )
+        ds_desc.setWordWrap(True)
+        ds_desc.setIndent(20)
+
+        ds_layout.addWidget(self.enable_dropped_sample_cb)
+        ds_layout.addWidget(ds_desc)
+
+        self.dropped_sample_group.setLayout(ds_layout)
+        main_layout.addWidget(self.dropped_sample_group)
+
     def update_border_detection_visibility(self):
         """Update visibility of border detection components"""
         enabled = self.enable_border_detection_cb.isChecked()
@@ -540,6 +566,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
         )
         self.enable_signalstats_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_signalstats'])
+        )
+        self.enable_dropped_sample_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_dropped_sample_detection'])
         )
         
         # Border mode combo
@@ -623,7 +652,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.enable_border_detection_cb.setChecked(bool(frame_config.enable_border_detection))
             self.enable_brng_analysis_cb.setChecked(bool(frame_config.enable_brng_analysis))
             self.enable_signalstats_cb.setChecked(bool(frame_config.enable_signalstats))
-            
+            self.enable_dropped_sample_cb.setChecked(bool(frame_config.enable_dropped_sample_detection))
+
             # Set border detection mode
             mode_index = self.border_mode_combo.findData(frame_config.border_detection_mode)
             if mode_index >= 0:
