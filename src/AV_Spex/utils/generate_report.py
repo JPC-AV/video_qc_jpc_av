@@ -317,6 +317,8 @@ def find_report_csvs(report_directory):
     colorbars_eval_fails_csv = None
     audio_clipping_csv = None
     channel_imbalance_csv = None
+    audible_timecode_csv = None
+    audio_dropout_csv = None
     difference_csv = None
 
     if os.path.isdir(report_directory):
@@ -346,10 +348,14 @@ def find_report_csvs(report_directory):
                         audio_clipping_csv = file_path
                     elif "qct-parse_channel_imbalance" in file:
                         channel_imbalance_csv = file_path
+                    elif "qct-parse_audible_timecode" in file:
+                        audible_timecode_csv = file_path
+                    elif "qct-parse_audio_dropout" in file:
+                        audio_dropout_csv = file_path
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -546,18 +552,24 @@ _WAVEFORM_CHANNEL_COLORS = [
 
 
 def _build_waveform_filter(num_channels, width, height):
-    """Build an FFmpeg filter_complex string for N-channel waveform overlay.
+    """Build an FFmpeg filter_complex string that renders each audio channel
+    as a separate waveform strip stacked vertically.
+
+    A thin separator line is inserted between channels so they are easy to
+    distinguish regardless of the number of channels.
 
     Args:
         num_channels (int): Number of audio channels.
         width (int): Image width.
-        height (int): Image height.
+        height (int): Height per channel in pixels.
 
     Returns:
         str: filter_complex string for FFmpeg.
     """
     colors = _WAVEFORM_CHANNEL_COLORS
-    opacity = 0.6
+    opacity = 0.8
+    separator_height = 2
+    separator_color = "333333"
 
     if num_channels == 1:
         # Mono — single waveform, no split needed
@@ -567,9 +579,14 @@ def _build_waveform_filter(num_channels, width, height):
     layout_map = {2: "stereo", 3: "2.1", 4: "quad", 6: "5.1", 8: "7.1"}
     layout_arg = layout_map.get(num_channels, f"{num_channels}c")
 
-    # Build channelsplit → per-channel showwavespic → overlay chain
+    # Build channelsplit → per-channel showwavespic → vstack
     split_outputs = "".join(f"[ch{i}]" for i in range(num_channels))
     lines = [f"[0:a]channelsplit=channel_layout={layout_arg}{split_outputs};"]
+
+    # Create a thin separator strip
+    lines.append(
+        f"color=c=#{separator_color}:s={width}x{separator_height}:d=1[sep];"
+    )
 
     for i in range(num_channels):
         color = colors[i % len(colors)]
@@ -577,16 +594,23 @@ def _build_waveform_filter(num_channels, width, height):
             f"[ch{i}]showwavespic=s={width}x{height}:colors={color}@{opacity}:draw=full:scale=sqrt[w{i}];"
         )
 
-    # Chain overlays: overlay w0 + w1 → t0, t0 + w2 → t1, ...
-    if num_channels == 2:
-        lines.append(f"[w0][w1]overlay=format=auto")
+    # Interleave waveform strips with separator copies, then vstack
+    # We need (num_channels - 1) copies of the separator
+    if num_channels > 2:
+        lines.append(f"[sep]split={num_channels - 1}" + "".join(f"[s{i}]" for i in range(num_channels - 1)) + ";")
     else:
-        lines.append(f"[w0][w1]overlay=format=auto[t0];")
-        for i in range(2, num_channels):
-            if i == num_channels - 1:
-                lines.append(f"[t{i - 2}][w{i}]overlay=format=auto")
-            else:
-                lines.append(f"[t{i - 2}][w{i}]overlay=format=auto[t{i - 1}];")
+        # For stereo, the single [sep] can be used directly
+        lines.append("[sep]copy[s0];")
+
+    # Build the vstack input list: w0, s0, w1, s1, w2, ..., w(N-1)
+    vstack_inputs = ""
+    for i in range(num_channels):
+        vstack_inputs += f"[w{i}]"
+        if i < num_channels - 1:
+            vstack_inputs += f"[s{i}]"
+
+    total_inputs = num_channels + (num_channels - 1)  # waveforms + separators
+    lines.append(f"{vstack_inputs}vstack=inputs={total_inputs}")
 
     return "\n".join(lines)
 
@@ -1210,9 +1234,257 @@ def make_channel_imbalance_html(channel_imbalance_csv):
     return html
 
 
+def make_audible_timecode_html(audible_timecode_csv):
+    """
+    Generates an HTML section summarizing audible timecode detection results.
+
+    Args:
+        audible_timecode_csv (str): Path to the audible timecode CSV file.
+
+    Returns:
+        str: HTML string with audible timecode results, or None if file cannot be read.
+    """
+    if not audible_timecode_csv or not os.path.isfile(audible_timecode_csv):
+        return None
+
+    try:
+        with open(audible_timecode_csv, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    except Exception as e:
+        logger.error(f"Error reading audible timecode CSV: {e}")
+        return None
+
+    if len(rows) < 6:
+        return None
+
+    # Parse summary rows
+    metric_type = rows[1][1] if len(rows[1]) > 1 else "N/A"
+    total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
+    duration = rows[3][1] if len(rows[3]) > 1 else "N/A"
+    tc_detected = rows[4][1] if len(rows[4]) > 1 else "No"
+    num_regions = rows[5][1] if len(rows[5]) > 1 else "0"
+
+    if tc_detected == "Yes":
+        status_color = "#dc3545"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+        status_text = "Audible Timecode Detected"
+    else:
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+        status_text = "No Audible Timecode Detected"
+
+    html = f'''
+    <a id="link_timecode_methodology" href="javascript:void(0);"
+       onclick="toggleContent('timecode_methodology', 'What is audible timecode detection? ▼', 'What is audible timecode detection? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is audible timecode detection? ▼</a>
+    <div id="timecode_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Audible timecode detection</strong> scans the audio frames of the QCTools report to
+            identify the presence of Linear Timecode (LTC) artifacts &mdash; a biphase-modulated square
+            wave (~2400 Hz for 30fps NTSC) that was recorded on an audio track during the original
+            production or dubbing process.
+        </p>
+        <p style="margin: 0 0 10px 0;">
+            The analysis uses rolling windows over the audio measurements to detect the characteristic
+            statistical fingerprint of LTC: steady RMS level, low crest factor (square wave), narrow
+            dynamic range, and a zero-crossing rate consistent with the LTC carrier frequency.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Detection criteria:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>Dual-channel TC</strong> &mdash; both audio channels carry timecode (stable loudness, narrow dynamic range).</li>
+            <li style="margin-bottom: 4px;"><strong>TC + silence</strong> &mdash; one channel carries timecode while the other is near-silent (large gap between momentary and integrated loudness).</li>
+            <li style="margin-bottom: 4px;"><strong>TC + program audio</strong> &mdash; timecode is present alongside program audio on separate channels (divergence between M and S loudness, high M variance).</li>
+        </ul>
+        <p style="margin: 0;">
+            Detections must persist across multiple consecutive windows to be reported, reducing
+            false positives from transient audio events.
+        </p>
+    </div>
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Metric Type</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{metric_type}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Duration</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{duration}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Regions Detected</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{num_regions}</td></tr>
+    </table>
+    '''
+
+    # Add detection regions table if there are any
+    detection_rows = [r for r in rows[8:] if len(r) >= 5]
+    if detection_rows:
+        html += f'''
+        <a href="javascript:void(0);" onclick="toggleContent('timecode_regions', 'Show detected regions ({len(detection_rows)}) ▼', 'Hide detected regions ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show detected regions ({len(detection_rows)}) ▼</a>
+        <div id="timecode_regions" style="display: none;">
+        <table style="border-collapse: collapse; margin: 10px 0;">
+            <tr>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start Time</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End Time</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Criterion</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Confidence</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Details</th>
+            </tr>
+        '''
+        for row in detection_rows:
+            details = row[5] if len(row) > 5 else ""
+            html += f'''<tr>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[0]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[1]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[2]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[3]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[4]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{details}</td>
+            </tr>\n'''
+        html += '</table></div>\n'
+
+    return html
+
+
+def make_audio_dropout_html(audio_dropout_csv):
+    """
+    Generates an HTML section summarizing audio dropout detection results.
+
+    Args:
+        audio_dropout_csv (str): Path to the audio dropout CSV file.
+
+    Returns:
+        str: HTML string with audio dropout results, or None if file cannot be read.
+    """
+    if not audio_dropout_csv or not os.path.isfile(audio_dropout_csv):
+        return None
+
+    try:
+        with open(audio_dropout_csv, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    except Exception as e:
+        logger.error(f"Error reading audio dropout CSV: {e}")
+        return None
+
+    if len(rows) < 8:
+        return None
+
+    # Parse summary rows
+    window_size = rows[1][1] if len(rows[1]) > 1 else "N/A"
+    rms_threshold = rows[2][1] if len(rows[2]) > 1 else "N/A"
+    silence_floor = rows[3][1] if len(rows[3]) > 1 else "N/A"
+    total_frames = rows[4][1] if len(rows[4]) > 1 else "N/A"
+    events_detected = rows[5][1] if len(rows[5]) > 1 else "N/A"
+    frames_flagged = rows[6][1] if len(rows[6]) > 1 else "N/A"
+    dropout_detected = rows[7][1] if len(rows[7]) > 1 else "N/A"
+
+    if dropout_detected == "Yes":
+        status_color = "#dc3545"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+        status_text = "Audio Dropout Detected"
+    else:
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+        status_text = "No Audio Dropout Detected"
+
+    html = f'''
+    <a id="link_dropout_methodology" href="javascript:void(0);"
+       onclick="toggleContent('dropout_methodology', 'What is audio dropout detection? ▼', 'What is audio dropout detection? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is audio dropout detection? ▼</a>
+    <div id="dropout_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Audio dropout detection</strong> identifies moments where the audio signal level
+            drops suddenly and significantly, which is characteristic of tape dropout during analog
+            playback. A rolling window of audio frames is used to establish a local baseline, and
+            frames that fall far below that baseline are flagged.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Metrics used:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>RMS Level (dBFS)</strong> &mdash; the primary trigger.
+                A frame is flagged when its RMS level drops more than {rms_threshold} dB below the rolling
+                median of the preceding {window_size} frames. Frames where the median itself is below
+                {silence_floor} dBFS are ignored to avoid false positives in naturally quiet content.</li>
+            <li style="margin-bottom: 4px;"><strong>Max Difference</strong> &mdash; the maximum sample-to-sample
+                jump within a frame. A spike above 2x the rolling median suggests a click or discontinuity
+                at the dropout boundary.</li>
+            <li style="margin-bottom: 4px;"><strong>RMS Difference</strong> &mdash; the RMS of sample-to-sample
+                differences. A spike corroborates signal discontinuity.</li>
+            <li style="margin-bottom: 4px;"><strong>Zero Crossings Rate</strong> &mdash; the proportion of
+                sign changes in the audio signal. Very low values indicate silence; very high values may
+                indicate noise bursts.</li>
+        </ul>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Confidence levels:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>High</strong> &mdash; RMS drop plus two or more corroborating metrics.</li>
+            <li style="margin-bottom: 4px;"><strong>Medium</strong> &mdash; RMS drop plus one corroborating metric.</li>
+            <li style="margin-bottom: 4px;"><strong>Low</strong> &mdash; RMS drop only, no corroboration.</li>
+        </ul>
+        <p style="margin: 0;">
+            All metrics are derived from FFmpeg's <code>astats</code> filter as recorded in the QCTools
+            report. Detection is performed per audio channel to catch single-channel dropouts.
+        </p>
+    </div>
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Dropout Events</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{events_detected}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Frames Flagged</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{frames_flagged}</td></tr>
+    </table>
+    '''
+
+    # Add dropout events table if there are any
+    dropout_events = [r for r in rows[9:] if len(r) >= 7]
+    if dropout_events:
+        confidence_colors = {
+            'high': '#dc3545',
+            'medium': '#fd7e14',
+            'low': '#ffc107',
+        }
+        html += f'''
+        <a href="javascript:void(0);" onclick="toggleContent('audio_dropout_events', 'Show dropout events ({len(dropout_events)}) ▼', 'Hide dropout events ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show dropout events ({len(dropout_events)}) ▼</a>
+        <div id="audio_dropout_events" style="display: none;">
+        <table style="border-collapse: collapse; margin: 10px 0;">
+            <tr>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Worst RMS (dBFS)</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Median RMS (dBFS)</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Drop (dB)</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Confidence</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Corroborating</th>
+            </tr>
+        '''
+        for event in dropout_events:
+            conf = event[6].strip().lower() if len(event) > 6 else 'low'
+            conf_color = confidence_colors.get(conf, '#ffc107')
+            corr = event[7] if len(event) > 7 else ""
+            html += f'''<tr>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[0]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[1]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[2]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[3]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[4]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{event[5]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; color: {conf_color}; font-weight: bold;">{event[6]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{corr}</td>
+            </tr>\n'''
+        html += '</table></div>\n'
+
+    return html
+
+
 def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict):
     """
-    Creates HTML visualizations for color bars analysis, including bar charts comparing 
+    Creates HTML visualizations for color bars analysis, including bar charts comparing
     SMPTE color bars with the video's color bars values.
 
     Args:
@@ -1831,13 +2103,14 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                         # Use border_regions if available
                         pass
                 
+                # Build active area HTML
+                active_area_html = ""
                 if video_width > 0 and video_height > 0:
                     active_percentage = (w * h) / (video_width * video_height) * 100
                     right_border = video_width - x - w
                     bottom_border = video_height - y - h
-                    
-                    html += f"""
-                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+
+                    active_area_html = f"""
                         <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
                             <tr>
                                 <td style="padding: 4px 10px; font-weight: bold; width: 200px;">Active picture area</td>
@@ -1852,16 +2125,16 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                                 <td style="padding: 4px 10px;">Left={x}px, Right={right_border}px, Top={y}px, Bottom={bottom_border}px</td>
                             </tr>
                         </table>
-                    </div>
                     """
                 else:
-                    html += f"""
-                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    active_area_html = f"""
                         <p><strong>Active Picture Area:</strong> {w}×{h} pixels at ({x}, {y})</p>
-                    </div>
                     """
-            
+            else:
+                active_area_html = ""
+
             # Head switching artifacts
+            hs_html = ""
             hs_data = display_borders.get('head_switching_artifacts')
             if hs_data and isinstance(hs_data, dict):
                 severity = hs_data.get('severity', 'none')
@@ -1871,13 +2144,36 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     height_info = ""
                     if avg_height:
                         height_info = f"<p>Average artifact height: {avg_height}px</p>"
-                    html += f"""
-                    <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    hs_html = f"""
                         <p><strong>Head Switching Artifacts Detected</strong></p>
                         <p>Affected frames: {artifact_pct:.1f}%</p>
                         {height_info}
-                    </div>
                     """
+
+            # Render active area and head switching side by side using flexbox
+            if active_area_html and hs_html:
+                html += f"""
+                <div style="display: flex; gap: 12px; margin: 10px 0; align-items: stretch;">
+                    <div style="background-color: #f5e9e3; padding: 10px; border-radius: 4px; flex: 1; min-width: 0;">
+                        {active_area_html}
+                    </div>
+                    <div style="background-color: #f5e9e3; padding: 10px; border-radius: 4px; flex: 1; min-width: 0;">
+                        {hs_html}
+                    </div>
+                </div>
+                """
+            elif active_area_html:
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    {active_area_html}
+                </div>
+                """
+            elif hs_html:
+                html += f"""
+                <div style="background-color: #f5e9e3; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    {hs_html}
+                </div>
+                """
         
         # Display initial border visualization image
         if frame_outputs['border_visualization']:
@@ -3025,7 +3321,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
         return
@@ -3202,6 +3498,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
+    audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
+    audio_dropout_html = make_audio_dropout_html(audio_dropout_csv) if audio_dropout_csv else None
 
     existing_thumbs = find_qct_thumbs(report_directory)
     no_qct_parse_files = (
@@ -3210,6 +3508,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         not colorbars_eval_fails_csv and
         not audio_clipping_csv and
         not channel_imbalance_csv and
+        not audible_timecode_csv and
+        not audio_dropout_csv and
         not existing_thumbs
     )
 
@@ -3497,6 +3797,20 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h3>Channel Imbalance Analysis</h3>
         {channel_imbalance_html}
         """
+
+    if audible_timecode_html:
+        html_template += f"""
+        <h3>Audible Timecode Detection</h3>
+        {audible_timecode_html}
+        """
+
+    if audio_dropout_html:
+        html_template += f"""
+        <h3>Audio Dropout Detection</h3>
+        {audio_dropout_html}
+        """
+
+    if audio_clipping_html or channel_imbalance_html or audible_timecode_html or audio_dropout_html:
         html_template += waveform_divider
 
     if difference_csv:

@@ -94,7 +94,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Checkboxes with descriptions on second line
         self.run_qctparse_cb = QCheckBox("Run Tool")
         self.run_qctparse_cb.setStyleSheet("font-weight: bold;")
-        run_qctparse_desc = QLabel("Run qct-parse tool on input video file")
+        run_qctparse_desc = QLabel("Run qct-parse tool on QCtools report of input video file")
         run_qctparse_desc.setIndent(20)
 
         self.bars_detection_cb = QCheckBox("Detect Color Bars")
@@ -112,15 +112,10 @@ class ComplexWindow(QWidget, ThemeableMixin):
         thumb_export_desc = QLabel("Export thumbnails of failed frames for review")
         thumb_export_desc.setIndent(20)
 
-        self.detect_audio_clipping_cb = QCheckBox("Detect Audio Clipping")
-        self.detect_audio_clipping_cb.setStyleSheet("font-weight: bold;")
-        detect_audio_clipping_desc = QLabel("Detect audio clipping using peak level analysis")
-        detect_audio_clipping_desc.setIndent(20)
-
-        self.detect_channel_imbalance_cb = QCheckBox("Detect Channel Imbalance")
-        self.detect_channel_imbalance_cb.setStyleSheet("font-weight: bold;")
-        detect_channel_imbalance_desc = QLabel("Compare channel 1 vs channel 2 RMS levels")
-        detect_channel_imbalance_desc.setIndent(20)
+        self.audio_analysis_cb = QCheckBox("Perform Audio Analysis")
+        self.audio_analysis_cb.setStyleSheet("font-weight: bold;")
+        audio_analysis_desc = QLabel("Detect audio clipping, channel imbalance, audible timecode, and audio dropout")
+        audio_analysis_desc.setIndent(20)
 
         # Add all widgets to the qct layout
         qct_layout.addWidget(self.run_qctparse_cb)
@@ -131,10 +126,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
         qct_layout.addWidget(evaluate_bars_desc)
         qct_layout.addWidget(self.thumb_export_cb)
         qct_layout.addWidget(thumb_export_desc)
-        qct_layout.addWidget(self.detect_audio_clipping_cb)
-        qct_layout.addWidget(detect_audio_clipping_desc)
-        qct_layout.addWidget(self.detect_channel_imbalance_cb)
-        qct_layout.addWidget(detect_channel_imbalance_desc)
+        qct_layout.addWidget(self.audio_analysis_cb)
+        qct_layout.addWidget(audio_analysis_desc)
         
         self.qct_group.setLayout(qct_layout)
         main_layout.addWidget(self.qct_group)
@@ -600,8 +593,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.thumb_export_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'thumbExport'])
         )
-        self.detect_audio_clipping_cb.stateChanged.connect(self.on_detect_audio_clipping_changed)
-        self.detect_channel_imbalance_cb.stateChanged.connect(self.on_detect_channel_imbalance_changed)
+        self.audio_analysis_cb.stateChanged.connect(self.on_audio_analysis_changed)
 
     def load_config_values(self):
         """Load current config values into UI elements"""
@@ -661,16 +653,14 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.bars_detection_cb.setChecked(qct.barsDetection)
         self.evaluate_bars_cb.setChecked(qct.evaluateBars)
         self.thumb_export_cb.setChecked(qct.thumbExport)
-        self.detect_audio_clipping_cb.setChecked(getattr(qct, 'detect_audio_clipping', False))
-        self.detect_channel_imbalance_cb.setChecked(getattr(qct, 'detect_channel_imbalance', False))
+        self.audio_analysis_cb.setChecked(getattr(qct, 'audio_analysis', False))
 
         # Set initial enabled state for QCT Parse dependent checkboxes
         dependent_checkboxes = [
             self.bars_detection_cb,
             self.evaluate_bars_cb,
             self.thumb_export_cb,
-            self.detect_audio_clipping_cb,
-            self.detect_channel_imbalance_cb
+            self.audio_analysis_cb
         ]
 
         # Enable/disable dependent checkboxes based on run_tool state
@@ -795,8 +785,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.bars_detection_cb,
             self.evaluate_bars_cb,
             self.thumb_export_cb,
-            self.detect_audio_clipping_cb,
-            self.detect_channel_imbalance_cb
+            self.audio_analysis_cb
         ]
 
         if Qt.CheckState(state) == Qt.CheckState.Checked:
@@ -814,8 +803,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
                         'barsDetection': True,
                         'evaluateBars': True,
                         'thumbExport': True,
-                        'detect_audio_clipping': True,
-                        'detect_channel_imbalance': True
+                        'audio_analysis': True
                     }
                 }
             }
@@ -880,25 +868,13 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Check overall dependencies
         self.check_qct_dependencies()
 
-    def on_detect_audio_clipping_changed(self, state):
-        """Handle changes in detect audio clipping checkbox with dependency logic"""
+    def on_audio_analysis_changed(self, state):
+        """Handle changes in audio analysis checkbox with dependency logic"""
         if self.is_loading:
             return
 
         new_value = Qt.CheckState(state) == Qt.CheckState.Checked
-        updates = {'tools': {'qct_parse': {'detect_audio_clipping': new_value}}}
-        config_mgr.update_config('checks', updates)
-
-        # Check overall dependencies
-        self.check_qct_dependencies()
-
-    def on_detect_channel_imbalance_changed(self, state):
-        """Handle changes in detect channel imbalance checkbox with dependency logic"""
-        if self.is_loading:
-            return
-
-        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
-        updates = {'tools': {'qct_parse': {'detect_channel_imbalance': new_value}}}
+        updates = {'tools': {'qct_parse': {'audio_analysis': new_value}}}
         config_mgr.update_config('checks', updates)
 
         # Check overall dependencies
@@ -911,8 +887,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Audio clipping is independent, so only auto-uncheck run_tool if nothing is active
         if (not self.bars_detection_cb.isChecked() and
             not self.evaluate_bars_cb.isChecked() and
-            not self.detect_audio_clipping_cb.isChecked() and
-            not self.detect_channel_imbalance_cb.isChecked()):
+            not self.audio_analysis_cb.isChecked()):
             # Uncheck run tool since no detection methods are active
             self.run_qctparse_cb.blockSignals(True)
             self.run_qctparse_cb.setChecked(False)
@@ -922,8 +897,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.bars_detection_cb.setEnabled(False)
             self.evaluate_bars_cb.setEnabled(False)
             self.thumb_export_cb.setEnabled(False)
-            self.detect_audio_clipping_cb.setEnabled(False)
-            self.detect_channel_imbalance_cb.setEnabled(False)
+            self.audio_analysis_cb.setEnabled(False)
 
             # Update config for run_tool change
             run_tool_updates = {

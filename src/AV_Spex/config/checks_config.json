@@ -61,8 +61,7 @@
       "barsDetection": true,
       "evaluateBars": true,
       "thumbExport": true,
-      "detect_audio_clipping": false,
-      "detect_channel_imbalance": false,
+      "audio_analysis": false,
       "tagname": ""
     }
   },

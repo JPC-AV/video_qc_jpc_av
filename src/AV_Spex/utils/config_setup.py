@@ -312,8 +312,7 @@ class QCTParseToolConfig:
     barsDetection: bool
     evaluateBars: bool
     thumbExport: bool
-    detect_audio_clipping: bool = False
-    detect_channel_imbalance: bool = False
+    audio_analysis: bool = False
 
 @dataclass
 class ToolsConfig:
@@ -388,8 +387,7 @@ class ChecksProfile:
             barsDetection=False,
             evaluateBars=False,
             thumbExport=False,
-            detect_audio_clipping=False,
-            detect_channel_imbalance=False
+            audio_analysis=False
         )
     ))
 
