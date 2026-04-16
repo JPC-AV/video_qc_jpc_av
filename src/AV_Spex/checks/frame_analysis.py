@@ -3578,11 +3578,11 @@ class EnhancedFrameAnalysis:
         audio_duration = None
         video_duration = None
 
-        # Try reading from ffprobe sidecar JSON
-        sidecar_path = self.video_path.parent / f"{self.video_id}_qc_metadata" / f"{self.video_id}_ffprobe_output.json"
+        # Try reading from ffprobe sidecar (run_tools.py saves it as .txt despite JSON content)
+        sidecar_path = self.video_path.parent / f"{self.video_id}_qc_metadata" / f"{self.video_id}_ffprobe_output.txt"
         if not sidecar_path.exists():
             # Also check the destination output dir
-            sidecar_path = self.output_dir / f"{self.video_id}_ffprobe_output.json"
+            sidecar_path = self.output_dir / f"{self.video_id}_ffprobe_output.txt"
 
         if sidecar_path.exists():
             try:
