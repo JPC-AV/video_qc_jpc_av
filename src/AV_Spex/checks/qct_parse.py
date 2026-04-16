@@ -1148,8 +1148,8 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
     audio clipping (Peak_level >= threshold), channel imbalance (comparing
-    per-channel RMS_level values), audible timecode (LTC artifacts), and/or
-    audio dropout (sudden RMS drops indicative of tape dropout).
+    per-channel RMS_level values), audible timecode (LTC artifacts), and/or audio
+    dropout (sudden RMS drops indicative of tape dropout).
 
     Parameters:
         startObj (str): Path to the QCTools report file (.qctools.xml.gz)
