@@ -425,6 +425,8 @@ class ProcessingManager:
                 'audio_duration': ds.get('audio_duration', 0.0),
                 'video_duration': ds.get('video_duration', 0.0),
                 'combined_score': ds.get('combined_score', 0.0),
+                'estimated_loss_ms': ds.get('estimated_loss_ms', 0.0),
+                'sample_rate': ds.get('sample_rate', 0),
                 'spectrogram_path': ds.get('spectrogram_path'),
                 'spike_timestamps': ds.get('spike_timestamps', [])
             }

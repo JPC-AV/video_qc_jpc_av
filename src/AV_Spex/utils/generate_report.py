@@ -3275,6 +3275,8 @@ def generate_frame_analysis_html(frame_outputs, video_id):
         audio_duration = dropped_sample_data.get('audio_duration', 0.0)
         video_duration = dropped_sample_data.get('video_duration', 0.0)
         combined_score = dropped_sample_data.get('combined_score', 0.0)
+        estimated_loss_ms = dropped_sample_data.get('estimated_loss_ms', 0.0)
+        sample_rate = dropped_sample_data.get('sample_rate', 0)
         spike_timestamps = dropped_sample_data.get('spike_timestamps', [])
 
         if status == 'critical':
@@ -3322,11 +3324,39 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{video_duration:.6f} s</td>
             </tr>
             <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">Estimated loss from detected spikes</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{estimated_loss_ms:.4f} ms</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">Audio sample rate</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{sample_rate} Hz</td>
+            </tr>
+            <tr>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">Combined risk score</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{combined_score:.3f}</td>
             </tr>
         </table>
         """
+
+        # Comparison note: measured duration difference vs estimated loss from spikes
+        if estimated_loss_ms > 0 and duration_diff_ms > 0:
+            ratio = duration_diff_ms / estimated_loss_ms
+            if ratio > 10:
+                html += f"""
+                <p style="font-size: 13px; color: #cc6600; margin: 8px 0;">
+                    &#x26A0; The measured duration difference ({duration_diff_ms:.3f}ms) is {ratio:.0f}x larger than
+                    the {spike_count} detected spike(s) account for ({estimated_loss_ms:.4f}ms).
+                    Additional undetected drops or a systematic offset in the digitization chain is likely.
+                </p>
+                """
+            elif ratio < 0.5:
+                html += f"""
+                <p style="font-size: 13px; color: #cc6600; margin: 8px 0;">
+                    &#x26A0; The measured duration difference ({duration_diff_ms:.3f}ms) is smaller than
+                    the estimated loss from {spike_count} spike(s) ({estimated_loss_ms:.4f}ms).
+                    Some detected spikes may be content transients rather than dropped samples.
+                </p>
+                """
 
         # Spike timestamps (collapsible, if any)
         if spike_timestamps:

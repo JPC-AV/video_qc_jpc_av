@@ -87,6 +87,8 @@ class DroppedSampleResult:
     audio_duration: float
     video_duration: float
     combined_score: float  # weighted risk score 0.0-1.0
+    estimated_loss_ms: float = 0.0  # estimated duration loss from detected spikes
+    sample_rate: int = 0  # audio sample rate in Hz
     spectrogram_path: Optional[str] = None
     spike_timestamps: List[float] = None
 
@@ -3316,7 +3318,7 @@ class EnhancedFrameAnalysis:
                 logger.info("No dropped sample spikes detected in spectrogram")
 
         # Step 3: Compare audio/video durations
-        audio_duration, video_duration = self._get_av_durations()
+        audio_duration, video_duration, sample_rate = self._get_av_durations()
         duration_diff_ms = 0.0
         if audio_duration is not None and video_duration is not None:
             duration_diff_ms = abs(audio_duration - video_duration) * 1000.0
@@ -3331,7 +3333,25 @@ class EnhancedFrameAnalysis:
             audio_duration = audio_duration or 0.0
             video_duration = video_duration or 0.0
 
-        # Step 4: Compute combined score and status
+        # Step 4: Estimate duration loss from detected spikes and compare with measured difference
+        # Each spike represents ~1 dropped sample. At the given sample rate,
+        # 1 sample = 1/sample_rate seconds.
+        estimated_loss_ms = 0.0
+        if spike_count > 0 and sample_rate > 0:
+            estimated_loss_ms = (spike_count / sample_rate) * 1000.0
+            logger.info(f"Estimated duration loss from {spike_count} dropped sample(s) at {sample_rate}Hz: {estimated_loss_ms:.4f}ms")
+            if duration_diff_ms > 0:
+                ratio = duration_diff_ms / estimated_loss_ms if estimated_loss_ms > 0 else 0
+                logger.info(f"  Measured duration difference: {duration_diff_ms:.3f}ms")
+                logger.info(f"  Ratio (measured / estimated): {ratio:.1f}x")
+                if ratio > 10:
+                    logger.info(f"  Duration difference is {ratio:.0f}x larger than detected spikes account for — "
+                                f"additional undetected drops or systematic offset likely")
+                elif ratio < 0.5:
+                    logger.info(f"  Duration difference is smaller than detected spikes — "
+                                f"some spikes may be content transients rather than drops")
+
+        # Step 5: Compute combined score and status
         combined_score, status = self._compute_dropped_sample_score(spike_count, duration_diff_ms)
 
         # Build message
@@ -3340,6 +3360,8 @@ class EnhancedFrameAnalysis:
             parts.append(f"{spike_count} spectrogram spike(s) detected")
         if duration_diff_ms > 0:
             parts.append(f"{duration_diff_ms:.3f}ms audio/video duration difference")
+        if estimated_loss_ms > 0:
+            parts.append(f"estimated loss from spikes: {estimated_loss_ms:.4f}ms")
         if not parts:
             message = "No indicators of dropped samples detected"
         else:
@@ -3355,6 +3377,8 @@ class EnhancedFrameAnalysis:
             audio_duration=audio_duration,
             video_duration=video_duration,
             combined_score=combined_score,
+            estimated_loss_ms=estimated_loss_ms,
+            sample_rate=sample_rate,
             spectrogram_path=str(spectrogram_path) if spectrogram_path else None,
             spike_timestamps=spike_timestamps
         )
@@ -3534,15 +3558,25 @@ class EnhancedFrameAnalysis:
                 return 0, []
 
             # Group adjacent spike columns into single events
-            spikes = []
+            groups = []
             current_group = [spike_columns[0]]
             for i in range(1, len(spike_columns)):
-                if spike_columns[i] - spike_columns[i-1] <= 3:  # Adjacent within 3px
+                if spike_columns[i] - spike_columns[i-1] <= 2:  # Adjacent within 2px
                     current_group.append(spike_columns[i])
                 else:
-                    spikes.append(current_group)
+                    groups.append(current_group)
                     current_group = [spike_columns[i]]
-            spikes.append(current_group)
+            groups.append(current_group)
+
+            # Reject groups wider than 2 columns — a true dropped sample is a
+            # single-sample impulse (~20us at 48kHz) which should appear as at most
+            # 1-2 pixel columns in the spectrogram. Wider bright regions are more
+            # likely loud content transients (music hits, speech plosives, etc.).
+            max_spike_width = 2
+            spikes = [g for g in groups if len(g) <= max_spike_width]
+            rejected = len(groups) - len(spikes)
+            if rejected > 0:
+                logger.debug(f"Rejected {rejected} spike group(s) wider than {max_spike_width} columns (likely content transients)")
 
             # Estimate timestamps by mapping column position to video duration
             video_duration = self._get_video_duration() or 0
@@ -3564,19 +3598,21 @@ class EnhancedFrameAnalysis:
             logger.debug(traceback.format_exc())
             return 0, []
 
-    def _get_av_durations(self) -> Tuple[Optional[float], Optional[float]]:
+    def _get_av_durations(self) -> Tuple[Optional[float], Optional[float], int]:
         """
-        Get audio and video stream durations from the ffprobe sidecar JSON.
-        Falls back to a fresh ffprobe call if the sidecar is not found.
+        Get audio and video stream durations and audio sample rate from the
+        ffprobe sidecar JSON. Falls back to a fresh ffprobe call if not found.
 
         Handles both standard duration fields and Matroska containers where
         per-stream durations are stored in tags.DURATION as HH:MM:SS.nnnnnnnnn.
 
         Returns:
-            Tuple of (audio_duration, video_duration) in seconds, or None if unavailable
+            Tuple of (audio_duration, video_duration, sample_rate).
+            Durations in seconds (None if unavailable), sample_rate in Hz (0 if unavailable).
         """
         audio_duration = None
         video_duration = None
+        sample_rate = 0
 
         # Try reading from ffprobe sidecar (run_tools.py saves it as .txt despite JSON content)
         sidecar_path = self.video_path.parent / f"{self.video_id}_qc_metadata" / f"{self.video_id}_ffprobe_output.txt"
@@ -3589,12 +3625,12 @@ class EnhancedFrameAnalysis:
                 with open(sidecar_path, 'r') as f:
                     ffprobe_data = json.load(f)
 
-                audio_duration, video_duration = self._extract_stream_durations(
+                audio_duration, video_duration, sample_rate = self._extract_stream_durations(
                     ffprobe_data.get('streams', [])
                 )
-                logger.debug(f"Durations from ffprobe sidecar: audio={audio_duration}, video={video_duration}")
+                logger.debug(f"Durations from ffprobe sidecar: audio={audio_duration}, video={video_duration}, sample_rate={sample_rate}")
                 if audio_duration is not None and video_duration is not None:
-                    return audio_duration, video_duration
+                    return audio_duration, video_duration, sample_rate
             except Exception as e:
                 logger.debug(f"Could not read ffprobe sidecar: {e}")
 
@@ -3603,30 +3639,31 @@ class EnhancedFrameAnalysis:
         try:
             cmd = [
                 'ffprobe', '-v', 'quiet',
-                '-show_entries', 'stream=codec_type,duration:stream_tags=DURATION',
+                '-show_entries', 'stream=codec_type,duration,sample_rate:stream_tags=DURATION',
                 '-of', 'json',
                 str(self.video_path)
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
                 data = json.loads(result.stdout)
-                audio_duration, video_duration = self._extract_stream_durations(
+                audio_duration, video_duration, sample_rate = self._extract_stream_durations(
                     data.get('streams', [])
                 )
         except Exception as e:
             logger.warning(f"Could not get stream durations via ffprobe: {e}")
 
-        return audio_duration, video_duration
+        return audio_duration, video_duration, sample_rate
 
     @staticmethod
-    def _extract_stream_durations(streams: list) -> Tuple[Optional[float], Optional[float]]:
+    def _extract_stream_durations(streams: list) -> Tuple[Optional[float], Optional[float], int]:
         """
-        Extract audio and video durations from ffprobe stream data.
+        Extract audio and video durations and audio sample rate from ffprobe stream data.
         Checks the 'duration' field first, then falls back to tags.DURATION
         (used by Matroska/WebM containers which store duration as HH:MM:SS.nnnnnnnnn).
         """
         audio_duration = None
         video_duration = None
+        sample_rate = 0
 
         for stream in streams:
             codec_type = stream.get('codec_type', '')
@@ -3655,7 +3692,16 @@ class EnhancedFrameAnalysis:
                 elif codec_type == 'audio' and audio_duration is None:
                     audio_duration = duration
 
-        return audio_duration, video_duration
+            # Extract sample rate from audio stream
+            if codec_type == 'audio' and sample_rate == 0:
+                sr = stream.get('sample_rate')
+                if sr is not None:
+                    try:
+                        sample_rate = int(sr)
+                    except (ValueError, TypeError):
+                        pass
+
+        return audio_duration, video_duration, sample_rate
 
     @staticmethod
     def _parse_duration_tag(duration_str: str) -> Optional[float]:
