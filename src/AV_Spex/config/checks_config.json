@@ -22,7 +22,10 @@
       "brng_skip_color_bars": true,
       "signalstats_start_time": 120,
       "signalstats_duration": 60,
-      "signalstats_periods": 3
+      "signalstats_periods": 3,
+      "enable_dropped_sample_detection": true,
+      "enable_duplicate_frame_detection": true,
+      "duplicate_min_run_length": 2
     }
   },
   "fixity": {
@@ -61,8 +64,7 @@
       "barsDetection": true,
       "evaluateBars": true,
       "thumbExport": true,
-      "detect_audio_clipping": false,
-      "detect_channel_imbalance": false,
+      "audio_analysis": false,
       "tagname": ""
     }
   },

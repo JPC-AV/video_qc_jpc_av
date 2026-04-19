@@ -254,6 +254,14 @@ class ConfigManager:
                             tools['qct_parse'][key] = self._migrate_yes_no_to_bool(
                                 tools['qct_parse'][key]
                             )
+                    # Migrate detect_audio_clipping + detect_channel_imbalance → audio_analysis
+                    if 'detect_audio_clipping' in tools['qct_parse'] or 'detect_channel_imbalance' in tools['qct_parse']:
+                        if 'audio_analysis' not in tools['qct_parse']:
+                            old_clipping = self._migrate_yes_no_to_bool(tools['qct_parse'].get('detect_audio_clipping', False))
+                            old_imbalance = self._migrate_yes_no_to_bool(tools['qct_parse'].get('detect_channel_imbalance', False))
+                            tools['qct_parse']['audio_analysis'] = old_clipping or old_imbalance
+                        tools['qct_parse'].pop('detect_audio_clipping', None)
+                        tools['qct_parse'].pop('detect_channel_imbalance', None)
         
         return config_data
 

@@ -78,6 +78,54 @@ class SignalstatsResult:
     comparison_results: List[Dict] = None
 
 @dataclass
+class DroppedSampleResult:
+    """Results from dropped sample detection analysis"""
+    status: str  # 'clean', 'warning', 'critical'
+    message: str
+    spike_count: int
+    duration_diff_ms: float
+    audio_duration: float
+    video_duration: float
+    combined_score: float  # weighted risk score 0.0-1.0
+    estimated_loss_ms: float = 0.0  # estimated duration loss from detected spikes
+    sample_rate: int = 0  # audio sample rate in Hz
+    spectrogram_path: Optional[str] = None
+    spike_timestamps: List[float] = None
+
+@dataclass
+class DuplicateFrameRun:
+    """A run of consecutive frames flagged as likely duplicates by QCTools metrics"""
+    start_time: float           # timestamp of the first duplicate frame in the run
+    end_time: float             # timestamp of the last duplicate frame in the run
+    duplicate_count: int        # number of duplicate frames (each a near-zero YDIF reading)
+    frozen_frames: int          # total identical frames in the freeze (duplicate_count + 1)
+    estimated_loss_seconds: float
+    avg_ydif: float
+    max_ydif: float
+    avg_udif: float
+    avg_vdif: float
+    avg_vrep: float             # vertical line repetition (corroborating, not gating)
+    cv_mse: Optional[float]     # OpenCV-verified MSE (None if verification skipped)
+    cv_verified: bool           # True if MSE confirms near-identical frames
+    first_frame_thumbnail: Optional[str] = None  # path to JPG of run's first frame
+    last_frame_thumbnail: Optional[str] = None   # path to JPG of run's last frame
+
+@dataclass
+class DuplicateFrameResult:
+    """Results from duplicate frame detection analysis"""
+    status: str                 # 'clean', 'warning', 'critical'
+    message: str
+    total_runs: int
+    total_duplicate_frames: int
+    estimated_loss_seconds: float
+    bit_depth_10: bool
+    ydif_threshold: float
+    udif_threshold: float
+    vdif_threshold: float
+    min_run_length: int
+    runs: List[DuplicateFrameRun] = None
+
+@dataclass
 class UpstreamAnalysisContext:
     """
     Packages findings from border detection and signalstats
@@ -499,6 +547,166 @@ class QCToolsParser:
             logger.debug(f"  No black segments detected (min duration: {min_duration}s)")
         
         return black_segments
+
+    def find_duplicate_frame_candidates(
+        self,
+        color_bars_end_time: float = 0,
+        black_segments: Optional[List[Tuple[float, float]]] = None,
+        min_run_length: int = 2,
+    ) -> Tuple[List[Dict], Dict[str, float]]:
+        """
+        Scan QCTools report for runs of consecutive frames whose YDIF/UDIF/VDIF
+        values are below bit-depth-aware thresholds. These are candidate duplicate
+        frames likely caused by TBC/framesync error concealment.
+
+        A run of K consecutive low-diff frames represents a freeze of K+1 identical
+        frames (the first frame plus K repeats).
+
+        Color bars and known black segments are excluded.
+
+        Args:
+            color_bars_end_time: End of color bars to exclude
+            black_segments: List of (start, end) tuples to exclude
+            min_run_length: Minimum K (consecutive low-diff frames) required to
+                            report a run. Default 2 → freeze of ≥3 frames.
+
+        Returns:
+            (runs, thresholds) where:
+              runs is a list of dicts with keys:
+                start_time, end_time, duplicate_count, avg_ydif, max_ydif,
+                avg_udif, avg_vdif, avg_vrep
+              thresholds is {'ydif': float, 'udif': float, 'vdif': float}
+        """
+        # Bit-depth-aware thresholds. The qct-parse module scales 10-bit
+        # thresholds ~4x relative to 8-bit (10-bit codes are 4x 8-bit codes).
+        # A genuine TBC duplicate has effectively zero diff; allow a small
+        # margin for digital noise.
+        if self.bit_depth_10:
+            ydif_thresh = 4.0
+            udif_thresh = 4.0
+            vdif_thresh = 4.0
+        else:
+            ydif_thresh = 1.0
+            udif_thresh = 1.0
+            vdif_thresh = 1.0
+
+        thresholds = {'ydif': ydif_thresh, 'udif': udif_thresh, 'vdif': vdif_thresh}
+        black_segments = black_segments or []
+        runs: List[Dict] = []
+
+        # Running state for the current candidate run
+        run_start_time: Optional[float] = None
+        run_last_time: Optional[float] = None
+        run_ydifs: List[float] = []
+        run_udifs: List[float] = []
+        run_vdifs: List[float] = []
+        run_vreps: List[float] = []
+
+        def _close_run():
+            """Finalize the in-progress run if it meets min_run_length."""
+            nonlocal run_start_time, run_last_time
+            nonlocal run_ydifs, run_udifs, run_vdifs, run_vreps
+            if run_start_time is None or len(run_ydifs) < min_run_length:
+                run_start_time = None
+                run_last_time = None
+                run_ydifs = []
+                run_udifs = []
+                run_vdifs = []
+                run_vreps = []
+                return
+            runs.append({
+                'start_time': run_start_time,
+                'end_time': run_last_time,
+                'duplicate_count': len(run_ydifs),
+                'avg_ydif': sum(run_ydifs) / len(run_ydifs),
+                'max_ydif': max(run_ydifs),
+                'avg_udif': sum(run_udifs) / len(run_udifs) if run_udifs else 0.0,
+                'avg_vdif': sum(run_vdifs) / len(run_vdifs) if run_vdifs else 0.0,
+                'avg_vrep': sum(run_vreps) / len(run_vreps) if run_vreps else 0.0,
+            })
+            run_start_time = None
+            run_last_time = None
+            run_ydifs = []
+            run_udifs = []
+            run_vdifs = []
+            run_vreps = []
+
+        def _in_excluded_region(ts: float) -> bool:
+            if color_bars_end_time and ts <= color_bars_end_time:
+                return True
+            for bs_start, bs_end in black_segments:
+                if bs_start <= ts <= bs_end:
+                    return True
+            return False
+
+        try:
+            if self.report_path.endswith('.gz'):
+                file_handle = gzip.open(self.report_path, 'rt')
+            else:
+                file_handle = open(self.report_path, 'r')
+
+            parser = ET.iterparse(file_handle, events=['start', 'end'])
+            parser = iter(parser)
+            event, root = next(parser)
+
+            for event, elem in parser:
+                if event != 'end' or elem.tag != 'frame':
+                    continue
+
+                timestamp_str = elem.get('pkt_pts_time')
+                if not timestamp_str:
+                    elem.clear()
+                    root.clear()
+                    continue
+                timestamp = float(timestamp_str)
+
+                ydif_tag = elem.find('.//tag[@key="lavfi.signalstats.YDIF"]')
+                # YDIF is the primary signal. If absent, can't classify.
+                if ydif_tag is None:
+                    _close_run()
+                    elem.clear()
+                    root.clear()
+                    continue
+
+                ydif = float(ydif_tag.get('value', '999'))
+                udif_tag = elem.find('.//tag[@key="lavfi.signalstats.UDIF"]')
+                vdif_tag = elem.find('.//tag[@key="lavfi.signalstats.VDIF"]')
+                vrep_tag = elem.find('.//tag[@key="lavfi.signalstats.VREP"]')
+                udif = float(udif_tag.get('value', '999')) if udif_tag is not None else 999.0
+                vdif = float(vdif_tag.get('value', '999')) if vdif_tag is not None else 999.0
+                vrep = float(vrep_tag.get('value', '0')) if vrep_tag is not None else 0.0
+
+                is_candidate = (
+                    ydif < ydif_thresh
+                    and udif < udif_thresh
+                    and vdif < vdif_thresh
+                    and not _in_excluded_region(timestamp)
+                )
+
+                if is_candidate:
+                    if run_start_time is None:
+                        run_start_time = timestamp
+                    run_last_time = timestamp
+                    run_ydifs.append(ydif)
+                    run_udifs.append(udif)
+                    run_vdifs.append(vdif)
+                    run_vreps.append(vrep)
+                else:
+                    _close_run()
+
+                elem.clear()
+                root.clear()
+
+            # Close any open run at end of file
+            _close_run()
+            file_handle.close()
+
+        except Exception as e:
+            logger.error(f"Error scanning QCTools report for duplicate frames: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+        return runs, thresholds
 
 
 class SophisticatedBorderDetector:
@@ -3274,6 +3482,666 @@ class EnhancedFrameAnalysis:
             logger.warning(f"Could not get video duration: {e}")
         return None
 
+    def _detect_dropped_samples(self, color_bars_end_time: float = None) -> Optional[DroppedSampleResult]:
+        """
+        Detect potential dropped audio samples by:
+        1. Generating a spectrogram image via FFmpeg showspectrumpic and analyzing it for vertical spikes
+        2. Comparing audio and video stream durations from the ffprobe sidecar
+        3. Combining both signals into a weighted risk score
+
+        Args:
+            color_bars_end_time: End time of color bars (unused for now, reserved for future filtering)
+
+        Returns:
+            DroppedSampleResult or None if detection fails
+        """
+        #logger.info("Running dropped sample detection...")
+
+        # Step 1: Generate spectrogram image
+        spectrogram_path = self._generate_spectrogram()
+
+        # Step 2: Analyze spectrogram for vertical spikes
+        spike_count = 0
+        spike_timestamps = []
+        if spectrogram_path:
+            spike_count, spike_timestamps = self._analyze_spectrogram_spikes(spectrogram_path)
+            if spike_count > 0:
+                logger.warning(f"Detected {spike_count} potential dropped sample spike(s) in spectrogram\n")
+            else:
+                logger.info("No dropped sample spikes detected in spectrogram")
+
+        # Step 3: Compare audio/video durations
+        audio_duration, video_duration, sample_rate = self._get_av_durations()
+        duration_diff_ms = 0.0
+        if audio_duration is not None and video_duration is not None:
+            duration_diff_ms = abs(audio_duration - video_duration) * 1000.0
+            if duration_diff_ms > 0:
+                logger.warning(f"Audio/video duration mismatch: {duration_diff_ms:.3f}ms")
+                logger.debug(f"  Audio duration: {audio_duration:.6f}s")
+                logger.debug(f"  Video duration: {video_duration:.6f}s\n")
+            else:
+                logger.info(f"Audio and video durations match\n")
+        else:
+            logger.warning(f"Could not determine audio and/or video duration for comparison\n")
+            audio_duration = audio_duration or 0.0
+            video_duration = video_duration or 0.0
+
+        # Step 4: Estimate duration loss from detected spikes and compare with measured difference
+        # Each spike represents ~1 dropped sample. At the given sample rate,
+        # 1 sample = 1/sample_rate seconds.
+        estimated_loss_ms = 0.0
+        if spike_count > 0 and sample_rate > 0:
+            estimated_loss_ms = (spike_count / sample_rate) * 1000.0
+            logger.info(f"Estimated duration loss from {spike_count} dropped sample(s) at {sample_rate}Hz: {estimated_loss_ms:.4f}ms")
+            if duration_diff_ms > 0:
+                ratio = duration_diff_ms / estimated_loss_ms if estimated_loss_ms > 0 else 0
+                logger.info(f"  Measured duration difference: {duration_diff_ms:.3f}ms")
+                logger.info(f"  Ratio (measured / estimated): {ratio:.1f}x")
+                if ratio > 10:
+                    logger.info(f"  Duration difference is {ratio:.0f}x larger than detected spikes account for — "
+                                f"additional undetected drops or systematic offset likely")
+                elif ratio < 0.5:
+                    logger.info(f"  Duration difference is smaller than detected spikes — "
+                                f"some spikes may be content transients rather than drops")
+
+        # Step 5: Compute combined score and status
+        combined_score, status = self._compute_dropped_sample_score(spike_count, duration_diff_ms)
+
+        # Build message
+        parts = []
+        if spike_count > 0:
+            parts.append(f"{spike_count} spectrogram spike(s) detected")
+        if duration_diff_ms > 0:
+            parts.append(f"{duration_diff_ms:.3f}ms audio/video duration difference")
+        if estimated_loss_ms > 0:
+            parts.append(f"estimated loss from spikes: {estimated_loss_ms:.4f}ms")
+        if not parts:
+            message = "No indicators of dropped samples detected"
+        else:
+            message = "; ".join(parts)
+
+        logger.info(f"\nDropped sample detection result: {status} — {message}\n")
+
+        return DroppedSampleResult(
+            status=status,
+            message=message,
+            spike_count=spike_count,
+            duration_diff_ms=duration_diff_ms,
+            audio_duration=audio_duration,
+            video_duration=video_duration,
+            combined_score=combined_score,
+            estimated_loss_ms=estimated_loss_ms,
+            sample_rate=sample_rate,
+            spectrogram_path=str(spectrogram_path) if spectrogram_path else None,
+            spike_timestamps=spike_timestamps
+        )
+
+    def _detect_duplicate_frames(
+        self,
+        color_bars_end_time: Optional[float] = None,
+        black_segments: Optional[List[Tuple[float, float]]] = None,
+        min_run_length: int = 2,
+    ) -> Optional[DuplicateFrameResult]:
+        """
+        Detect runs of likely duplicate frames using QCTools YDIF/UDIF/VDIF
+        as a candidate filter, then verify each candidate with OpenCV by
+        computing MSE between the freeze's first frame and its predecessor.
+
+        Args:
+            color_bars_end_time: End of detected color bars to exclude
+            black_segments: Known black segments to exclude
+            min_run_length: Minimum consecutive low-diff frames to report
+
+        Returns:
+            DuplicateFrameResult or None if no QCTools report is available
+        """
+        if not self.qctools_parser:
+            logger.warning("Skipping duplicate frame detection — no QCTools report available\n")
+            return None
+
+        logger.info("Running duplicate frame detection...")
+
+        candidate_runs, thresholds = self.qctools_parser.find_duplicate_frame_candidates(
+            color_bars_end_time=color_bars_end_time or 0,
+            black_segments=black_segments,
+            min_run_length=min_run_length,
+        )
+        logger.info(
+            f"  QCTools candidates: {len(candidate_runs)} run(s) below "
+            f"YDIF<{thresholds['ydif']}, UDIF<{thresholds['udif']}, VDIF<{thresholds['vdif']}"
+        )
+
+        # Open the video once for verification across all candidate runs.
+        cap = None
+        fps = self.qctools_parser.fps or 29.97
+        frame_period = 1.0 / fps if fps else 1.0 / 29.97
+        try:
+            cap = cv2.VideoCapture(str(self.video_path))
+            if cap.isOpened():
+                file_fps = cap.get(cv2.CAP_PROP_FPS)
+                if file_fps and file_fps > 0:
+                    fps = file_fps
+                    frame_period = 1.0 / fps
+            else:
+                logger.warning("  OpenCV could not open video for verification — reporting unverified candidates")
+                cap = None
+        except Exception as e:
+            logger.warning(f"  OpenCV verification unavailable: {e}")
+            cap = None
+
+        # MSE threshold: an actual duplicate has near-zero MSE; allow a tiny
+        # margin for codec noise. Computed on luma only (matches YDIF semantics).
+        mse_threshold = 5.0
+
+        verified_runs: List[DuplicateFrameRun] = []
+        for idx, candidate in enumerate(candidate_runs):
+            if self.check_cancelled():
+                break
+
+            cv_mse: Optional[float] = None
+            cv_verified = False
+
+            if cap is not None:
+                # Sample up to 3 consecutive frame pairs from within the run,
+                # starting one frame before run_start to compare the first
+                # duplicate against its predecessor.
+                seek_time_s = max(0.0, candidate['start_time'] - frame_period)
+                pairs_to_test = min(3, candidate['duplicate_count'])
+                mse_values: List[float] = []
+                try:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, seek_time_s * 1000.0)
+                    ret, prev_frame = cap.read()
+                    if ret and prev_frame is not None:
+                        prev_y = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                        for _ in range(pairs_to_test):
+                            ret, cur_frame = cap.read()
+                            if not ret or cur_frame is None:
+                                break
+                            cur_y = cv2.cvtColor(cur_frame, cv2.COLOR_BGR2GRAY)
+                            if cur_y.shape != prev_y.shape:
+                                break
+                            diff = cur_y.astype(np.int32) - prev_y.astype(np.int32)
+                            mse_values.append(float((diff * diff).mean()))
+                            prev_y = cur_y
+                except Exception as e:
+                    logger.debug(f"  OpenCV verification error for run {idx + 1}: {e}")
+
+                if mse_values:
+                    cv_mse = sum(mse_values) / len(mse_values)
+                    cv_verified = cv_mse < mse_threshold
+
+            estimated_loss = candidate['duplicate_count'] * frame_period
+            verified_runs.append(DuplicateFrameRun(
+                start_time=candidate['start_time'],
+                end_time=candidate['end_time'],
+                duplicate_count=candidate['duplicate_count'],
+                frozen_frames=candidate['duplicate_count'] + 1,
+                estimated_loss_seconds=estimated_loss,
+                avg_ydif=candidate['avg_ydif'],
+                max_ydif=candidate['max_ydif'],
+                avg_udif=candidate['avg_udif'],
+                avg_vdif=candidate['avg_vdif'],
+                avg_vrep=candidate['avg_vrep'],
+                cv_mse=cv_mse,
+                cv_verified=cv_verified,
+            ))
+
+        if cap is not None:
+            cap.release()
+
+        # Keep only runs that OpenCV verified (when verification was available)
+        if cap is None:
+            final_runs = verified_runs
+        else:
+            final_runs = [r for r in verified_runs if r.cv_verified]
+            dropped = len(verified_runs) - len(final_runs)
+            if dropped > 0:
+                logger.info(f"  OpenCV verification rejected {dropped} candidate run(s) as false positives")
+
+        # Save first/last frame thumbnails for the HTML report
+        if final_runs:
+            thumb_dir = self.output_dir / "duplicate_frame_thumbnails"
+            thumb_dir.mkdir(exist_ok=True)
+            thumb_cap = None
+            try:
+                thumb_cap = cv2.VideoCapture(str(self.video_path))
+                if thumb_cap.isOpened():
+                    for i, run in enumerate(final_runs, 1):
+                        if self.check_cancelled():
+                            break
+                        for label, ts in (('first', run.start_time), ('last', run.end_time)):
+                            try:
+                                thumb_cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
+                                ret, frame = thumb_cap.read()
+                                if ret and frame is not None:
+                                    out_path = thumb_dir / f"run_{i:03d}_{label}.jpg"
+                                    cv2.imwrite(str(out_path), frame)
+                                    if label == 'first':
+                                        run.first_frame_thumbnail = str(out_path)
+                                    else:
+                                        run.last_frame_thumbnail = str(out_path)
+                            except Exception as e:
+                                logger.debug(f"  Could not save {label} thumbnail for run {i}: {e}")
+            finally:
+                if thumb_cap is not None:
+                    thumb_cap.release()
+
+        total_dupes = sum(r.duplicate_count for r in final_runs)
+        total_loss = sum(r.estimated_loss_seconds for r in final_runs)
+
+        # Status: clean if none, warning for any verified runs, critical for many/long
+        if not final_runs:
+            status = 'clean'
+            message = "No duplicate frame runs detected"
+        else:
+            longest = max(r.frozen_frames for r in final_runs)
+            if len(final_runs) >= 5 or longest >= 10:
+                status = 'critical'
+            else:
+                status = 'warning'
+            message = (
+                f"{len(final_runs)} freeze run(s) detected, "
+                f"{total_dupes} duplicate frame(s) total, "
+                f"~{total_loss:.3f}s estimated loss"
+            )
+
+        logger.info(f"Duplicate frame detection result: {status} — {message}\n")
+        if final_runs:
+            for i, r in enumerate(final_runs[:10], 1):
+                start_tc = f"{int(r.start_time // 60):02d}:{r.start_time % 60:05.2f}"
+                vrep_str = f", VREP={r.avg_vrep:.1f}" if r.avg_vrep > 0 else ""
+                mse_str = f", MSE={r.cv_mse:.2f}" if r.cv_mse is not None else ""
+                logger.info(
+                    f"  Run {i}: start={start_tc}, frozen={r.frozen_frames} frames"
+                    f", YDIF avg={r.avg_ydif:.3f}{vrep_str}{mse_str}"
+                )
+            if len(final_runs) > 10:
+                logger.info(f"  ... and {len(final_runs) - 10} more")
+
+        return DuplicateFrameResult(
+            status=status,
+            message=message,
+            total_runs=len(final_runs),
+            total_duplicate_frames=total_dupes,
+            estimated_loss_seconds=total_loss,
+            bit_depth_10=self.qctools_parser.bit_depth_10,
+            ydif_threshold=thresholds['ydif'],
+            udif_threshold=thresholds['udif'],
+            vdif_threshold=thresholds['vdif'],
+            min_run_length=min_run_length,
+            runs=final_runs,
+        )
+
+    def _generate_spectrogram(self) -> Optional[Path]:
+        """Generate a spectrogram image using FFmpeg's showspectrumpic filter."""
+        output_path = self.output_dir / f"{self.video_id}_spectrogram.png"
+
+        cmd = [
+            'ffmpeg', '-y', '-i', str(self.video_path),
+            '-vn', '-lavfi', 'showspectrumpic=s=1280x480',
+            str(output_path)
+        ]
+
+        try:
+            logger.debug(f"    Generating spectrogram: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0 and output_path.exists():
+                logger.info(f"Spectrogram saved to: {output_path.name}")
+                return output_path
+            else:
+                logger.warning(f"FFmpeg spectrogram generation failed (exit code {result.returncode})")
+                if result.stderr:
+                    logger.debug(f"FFmpeg stderr: {result.stderr[-500:]}")
+        except subprocess.TimeoutExpired:
+            logger.warning("Spectrogram generation timed out (300s limit)")
+        except Exception as e:
+            logger.warning(f"Error generating spectrogram: {e}")
+
+        return None
+
+    def _analyze_spectrogram_spikes(self, spectrogram_path: Path) -> Tuple[int, List[float]]:
+        """
+        Analyze a spectrogram PNG for vertical bright lines (spikes) that indicate
+        dropped audio samples. These appear as bright columns spanning the full
+        frequency range.
+
+        Returns:
+            Tuple of (spike_count, estimated_timestamps)
+        """
+        try:
+            img = cv2.imread(str(spectrogram_path))
+            if img is None:
+                logger.warning("Could not load spectrogram image for analysis")
+                return 0, []
+
+            height, width = img.shape[:2]
+            gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+            # Dynamically find the actual spectrogram plot area.
+            # showspectrumpic adds: left axis labels, right colorbar + dBFS scale,
+            # and top/bottom time/frequency labels around the plot.
+            #
+            # Strategy: use a narrow horizontal band (40-60% height) to avoid text,
+            # then find gaps of >= 10 dark columns that separate the plot from
+            # the axis labels (left) and colorbar (right).
+
+            band_top = int(height * 0.4)
+            band_bottom = int(height * 0.6)
+            band = gray_full[band_top:band_bottom, :]
+            col_means = np.mean(band, axis=0)
+
+            gap_threshold = 10  # Minimum dark columns to count as a structural gap
+
+            # Find left edge: scan from left, skip dark margin, skip axis labels,
+            # find the first sustained gap, then the plot starts after it
+            plot_left = 0
+            c = 0
+            while c < width and col_means[c] < 2:
+                c += 1
+            # Now in axis labels region — scan for the first gap of >= gap_threshold
+            while c < width // 2:
+                if col_means[c] < 2:
+                    gap_start = c
+                    while c < width and col_means[c] < 2:
+                        c += 1
+                    gap_len = c - gap_start
+                    if gap_len >= gap_threshold:
+                        plot_left = c
+                        break
+                else:
+                    c += 1
+
+            # Find right edge: scan from right, skip dark margin, skip colorbar/labels,
+            # find the first sustained gap, then the plot ends before it
+            plot_right = width - 1
+            c = width - 1
+            while c > 0 and col_means[c] < 2:
+                c -= 1
+            # Now in colorbar/labels region — scan for the first gap
+            while c > width // 2:
+                if col_means[c] < 2:
+                    gap_end = c
+                    while c > 0 and col_means[c] < 2:
+                        c -= 1
+                    gap_start = c + 1
+                    gap_len = gap_end - gap_start + 1
+                    if gap_len >= gap_threshold:
+                        plot_right = gap_start - 1
+                        # Skip any bright axis border line at the edge
+                        while plot_right > plot_left and col_means[plot_right] > 150:
+                            plot_right -= 1
+                        break
+                else:
+                    c -= 1
+
+            # Find top/bottom edges using the plot column range
+            top_edges = []
+            bottom_edges = []
+            for col in range(plot_left, plot_right, max(1, (plot_right - plot_left) // 20)):
+                col_data = gray_full[:, col]
+                for r in range(height):
+                    if col_data[r] > 15:
+                        top_edges.append(r)
+                        break
+                for r in range(height - 1, 0, -1):
+                    if col_data[r] > 15:
+                        bottom_edges.append(r)
+                        break
+
+            plot_top = int(np.median(top_edges)) if top_edges else 0
+            plot_bottom = int(np.median(bottom_edges)) if bottom_edges else height
+
+            plot_area = img[plot_top:plot_bottom, plot_left:plot_right]
+
+            if plot_area.size == 0:
+                logger.warning("    Spectrogram plot area is empty after cropping")
+                return 0, []
+
+            # Convert to grayscale and compute mean brightness per column
+            gray = cv2.cvtColor(plot_area, cv2.COLOR_BGR2GRAY)
+            plot_height, plot_width = gray.shape
+
+            logger.debug(f"    Spectrogram plot area: ({plot_left},{plot_top}) to ({plot_right},{plot_bottom}), "
+                         f"size {plot_width}x{plot_height}")
+
+            column_means = np.mean(gray, axis=0)
+
+            # Use a rolling median with a wide window to establish local baseline
+            window_size = max(51, plot_width // 20)
+            if window_size % 2 == 0:
+                window_size += 1
+
+            # Pad for rolling computation
+            padded = np.pad(column_means, window_size // 2, mode='edge')
+            rolling_median = np.array([
+                np.median(padded[i:i + window_size])
+                for i in range(len(column_means))
+            ])
+
+            # Compute deviation from local median
+            deviations = column_means - rolling_median
+
+            # Use MAD (median absolute deviation) for robust threshold
+            mad = np.median(np.abs(deviations))
+            if mad == 0:
+                mad = np.std(deviations)
+            if mad == 0:
+                return 0, []
+
+            threshold = 3.0 * mad  # 3x MAD for spike detection
+
+            # Also require the column to be bright across most of the frequency range
+            # A true dropped sample spike lights up the full spectrum
+            spike_columns = []
+            for col_idx in range(plot_width):
+                if deviations[col_idx] > threshold:
+                    # Check that the brightness spans most of the frequency range
+                    col_data = gray[:, col_idx]
+                    # Count rows above the overall median brightness
+                    overall_median = np.median(gray)
+                    bright_fraction = np.sum(col_data > overall_median + threshold) / plot_height
+                    if bright_fraction > 0.3:  # At least 30% of frequency range is bright
+                        spike_columns.append(col_idx)
+
+            if not spike_columns:
+                return 0, []
+
+            # Group adjacent spike columns into single events
+            groups = []
+            current_group = [spike_columns[0]]
+            for i in range(1, len(spike_columns)):
+                if spike_columns[i] - spike_columns[i-1] <= 2:  # Adjacent within 2px
+                    current_group.append(spike_columns[i])
+                else:
+                    groups.append(current_group)
+                    current_group = [spike_columns[i]]
+            groups.append(current_group)
+
+            # Reject groups wider than 2 columns — a true dropped sample is a
+            # single-sample impulse (~20us at 48kHz) which should appear as at most
+            # 1-2 pixel columns in the spectrogram. Wider bright regions are more
+            # likely loud content transients (music hits, speech plosives, etc.).
+            max_spike_width = 2
+            spikes = [g for g in groups if len(g) <= max_spike_width]
+            rejected = len(groups) - len(spikes)
+            if rejected > 0:
+                logger.debug(f"    Rejected {rejected} spike group(s) wider than {max_spike_width} columns (likely content transients)")
+
+            # Estimate timestamps by mapping column position to video duration
+            video_duration = self._get_video_duration() or 0
+            spike_timestamps = []
+            for group in spikes:
+                center_col = sum(group) / len(group)
+                timestamp = (center_col / plot_width) * video_duration
+                spike_timestamps.append(round(timestamp, 2))
+
+            logger.debug(f"    Spike detection: {len(spikes)} spike(s) found at columns {[g[0] for g in spikes]}")
+            if spike_timestamps:
+                logger.debug(f"    Estimated timestamps: {spike_timestamps}\n")
+
+            return len(spikes), spike_timestamps
+
+        except Exception as e:
+            logger.warning(f"Error analyzing spectrogram: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return 0, []
+
+    def _get_av_durations(self) -> Tuple[Optional[float], Optional[float], int]:
+        """
+        Get audio and video stream durations and audio sample rate from the
+        ffprobe sidecar JSON. Falls back to a fresh ffprobe call if not found.
+
+        Handles both standard duration fields and Matroska containers where
+        per-stream durations are stored in tags.DURATION as HH:MM:SS.nnnnnnnnn.
+
+        Returns:
+            Tuple of (audio_duration, video_duration, sample_rate).
+            Durations in seconds (None if unavailable), sample_rate in Hz (0 if unavailable).
+        """
+        audio_duration = None
+        video_duration = None
+        sample_rate = 0
+
+        # Try reading from ffprobe sidecar (run_tools.py saves it as .txt despite JSON content)
+        sidecar_path = self.video_path.parent / f"{self.video_id}_qc_metadata" / f"{self.video_id}_ffprobe_output.txt"
+        if not sidecar_path.exists():
+            # Also check the destination output dir
+            sidecar_path = self.output_dir / f"{self.video_id}_ffprobe_output.txt"
+
+        if sidecar_path.exists():
+            try:
+                with open(sidecar_path, 'r') as f:
+                    ffprobe_data = json.load(f)
+
+                audio_duration, video_duration, sample_rate = self._extract_stream_durations(
+                    ffprobe_data.get('streams', [])
+                )
+                logger.debug(f"    Durations from ffprobe sidecar: audio={audio_duration}, video={video_duration}, sample_rate={sample_rate}\n")
+                if audio_duration is not None and video_duration is not None:
+                    return audio_duration, video_duration, sample_rate
+            except Exception as e:
+                logger.debug(f"Could not read ffprobe sidecar: {e}\n")
+
+        # Fallback: run ffprobe directly, requesting both duration and DURATION tag
+        logger.debug("Falling back to fresh ffprobe call for stream durations")
+        try:
+            cmd = [
+                'ffprobe', '-v', 'quiet',
+                '-show_entries', 'stream=codec_type,duration,sample_rate:stream_tags=DURATION',
+                '-of', 'json',
+                str(self.video_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                audio_duration, video_duration, sample_rate = self._extract_stream_durations(
+                    data.get('streams', [])
+                )
+        except Exception as e:
+            logger.warning(f"Could not get stream durations via ffprobe: {e}")
+
+        return audio_duration, video_duration, sample_rate
+
+    @staticmethod
+    def _extract_stream_durations(streams: list) -> Tuple[Optional[float], Optional[float], int]:
+        """
+        Extract audio and video durations and audio sample rate from ffprobe stream data.
+        Checks the 'duration' field first, then falls back to tags.DURATION
+        (used by Matroska/WebM containers which store duration as HH:MM:SS.nnnnnnnnn).
+        """
+        audio_duration = None
+        video_duration = None
+        sample_rate = 0
+
+        for stream in streams:
+            codec_type = stream.get('codec_type', '')
+            if codec_type not in ('video', 'audio'):
+                continue
+
+            duration = None
+            # Try direct duration field first
+            duration_str = stream.get('duration')
+            if duration_str is not None:
+                try:
+                    duration = float(duration_str)
+                except (ValueError, TypeError):
+                    pass
+
+            # Fall back to tags.DURATION (Matroska format: HH:MM:SS.nnnnnnnnn)
+            if duration is None:
+                tags = stream.get('tags', {})
+                tag_duration = tags.get('DURATION') or tags.get('duration')
+                if tag_duration:
+                    duration = EnhancedFrameAnalysis._parse_duration_tag(tag_duration)
+
+            if duration is not None:
+                if codec_type == 'video' and video_duration is None:
+                    video_duration = duration
+                elif codec_type == 'audio' and audio_duration is None:
+                    audio_duration = duration
+
+            # Extract sample rate from audio stream
+            if codec_type == 'audio' and sample_rate == 0:
+                sr = stream.get('sample_rate')
+                if sr is not None:
+                    try:
+                        sample_rate = int(sr)
+                    except (ValueError, TypeError):
+                        pass
+
+        return audio_duration, video_duration, sample_rate
+
+    @staticmethod
+    def _parse_duration_tag(duration_str: str) -> Optional[float]:
+        """Parse a duration string in HH:MM:SS.nnnnnnnnn format to seconds."""
+        try:
+            parts = duration_str.split(':')
+            if len(parts) == 3:
+                hours = int(parts[0])
+                minutes = int(parts[1])
+                seconds = float(parts[2])
+                return hours * 3600 + minutes * 60 + seconds
+            else:
+                return float(duration_str)
+        except (ValueError, TypeError):
+            return None
+
+    def _compute_dropped_sample_score(self, spike_count: int, duration_diff_ms: float) -> Tuple[float, str]:
+        """
+        Compute a combined risk score from spectrogram spikes and duration mismatch.
+
+        Scoring:
+        - Spike score: 0 spikes = 0.0, 1-5 = 0.3-0.5, 6+ = 0.6-0.8
+        - Duration score: 0ms = 0.0, >0ms = 0.3
+        - If both present, escalate
+
+        Returns:
+            Tuple of (score 0.0-1.0, status string)
+        """
+        spike_score = 0.0
+        if spike_count > 0:
+            spike_score = min(0.8, 0.2 + spike_count * 0.06)
+
+        duration_score = 0.0
+        if duration_diff_ms > 0:
+            duration_score = 0.3
+
+        # Combined score: weighted sum with escalation when both are present
+        combined = spike_score * 0.7 + duration_score * 0.3
+        if spike_count > 0 and duration_diff_ms > 0:
+            combined = min(1.0, combined + 0.15)  # escalation bonus
+
+        # Determine status
+        if combined == 0:
+            status = 'clean'
+        elif combined < 0.4:
+            status = 'warning'
+        else:
+            status = 'critical'
+
+        return round(combined, 3), status
+
     def _check_bitplane_noise(self, num_samples: int = 20) -> Dict:
         """
         Check if the 9th and 10th bits (two least significant bits) of a 10-bit
@@ -3549,20 +4417,28 @@ class EnhancedFrameAnalysis:
         border_detection_enabled = self._is_step_enabled(frame_config.enable_border_detection)
         brng_analysis_enabled = self._is_step_enabled(frame_config.enable_brng_analysis)
         signalstats_enabled = self._is_step_enabled(frame_config.enable_signalstats)
+        dropped_sample_enabled = self._is_step_enabled(frame_config.enable_dropped_sample_detection)
+        duplicate_frame_enabled = self._is_step_enabled(
+            getattr(frame_config, 'enable_duplicate_frame_detection', True)
+        )
 
         # Log which steps will run
         logger.info(f"Frame analysis configuration:")
         logger.debug(f"  Bitplane check: {'enabled' if bitplane_check_enabled else 'disabled'}")
         logger.debug(f"  Border detection: {'enabled' if border_detection_enabled else 'disabled'}")
         logger.debug(f"  BRNG analysis: {'enabled' if brng_analysis_enabled else 'disabled'}")
-        logger.debug(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}\n")
+        logger.debug(f"  Signalstats: {'enabled' if signalstats_enabled else 'disabled'}")
+        logger.debug(f"  Dropped sample detection: {'enabled' if dropped_sample_enabled else 'disabled'}")
+        logger.debug(f"  Duplicate frame detection: {'enabled' if duplicate_frame_enabled else 'disabled'}\n")
 
         # Track what was actually run
         results['steps_enabled'] = {
             'bitplane_check': bitplane_check_enabled,
             'border_detection': border_detection_enabled,
             'brng_analysis': brng_analysis_enabled,
-            'signalstats': signalstats_enabled
+            'signalstats': signalstats_enabled,
+            'dropped_sample_detection': dropped_sample_enabled,
+            'duplicate_frame_detection': duplicate_frame_enabled,
         }
 
         # Step 0: Bitplane check — verify 9th and 10th bits are not empty
@@ -3584,44 +4460,54 @@ class EnhancedFrameAnalysis:
             if color_bars_end_time > 0:
                 results['color_bars_end_time'] = color_bars_end_time
 
+        # Period selection (QCTools violations + suggested periods) is only
+        # needed for the video-frame analysis steps. Dropped sample detection
+        # is audio-only and does not consume them.
+        needs_period_selection = (
+            border_detection_enabled or signalstats_enabled or brng_analysis_enabled
+        )
+        # Black segments are also consumed by duplicate frame detection (to
+        # exclude all-black freezes from the candidate pool).
+        needs_black_segments = needs_period_selection or duplicate_frame_enabled
+
         # Step 2: Parse QCTools for initial violations (needed for BRNG analysis or border detection)
         violations = []
-        if self.check_cancelled():
-            return results
-        if self.qctools_report :
-            logger.info("Parsing QCTools report for violations...")
-            parser = QCToolsParser(self.qctools_report )
-            violations = parser.parse_for_violations_streaming(
-                max_frames=100,
-                skip_color_bars=skip_color_bars,
-                color_bars_end_time=color_bars_end_time
-            )
-            frames_with_qctools_violations = len(violations)
-            
-            if frames_with_qctools_violations == 0:
-                results['qctools_violations_found'] = "No BRNG violations detected in content"
-            else:
-                results['qctools_violations_found'] = frames_with_qctools_violations
-        elif not self.qctools_parser:
-            logger.info("No QCTools report found")
-        else:
-            logger.info("Skipping QCTools parsing (neither BRNG analysis nor border detection enabled)")
-
-        # Analyze QCTools violation distribution to find optimal analysis periods
         qctools_suggested_periods = []
-        if violations:
-            qctools_suggested_periods = self._analyze_qctools_violation_distribution(
-                violations, 
-                num_periods=frame_config.analysis_period_count,
-                period_duration=frame_config.analysis_period_duration
-            )
-            logger.info(f"Identified {len(qctools_suggested_periods)} periods with highest violation density\n")
-        
-        # Detect black segments from QCTools data to avoid selecting them as analysis periods
         black_segments = []
         if self.check_cancelled():
             return results
-        if self.qctools_report:
+        if needs_period_selection:
+            if self.qctools_report:
+                logger.info("Parsing QCTools report for violations...")
+                parser = QCToolsParser(self.qctools_report)
+                violations = parser.parse_for_violations_streaming(
+                    max_frames=100,
+                    skip_color_bars=skip_color_bars,
+                    color_bars_end_time=color_bars_end_time
+                )
+                frames_with_qctools_violations = len(violations)
+
+                if frames_with_qctools_violations == 0:
+                    results['qctools_violations_found'] = "No BRNG violations detected in content"
+                else:
+                    results['qctools_violations_found'] = frames_with_qctools_violations
+            elif not self.qctools_parser:
+                logger.info("No QCTools report found")
+
+            # Analyze QCTools violation distribution to find optimal analysis periods
+            if violations:
+                qctools_suggested_periods = self._analyze_qctools_violation_distribution(
+                    violations,
+                    num_periods=frame_config.analysis_period_count,
+                    period_duration=frame_config.analysis_period_duration
+                )
+                logger.info(f"Identified {len(qctools_suggested_periods)} periods with highest violation density\n")
+
+        # Detect black segments from QCTools data to avoid them in period
+        # selection AND to exclude them from duplicate frame candidates.
+        if self.check_cancelled():
+            return results
+        if needs_black_segments and self.qctools_report:
             logger.info("Scanning for black segments...")
             parser = QCToolsParser(self.qctools_report)
             black_segments = parser.detect_black_segments(min_duration=2.0)
@@ -3753,7 +4639,7 @@ class EnhancedFrameAnalysis:
             if signals and frame_config.enable_signalstats:
                 signals.step_completed.emit("Frame Analysis - Signalstats")
         else:
-            logger.warning("Skipping signalstats analysis (disabled in config)\n")
+            logger.warning("Skipping signalstats analysis (disabled in config)")
         
         # Build upstream context from border detection + signalstats for BRNG analyzer
         upstream_context = None
@@ -4082,7 +4968,48 @@ class EnhancedFrameAnalysis:
                 
                 logger.debug(f"{'='*60}\n")
         
-        # Step 7: Generate comprehensive summary
+        # Step 7: Dropped sample detection (conditional)
+        dropped_sample_enabled = self._is_step_enabled(frame_config.enable_dropped_sample_detection)
+        if self.check_cancelled():
+            return results
+        if dropped_sample_enabled:
+            logger.info("Starting dropped sample detection...")
+            if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+                self.signals.frame_analysis_progress.emit(0)
+
+            dropped_sample_result = self._detect_dropped_samples(
+                color_bars_end_time=color_bars_end_time
+            )
+            if dropped_sample_result:
+                results['dropped_sample_detection'] = asdict(dropped_sample_result)
+
+            if signals and frame_config.enable_dropped_sample_detection:
+                signals.step_completed.emit("Frame Analysis - Dropped Sample Detection")
+        else:
+            logger.warning("Skipping dropped sample detection (disabled in config)\n")
+
+        # Step 8: Duplicate frame detection (conditional)
+        if self.check_cancelled():
+            return results
+        if duplicate_frame_enabled:
+            if self.signals and hasattr(self.signals, 'frame_analysis_progress'):
+                self.signals.frame_analysis_progress.emit(0)
+
+            min_run_length = getattr(frame_config, 'duplicate_min_run_length', 2)
+            duplicate_frame_result = self._detect_duplicate_frames(
+                color_bars_end_time=color_bars_end_time,
+                black_segments=black_segments,
+                min_run_length=min_run_length,
+            )
+            if duplicate_frame_result:
+                results['duplicate_frame_detection'] = asdict(duplicate_frame_result)
+
+            if signals:
+                signals.step_completed.emit("Frame Analysis - Duplicate Frame Detection")
+        else:
+            logger.warning("Skipping duplicate frame detection (disabled in config)\n")
+
+        # Step 9: Generate comprehensive summary
         if self.check_cancelled():
             return results
         results['summary'] = self._generate_summary(results)

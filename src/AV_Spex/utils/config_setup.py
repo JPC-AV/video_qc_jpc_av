@@ -263,6 +263,13 @@ class FrameAnalysisConfig:
     analysis_period_duration: int = 60
     analysis_period_count: int = 3
 
+    # Dropped sample detection settings
+    enable_dropped_sample_detection: bool = True
+
+    # Duplicate frame detection settings
+    enable_duplicate_frame_detection: bool = True
+    duplicate_min_run_length: int = 2
+
 # Output configuration
 VALID_QCTOOLS_EXTENSIONS = ("qctools.xml.gz", "qctools.mkv")
 
@@ -312,8 +319,7 @@ class QCTParseToolConfig:
     barsDetection: bool
     evaluateBars: bool
     thumbExport: bool
-    detect_audio_clipping: bool = False
-    detect_channel_imbalance: bool = False
+    audio_analysis: bool = False
 
 @dataclass
 class ToolsConfig:
@@ -388,8 +394,7 @@ class ChecksProfile:
             barsDetection=False,
             evaluateBars=False,
             thumbExport=False,
-            detect_audio_clipping=False,
-            detect_channel_imbalance=False
+            audio_analysis=False
         )
     ))
 

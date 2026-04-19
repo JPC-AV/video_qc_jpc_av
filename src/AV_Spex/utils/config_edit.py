@@ -443,7 +443,7 @@ def update_tool_setting(tool_names: List[str], value: bool):
                 
             # QCT Parse uses booleans for all fields
             elif tool_name == 'qct_parse':
-                if field not in ('run_tool', 'barsDetection', 'evaluateBars', 'thumbExport', 'detect_audio_clipping', 'detect_channel_imbalance'):
+                if field not in ('run_tool', 'barsDetection', 'evaluateBars', 'thumbExport', 'audio_analysis'):
                     logger.warning(f"Invalid field '{field}' for qct_parse")
                     continue
                 updates['tools'][tool_name] = {field: value}
@@ -1251,8 +1251,7 @@ profile_step1 = {
             "barsDetection": False,
             "evaluateBars": False,
             "thumbExport": False,
-            "detect_audio_clipping": False,
-            "detect_channel_imbalance": False
+            "audio_analysis": False
         }
     },
     "outputs": {
@@ -1305,8 +1304,7 @@ profile_step2 = {
             "barsDetection": True,
             "evaluateBars": True,
             "thumbExport": True,
-            "detect_audio_clipping": True,
-            "detect_channel_imbalance": True
+            "audio_analysis": True
         }
     },
     "outputs": {
@@ -1359,8 +1357,7 @@ profile_allOff = {
             "barsDetection": False,
             "evaluateBars": False,
             "thumbExport": False,
-            "detect_audio_clipping": False,
-            "detect_channel_imbalance": False
+            "audio_analysis": False
         }
     },
     "outputs": {
