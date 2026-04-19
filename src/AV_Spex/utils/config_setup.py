@@ -266,6 +266,10 @@ class FrameAnalysisConfig:
     # Dropped sample detection settings
     enable_dropped_sample_detection: bool = True
 
+    # Duplicate frame detection settings
+    enable_duplicate_frame_detection: bool = True
+    duplicate_min_run_length: int = 2
+
 # Output configuration
 VALID_QCTOOLS_EXTENSIONS = ("qctools.xml.gz", "qctools.mkv")
 

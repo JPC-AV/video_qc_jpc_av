@@ -141,6 +141,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.setup_signalstats_section(main_layout)
         self.setup_brng_analysis_section(main_layout)
         self.setup_dropped_sample_detection_section(main_layout)
+        self.setup_duplicate_frame_detection_section(main_layout)
 
     def setup_bitplane_check_section(self, main_layout):
         """Set up the bitplane check section with enable checkbox"""
@@ -492,6 +493,32 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.dropped_sample_group.setLayout(ds_layout)
         main_layout.addWidget(self.dropped_sample_group)
 
+    def setup_duplicate_frame_detection_section(self, main_layout):
+        """Set up the duplicate frame detection section with enable checkbox"""
+        theme_manager = ThemeManager.instance()
+
+        self.duplicate_frame_group = QGroupBox("Duplicate Frame Detection")
+        theme_manager.style_groupbox(self.duplicate_frame_group, "top left")
+        self.themed_group_boxes['duplicate_frame'] = self.duplicate_frame_group
+
+        df_layout = QVBoxLayout()
+
+        self.enable_duplicate_frame_cb = QCheckBox("Enable Duplicate Frame Detection")
+        self.enable_duplicate_frame_cb.setStyleSheet("font-weight: bold;")
+        df_desc = QLabel(
+            "Detect runs of repeated frames likely caused by TBC or framesync errors. "
+            "Uses QCTools YDIF/UDIF/VDIF to find candidate freezes (excluding color bars "
+            "and black segments), then verifies each candidate with OpenCV."
+        )
+        df_desc.setWordWrap(True)
+        df_desc.setIndent(20)
+
+        df_layout.addWidget(self.enable_duplicate_frame_cb)
+        df_layout.addWidget(df_desc)
+
+        self.duplicate_frame_group.setLayout(df_layout)
+        main_layout.addWidget(self.duplicate_frame_group)
+
     def update_border_detection_visibility(self):
         """Update visibility of border detection components"""
         enabled = self.enable_border_detection_cb.isChecked()
@@ -569,6 +596,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
         )
         self.enable_dropped_sample_cb.stateChanged.connect(
             lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_dropped_sample_detection'])
+        )
+        self.enable_duplicate_frame_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['outputs', 'frame_analysis', 'enable_duplicate_frame_detection'])
         )
         
         # Border mode combo
@@ -653,6 +683,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.enable_brng_analysis_cb.setChecked(bool(frame_config.enable_brng_analysis))
             self.enable_signalstats_cb.setChecked(bool(frame_config.enable_signalstats))
             self.enable_dropped_sample_cb.setChecked(bool(frame_config.enable_dropped_sample_detection))
+            self.enable_duplicate_frame_cb.setChecked(bool(getattr(frame_config, 'enable_duplicate_frame_detection', True)))
 
             # Set border detection mode
             mode_index = self.border_mode_combo.findData(frame_config.border_detection_mode)

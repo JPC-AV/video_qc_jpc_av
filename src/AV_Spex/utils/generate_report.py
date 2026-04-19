@@ -211,7 +211,8 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
         'signalstats_analysis': None,
         'enhanced_frame_analysis': None,
         'dropped_sample_spectrogram': None,
-        'dropped_sample_detection': None
+        'dropped_sample_detection': None,
+        'duplicate_frame_detection': None
     }
     
     # Check for border detection outputs
@@ -300,6 +301,12 @@ def find_frame_analysis_outputs(source_directory, destination_directory, video_i
                 spec_path = enhanced_data['dropped_sample_detection'].get('spectrogram_path')
                 if spec_path and os.path.exists(spec_path):
                     frame_outputs['dropped_sample_spectrogram'] = spec_path
+
+            # Extract duplicate frame detection data (always present when the
+            # step ran, even if no runs were detected — section is rendered
+            # with header + table either way).
+            if enhanced_data.get('duplicate_frame_detection') is not None:
+                frame_outputs['duplicate_frame_detection'] = enhanced_data['duplicate_frame_detection']
 
         except Exception as e:
             logger.warning(f"Could not read signalstats from enhanced frame analysis: {e}")
@@ -3413,6 +3420,174 @@ def generate_dropped_sample_html(frame_outputs):
     return html
 
 
+def generate_duplicate_frame_html(frame_outputs):
+    """
+    Generate the HTML section for duplicate frame detection.
+
+    Renders a header, methodology blurb, status line, and a table of detected
+    runs (showing the first and last frame thumbnails of each freeze). When no
+    runs were detected, still renders the header and a placeholder row so the
+    report shows the step ran cleanly.
+
+    Args:
+        frame_outputs (dict): Output of locate_frame_analysis_outputs(). Returns
+            empty string if duplicate frame detection didn't run for this video.
+
+    Returns:
+        str: HTML fragment, or empty string if step did not run.
+    """
+    duplicate_data = frame_outputs.get('duplicate_frame_detection')
+    if duplicate_data is None:
+        return ""
+
+    runs = duplicate_data.get('runs') or []
+    status = duplicate_data.get('status', 'unknown')
+    message = duplicate_data.get('message', '')
+    bit_depth_10 = duplicate_data.get('bit_depth_10', False)
+    ydif_thresh = duplicate_data.get('ydif_threshold', 0)
+    udif_thresh = duplicate_data.get('udif_threshold', 0)
+    vdif_thresh = duplicate_data.get('vdif_threshold', 0)
+    min_run_length = duplicate_data.get('min_run_length', 2)
+    total_loss = duplicate_data.get('estimated_loss_seconds', 0.0)
+
+    if status == 'critical':
+        status_color = '#cc0000'
+        status_icon = '&#x26A0;'
+    elif status == 'warning':
+        status_color = '#cc6600'
+        status_icon = '&#x26A0;'
+    elif status == 'clean':
+        status_color = '#0a5f1c'
+        status_icon = '&#x2705;'
+    else:
+        status_color = '#666666'
+        status_icon = '&#x2753;'
+
+    bit_depth_label = "10-bit" if bit_depth_10 else "8-bit"
+
+    html = "<h3>Duplicate Frame Detection</h3>"
+
+    # Collapsible methodology explanation
+    html += f"""
+    <a id="link_duplicate_frame_methodology" href="javascript:void(0);"
+       onclick="toggleContent('duplicate_frame_methodology', 'What is duplicate frame detection? &#x25BC;', 'What is duplicate frame detection? &#x25B2;')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is duplicate frame detection? &#x25BC;</a>
+    <div id="duplicate_frame_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Duplicate frame detection</strong> identifies runs of repeated frames likely caused by
+            TBC or framesync error concealment during digitization. The detection pipeline:
+        </p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>QCTools candidate filter</strong> &mdash; The QCTools
+                report is scanned for runs of consecutive frames whose YDIF, UDIF, and VDIF values all fall
+                below bit-depth-aware thresholds. Color bars and detected black segments are excluded.</li>
+            <li style="margin-bottom: 4px;"><strong>OpenCV verification</strong> &mdash; Each candidate is
+                verified by reading the actual frames with OpenCV and computing the mean squared error
+                against the preceding frame. Candidates that don't confirm as near-identical are dropped.</li>
+            <li style="margin-bottom: 4px;"><strong>Minimum run length</strong> &mdash; A run of K
+                consecutive low-diff frames represents a freeze of K+1 identical frames. The minimum run
+                length is configurable (default {min_run_length}, freeze of &ge;{min_run_length + 1} frames)
+                to suppress single-frame matches that occur naturally on static content.</li>
+        </ul>
+        <p style="margin: 0;">
+            Detected file is {bit_depth_label}; thresholds in use:
+            YDIF &lt; {ydif_thresh}, UDIF &lt; {udif_thresh}, VDIF &lt; {vdif_thresh}.
+        </p>
+    </div>
+    """
+
+    html += f"""
+    <p style="font-size: 14px; color: {status_color}; font-weight: bold;">
+        {status_icon} {message}
+    </p>
+    """
+
+    if total_loss > 0:
+        html += f"""
+        <p style="font-size: 13px; color: #555; margin: 4px 0 12px 0;">
+            Estimated total duration loss from freezes: <strong>{total_loss:.3f} s</strong>
+        </p>
+        """
+
+    # Results table
+    html += """
+    <table style="border-collapse: collapse; margin: 10px 0; font-size: 13px;">
+        <tr style="background-color: #f0ebe4;">
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: left;">#</th>
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: left;">Start</th>
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: left;">End</th>
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Frozen frames</th>
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Est. loss (s)</th>
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">YDIF avg</th>
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">VREP</th>
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">OpenCV MSE</th>
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">First frame</th>
+            <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">Last frame</th>
+        </tr>
+    """
+
+    if not runs:
+        html += """
+        <tr>
+            <td colspan="10" style="padding: 12px; border: 1px solid #d0c0b0;
+                text-align: center; color: #666; font-style: italic;">
+                No duplicate frame runs detected.
+            </td>
+        </tr>
+        """
+    else:
+        def _fmt_tc(t):
+            mins = int(t // 60)
+            secs = t - (mins * 60)
+            return f"{mins:02d}:{secs:05.2f}"
+
+        def _embed_thumb(thumb_path):
+            if not thumb_path or not os.path.exists(thumb_path):
+                return '<span style="color:#999; font-size:12px;">n/a</span>'
+            try:
+                with open(thumb_path, 'rb') as fh:
+                    encoded = b64encode(fh.read()).decode()
+                return (
+                    f'<img src="data:image/jpeg;base64,{encoded}" '
+                    f'style="max-width: 220px; height: auto; border: 1px solid #d0c0b0;" />'
+                )
+            except Exception as e:
+                logger.warning(f"Could not embed duplicate frame thumbnail {thumb_path}: {e}")
+                return '<span style="color:#999; font-size:12px;">unavailable</span>'
+
+        for i, run in enumerate(runs, 1):
+            start_t = run.get('start_time', 0.0)
+            end_t = run.get('end_time', 0.0)
+            frozen = run.get('frozen_frames', 0)
+            est_loss = run.get('estimated_loss_seconds', 0.0)
+            avg_ydif = run.get('avg_ydif', 0.0)
+            avg_vrep = run.get('avg_vrep', 0.0)
+            cv_mse = run.get('cv_mse')
+            first_thumb = run.get('first_frame_thumbnail')
+            last_thumb = run.get('last_frame_thumbnail')
+
+            mse_cell = f"{cv_mse:.2f}" if isinstance(cv_mse, (int, float)) else "&mdash;"
+            html += f"""
+            <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{i}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{_fmt_tc(start_t)}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{_fmt_tc(end_t)}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{frozen}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{est_loss:.3f}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_ydif:.3f}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_vrep:.2f}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{mse_cell}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">{_embed_thumb(first_thumb)}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">{_embed_thumb(last_thumb)}</td>
+            </tr>
+            """
+
+    html += "</table>"
+    return html
+
+
 def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, paper_bgcolor='#f5e9e3'):
     with open(qctools_content_check_output, 'r') as file:
         lines = file.readlines()
@@ -3691,6 +3866,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
     audio_dropout_html = make_audio_dropout_html(audio_dropout_csv) if audio_dropout_csv else None
     dropped_sample_html = generate_dropped_sample_html(frame_outputs) if frame_outputs else ""
+    duplicate_frame_html = generate_duplicate_frame_html(frame_outputs) if frame_outputs else ""
 
     existing_thumbs = find_qct_thumbs(report_directory)
     no_qct_parse_files = (
@@ -3945,6 +4121,13 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if frame_analysis_html:
         html_template += frame_analysis_html
+
+    # Duplicate frame detection: last subsection of the frame analysis block,
+    # placed after BRNG analysis and before the qct-parse color bars section.
+    if duplicate_frame_html:
+        html_template += duplicate_frame_html
+
+    if frame_analysis_html or duplicate_frame_html:
         html_template += color_strip_divider
 
     # Rest of the HTML template remains the same...
