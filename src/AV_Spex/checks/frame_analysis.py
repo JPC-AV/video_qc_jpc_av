@@ -4066,52 +4066,58 @@ class EnhancedFrameAnalysis:
             if color_bars_end_time > 0:
                 results['color_bars_end_time'] = color_bars_end_time
 
+        # Period selection and black segment detection are only needed for the
+        # video-frame analysis steps. Dropped sample detection is audio-only and
+        # does not consume them, so skip this whole block if it's the only step.
+        needs_period_selection = (
+            border_detection_enabled or signalstats_enabled or brng_analysis_enabled
+        )
+
         # Step 2: Parse QCTools for initial violations (needed for BRNG analysis or border detection)
         violations = []
-        if self.check_cancelled():
-            return results
-        if self.qctools_report :
-            logger.info("Parsing QCTools report for violations...")
-            parser = QCToolsParser(self.qctools_report )
-            violations = parser.parse_for_violations_streaming(
-                max_frames=100,
-                skip_color_bars=skip_color_bars,
-                color_bars_end_time=color_bars_end_time
-            )
-            frames_with_qctools_violations = len(violations)
-            
-            if frames_with_qctools_violations == 0:
-                results['qctools_violations_found'] = "No BRNG violations detected in content"
-            else:
-                results['qctools_violations_found'] = frames_with_qctools_violations
-        elif not self.qctools_parser:
-            logger.info("No QCTools report found")
-        else:
-            logger.info("Skipping QCTools parsing (neither BRNG analysis nor border detection enabled)")
-
-        # Analyze QCTools violation distribution to find optimal analysis periods
         qctools_suggested_periods = []
-        if violations:
-            qctools_suggested_periods = self._analyze_qctools_violation_distribution(
-                violations, 
-                num_periods=frame_config.analysis_period_count,
-                period_duration=frame_config.analysis_period_duration
-            )
-            logger.info(f"Identified {len(qctools_suggested_periods)} periods with highest violation density\n")
-        
-        # Detect black segments from QCTools data to avoid selecting them as analysis periods
         black_segments = []
         if self.check_cancelled():
             return results
-        if self.qctools_report:
-            logger.info("Scanning for black segments...")
-            parser = QCToolsParser(self.qctools_report)
-            black_segments = parser.detect_black_segments(min_duration=2.0)
-            if black_segments:
-                results['black_segments'] = [
-                    {'start': s, 'end': e, 'duration': e - s} for s, e in black_segments
-                ]
-                logger.info("")  # Blank line after black segment log output
+        if needs_period_selection:
+            if self.qctools_report:
+                logger.info("Parsing QCTools report for violations...")
+                parser = QCToolsParser(self.qctools_report)
+                violations = parser.parse_for_violations_streaming(
+                    max_frames=100,
+                    skip_color_bars=skip_color_bars,
+                    color_bars_end_time=color_bars_end_time
+                )
+                frames_with_qctools_violations = len(violations)
+
+                if frames_with_qctools_violations == 0:
+                    results['qctools_violations_found'] = "No BRNG violations detected in content"
+                else:
+                    results['qctools_violations_found'] = frames_with_qctools_violations
+            elif not self.qctools_parser:
+                logger.info("No QCTools report found")
+
+            # Analyze QCTools violation distribution to find optimal analysis periods
+            if violations:
+                qctools_suggested_periods = self._analyze_qctools_violation_distribution(
+                    violations,
+                    num_periods=frame_config.analysis_period_count,
+                    period_duration=frame_config.analysis_period_duration
+                )
+                logger.info(f"Identified {len(qctools_suggested_periods)} periods with highest violation density\n")
+
+            # Detect black segments from QCTools data to avoid selecting them as analysis periods
+            if self.check_cancelled():
+                return results
+            if self.qctools_report:
+                logger.info("Scanning for black segments...")
+                parser = QCToolsParser(self.qctools_report)
+                black_segments = parser.detect_black_segments(min_duration=2.0)
+                if black_segments:
+                    results['black_segments'] = [
+                        {'start': s, 'end': e, 'duration': e - s} for s, e in black_segments
+                    ]
+                    logger.info("")  # Blank line after black segment log output
         
         # Step 3: Border detection (conditional)
         border_results = None
