@@ -258,7 +258,8 @@ class ProcessingManager:
             frame_config.enable_border_detection,
             frame_config.enable_brng_analysis,
             frame_config.enable_signalstats,
-            frame_config.enable_dropped_sample_detection
+            frame_config.enable_dropped_sample_detection,
+            getattr(frame_config, 'enable_duplicate_frame_detection', False)
         ]):
             if self.signals:
                 self.signals.output_progress.emit("Performing enhanced frame analysis...")
@@ -314,7 +315,8 @@ class ProcessingManager:
             frame_config.enable_border_detection,
             frame_config.enable_brng_analysis,
             frame_config.enable_signalstats,
-            frame_config.enable_dropped_sample_detection
+            frame_config.enable_dropped_sample_detection,
+            getattr(frame_config, 'enable_duplicate_frame_detection', False)
         ]):
             logger.info("No frame analysis sub-steps enabled")
             return None

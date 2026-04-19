@@ -23,7 +23,9 @@
       "signalstats_start_time": 120,
       "signalstats_duration": 60,
       "signalstats_periods": 3,
-      "enable_dropped_sample_detection": true
+      "enable_dropped_sample_detection": true,
+      "enable_duplicate_frame_detection": true,
+      "duplicate_min_run_length": 2
     }
   },
   "fixity": {
