@@ -3302,7 +3302,7 @@ class EnhancedFrameAnalysis:
         Returns:
             DroppedSampleResult or None if detection fails
         """
-        logger.info("Running dropped sample detection...")
+        #logger.info("Running dropped sample detection...")
 
         # Step 1: Generate spectrogram image
         spectrogram_path = self._generate_spectrogram()
@@ -3313,7 +3313,7 @@ class EnhancedFrameAnalysis:
         if spectrogram_path:
             spike_count, spike_timestamps = self._analyze_spectrogram_spikes(spectrogram_path)
             if spike_count > 0:
-                logger.warning(f"Detected {spike_count} potential dropped sample spike(s) in spectrogram")
+                logger.warning(f"Detected {spike_count} potential dropped sample spike(s) in spectrogram\n")
             else:
                 logger.info("No dropped sample spikes detected in spectrogram")
 
@@ -3325,11 +3325,11 @@ class EnhancedFrameAnalysis:
             if duration_diff_ms > 0:
                 logger.warning(f"Audio/video duration mismatch: {duration_diff_ms:.3f}ms")
                 logger.debug(f"  Audio duration: {audio_duration:.6f}s")
-                logger.debug(f"  Video duration: {video_duration:.6f}s")
+                logger.debug(f"  Video duration: {video_duration:.6f}s\n")
             else:
-                logger.info("Audio and video durations match")
+                logger.info(f"Audio and video durations match\n")
         else:
-            logger.warning("Could not determine audio and/or video duration for comparison")
+            logger.warning(f"Could not determine audio and/or video duration for comparison\n")
             audio_duration = audio_duration or 0.0
             video_duration = video_duration or 0.0
 
@@ -3367,7 +3367,7 @@ class EnhancedFrameAnalysis:
         else:
             message = "; ".join(parts)
 
-        logger.info(f"Dropped sample detection result: {status} — {message}\n")
+        logger.info(f"\nDropped sample detection result: {status} — {message}\n")
 
         return DroppedSampleResult(
             status=status,
@@ -3394,7 +3394,7 @@ class EnhancedFrameAnalysis:
         ]
 
         try:
-            logger.debug(f"Generating spectrogram: {' '.join(cmd)}")
+            logger.debug(f"    Generating spectrogram: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0 and output_path.exists():
                 logger.info(f"Spectrogram saved to: {output_path.name}")
@@ -3505,14 +3505,14 @@ class EnhancedFrameAnalysis:
             plot_area = img[plot_top:plot_bottom, plot_left:plot_right]
 
             if plot_area.size == 0:
-                logger.warning("Spectrogram plot area is empty after cropping")
+                logger.warning("    Spectrogram plot area is empty after cropping")
                 return 0, []
 
             # Convert to grayscale and compute mean brightness per column
             gray = cv2.cvtColor(plot_area, cv2.COLOR_BGR2GRAY)
             plot_height, plot_width = gray.shape
 
-            logger.debug(f"Spectrogram plot area: ({plot_left},{plot_top}) to ({plot_right},{plot_bottom}), "
+            logger.debug(f"    Spectrogram plot area: ({plot_left},{plot_top}) to ({plot_right},{plot_bottom}), "
                          f"size {plot_width}x{plot_height}")
 
             column_means = np.mean(gray, axis=0)
@@ -3576,7 +3576,7 @@ class EnhancedFrameAnalysis:
             spikes = [g for g in groups if len(g) <= max_spike_width]
             rejected = len(groups) - len(spikes)
             if rejected > 0:
-                logger.debug(f"Rejected {rejected} spike group(s) wider than {max_spike_width} columns (likely content transients)")
+                logger.debug(f"    Rejected {rejected} spike group(s) wider than {max_spike_width} columns (likely content transients)")
 
             # Estimate timestamps by mapping column position to video duration
             video_duration = self._get_video_duration() or 0
@@ -3586,9 +3586,9 @@ class EnhancedFrameAnalysis:
                 timestamp = (center_col / plot_width) * video_duration
                 spike_timestamps.append(round(timestamp, 2))
 
-            logger.debug(f"Spike detection: {len(spikes)} spike(s) found at columns {[g[0] for g in spikes]}")
+            logger.debug(f"    Spike detection: {len(spikes)} spike(s) found at columns {[g[0] for g in spikes]}")
             if spike_timestamps:
-                logger.debug(f"Estimated timestamps: {spike_timestamps}")
+                logger.debug(f"    Estimated timestamps: {spike_timestamps}\n")
 
             return len(spikes), spike_timestamps
 
@@ -3628,11 +3628,11 @@ class EnhancedFrameAnalysis:
                 audio_duration, video_duration, sample_rate = self._extract_stream_durations(
                     ffprobe_data.get('streams', [])
                 )
-                logger.debug(f"Durations from ffprobe sidecar: audio={audio_duration}, video={video_duration}, sample_rate={sample_rate}")
+                logger.debug(f"    Durations from ffprobe sidecar: audio={audio_duration}, video={video_duration}, sample_rate={sample_rate}\n")
                 if audio_duration is not None and video_duration is not None:
                     return audio_duration, video_duration, sample_rate
             except Exception as e:
-                logger.debug(f"Could not read ffprobe sidecar: {e}")
+                logger.debug(f"Could not read ffprobe sidecar: {e}\n")
 
         # Fallback: run ffprobe directly, requesting both duration and DURATION tag
         logger.debug("Falling back to fresh ffprobe call for stream durations")
