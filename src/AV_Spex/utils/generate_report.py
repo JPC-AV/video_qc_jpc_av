@@ -4283,6 +4283,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         {colorbars_eval_html}
         """
 
+    if clamped_levels_html:
+        html_template += f"""
+        <h3>Clamped Levels Detection</h3>
+        {clamped_levels_html}
+        """
+
     if audio_clipping_html:
         html_template += waveform_divider
         html_template += f"""
@@ -4310,12 +4316,6 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if audio_clipping_html or channel_imbalance_html or audible_timecode_html or audio_dropout_html:
         html_template += waveform_divider
-
-    if clamped_levels_html:
-        html_template += f"""
-        <h3>Clamped Levels Detection</h3>
-        {clamped_levels_html}
-        """
 
     if dropped_sample_html:
         html_template += dropped_sample_html
