@@ -87,73 +87,80 @@ def check_cancelled():
     """Mock check_cancelled function"""
     return lambda: False
 
-def test_make_profile_piecharts_colorbars_success(sample_colorbars_eval_csv, 
-                                                 sample_colorbars_thumbs_dict, 
-                                                 sample_colorbars_failure_summary, 
-                                                 check_cancelled, 
+VIDEO_ID = "JPC_AV_05000"
+
+
+def test_make_profile_piecharts_colorbars_success(sample_colorbars_eval_csv,
+                                                 sample_colorbars_thumbs_dict,
+                                                 sample_colorbars_failure_summary,
+                                                 check_cancelled,
                                                  setup_logging):
     """Test successful generation of colorbars evaluation pie charts"""
     html_output = make_profile_piecharts(
         sample_colorbars_eval_csv,
         sample_colorbars_thumbs_dict,
         sample_colorbars_failure_summary,
-        check_cancelled
+        VIDEO_ID,
+        check_cancelled=check_cancelled,
     )
-    
+
     assert html_output is not None
     # Check for expected content
     assert 'SATMAX' in html_output
     assert 'VMAX' in html_output
     assert 'Failed Frames' in html_output
     assert 'Other Frames' in html_output
-    assert 'data:image/png;base64,' in html_output
+    assert 'data:image/jpeg;base64,' in html_output
     assert '704' in html_output  # Check for specific failure value
     assert '405' in html_output  # Check for threshold value
-    
-def test_make_profile_piecharts_colorbars_no_failures(sample_colorbars_eval_csv_no_failures, 
-                                                     sample_colorbars_thumbs_dict, 
-                                                     check_cancelled, 
+
+def test_make_profile_piecharts_colorbars_no_failures(sample_colorbars_eval_csv_no_failures,
+                                                     sample_colorbars_thumbs_dict,
+                                                     check_cancelled,
                                                      setup_logging):
     """Test with no colorbars failures"""
     empty_failure_summary = {}
-    
+
     html_output = make_profile_piecharts(
         sample_colorbars_eval_csv_no_failures,
         sample_colorbars_thumbs_dict,
         empty_failure_summary,
-        check_cancelled
+        VIDEO_ID,
+        check_cancelled=check_cancelled,
     )
-    
+
     assert html_output is not None
     assert 'Peak Values outside of Threshold' not in html_output
 
-def test_make_profile_piecharts_colorbars_cancelled(sample_colorbars_eval_csv, 
-                                                   sample_colorbars_thumbs_dict, 
-                                                   sample_colorbars_failure_summary, 
+def test_make_profile_piecharts_colorbars_cancelled(sample_colorbars_eval_csv,
+                                                   sample_colorbars_thumbs_dict,
+                                                   sample_colorbars_failure_summary,
                                                    setup_logging):
     """Test when check_cancelled returns True"""
     def cancelled_check():
         return True
-        
+
     html_output = make_profile_piecharts(
         sample_colorbars_eval_csv,
         sample_colorbars_thumbs_dict,
         sample_colorbars_failure_summary,
-        cancelled_check
+        VIDEO_ID,
+        check_cancelled=cancelled_check,
     )
-    
+
     assert html_output is None
 
-def test_make_profile_piecharts_colorbars_missing_file(sample_colorbars_thumbs_dict, 
-                                                      sample_colorbars_failure_summary, 
-                                                      check_cancelled, 
+def test_make_profile_piecharts_colorbars_missing_file(sample_colorbars_thumbs_dict,
+                                                      sample_colorbars_failure_summary,
+                                                      check_cancelled,
                                                       setup_logging):
     """Test behavior when colorbars CSV file is missing"""
     html_output = make_profile_piecharts(
         "nonexistent_file.csv",
         sample_colorbars_thumbs_dict,
         sample_colorbars_failure_summary,
-        check_cancelled
+        VIDEO_ID,
+        check_cancelled=check_cancelled,
     )
-    
+
     assert html_output is None
