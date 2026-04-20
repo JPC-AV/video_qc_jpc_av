@@ -65,6 +65,7 @@
       "evaluateBars": true,
       "thumbExport": true,
       "audio_analysis": false,
+      "detect_clamped_levels": false,
       "tagname": ""
     }
   },

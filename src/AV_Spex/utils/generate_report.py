@@ -342,6 +342,7 @@ def find_report_csvs(report_directory):
     channel_imbalance_csv = None
     audible_timecode_csv = None
     audio_dropout_csv = None
+    clamped_levels_csv = None
     difference_csv = None
 
     if os.path.isdir(report_directory):
@@ -375,10 +376,12 @@ def find_report_csvs(report_directory):
                         audible_timecode_csv = file_path
                     elif "qct-parse_audio_dropout" in file:
                         audio_dropout_csv = file_path
+                    elif "qct-parse_clamped_levels" in file:
+                        clamped_levels_csv = file_path
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -1502,6 +1505,125 @@ def make_audio_dropout_html(audio_dropout_csv):
             </tr>\n'''
         html += '</table></div>\n'
 
+    return html
+
+
+def make_clamped_levels_html(clamped_levels_csv):
+    """
+    Generates an HTML section summarizing clamped-levels detection results.
+    Always renders when the CSV is present, including when no clamping was
+    found — so the report shows that the check was run.
+
+    Args:
+        clamped_levels_csv (str): Path to the clamped-levels CSV file.
+
+    Returns:
+        str: HTML string, or None if the file cannot be read.
+    """
+    if not clamped_levels_csv or not os.path.isfile(clamped_levels_csv):
+        return None
+
+    try:
+        with open(clamped_levels_csv, 'r') as f:
+            rows = list(csv.reader(f))
+    except Exception as e:
+        logger.error(f"Error reading clamped levels CSV: {e}")
+        return None
+
+    if len(rows) < 8:
+        return None
+
+    bit_depth = rows[1][1] if len(rows[1]) > 1 else "N/A"
+    total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
+    any_clamp = rows[5][1] if len(rows[5]) > 1 else "N/A"
+
+    # Findings table starts at row 7 (header) then rows 8+
+    findings = [r for r in rows[8:] if len(r) >= 8]
+
+    if any_clamp == "Yes":
+        status_color = "#dc3545"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+        status_text = "Clamped Levels Detected"
+    else:
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+        status_text = "No Clamped Levels Detected"
+
+    def verdict_color(verdict):
+        if verdict == "Clamped":
+            return "#dc3545"
+        if verdict == "Not Clamped":
+            return "#155724"
+        return "#856404"  # Inconclusive
+
+    rows_html = ""
+    for r in findings:
+        channel, direction, limit, extreme, hits, hit_pct, beyond, verdict = r[:8]
+        v_color = verdict_color(verdict)
+        rows_html += (
+            f'<tr>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{channel}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{direction}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{limit}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{extreme}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{hits}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{hit_pct}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{beyond}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; color: {v_color}; font-weight: bold;">{verdict}</td>'
+            f'</tr>\n'
+        )
+
+    html = f'''
+    <a id="link_clamp_methodology" href="javascript:void(0);"
+       onclick="toggleContent('clamp_methodology', 'What is clamped-levels detection? ▼', 'What is clamped-levels detection? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is clamped-levels detection? ▼</a>
+    <div id="clamp_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Clamped-levels detection</strong> flags analog-to-digital converters that truncate
+            the video signal at the broadcast (legal) range limits. A clamped channel will pile up at
+            the limit value and never exceed it, whereas an unclamped source will show excursions past
+            the legal range caused by sync pulses, noise, or peak whites/superblacks.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Verdicts:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>Clamped</strong> &mdash; frames hit the limit exactly
+                with zero excursions past it; indicates the ADC is truncating the signal.</li>
+            <li style="margin-bottom: 4px;"><strong>Not Clamped</strong> &mdash; one or more frames went
+                past the limit; the signal is free to exceed broadcast range.</li>
+            <li style="margin-bottom: 4px;"><strong>Inconclusive</strong> &mdash; the signal never reached
+                the limit, so clamping cannot be determined from this content.</li>
+        </ul>
+        <p style="margin: 0;">
+            Limits are derived from SMPTE broadcast-range values (bit-depth aware): 10-bit Y 64&ndash;940,
+            U/V 64&ndash;960; 8-bit Y 16&ndash;235, U/V 16&ndash;240. Measurements come from FFmpeg's
+            <code>signalstats</code> filter as recorded in the QCTools report.
+        </p>
+    </div>
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Bit Depth</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{bit_depth}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Video Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+    </table>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Direction</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Limit</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Global Extreme</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames at Limit</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Hit %</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames Beyond Limit</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Verdict</th>
+        </tr>
+        {rows_html}
+    </table>
+    '''
     return html
 
 
@@ -3686,7 +3808,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, difference_csv = find_report_csvs(report_directory)
 
     if check_cancelled():
         return
@@ -3865,6 +3987,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
     audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
     audio_dropout_html = make_audio_dropout_html(audio_dropout_csv) if audio_dropout_csv else None
+    clamped_levels_html = make_clamped_levels_html(clamped_levels_csv) if clamped_levels_csv else None
     dropped_sample_html = generate_dropped_sample_html(frame_outputs) if frame_outputs else ""
     duplicate_frame_html = generate_duplicate_frame_html(frame_outputs) if frame_outputs else ""
 
@@ -3877,6 +4000,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         not channel_imbalance_csv and
         not audible_timecode_csv and
         not audio_dropout_csv and
+        not clamped_levels_csv and
         not existing_thumbs
     )
 
@@ -4157,6 +4281,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3>{eval_header}</h3>
         {colorbars_eval_html}
+        """
+
+    if clamped_levels_html:
+        html_template += f"""
+        <h3>Clamped Levels Detection</h3>
+        {clamped_levels_html}
         """
 
     if audio_clipping_html:

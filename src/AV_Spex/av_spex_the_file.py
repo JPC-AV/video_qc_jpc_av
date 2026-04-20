@@ -89,6 +89,7 @@ class ParsedArguments:
     frame_border_pixels: Optional[int]
     frame_no_colorbar_skip: bool
     frame_brng_duration: Optional[int]
+    enable_clamped_levels: Optional[str]
     exiftool_profile: Optional[str]
     mediainfo_profile: Optional[str]
     ffprobe_profile: Optional[str]
@@ -221,6 +222,11 @@ The scripts will confirm that the digital files conform to predetermined specifi
         type=int,
         help='Maximum duration in seconds for BRNG analysis'
     )
+    parser.add_argument(
+        '--enable-clamped-levels',
+        choices=['on', 'off'],
+        help='Enable/disable clamped video levels detection in qct-parse'
+    )
 
     args = parser.parse_args()
 
@@ -274,6 +280,7 @@ The scripts will confirm that the digital files conform to predetermined specifi
         frame_border_pixels=getattr(args, 'frame_border_pixels', None),
         frame_no_colorbar_skip=getattr(args, 'frame_no_colorbar_skip', False),
         frame_brng_duration=getattr(args, 'frame_brng_duration', None),
+        enable_clamped_levels=getattr(args, 'enable_clamped_levels', None),
         exiftool_profile=args.exiftool_profile,
         mediainfo_profile=args.mediainfo_profile,
         ffprobe_profile=args.ffprobe_profile,
@@ -477,6 +484,12 @@ def run_cli_mode(args):
     # Only update config if there are actual changes
     if frame_updates['outputs']['frame_analysis']:
         config_mgr.update_config('checks', frame_updates)
+        config_mgr.save_config('checks', is_last_used=True)
+
+    if args.enable_clamped_levels:
+        config_mgr.update_config('checks', {
+            'tools': {'qct_parse': {'detect_clamped_levels': (args.enable_clamped_levels == 'on')}}
+        })
         config_mgr.save_config('checks', is_last_used=True)
 
     if args.dry_run_only:

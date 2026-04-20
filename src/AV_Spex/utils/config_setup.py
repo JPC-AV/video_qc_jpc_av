@@ -320,6 +320,7 @@ class QCTParseToolConfig:
     evaluateBars: bool
     thumbExport: bool
     audio_analysis: bool = False
+    detect_clamped_levels: bool = False
 
 @dataclass
 class ToolsConfig:
@@ -394,7 +395,8 @@ class ChecksProfile:
             barsDetection=False,
             evaluateBars=False,
             thumbExport=False,
-            audio_analysis=False
+            audio_analysis=False,
+            detect_clamped_levels=False
         )
     ))
 
