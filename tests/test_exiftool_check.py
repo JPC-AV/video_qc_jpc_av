@@ -3,6 +3,7 @@ import json
 import pytest
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Any, Optional, Union
+from unittest.mock import MagicMock
 
 # Import the modules you want to test
 # Adjust the import path to match your project structure
@@ -103,6 +104,21 @@ def test_logger():
     return Logger()
 
 @pytest.fixture
+def patch_config_mgr(test_config, monkeypatch):
+    """Patch ConfigManager in exiftool_check so get_config returns the test config."""
+    mock_mgr = MagicMock()
+
+    def fake_get_config(name, _cls):
+        if name == 'spex':
+            return test_config
+        return MagicMock()
+
+    mock_mgr.get_config.side_effect = fake_get_config
+    monkeypatch.setattr('AV_Spex.checks.exiftool_check.ConfigManager',
+                        lambda: mock_mgr)
+    return mock_mgr
+
+@pytest.fixture
 def sample_json_file(tmp_path):
     """Create a sample ExifTool JSON file for testing"""
     file_path = tmp_path / "sample_exiftool.json"
@@ -112,8 +128,12 @@ def sample_json_file(tmp_path):
 
 @pytest.fixture
 def sample_exif_data():
-    """Create sample exiftool data for testing"""
-    return SAMPLE_EXIFTOOL_JSON.copy()
+    """Create sample exiftool data that matches the test config's expected values"""
+    data = SAMPLE_EXIFTOOL_JSON.copy()
+    # Override DisplayWidth/Height to match the expected aspect ratio (4:3)
+    data["DisplayWidth"] = 4
+    data["DisplayHeight"] = 3
+    return data
 
 @pytest.fixture
 def mismatched_exif_data():
@@ -168,20 +188,16 @@ def test_parse_exiftool_json_missing_file(monkeypatch):
     assert exif_data == {}
 
 # Test check_exif_spex with matching values
-def test_check_exif_spex_matching(sample_exif_data, test_config, monkeypatch):
-    # Monkeypatch the config and logger
-    monkeypatch.setattr('AV_Spex.checks.exiftool_check.spex_config', test_config)
+def test_check_exif_spex_matching(sample_exif_data, patch_config_mgr, monkeypatch):
     monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
-    
+
     differences = check_exif_spex(sample_exif_data)
     assert differences == {}  # No differences expected
 
 # Test check_exif_spex with mismatching values
-def test_check_exif_spex_mismatching(mismatched_exif_data, test_config, monkeypatch):
-    # Monkeypatch the config and logger
-    monkeypatch.setattr('AV_Spex.checks.exiftool_check.spex_config', test_config)
+def test_check_exif_spex_mismatching(mismatched_exif_data, patch_config_mgr, monkeypatch):
     monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
-    
+
     differences = check_exif_spex(mismatched_exif_data)
     
     # Check that differences were detected
@@ -199,9 +215,7 @@ def test_check_exif_spex_mismatching(mismatched_exif_data, test_config, monkeypa
     assert differences["CodecID"][0] == "A_AAC"  # actual value
 
 # Test handling list of acceptable values
-def test_check_exif_spex_list_values(sample_exif_data, test_config, monkeypatch):
-    # Monkeypatch the config and logger
-    monkeypatch.setattr('AV_Spex.checks.exiftool_check.spex_config', test_config)
+def test_check_exif_spex_list_values(sample_exif_data, patch_config_mgr, monkeypatch):
     monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
     
     # CodecID is already defined as a list in test_config: ["A_FLAC", "A_PCM/INT/LIT"]
@@ -221,9 +235,7 @@ def test_check_exif_spex_list_values(sample_exif_data, test_config, monkeypatch)
     assert "CodecID" in differences  # Should not match any acceptable value
 
 # Test string normalization in comparison
-def test_check_exif_spex_string_normalization(sample_exif_data, test_config, monkeypatch):
-    # Monkeypatch the config and logger
-    monkeypatch.setattr('AV_Spex.checks.exiftool_check.spex_config', test_config)
+def test_check_exif_spex_string_normalization(sample_exif_data, patch_config_mgr, monkeypatch):
     monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
     
     # Add whitespace to a value in the data
@@ -244,9 +256,7 @@ def test_check_exif_spex_string_normalization(sample_exif_data, test_config, mon
     assert "FileType" in differences  # Should fail since MKV != mkv
 
 # Integration test for parse_exiftool function
-def test_parse_exiftool_integration(sample_json_file, test_config, monkeypatch):
-    # Monkeypatch the config and logger
-    monkeypatch.setattr('AV_Spex.checks.exiftool_check.spex_config', test_config)
+def test_parse_exiftool_integration(sample_json_file, patch_config_mgr, monkeypatch):
     monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
     
     # There will be differences related to the DisplayWidth/DisplayHeight being different

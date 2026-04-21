@@ -1,7 +1,7 @@
 import pytest
 import re
 
-from AV_Spex.utils.dir_setup import convert_wildcards_to_regex
+from AV_Spex.utils.filename_validate import convert_wildcards_to_regex
 
 
 def _pattern_matches(pattern, should_match, should_not_match):
