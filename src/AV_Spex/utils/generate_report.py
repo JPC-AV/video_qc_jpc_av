@@ -3442,15 +3442,24 @@ def generate_dropped_sample_html(frame_outputs):
     </p>
     """
 
-    # Embed spectrogram image
+    # Embed spectrogram image. The on-disk PNG is kept lossless for cv2 spike
+    # analysis in frame_analysis.py; here we transcode to JPEG in memory just
+    # for the report, which cuts the embedded payload ~5–10x with no impact on
+    # the analysis step.
     spectrogram_path = frame_outputs.get('dropped_sample_spectrogram')
     if spectrogram_path:
         try:
-            with open(spectrogram_path, "rb") as img_file:
-                encoded_img = b64encode(img_file.read()).decode()
+            import cv2
+            img = cv2.imread(str(spectrogram_path))
+            if img is None:
+                raise ValueError(f"cv2 could not read spectrogram at {spectrogram_path}")
+            ok, jpeg_bytes = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if not ok:
+                raise ValueError("cv2.imencode failed for spectrogram JPEG")
+            encoded_img = b64encode(jpeg_bytes.tobytes()).decode()
             html += f"""
             <p style="font-size: 13px; font-weight: bold; margin: 16px 0 6px 0;">Audio Spectrogram:</p>
-            <img src="data:image/png;base64,{encoded_img}"
+            <img src="data:image/jpeg;base64,{encoded_img}"
                  style="max-width: 100%; height: auto; margin: 0 0 10px 0; border: 1px solid #d0c0b0;" />
             """
         except Exception as e:
