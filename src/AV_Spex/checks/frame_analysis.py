@@ -1403,11 +1403,11 @@ class SophisticatedBorderDetector:
                 fig.text(0.5, 0.95, 'No head switching artifacts detected', ha='center', fontsize=12, weight='bold', color='green')
             
         plt.tight_layout()
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=100, bbox_inches='tight')
         plt.close()
-        
+
         self._emit_progress(100)
-        
+
         # logger.info(f"Border detection visualization saved to: {output_path}")
         return True
 
@@ -2664,7 +2664,7 @@ class DifferentialBRNGAnalyzer:
             # Save thumbnail
             thumb_filename = f"{self.video_path.stem}_brng_{i:03d}_{violation.timestamp:.1f}s.jpg"
             thumb_path = output_dir / thumb_filename
-            cv2.imwrite(str(thumb_path), viz)
+            cv2.imwrite(str(thumb_path), viz, [cv2.IMWRITE_JPEG_QUALITY, 82])
             thumbnails.append(str(thumb_path))
             
             cap_h.release()
@@ -5266,7 +5266,7 @@ class EnhancedFrameAnalysis:
         fig.text(0.5, 0.97, title, ha='center', fontsize=16, weight='bold')
         
         plt.tight_layout(rect=[0, 0.06, 1, 0.96])
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=100, bbox_inches='tight')
         plt.close()
         
         return True
