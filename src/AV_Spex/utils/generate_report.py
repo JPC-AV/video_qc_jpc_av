@@ -92,6 +92,18 @@ def prepare_file_section(file_path, process_function=None):
     return file_content, file_name
 
 
+def image_to_data_uri(image_path, mime_type='image/png'):
+    """Read a local image file and return it as a base64 data URI so the
+    generated HTML renders self-contained when shared off this machine."""
+    try:
+        with open(image_path, 'rb') as f:
+            encoded = b64encode(f.read()).decode('ascii')
+        return f"data:{mime_type};base64,{encoded}"
+    except Exception as e:
+        logger.warning(f"Could not embed image at {image_path}: {e}")
+        return ""
+
+
 def parse_timestamp(timestamp_str):
     if not timestamp_str:
         return (9999, 99, 99, 99, 9999)  # Return a placeholder tuple for non-timestamp entries
@@ -3442,15 +3454,24 @@ def generate_dropped_sample_html(frame_outputs):
     </p>
     """
 
-    # Embed spectrogram image
+    # Embed spectrogram image. The on-disk PNG is kept lossless for cv2 spike
+    # analysis in frame_analysis.py; here we transcode to JPEG in memory just
+    # for the report, which cuts the embedded payload ~5–10x with no impact on
+    # the analysis step.
     spectrogram_path = frame_outputs.get('dropped_sample_spectrogram')
     if spectrogram_path:
         try:
-            with open(spectrogram_path, "rb") as img_file:
-                encoded_img = b64encode(img_file.read()).decode()
+            import cv2
+            img = cv2.imread(str(spectrogram_path))
+            if img is None:
+                raise ValueError(f"cv2 could not read spectrogram at {spectrogram_path}")
+            ok, jpeg_bytes = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if not ok:
+                raise ValueError("cv2.imencode failed for spectrogram JPEG")
+            encoded_img = b64encode(jpeg_bytes.tobytes()).decode()
             html += f"""
             <p style="font-size: 13px; font-weight: bold; margin: 16px 0 6px 0;">Audio Spectrogram:</p>
-            <img src="data:image/png;base64,{encoded_img}"
+            <img src="data:image/jpeg;base64,{encoded_img}"
                  style="max-width: 100%; height: auto; margin: 0 0 10px 0; border: 1px solid #d0c0b0;" />
             """
         except Exception as e:
@@ -4007,8 +4028,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if check_cancelled():
         return
 
-    # Determine the  path to the image file
-    logo_image_path = config_mgr.get_logo_path('av_spex_the_logo.png')
+    # Embed logo as a data URI so the report renders self-contained.
+    logo_image_path = image_to_data_uri(config_mgr.get_logo_path('av_spex_the_logo.png'))
     if signals:
         signals.report_progress.emit(60)
 
@@ -4040,7 +4061,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         </script>"""
     else:
         # Fallback: use the static eq image as before
-        eq_image_path = config_mgr.get_logo_path('germfree_eq.png')
+        eq_image_path = image_to_data_uri(config_mgr.get_logo_path('germfree_eq.png'))
         color_strip_src = eq_image_path
         color_strip_store = (
             f'<img src="{eq_image_path}" alt="AV Spex Graphic EQ Logo" '
@@ -4081,7 +4102,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         </script>"""
     else:
         # Fallback: If generation fails, use the static logo as a divider (similar to eq_image_path)
-        eq_image_path = config_mgr.get_logo_path('germfree_eq.png') # Reusing your existing fallback
+        eq_image_path = image_to_data_uri(config_mgr.get_logo_path('germfree_eq.png'))
         waveform_store = f'<img src="{eq_image_path}" alt="AV Spex Logo" style="width: 10%; display: none;">'
         waveform_divider = f'<div style="text-align: center;"><img src="{eq_image_path}" style="width: 10%;"></div>'
         waveform_init_script = ""

@@ -1403,11 +1403,11 @@ class SophisticatedBorderDetector:
                 fig.text(0.5, 0.95, 'No head switching artifacts detected', ha='center', fontsize=12, weight='bold', color='green')
             
         plt.tight_layout()
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=100, bbox_inches='tight')
         plt.close()
-        
+
         self._emit_progress(100)
-        
+
         # logger.info(f"Border detection visualization saved to: {output_path}")
         return True
 
@@ -2649,11 +2649,22 @@ class DifferentialBRNGAnalyzer:
             
             # Add labels with better visibility
             self._add_quadrant_labels(viz, w, h, padding)
-            
+
+            # Downscale oversized composites so embedded HTML reports stay
+            # small; SD-source composites (~1450 px) pass through unchanged.
+            MAX_THUMB_WIDTH = 1600
+            if viz.shape[1] > MAX_THUMB_WIDTH:
+                scale = MAX_THUMB_WIDTH / viz.shape[1]
+                viz = cv2.resize(
+                    viz,
+                    (MAX_THUMB_WIDTH, int(viz.shape[0] * scale)),
+                    interpolation=cv2.INTER_AREA,
+                )
+
             # Save thumbnail
             thumb_filename = f"{self.video_path.stem}_brng_{i:03d}_{violation.timestamp:.1f}s.jpg"
             thumb_path = output_dir / thumb_filename
-            cv2.imwrite(str(thumb_path), viz)
+            cv2.imwrite(str(thumb_path), viz, [cv2.IMWRITE_JPEG_QUALITY, 82])
             thumbnails.append(str(thumb_path))
             
             cap_h.release()
@@ -3715,7 +3726,17 @@ class EnhancedFrameAnalysis:
                                 ret, frame = thumb_cap.read()
                                 if ret and frame is not None:
                                     out_path = thumb_dir / f"run_{i:03d}_{label}.jpg"
-                                    cv2.imwrite(str(out_path), frame)
+                                    # Downscale oversized frames so embedded
+                                    # HTML reports stay small; SD passes through.
+                                    MAX_THUMB_WIDTH = 800
+                                    if frame.shape[1] > MAX_THUMB_WIDTH:
+                                        scale = MAX_THUMB_WIDTH / frame.shape[1]
+                                        frame = cv2.resize(
+                                            frame,
+                                            (MAX_THUMB_WIDTH, int(frame.shape[0] * scale)),
+                                            interpolation=cv2.INTER_AREA,
+                                        )
+                                    cv2.imwrite(str(out_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
                                     if label == 'first':
                                         run.first_frame_thumbnail = str(out_path)
                                     else:
@@ -5255,7 +5276,7 @@ class EnhancedFrameAnalysis:
         fig.text(0.5, 0.97, title, ha='center', fontsize=16, weight='bold')
         
         plt.tight_layout(rect=[0, 0.06, 1, 0.96])
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=100, bbox_inches='tight')
         plt.close()
         
         return True
