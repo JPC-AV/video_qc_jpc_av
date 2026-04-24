@@ -2649,7 +2649,18 @@ class DifferentialBRNGAnalyzer:
             
             # Add labels with better visibility
             self._add_quadrant_labels(viz, w, h, padding)
-            
+
+            # Downscale oversized composites so embedded HTML reports stay
+            # small; SD-source composites (~1450 px) pass through unchanged.
+            MAX_THUMB_WIDTH = 1600
+            if viz.shape[1] > MAX_THUMB_WIDTH:
+                scale = MAX_THUMB_WIDTH / viz.shape[1]
+                viz = cv2.resize(
+                    viz,
+                    (MAX_THUMB_WIDTH, int(viz.shape[0] * scale)),
+                    interpolation=cv2.INTER_AREA,
+                )
+
             # Save thumbnail
             thumb_filename = f"{self.video_path.stem}_brng_{i:03d}_{violation.timestamp:.1f}s.jpg"
             thumb_path = output_dir / thumb_filename
