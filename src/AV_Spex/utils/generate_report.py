@@ -3086,6 +3086,15 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 </p>
                 """
             
+            # Flex wrapper so "Violation Types Detected" and "Violation
+            # Statistics" render side-by-side.
+            viol_flex_open = bool(violations) or bool(stats or aggregate)
+            if viol_flex_open:
+                html += (
+                    '<div style="display: flex; flex-wrap: wrap; gap: 24px; '
+                    'align-items: flex-start; margin: 16px 0;">'
+                )
+
             # ── Violation Types Breakdown ──
             if violations:
                 diagnostic_counts = {}
@@ -3122,7 +3131,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                                 initial_diag_counts[key] = initial_diag_counts.get(key, 0) + 1
 
                     html += """
-                    <div style="margin: 16px 0;">
+                    <div style="flex: 1 1 320px; min-width: 0;">
                         <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Violation Types Detected</p>
                     """
                     
@@ -3202,7 +3211,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 linear_pct = aggregate.get('linear_pattern_percentage', 0)
                 
                 html += """
-                <div style="margin: 16px 0;">
+                <div style="flex: 1 1 320px; min-width: 0;">
                     <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Violation Statistics</p>
                     <table style="border-collapse: collapse; width: auto; margin: 0;">
                 """
@@ -3242,7 +3251,10 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     </table>
                 </div>
                 """
-            
+
+            if viol_flex_open:
+                html += "</div>"
+
             # ── Content Start Detection ──
             skip_info = brng_data.get('skip_info', {})
             if skip_info and skip_info.get('total_skipped_seconds', 0) > 0:
