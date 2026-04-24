@@ -2177,7 +2177,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
         return ""
 
     html = """
-    <div class="frame-analysis-section">
+    <div class="frame-analysis-section" id="section-frame-analysis">
         <h2 style="color: #0a5f1c; text-decoration: underline; margin-top: 30px;">Frame Analysis Results</h2>
     """
 
@@ -4142,6 +4142,72 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         waveform_divider = f'<div style="text-align: center;"><img src="{eq_image_path}" style="width: 10%;"></div>'
         waveform_init_script = ""
 
+    # Build a "Jump to section" table of contents from the conditional flags
+    # computed above. Each entry is (anchor_id, label). Order matches the
+    # render order below, so sections are listed the way they appear.
+    _has_audio_results = bool(
+        audio_clipping_html or channel_imbalance_html
+        or audible_timecode_html or audio_dropout_html
+    )
+    toc_entries = []
+    if mediaconch_csv:
+        toc_entries.append(('section-mediaconch-csv', 'MediaConch CSV'))
+    if mediaconch_policy_content and mediaconch_policy_name:
+        toc_entries.append(('section-mediaconch-policy', 'MediaConch Policy'))
+    if frame_analysis_html:
+        toc_entries.append(('section-frame-analysis', 'Frame Analysis Results'))
+    if bitplane_html:
+        toc_entries.append(('section-bitplane', 'Bitplane Check'))
+    if duplicate_frame_html:
+        toc_entries.append(('section-duplicate-frame', 'Duplicate Frame Detection'))
+    if no_qct_parse_files:
+        toc_entries.append(('section-qct-parse-notice', 'QCT-Parse Analysis'))
+    if colorbars_html:
+        toc_entries.append(('section-colorbars', 'Color Bars Detection'))
+    if colorbars_eval_html:
+        toc_entries.append(('section-colorbars-eval', 'Colorbars Threshold Evaluation'))
+    if clamped_levels_html:
+        toc_entries.append(('section-clamped-levels', 'Clamped Levels Detection'))
+    if _has_audio_results:
+        toc_entries.append(('section-audio-analysis', 'Audio Analysis Results'))
+    if dropped_sample_html:
+        toc_entries.append(('section-dropped-sample', 'Dropped Sample Detection'))
+    if difference_csv:
+        toc_entries.append(('section-difference-csv', 'Difference CSV'))
+    if profile_summary_html:
+        toc_entries.append(('section-profile-summary', 'QCT-Parse Profile Summary'))
+    if tags_summary_html:
+        toc_entries.append(('section-tags-summary', 'QCT-Parse Tag Check Summary'))
+    if content_summary_html_list:
+        toc_entries.append(('section-content-summary', 'QCT-Parse Content Detection'))
+    if exiftool_output_path:
+        toc_entries.append(('section-exiftool', 'ExifTool Output'))
+    if mediainfo_output_path:
+        toc_entries.append(('section-mediainfo', 'MediaInfo Output'))
+    if ffprobe_output_path:
+        toc_entries.append(('section-ffprobe', 'FFprobe Output'))
+
+    if toc_entries:
+        toc_links = ''.join(
+            f'<li style="margin: 0;">'
+            f'<a href="#{anchor}" style="color: #378d6a; text-decoration: none; '
+            f'font-size: 13px;">{label}</a></li>'
+            for anchor, label in toc_entries
+        )
+        toc_html = (
+            '<nav aria-label="Report sections" '
+            'style="background-color: #f5e9e3; border: 1px solid #4d2b12; '
+            'border-radius: 4px; padding: 12px 16px; margin: 15px 0;">'
+            '<p style="font-weight: bold; margin: 0 0 8px 0; color: #4d2b12; '
+            'font-size: 14px;">Jump to section</p>'
+            '<ul style="list-style: none; padding: 0; margin: 0; '
+            'display: flex; flex-wrap: wrap; gap: 6px 18px;">'
+            f'{toc_links}'
+            '</ul></nav>'
+        )
+    else:
+        toc_html = ''
+
     # HTML template with JavaScript functions
     html_template = f"""
     <!DOCTYPE html>
@@ -4234,6 +4300,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
             .cell-mismatch {{
                 background-color: #ff9999;
             }}
+            [id^="section-"] {{
+                scroll-margin-top: 16px;
+            }}
         </style>
         <script>
         function openImage(imgData, caption) {{
@@ -4275,6 +4344,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h2>{video_id}</h2>
         {color_strip_store}
         {waveform_store}
+        {toc_html}
     """
 
     if check_cancelled():
@@ -4287,14 +4357,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if mediaconch_csv:
         html_template += f"""
-        <h3>{mediaconch_csv_filename}</h3>
+        <h3 id="section-mediaconch-csv">{mediaconch_csv_filename}</h3>
         {mc_csv_html}
         """
 
     # Add MediaConch policy section if available - NOW WITH COLLAPSIBLE FUNCTIONALITY
     if mediaconch_policy_content and mediaconch_policy_name:
         html_template += f"""
-        <h3>MediaConch Policy File: {mediaconch_policy_name}</h3>
+        <h3 id="section-mediaconch-policy">MediaConch Policy File: {mediaconch_policy_name}</h3>
         <a id="link_mediaconch_policy" href="javascript:void(0);" onclick="toggleContent('mediaconch_policy', 'Show policy content ▼', 'Hide policy content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show policy content ▼</a>
         <div id="mediaconch_policy" class="xml-content" style="display: none;">{mediaconch_policy_content}</div>
         """
@@ -4311,12 +4381,13 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         )
         if bitplane_html:
             html_template += (
-                '<div style="flex: 1 1 380px; min-width: 0;">'
+                '<div id="section-bitplane" style="flex: 1 1 380px; min-width: 0;">'
                 f'{bitplane_html}</div>'
             )
         if duplicate_frame_html:
             html_template += (
-                '<div style="flex: 2 1 600px; min-width: 0; overflow-x: auto;">'
+                '<div id="section-duplicate-frame" '
+                'style="flex: 2 1 600px; min-width: 0; overflow-x: auto;">'
                 f'{duplicate_frame_html}</div>'
             )
         html_template += '</div>'
@@ -4327,7 +4398,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Rest of the HTML template remains the same...
     if no_qct_parse_files:
         html_template += """
-        <h3>QCT-Parse Analysis</h3>
+        <h3 id="section-qct-parse-notice">QCT-Parse Analysis</h3>
         <div style="background-color: #fff3cd; padding: 15px; border: 1px solid #856404; margin: 10px 0; border-radius: 5px;">
             <p style="margin: 0; color: #856404;"><strong>Information:</strong> QCT-Parse analysis was not performed for this video. Quality control analysis sections are not available in this report.</p>
         </div>
@@ -4339,7 +4410,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         else:
             colorbars_header = f"SMPTE Colorbars vs {video_id} Colorbars"
         html_template += f"""
-        <h3>{colorbars_header}</h3>
+        <h3 id="section-colorbars">{colorbars_header}</h3>
         {colorbars_html}
         """
 
@@ -4349,13 +4420,13 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         else:
             eval_header = "Values relative to colorbar's thresholds"
         html_template += f"""
-        <h3>{eval_header}</h3>
+        <h3 id="section-colorbars-eval">{eval_header}</h3>
         {colorbars_eval_html}
         """
 
     if clamped_levels_html:
         html_template += f"""
-        <h3>Clamped Levels Detection</h3>
+        <h3 id="section-clamped-levels">Clamped Levels Detection</h3>
         {clamped_levels_html}
         """
 
@@ -4366,8 +4437,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if has_audio_results:
         html_template += (
-            '<h2 style="color: #0a5f1c; text-decoration: underline; '
-            'margin-top: 30px;">Audio Analysis Results</h2>'
+            '<h2 id="section-audio-analysis" style="color: #0a5f1c; '
+            'text-decoration: underline; margin-top: 30px;">'
+            'Audio Analysis Results</h2>'
         )
         html_template += waveform_divider
 
@@ -4418,34 +4490,37 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += waveform_divider
 
     if dropped_sample_html:
-        html_template += dropped_sample_html
+        html_template += f'<div id="section-dropped-sample">{dropped_sample_html}</div>'
 
     if difference_csv:
         html_template += f"""
-        <h3>{difference_csv_filename}</h3>
+        <h3 id="section-difference-csv">{difference_csv_filename}</h3>
         {diff_csv_html}
         """
 
     if profile_summary_html:
         html_template += f"""
-        <h3>qct-parse Profile Summary</h3>
+        <h3 id="section-profile-summary">qct-parse Profile Summary</h3>
         <div style="white-space: nowrap;">
             {profile_summary_html}
         </div>
         """
-    
+
     if tags_summary_html:
         html_template += f"""
-        <h3>qct-parse Tag Check Summary</h3>
+        <h3 id="section-tags-summary">qct-parse Tag Check Summary</h3>
         <div style="white-space: nowrap;">
             {tags_summary_html}
         </div>
         """
 
     if content_summary_html_list:
-        for content_summary_html in content_summary_html_list:
+        for idx, content_summary_html in enumerate(content_summary_html_list):
+            # Only first content-detection block gets the anchor id so TOC
+            # links resolve even when multiple blocks render.
+            heading_id = ' id="section-content-summary"' if idx == 0 else ''
             html_template += f"""
-            <h3>qct-parse Content Detection</h3>
+            <h3{heading_id}>qct-parse Content Detection</h3>
             <div style="white-space: nowrap;">
                 {content_summary_html}
             </div>
@@ -4454,21 +4529,21 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Modified sections with collapsible functionality
     if exiftool_output_path:
         html_template += f"""
-        <h3>{exif_file_filename}</h3>
+        <h3 id="section-exiftool">{exif_file_filename}</h3>
         <a id="link_exiftool" href="javascript:void(0);" onclick="toggleContent('exiftool', 'Show content ▼', 'Hide content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show content ▼</a>
         <div id="exiftool" class="metadata-content" style="display: none;">{exif_file_content}</div>
         """
 
     if mediainfo_output_path:
         html_template += f"""
-        <h3>{mi_file_filename}</h3>
+        <h3 id="section-mediainfo">{mi_file_filename}</h3>
         <a id="link_mediainfo" href="javascript:void(0);" onclick="toggleContent('mediainfo', 'Show content ▼', 'Hide content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show content ▼</a>
         <div id="mediainfo" class="metadata-content" style="display: none;">{mi_file_content}</div>
         """
 
     if ffprobe_output_path:
         html_template += f"""
-        <h3>{ffprobe_file_filename}</h3>
+        <h3 id="section-ffprobe">{ffprobe_file_filename}</h3>
         <a id="link_ffprobe" href="javascript:void(0);" onclick="toggleContent('ffprobe', 'Show content ▼', 'Hide content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show content ▼</a>
         <div id="ffprobe" class="metadata-content" style="display: none;">{ffprobe_file_content}</div>
         """
