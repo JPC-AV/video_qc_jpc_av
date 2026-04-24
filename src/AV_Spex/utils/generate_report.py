@@ -4359,32 +4359,62 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         {clamped_levels_html}
         """
 
-    if audio_clipping_html:
+    has_audio_results = bool(
+        audio_clipping_html or channel_imbalance_html
+        or audible_timecode_html or audio_dropout_html
+    )
+
+    if has_audio_results:
+        html_template += (
+            '<h2 style="color: #0a5f1c; text-decoration: underline; '
+            'margin-top: 30px;">Audio Analysis Results</h2>'
+        )
         html_template += waveform_divider
-        html_template += f"""
-        <h3>Audio Clipping Detection</h3>
-        {audio_clipping_html}
-        """
 
-    if channel_imbalance_html:
-        html_template += f"""
-        <h3>Channel Imbalance Analysis</h3>
-        {channel_imbalance_html}
-        """
+        # Clipping + Channel Imbalance side-by-side
+        if audio_clipping_html or channel_imbalance_html:
+            html_template += (
+                '<div style="display: flex; flex-wrap: wrap; gap: 24px; '
+                'align-items: flex-start; margin: 16px 0;">'
+            )
+            if audio_clipping_html:
+                html_template += f"""
+                <div style="flex: 1 1 420px; min-width: 0;">
+                    <h3>Audio Clipping Detection</h3>
+                    {audio_clipping_html}
+                </div>
+                """
+            if channel_imbalance_html:
+                html_template += f"""
+                <div style="flex: 1 1 420px; min-width: 0;">
+                    <h3>Channel Imbalance Analysis</h3>
+                    {channel_imbalance_html}
+                </div>
+                """
+            html_template += '</div>'
 
-    if audible_timecode_html:
-        html_template += f"""
-        <h3>Audible Timecode Detection</h3>
-        {audible_timecode_html}
-        """
+        # Audible Timecode + Audio Dropout side-by-side
+        if audible_timecode_html or audio_dropout_html:
+            html_template += (
+                '<div style="display: flex; flex-wrap: wrap; gap: 24px; '
+                'align-items: flex-start; margin: 16px 0;">'
+            )
+            if audible_timecode_html:
+                html_template += f"""
+                <div style="flex: 1 1 420px; min-width: 0;">
+                    <h3>Audible Timecode Detection</h3>
+                    {audible_timecode_html}
+                </div>
+                """
+            if audio_dropout_html:
+                html_template += f"""
+                <div style="flex: 1 1 420px; min-width: 0;">
+                    <h3>Audio Dropout Detection</h3>
+                    {audio_dropout_html}
+                </div>
+                """
+            html_template += '</div>'
 
-    if audio_dropout_html:
-        html_template += f"""
-        <h3>Audio Dropout Detection</h3>
-        {audio_dropout_html}
-        """
-
-    if audio_clipping_html or channel_imbalance_html or audible_timecode_html or audio_dropout_html:
         html_template += waveform_divider
 
     if dropped_sample_html:
