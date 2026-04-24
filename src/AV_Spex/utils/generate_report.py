@@ -4190,18 +4190,15 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if toc_entries:
         toc_links = ''.join(
             f'<li style="margin: 0;">'
-            f'<a href="#{anchor}" style="color: #378d6a; text-decoration: none; '
-            f'font-size: 13px;">{label}</a></li>'
+            f'<a class="toc-pill" href="#{anchor}">{label}</a></li>'
             for anchor, label in toc_entries
         )
         toc_html = (
-            '<nav aria-label="Report sections" '
-            'style="background-color: #f5e9e3; border: 1px solid #4d2b12; '
-            'border-radius: 4px; padding: 12px 16px; margin: 15px 0;">'
-            '<p style="font-weight: bold; margin: 0 0 8px 0; color: #4d2b12; '
+            '<nav aria-label="Report sections" style="margin: 18px 0;">'
+            '<p style="font-weight: bold; margin: 0 0 10px 0; color: #4d2b12; '
             'font-size: 14px;">Jump to section</p>'
             '<ul style="list-style: none; padding: 0; margin: 0; '
-            'display: flex; flex-wrap: wrap; gap: 6px 18px;">'
+            'display: flex; flex-wrap: wrap; gap: 8px;">'
             f'{toc_links}'
             '</ul></nav>'
         )
@@ -4302,6 +4299,24 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
             }}
             [id^="section-"] {{
                 scroll-margin-top: 16px;
+            }}
+            .toc-pill {{
+                display: inline-block;
+                padding: 6px 14px;
+                background-color: #fcfdff;
+                color: #378d6a;
+                border: 1px solid #378d6a;
+                border-radius: 999px;
+                text-decoration: none;
+                font-size: 13px;
+                font-weight: 500;
+                transition: background-color 0.15s ease, color 0.15s ease;
+            }}
+            .toc-pill:hover,
+            .toc-pill:focus {{
+                background-color: #378d6a;
+                color: #fcfdff;
+                outline: none;
             }}
         </style>
         <script>
