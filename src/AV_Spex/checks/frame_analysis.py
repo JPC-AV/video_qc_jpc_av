@@ -3726,7 +3726,17 @@ class EnhancedFrameAnalysis:
                                 ret, frame = thumb_cap.read()
                                 if ret and frame is not None:
                                     out_path = thumb_dir / f"run_{i:03d}_{label}.jpg"
-                                    cv2.imwrite(str(out_path), frame)
+                                    # Downscale oversized frames so embedded
+                                    # HTML reports stay small; SD passes through.
+                                    MAX_THUMB_WIDTH = 800
+                                    if frame.shape[1] > MAX_THUMB_WIDTH:
+                                        scale = MAX_THUMB_WIDTH / frame.shape[1]
+                                        frame = cv2.resize(
+                                            frame,
+                                            (MAX_THUMB_WIDTH, int(frame.shape[0] * scale)),
+                                            interpolation=cv2.INTER_AREA,
+                                        )
+                                    cv2.imwrite(str(out_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
                                     if label == 'first':
                                         run.first_frame_thumbnail = str(out_path)
                                     else:
