@@ -2028,136 +2028,158 @@ def _seconds_to_display(seconds):
     return f"{minutes}:{secs:04.1f}"
 
 
+def generate_bitplane_html(frame_outputs):
+    """
+    Generate HTML section for bitplane check results.
+
+    Rendered separately from generate_frame_analysis_html so the bitplane
+    section can be placed side-by-side with duplicate frame detection in the
+    report layout.
+
+    Args:
+        frame_outputs (dict): Dictionary of frame analysis output paths/data.
+
+    Returns:
+        str: HTML fragment, or empty string if no bitplane data.
+    """
+    if not frame_outputs:
+        return ""
+    bitplane_data = frame_outputs.get('bitplane_check')
+    if not bitplane_data:
+        return ""
+
+    status = bitplane_data.get('status', 'unknown')
+    message = bitplane_data.get('message', '')
+    frames_sampled = bitplane_data.get('frames_sampled', 0)
+    overall_avgs = bitplane_data.get('overall_bitplane_averages', {})
+    channels = bitplane_data.get('channels', {})
+
+    if status == 'truncated':
+        status_color = '#cc0000'
+        status_icon = '&#x26A0;'
+    elif status == 'partial_truncation':
+        status_color = '#cc6600'
+        status_icon = '&#x26A0;'
+    elif status == 'valid':
+        status_color = '#0a5f1c'
+        status_icon = '&#x2705;'
+    else:
+        status_color = '#666666'
+        status_icon = '&#x2753;'
+
+    html = "<h3 style='color: #bf971b;'>Bitplane Check (7th–10th Bit Verification)</h3>"
+    html += f"""
+    <p style="font-size: 14px; color: {status_color}; font-weight: bold;">
+        {status_icon} {message}
+    </p>
+    <p style="font-size: 13px; color: #555;">Frames sampled: {frames_sampled} (evenly spaced across the full video duration)</p>
+    """
+
+    if overall_avgs:
+        html += """
+        <table style="border-collapse: collapse; margin: 10px 0; font-size: 13px;">
+            <tr style="background-color: #f0ebe4;">
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: left;">Bitplane</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise (all channels)</th>
+            </tr>
+        """
+        for bp_name, avg in overall_avgs.items():
+            val_str = f"{avg:.6f}" if avg is not None else "N/A"
+            html += f"""
+            <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{val_str}</td>
+            </tr>
+            """
+        html += "</table>"
+
+    bit_order = bitplane_data.get('bit_order_check')
+    if bit_order:
+        bo_status = bit_order.get('status', '')
+        bo_message = bit_order.get('message', '')
+        avg_lsb = bit_order.get('avg_9th_10th', 0)
+        avg_msb = bit_order.get('avg_7th_8th', 0)
+        if bo_status == 'expected':
+            bo_color = '#0a5f1c'
+            bo_icon = '&#x2705;'
+        else:
+            bo_color = '#cc6600'
+            bo_icon = '&#x26A0;'
+        html += f"""
+        <p style="font-size: 13px; color: {bo_color}; margin: 8px 0;">
+            {bo_icon} {bo_message}
+        </p>
+        <p style="font-size: 13px; color: #555; margin: 4px 0 12px 0;">
+            Avg noise — 9th/10th bits: {avg_lsb:.6f} | 7th/8th bits: {avg_msb:.6f}
+        </p>
+        """
+
+    if channels:
+        html += """
+        <a id="link_bitplane_detail" href="javascript:void(0);"
+           onclick="toggleContent('bitplane_detail', 'Per-channel detail ▼', 'Per-channel detail ▲')"
+           style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block; font-size: 13px;">
+           Per-channel detail ▼</a>
+        <div id="bitplane_detail" style="display: none; margin: 0 0 16px 0;">
+        <table style="border-collapse: collapse; font-size: 13px;">
+            <tr style="background-color: #f0ebe4;">
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Channel</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Bitplane</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">Status</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Max Noise</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Zero Frames</th>
+            </tr>
+        """
+        for ch_name, bp_data in channels.items():
+            for bp_name, bp_result in bp_data.items():
+                bp_status = bp_result.get('status', 'unknown')
+                avg_noise = bp_result.get('average_noise', 0)
+                max_noise = bp_result.get('max_noise', 0)
+                zero_pct = bp_result.get('zero_percentage', 0)
+                row_color = '#fce4e4' if bp_status == 'empty' else ''
+                style = f' style="background-color: {row_color};"' if row_color else ''
+                html += f"""
+                <tr{style}>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{ch_name}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">
+                        {'&#x274C; empty' if bp_status == 'empty' else '&#x2705; active'}
+                    </td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_noise:.6f}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{max_noise:.6f}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{zero_pct:.1f}%</td>
+                </tr>
+                """
+        html += "</table></div>"
+
+    return html
+
+
 def generate_frame_analysis_html(frame_outputs, video_id):
     """
     Generate HTML section for frame analysis results.
-    
+
     Args:
         frame_outputs (dict): Dictionary of frame analysis output paths
         video_id (str): Video identifier
-        
+
     Returns:
         str: HTML string for frame analysis section
     """
-    if not any(frame_outputs.values()):
+    has_content = (
+        frame_outputs.get('border_visualization') or
+        frame_outputs.get('border_data') or
+        frame_outputs.get('brng_analysis') or
+        frame_outputs.get('signalstats_analysis')
+    )
+    if not has_content:
         return ""
-    
+
     html = """
     <div class="frame-analysis-section">
         <h2 style="color: #0a5f1c; text-decoration: underline; margin-top: 30px;">Frame Analysis Results</h2>
     """
-    
-    # Bitplane Check Section
-    bitplane_data = frame_outputs.get('bitplane_check')
-    if bitplane_data:
-        status = bitplane_data.get('status', 'unknown')
-        message = bitplane_data.get('message', '')
-        frames_sampled = bitplane_data.get('frames_sampled', 0)
-        overall_avgs = bitplane_data.get('overall_bitplane_averages', {})
-        channels = bitplane_data.get('channels', {})
-
-        # Choose color based on status
-        if status == 'truncated':
-            status_color = '#cc0000'
-            status_icon = '&#x26A0;'  # warning triangle
-        elif status == 'partial_truncation':
-            status_color = '#cc6600'
-            status_icon = '&#x26A0;'
-        elif status == 'valid':
-            status_color = '#0a5f1c'
-            status_icon = '&#x2705;'  # checkmark
-        else:
-            status_color = '#666666'
-            status_icon = '&#x2753;'  # question mark
-
-        html += "<h3 style='color: #bf971b;'>Bitplane Check (7th–10th Bit Verification)</h3>"
-        html += f"""
-        <p style="font-size: 14px; color: {status_color}; font-weight: bold;">
-            {status_icon} {message}
-        </p>
-        <p style="font-size: 13px; color: #555;">Frames sampled: {frames_sampled} (evenly spaced across the full video duration)</p>
-        """
-
-        # Overall averages
-        if overall_avgs:
-            html += """
-            <table style="border-collapse: collapse; margin: 10px 0; font-size: 13px;">
-                <tr style="background-color: #f0ebe4;">
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: left;">Bitplane</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise (all channels)</th>
-                </tr>
-            """
-            for bp_name, avg in overall_avgs.items():
-                val_str = f"{avg:.6f}" if avg is not None else "N/A"
-                html += f"""
-                <tr>
-                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
-                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{val_str}</td>
-                </tr>
-                """
-            html += "</table>"
-
-        # Bit order comparison (9th/10th vs 7th/8th)
-        bit_order = bitplane_data.get('bit_order_check')
-        if bit_order:
-            bo_status = bit_order.get('status', '')
-            bo_message = bit_order.get('message', '')
-            avg_lsb = bit_order.get('avg_9th_10th', 0)
-            avg_msb = bit_order.get('avg_7th_8th', 0)
-            if bo_status == 'expected':
-                bo_color = '#0a5f1c'
-                bo_icon = '&#x2705;'
-            else:
-                bo_color = '#cc6600'
-                bo_icon = '&#x26A0;'
-            html += f"""
-            <p style="font-size: 13px; color: {bo_color}; margin: 8px 0;">
-                {bo_icon} {bo_message}
-            </p>
-            <p style="font-size: 13px; color: #555; margin: 4px 0 12px 0;">
-                Avg noise — 9th/10th bits: {avg_lsb:.6f} | 7th/8th bits: {avg_msb:.6f}
-            </p>
-            """
-
-        # Per-channel detail (collapsible)
-        if channels:
-            html += """
-            <a id="link_bitplane_detail" href="javascript:void(0);"
-               onclick="toggleContent('bitplane_detail', 'Per-channel detail ▼', 'Per-channel detail ▲')"
-               style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block; font-size: 13px;">
-               Per-channel detail ▼</a>
-            <div id="bitplane_detail" style="display: none; margin: 0 0 16px 0;">
-            <table style="border-collapse: collapse; font-size: 13px;">
-                <tr style="background-color: #f0ebe4;">
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Channel</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Bitplane</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">Status</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Max Noise</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Zero Frames</th>
-                </tr>
-            """
-            for ch_name, bp_data in channels.items():
-                for bp_name, bp_result in bp_data.items():
-                    bp_status = bp_result.get('status', 'unknown')
-                    avg_noise = bp_result.get('average_noise', 0)
-                    max_noise = bp_result.get('max_noise', 0)
-                    zero_pct = bp_result.get('zero_percentage', 0)
-                    row_color = '#fce4e4' if bp_status == 'empty' else ''
-                    style = f' style="background-color: {row_color};"' if row_color else ''
-                    html += f"""
-                    <tr{style}>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{ch_name}</td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">
-                            {'&#x274C; empty' if bp_status == 'empty' else '&#x2705; active'}
-                        </td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_noise:.6f}</td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{max_noise:.6f}</td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{zero_pct:.1f}%</td>
-                    </tr>
-                    """
-            html += "</table></div>"
 
     # Border Detection Section
     if frame_outputs['border_visualization'] or frame_outputs['border_data']:
@@ -4011,6 +4033,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     clamped_levels_html = make_clamped_levels_html(clamped_levels_csv) if clamped_levels_csv else None
     dropped_sample_html = generate_dropped_sample_html(frame_outputs) if frame_outputs else ""
     duplicate_frame_html = generate_duplicate_frame_html(frame_outputs) if frame_outputs else ""
+    bitplane_html = generate_bitplane_html(frame_outputs) if frame_outputs else ""
 
     existing_thumbs = find_qct_thumbs(report_directory)
     no_qct_parse_files = (
@@ -4267,12 +4290,26 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if frame_analysis_html:
         html_template += frame_analysis_html
 
-    # Duplicate frame detection: last subsection of the frame analysis block,
-    # placed after BRNG analysis and before the qct-parse color bars section.
-    if duplicate_frame_html:
-        html_template += duplicate_frame_html
+    # Bitplane check and duplicate frame detection render side-by-side so
+    # each fills the vertical space of the taller section.
+    if bitplane_html or duplicate_frame_html:
+        html_template += (
+            '<div style="display: flex; flex-wrap: wrap; gap: 24px; '
+            'align-items: flex-start; margin-top: 20px;">'
+        )
+        if bitplane_html:
+            html_template += (
+                '<div style="flex: 1 1 380px; min-width: 0;">'
+                f'{bitplane_html}</div>'
+            )
+        if duplicate_frame_html:
+            html_template += (
+                '<div style="flex: 2 1 600px; min-width: 0; overflow-x: auto;">'
+                f'{duplicate_frame_html}</div>'
+            )
+        html_template += '</div>'
 
-    if frame_analysis_html or duplicate_frame_html:
+    if frame_analysis_html or bitplane_html or duplicate_frame_html:
         html_template += color_strip_divider
 
     # Rest of the HTML template remains the same...
