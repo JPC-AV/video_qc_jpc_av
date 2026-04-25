@@ -2028,136 +2028,158 @@ def _seconds_to_display(seconds):
     return f"{minutes}:{secs:04.1f}"
 
 
+def generate_bitplane_html(frame_outputs):
+    """
+    Generate HTML section for bitplane check results.
+
+    Rendered separately from generate_frame_analysis_html so the bitplane
+    section can be placed side-by-side with duplicate frame detection in the
+    report layout.
+
+    Args:
+        frame_outputs (dict): Dictionary of frame analysis output paths/data.
+
+    Returns:
+        str: HTML fragment, or empty string if no bitplane data.
+    """
+    if not frame_outputs:
+        return ""
+    bitplane_data = frame_outputs.get('bitplane_check')
+    if not bitplane_data:
+        return ""
+
+    status = bitplane_data.get('status', 'unknown')
+    message = bitplane_data.get('message', '')
+    frames_sampled = bitplane_data.get('frames_sampled', 0)
+    overall_avgs = bitplane_data.get('overall_bitplane_averages', {})
+    channels = bitplane_data.get('channels', {})
+
+    if status == 'truncated':
+        status_color = '#cc0000'
+        status_icon = '&#x26A0;'
+    elif status == 'partial_truncation':
+        status_color = '#cc6600'
+        status_icon = '&#x26A0;'
+    elif status == 'valid':
+        status_color = '#0a5f1c'
+        status_icon = '&#x2705;'
+    else:
+        status_color = '#666666'
+        status_icon = '&#x2753;'
+
+    html = "<h3 style='color: #bf971b;'>Bitplane Check (7th–10th Bit Verification)</h3>"
+    html += f"""
+    <p style="font-size: 14px; color: {status_color}; font-weight: bold;">
+        {status_icon} {message}
+    </p>
+    <p style="font-size: 13px; color: #555;">Frames sampled: {frames_sampled} (evenly spaced across the full video duration)</p>
+    """
+
+    if overall_avgs:
+        html += """
+        <table style="border-collapse: collapse; margin: 10px 0; font-size: 13px;">
+            <tr style="background-color: #f0ebe4;">
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: left;">Bitplane</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise (all channels)</th>
+            </tr>
+        """
+        for bp_name, avg in overall_avgs.items():
+            val_str = f"{avg:.6f}" if avg is not None else "N/A"
+            html += f"""
+            <tr>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{val_str}</td>
+            </tr>
+            """
+        html += "</table>"
+
+    bit_order = bitplane_data.get('bit_order_check')
+    if bit_order:
+        bo_status = bit_order.get('status', '')
+        bo_message = bit_order.get('message', '')
+        avg_lsb = bit_order.get('avg_9th_10th', 0)
+        avg_msb = bit_order.get('avg_7th_8th', 0)
+        if bo_status == 'expected':
+            bo_color = '#0a5f1c'
+            bo_icon = '&#x2705;'
+        else:
+            bo_color = '#cc6600'
+            bo_icon = '&#x26A0;'
+        html += f"""
+        <p style="font-size: 13px; color: {bo_color}; margin: 8px 0;">
+            {bo_icon} {bo_message}
+        </p>
+        <p style="font-size: 13px; color: #555; margin: 4px 0 12px 0;">
+            Avg noise — 9th/10th bits: {avg_lsb:.6f} | 7th/8th bits: {avg_msb:.6f}
+        </p>
+        """
+
+    if channels:
+        html += """
+        <a id="link_bitplane_detail" href="javascript:void(0);"
+           onclick="toggleContent('bitplane_detail', 'Per-channel detail ▼', 'Per-channel detail ▲')"
+           style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block; font-size: 13px;">
+           Per-channel detail ▼</a>
+        <div id="bitplane_detail" style="display: none; margin: 0 0 16px 0;">
+        <table style="border-collapse: collapse; font-size: 13px;">
+            <tr style="background-color: #f0ebe4;">
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Channel</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Bitplane</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">Status</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Max Noise</th>
+                <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Zero Frames</th>
+            </tr>
+        """
+        for ch_name, bp_data in channels.items():
+            for bp_name, bp_result in bp_data.items():
+                bp_status = bp_result.get('status', 'unknown')
+                avg_noise = bp_result.get('average_noise', 0)
+                max_noise = bp_result.get('max_noise', 0)
+                zero_pct = bp_result.get('zero_percentage', 0)
+                row_color = '#fce4e4' if bp_status == 'empty' else ''
+                style = f' style="background-color: {row_color};"' if row_color else ''
+                html += f"""
+                <tr{style}>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{ch_name}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">
+                        {'&#x274C; empty' if bp_status == 'empty' else '&#x2705; active'}
+                    </td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_noise:.6f}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{max_noise:.6f}</td>
+                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{zero_pct:.1f}%</td>
+                </tr>
+                """
+        html += "</table></div>"
+
+    return html
+
+
 def generate_frame_analysis_html(frame_outputs, video_id):
     """
     Generate HTML section for frame analysis results.
-    
+
     Args:
         frame_outputs (dict): Dictionary of frame analysis output paths
         video_id (str): Video identifier
-        
+
     Returns:
         str: HTML string for frame analysis section
     """
-    if not any(frame_outputs.values()):
+    has_content = (
+        frame_outputs.get('border_visualization') or
+        frame_outputs.get('border_data') or
+        frame_outputs.get('brng_analysis') or
+        frame_outputs.get('signalstats_analysis')
+    )
+    if not has_content:
         return ""
-    
+
     html = """
-    <div class="frame-analysis-section">
+    <div class="frame-analysis-section" id="section-frame-analysis">
         <h2 style="color: #0a5f1c; text-decoration: underline; margin-top: 30px;">Frame Analysis Results</h2>
     """
-    
-    # Bitplane Check Section
-    bitplane_data = frame_outputs.get('bitplane_check')
-    if bitplane_data:
-        status = bitplane_data.get('status', 'unknown')
-        message = bitplane_data.get('message', '')
-        frames_sampled = bitplane_data.get('frames_sampled', 0)
-        overall_avgs = bitplane_data.get('overall_bitplane_averages', {})
-        channels = bitplane_data.get('channels', {})
-
-        # Choose color based on status
-        if status == 'truncated':
-            status_color = '#cc0000'
-            status_icon = '&#x26A0;'  # warning triangle
-        elif status == 'partial_truncation':
-            status_color = '#cc6600'
-            status_icon = '&#x26A0;'
-        elif status == 'valid':
-            status_color = '#0a5f1c'
-            status_icon = '&#x2705;'  # checkmark
-        else:
-            status_color = '#666666'
-            status_icon = '&#x2753;'  # question mark
-
-        html += "<h3 style='color: #bf971b;'>Bitplane Check (7th–10th Bit Verification)</h3>"
-        html += f"""
-        <p style="font-size: 14px; color: {status_color}; font-weight: bold;">
-            {status_icon} {message}
-        </p>
-        <p style="font-size: 13px; color: #555;">Frames sampled: {frames_sampled} (evenly spaced across the full video duration)</p>
-        """
-
-        # Overall averages
-        if overall_avgs:
-            html += """
-            <table style="border-collapse: collapse; margin: 10px 0; font-size: 13px;">
-                <tr style="background-color: #f0ebe4;">
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: left;">Bitplane</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise (all channels)</th>
-                </tr>
-            """
-            for bp_name, avg in overall_avgs.items():
-                val_str = f"{avg:.6f}" if avg is not None else "N/A"
-                html += f"""
-                <tr>
-                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
-                    <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{val_str}</td>
-                </tr>
-                """
-            html += "</table>"
-
-        # Bit order comparison (9th/10th vs 7th/8th)
-        bit_order = bitplane_data.get('bit_order_check')
-        if bit_order:
-            bo_status = bit_order.get('status', '')
-            bo_message = bit_order.get('message', '')
-            avg_lsb = bit_order.get('avg_9th_10th', 0)
-            avg_msb = bit_order.get('avg_7th_8th', 0)
-            if bo_status == 'expected':
-                bo_color = '#0a5f1c'
-                bo_icon = '&#x2705;'
-            else:
-                bo_color = '#cc6600'
-                bo_icon = '&#x26A0;'
-            html += f"""
-            <p style="font-size: 13px; color: {bo_color}; margin: 8px 0;">
-                {bo_icon} {bo_message}
-            </p>
-            <p style="font-size: 13px; color: #555; margin: 4px 0 12px 0;">
-                Avg noise — 9th/10th bits: {avg_lsb:.6f} | 7th/8th bits: {avg_msb:.6f}
-            </p>
-            """
-
-        # Per-channel detail (collapsible)
-        if channels:
-            html += """
-            <a id="link_bitplane_detail" href="javascript:void(0);"
-               onclick="toggleContent('bitplane_detail', 'Per-channel detail ▼', 'Per-channel detail ▲')"
-               style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block; font-size: 13px;">
-               Per-channel detail ▼</a>
-            <div id="bitplane_detail" style="display: none; margin: 0 0 16px 0;">
-            <table style="border-collapse: collapse; font-size: 13px;">
-                <tr style="background-color: #f0ebe4;">
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Channel</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Bitplane</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">Status</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Avg Noise</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Max Noise</th>
-                    <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Zero Frames</th>
-                </tr>
-            """
-            for ch_name, bp_data in channels.items():
-                for bp_name, bp_result in bp_data.items():
-                    bp_status = bp_result.get('status', 'unknown')
-                    avg_noise = bp_result.get('average_noise', 0)
-                    max_noise = bp_result.get('max_noise', 0)
-                    zero_pct = bp_result.get('zero_percentage', 0)
-                    row_color = '#fce4e4' if bp_status == 'empty' else ''
-                    style = f' style="background-color: {row_color};"' if row_color else ''
-                    html += f"""
-                    <tr{style}>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{ch_name}</td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{bp_name}</td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: center;">
-                            {'&#x274C; empty' if bp_status == 'empty' else '&#x2705; active'}
-                        </td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_noise:.6f}</td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{max_noise:.6f}</td>
-                        <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{zero_pct:.1f}%</td>
-                    </tr>
-                    """
-            html += "</table></div>"
 
     # Border Detection Section
     if frame_outputs['border_visualization'] or frame_outputs['border_data']:
@@ -3064,6 +3086,15 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 </p>
                 """
             
+            # Flex wrapper so "Violation Types Detected" and "Violation
+            # Statistics" render side-by-side.
+            viol_flex_open = bool(violations) or bool(stats or aggregate)
+            if viol_flex_open:
+                html += (
+                    '<div style="display: flex; flex-wrap: wrap; gap: 24px; '
+                    'align-items: flex-start; margin: 16px 0;">'
+                )
+
             # ── Violation Types Breakdown ──
             if violations:
                 diagnostic_counts = {}
@@ -3100,7 +3131,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                                 initial_diag_counts[key] = initial_diag_counts.get(key, 0) + 1
 
                     html += """
-                    <div style="margin: 16px 0;">
+                    <div style="flex: 1 1 320px; min-width: 0;">
                         <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Violation Types Detected</p>
                     """
                     
@@ -3180,7 +3211,7 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                 linear_pct = aggregate.get('linear_pattern_percentage', 0)
                 
                 html += """
-                <div style="margin: 16px 0;">
+                <div style="flex: 1 1 320px; min-width: 0;">
                     <p style="font-weight: bold; margin-bottom: 8px; color: #4d2b12;">Violation Statistics</p>
                     <table style="border-collapse: collapse; width: auto; margin: 0;">
                 """
@@ -3220,7 +3251,10 @@ def generate_frame_analysis_html(frame_outputs, video_id):
                     </table>
                 </div>
                 """
-            
+
+            if viol_flex_open:
+                html += "</div>"
+
             # ── Content Start Detection ──
             skip_info = brng_data.get('skip_info', {})
             if skip_info and skip_info.get('total_skipped_seconds', 0) > 0:
@@ -4011,6 +4045,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     clamped_levels_html = make_clamped_levels_html(clamped_levels_csv) if clamped_levels_csv else None
     dropped_sample_html = generate_dropped_sample_html(frame_outputs) if frame_outputs else ""
     duplicate_frame_html = generate_duplicate_frame_html(frame_outputs) if frame_outputs else ""
+    bitplane_html = generate_bitplane_html(frame_outputs) if frame_outputs else ""
 
     existing_thumbs = find_qct_thumbs(report_directory)
     no_qct_parse_files = (
@@ -4107,6 +4142,71 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         waveform_divider = f'<div style="text-align: center;"><img src="{eq_image_path}" style="width: 10%;"></div>'
         waveform_init_script = ""
 
+    # Build a "Jump to section" table of contents from the conditional flags
+    # computed above. Each entry is (anchor_id, label). Order matches the
+    # render order below, so sections are listed the way they appear.
+    _has_audio_results = bool(
+        audio_clipping_html or channel_imbalance_html
+        or audible_timecode_html or audio_dropout_html
+    )
+    toc_entries = []
+    if mediaconch_csv:
+        toc_entries.append(('section-mediaconch-csv', 'MediaConch CSV'))
+    if mediaconch_policy_content and mediaconch_policy_name:
+        toc_entries.append(('section-mediaconch-policy', 'MediaConch Policy'))
+    if frame_analysis_html:
+        toc_entries.append(('section-frame-analysis', 'Frame Analysis Results'))
+    if bitplane_html:
+        toc_entries.append(('section-bitplane', 'Bitplane Check'))
+    if duplicate_frame_html:
+        toc_entries.append(('section-duplicate-frame', 'Duplicate Frame Detection'))
+    if no_qct_parse_files:
+        toc_entries.append(('section-qct-parse-notice', 'QCT-Parse Analysis'))
+    if colorbars_html:
+        toc_entries.append(('section-colorbars', 'Color Bars Detection'))
+    if colorbars_eval_html:
+        toc_entries.append(('section-colorbars-eval', 'Colorbars Threshold Evaluation'))
+    if clamped_levels_html:
+        toc_entries.append(('section-clamped-levels', 'Clamped Levels Detection'))
+    if _has_audio_results:
+        toc_entries.append(('section-audio-analysis', 'Audio Analysis Results'))
+    if dropped_sample_html:
+        toc_entries.append(('section-dropped-sample', 'Dropped Sample Detection'))
+    if difference_csv:
+        toc_entries.append(('section-difference-csv', 'Difference CSV'))
+    if profile_summary_html:
+        toc_entries.append(('section-profile-summary', 'QCT-Parse Profile Summary'))
+    if tags_summary_html:
+        toc_entries.append(('section-tags-summary', 'QCT-Parse Tag Check Summary'))
+    if content_summary_html_list:
+        toc_entries.append(('section-content-summary', 'QCT-Parse Content Detection'))
+    if exiftool_output_path:
+        toc_entries.append(('section-exiftool', 'ExifTool Output'))
+    if mediainfo_output_path:
+        toc_entries.append(('section-mediainfo', 'MediaInfo Output'))
+    if ffprobe_output_path:
+        toc_entries.append(('section-ffprobe', 'FFprobe Output'))
+
+    if toc_entries:
+        toc_links = ''.join(
+            f'<li style="margin: 0;">'
+            f'<a class="toc-pill" href="#{anchor}">{label}</a></li>'
+            for anchor, label in toc_entries
+        )
+        toc_html = (
+            '<nav aria-label="Report sections" '
+            'style="background-color: #f5e9e3; border: 1px solid #4d2b12; '
+            'border-radius: 4px; padding: 14px 18px; margin: 18px 0;">'
+            '<p style="font-weight: bold; margin: 0 0 10px 0; color: #4d2b12; '
+            'font-size: 14px;">Jump to section</p>'
+            '<ul style="list-style: none; padding: 0; margin: 0; '
+            'display: flex; flex-wrap: wrap; gap: 8px;">'
+            f'{toc_links}'
+            '</ul></nav>'
+        )
+    else:
+        toc_html = ''
+
     # HTML template with JavaScript functions
     html_template = f"""
     <!DOCTYPE html>
@@ -4199,6 +4299,27 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
             .cell-mismatch {{
                 background-color: #ff9999;
             }}
+            [id^="section-"] {{
+                scroll-margin-top: 16px;
+            }}
+            .toc-pill {{
+                display: inline-block;
+                padding: 6px 14px;
+                background-color: #fcfdff;
+                color: #378d6a;
+                border: 1px solid #378d6a;
+                border-radius: 999px;
+                text-decoration: none;
+                font-size: 13px;
+                font-weight: 500;
+                transition: background-color 0.15s ease, color 0.15s ease;
+            }}
+            .toc-pill:hover,
+            .toc-pill:focus {{
+                background-color: #378d6a;
+                color: #fcfdff;
+                outline: none;
+            }}
         </style>
         <script>
         function openImage(imgData, caption) {{
@@ -4240,6 +4361,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h2>{video_id}</h2>
         {color_strip_store}
         {waveform_store}
+        {toc_html}
     """
 
     if check_cancelled():
@@ -4252,14 +4374,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if mediaconch_csv:
         html_template += f"""
-        <h3>{mediaconch_csv_filename}</h3>
+        <h3 id="section-mediaconch-csv">{mediaconch_csv_filename}</h3>
         {mc_csv_html}
         """
 
     # Add MediaConch policy section if available - NOW WITH COLLAPSIBLE FUNCTIONALITY
     if mediaconch_policy_content and mediaconch_policy_name:
         html_template += f"""
-        <h3>MediaConch Policy File: {mediaconch_policy_name}</h3>
+        <h3 id="section-mediaconch-policy">MediaConch Policy File: {mediaconch_policy_name}</h3>
         <a id="link_mediaconch_policy" href="javascript:void(0);" onclick="toggleContent('mediaconch_policy', 'Show policy content ▼', 'Hide policy content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show policy content ▼</a>
         <div id="mediaconch_policy" class="xml-content" style="display: none;">{mediaconch_policy_content}</div>
         """
@@ -4267,18 +4389,33 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if frame_analysis_html:
         html_template += frame_analysis_html
 
-    # Duplicate frame detection: last subsection of the frame analysis block,
-    # placed after BRNG analysis and before the qct-parse color bars section.
-    if duplicate_frame_html:
-        html_template += duplicate_frame_html
+    # Bitplane check and duplicate frame detection render side-by-side so
+    # each fills the vertical space of the taller section.
+    if bitplane_html or duplicate_frame_html:
+        html_template += (
+            '<div style="display: flex; flex-wrap: wrap; gap: 24px; '
+            'align-items: flex-start; margin-top: 20px;">'
+        )
+        if bitplane_html:
+            html_template += (
+                '<div id="section-bitplane" style="flex: 1 1 380px; min-width: 0;">'
+                f'{bitplane_html}</div>'
+            )
+        if duplicate_frame_html:
+            html_template += (
+                '<div id="section-duplicate-frame" '
+                'style="flex: 2 1 600px; min-width: 0; overflow-x: auto;">'
+                f'{duplicate_frame_html}</div>'
+            )
+        html_template += '</div>'
 
-    if frame_analysis_html or duplicate_frame_html:
+    if frame_analysis_html or bitplane_html or duplicate_frame_html:
         html_template += color_strip_divider
 
     # Rest of the HTML template remains the same...
     if no_qct_parse_files:
         html_template += """
-        <h3>QCT-Parse Analysis</h3>
+        <h3 id="section-qct-parse-notice">QCT-Parse Analysis</h3>
         <div style="background-color: #fff3cd; padding: 15px; border: 1px solid #856404; margin: 10px 0; border-radius: 5px;">
             <p style="margin: 0; color: #856404;"><strong>Information:</strong> QCT-Parse analysis was not performed for this video. Quality control analysis sections are not available in this report.</p>
         </div>
@@ -4290,7 +4427,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         else:
             colorbars_header = f"SMPTE Colorbars vs {video_id} Colorbars"
         html_template += f"""
-        <h3>{colorbars_header}</h3>
+        <h3 id="section-colorbars">{colorbars_header}</h3>
         {colorbars_html}
         """
 
@@ -4300,73 +4437,107 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         else:
             eval_header = "Values relative to colorbar's thresholds"
         html_template += f"""
-        <h3>{eval_header}</h3>
+        <h3 id="section-colorbars-eval">{eval_header}</h3>
         {colorbars_eval_html}
         """
 
     if clamped_levels_html:
         html_template += f"""
-        <h3>Clamped Levels Detection</h3>
+        <h3 id="section-clamped-levels">Clamped Levels Detection</h3>
         {clamped_levels_html}
         """
 
-    if audio_clipping_html:
+    has_audio_results = bool(
+        audio_clipping_html or channel_imbalance_html
+        or audible_timecode_html or audio_dropout_html
+    )
+
+    if has_audio_results:
+        html_template += (
+            '<h2 id="section-audio-analysis" style="color: #0a5f1c; '
+            'text-decoration: underline; margin-top: 30px;">'
+            'Audio Analysis Results</h2>'
+        )
         html_template += waveform_divider
-        html_template += f"""
-        <h3>Audio Clipping Detection</h3>
-        {audio_clipping_html}
-        """
 
-    if channel_imbalance_html:
-        html_template += f"""
-        <h3>Channel Imbalance Analysis</h3>
-        {channel_imbalance_html}
-        """
+        # Clipping + Channel Imbalance side-by-side
+        if audio_clipping_html or channel_imbalance_html:
+            html_template += (
+                '<div style="display: flex; flex-wrap: wrap; gap: 24px; '
+                'align-items: flex-start; margin: 16px 0;">'
+            )
+            if audio_clipping_html:
+                html_template += f"""
+                <div style="flex: 1 1 420px; min-width: 0;">
+                    <h3>Audio Clipping Detection</h3>
+                    {audio_clipping_html}
+                </div>
+                """
+            if channel_imbalance_html:
+                html_template += f"""
+                <div style="flex: 1 1 420px; min-width: 0;">
+                    <h3>Channel Imbalance Analysis</h3>
+                    {channel_imbalance_html}
+                </div>
+                """
+            html_template += '</div>'
 
-    if audible_timecode_html:
-        html_template += f"""
-        <h3>Audible Timecode Detection</h3>
-        {audible_timecode_html}
-        """
+        # Audible Timecode + Audio Dropout side-by-side
+        if audible_timecode_html or audio_dropout_html:
+            html_template += (
+                '<div style="display: flex; flex-wrap: wrap; gap: 24px; '
+                'align-items: flex-start; margin: 16px 0;">'
+            )
+            if audible_timecode_html:
+                html_template += f"""
+                <div style="flex: 1 1 420px; min-width: 0;">
+                    <h3>Audible Timecode Detection</h3>
+                    {audible_timecode_html}
+                </div>
+                """
+            if audio_dropout_html:
+                html_template += f"""
+                <div style="flex: 1 1 420px; min-width: 0;">
+                    <h3>Audio Dropout Detection</h3>
+                    {audio_dropout_html}
+                </div>
+                """
+            html_template += '</div>'
 
-    if audio_dropout_html:
-        html_template += f"""
-        <h3>Audio Dropout Detection</h3>
-        {audio_dropout_html}
-        """
-
-    if audio_clipping_html or channel_imbalance_html or audible_timecode_html or audio_dropout_html:
         html_template += waveform_divider
 
     if dropped_sample_html:
-        html_template += dropped_sample_html
+        html_template += f'<div id="section-dropped-sample">{dropped_sample_html}</div>'
 
     if difference_csv:
         html_template += f"""
-        <h3>{difference_csv_filename}</h3>
+        <h3 id="section-difference-csv">{difference_csv_filename}</h3>
         {diff_csv_html}
         """
 
     if profile_summary_html:
         html_template += f"""
-        <h3>qct-parse Profile Summary</h3>
+        <h3 id="section-profile-summary">qct-parse Profile Summary</h3>
         <div style="white-space: nowrap;">
             {profile_summary_html}
         </div>
         """
-    
+
     if tags_summary_html:
         html_template += f"""
-        <h3>qct-parse Tag Check Summary</h3>
+        <h3 id="section-tags-summary">qct-parse Tag Check Summary</h3>
         <div style="white-space: nowrap;">
             {tags_summary_html}
         </div>
         """
 
     if content_summary_html_list:
-        for content_summary_html in content_summary_html_list:
+        for idx, content_summary_html in enumerate(content_summary_html_list):
+            # Only first content-detection block gets the anchor id so TOC
+            # links resolve even when multiple blocks render.
+            heading_id = ' id="section-content-summary"' if idx == 0 else ''
             html_template += f"""
-            <h3>qct-parse Content Detection</h3>
+            <h3{heading_id}>qct-parse Content Detection</h3>
             <div style="white-space: nowrap;">
                 {content_summary_html}
             </div>
@@ -4375,21 +4546,21 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Modified sections with collapsible functionality
     if exiftool_output_path:
         html_template += f"""
-        <h3>{exif_file_filename}</h3>
+        <h3 id="section-exiftool">{exif_file_filename}</h3>
         <a id="link_exiftool" href="javascript:void(0);" onclick="toggleContent('exiftool', 'Show content ▼', 'Hide content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show content ▼</a>
         <div id="exiftool" class="metadata-content" style="display: none;">{exif_file_content}</div>
         """
 
     if mediainfo_output_path:
         html_template += f"""
-        <h3>{mi_file_filename}</h3>
+        <h3 id="section-mediainfo">{mi_file_filename}</h3>
         <a id="link_mediainfo" href="javascript:void(0);" onclick="toggleContent('mediainfo', 'Show content ▼', 'Hide content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show content ▼</a>
         <div id="mediainfo" class="metadata-content" style="display: none;">{mi_file_content}</div>
         """
 
     if ffprobe_output_path:
         html_template += f"""
-        <h3>{ffprobe_file_filename}</h3>
+        <h3 id="section-ffprobe">{ffprobe_file_filename}</h3>
         <a id="link_ffprobe" href="javascript:void(0);" onclick="toggleContent('ffprobe', 'Show content ▼', 'Hide content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show content ▼</a>
         <div id="ffprobe" class="metadata-content" style="display: none;">{ffprobe_file_content}</div>
         """
