@@ -4194,7 +4194,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
             for anchor, label in toc_entries
         )
         toc_html = (
-            '<nav aria-label="Report sections" style="margin: 18px 0;">'
+            '<nav aria-label="Report sections" '
+            'style="background-color: #f5e9e3; border: 1px solid #4d2b12; '
+            'border-radius: 4px; padding: 14px 18px; margin: 18px 0;">'
             '<p style="font-weight: bold; margin: 0 0 10px 0; color: #4d2b12; '
             'font-size: 14px;">Jump to section</p>'
             '<ul style="list-style: none; padding: 0; margin: 0; '
