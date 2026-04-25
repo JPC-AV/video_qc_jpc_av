@@ -345,7 +345,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
                     self._add_step_item("Frame Analysis - Duplicate Frame Detection")
             
             # Output files
-            if checks_config.outputs.access_file == "yes":
+            if checks_config.outputs.access_file:
                 self._add_step_item("Generate Access File")
             if checks_config.outputs.report:
                 self._add_step_item("Generate Report")

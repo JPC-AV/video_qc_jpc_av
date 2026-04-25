@@ -276,8 +276,8 @@ VALID_QCTOOLS_EXTENSIONS = ("qctools.xml.gz", "qctools.mkv")
 # Output configuration
 @dataclass
 class OutputsConfig:
-    access_file: str
-    report: str
+    access_file: bool
+    report: bool
     qctools_ext: str # Must be one of VALID_QCTOOLS_EXTENSIONS
     frame_analysis: FrameAnalysisConfig = field(default_factory=FrameAnalysisConfig)
 
