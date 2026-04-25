@@ -464,7 +464,7 @@ def _extract_frame_at(video_path, timestamp, output_path, height):
     subprocess.run(cmd, check=True)
 
 
-def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max_workers=4, signals=None, progress_start=62, progress_end=73):
+def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max_workers=4, signals=None, progress_start=22, progress_end=25):
     """
     Generate a frame-strip image from a video and return it as a
     base64-encoded JPEG string.
@@ -653,7 +653,7 @@ def _build_waveform_filter(num_channels, width, height):
     return "\n".join(lines)
 
 
-def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=None, progress_start=75, progress_end=79):
+def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=None, progress_start=25, progress_end=95):
     """
     Generate a compact audio waveform image from a video file and return it
     as a base64-encoded JPEG string.
@@ -3912,14 +3912,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
             thumb_key = f"Failed frame \n\n{tag}:{tagValue}\n\n{timestamp}"
             generated_thumbs[thumb_key] = (thumb_path, tag, timestamp)
         if signals and total_thumbs > 0:
-            signals.report_progress.emit(1 + int(18 * (i + 1) / total_thumbs))
-    
+            signals.report_progress.emit(1 + int(9 * (i + 1) / total_thumbs))
+
     # Merge with existing thumbs (for things like color bars detection)
     existing_thumbs = find_qct_thumbs(report_directory)
     thumbs_dict = {**existing_thumbs, **generated_thumbs}
 
     if signals:
-        signals.report_progress.emit(20)
+        signals.report_progress.emit(10)
 
     # Sort thumbs_dict as before
     sorted_thumbs_dict = {}
@@ -3938,7 +3938,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         return
 
     if signals:
-        signals.report_progress.emit(40)
+        signals.report_progress.emit(15)
 
     # Find frame analysis outputs
     frame_outputs = find_frame_analysis_outputs(
@@ -4066,14 +4066,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Embed logo as a data URI so the report renders self-contained.
     logo_image_path = image_to_data_uri(config_mgr.get_logo_path('av_spex_the_logo.png'))
     if signals:
-        signals.report_progress.emit(60)
+        signals.report_progress.emit(20)
 
     # Generate a color strip from the video, fall back to the static eq image
     color_strip_b64 = None
     if video_path:
-        color_strip_b64 = generate_color_strip_base64(video_path, signals=signals, progress_start=62, progress_end=74)
+        color_strip_b64 = generate_color_strip_base64(video_path, signals=signals, progress_start=22, progress_end=25)
     if signals:
-        signals.report_progress.emit(75)
+        signals.report_progress.emit(25)
  
     if color_strip_b64:
         # Store the data URI once in a hidden element, reference it via JS
@@ -4108,7 +4108,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Generate audio waveform
     waveform_b64 = None
     if video_path:
-        waveform_b64 = generate_audio_waveform_base64(video_path, signals=signals, progress_start=75, progress_end=79)
+        waveform_b64 = generate_audio_waveform_base64(video_path, signals=signals, progress_start=25, progress_end=95)
 
     if waveform_b64:
         # Note: Using class "waveform-data-store" to target via JS
@@ -4576,7 +4576,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     """
 
     if signals:
-        signals.report_progress.emit(80)
+        signals.report_progress.emit(96)
 
     # Minify: collapse runs of whitespace between tags and strip leading whitespace on lines
     html_template = re.sub(r'>\s+<', '>\n<', html_template)
