@@ -205,6 +205,18 @@ def stop_file_log():
             handler.close()
 
 
+def disconnect_qt_log_handler():
+    """Remove and close the QtLogHandler before Qt tears down its C++ objects."""
+    for handler in logger.handlers[:]:
+        if isinstance(handler, QtLogHandler):
+            try:
+                handler.log_message.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            logger.removeHandler(handler)
+            handler.close()
+
+
 def connect_logger_to_ui(ui_component):
     """
     Connect the existing logger to a UI component without recreating the logger.

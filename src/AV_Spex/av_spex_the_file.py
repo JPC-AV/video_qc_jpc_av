@@ -48,9 +48,11 @@ class LazyGUILoader:
             def save_configs_on_quit():
                 print("Application about to quit - saving configs")
                 from .utils.config_manager import ConfigManager
+                from .utils.log_setup import disconnect_qt_log_handler
                 config_mgr = ConfigManager()
                 config_mgr.save_config('checks', is_last_used=True)
                 config_mgr.save_config('spex', is_last_used=True)
+                disconnect_qt_log_handler()
             
             # Make sure to explicitly connect to the instance
             cls._app.aboutToQuit.connect(save_configs_on_quit)
