@@ -327,17 +327,17 @@ def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, 
     try:
         bars_frame_count = 0
         bars_progress_interval = 500  # Emit progress every 500 frames
-        bars_last_progress_pct = 5
+        bars_last_progress_pct = 0
         for event, elem in parser_iter: #iterparse the xml doc
             if elem.attrib['media_type'] == "video": #get just the video frames
                 frame_pkt_dts_time = elem.attrib[pkt] #get the timestamps for the current frame we're looking at
-                
-                # Emit progress during bars detection (maps into 5→12% range)
+
+                # Emit progress during bars detection (maps into 0→5% range)
                 bars_frame_count += 1
-                if (signals and hasattr(signals, 'qctparse_progress') and 
+                if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and bars_frame_count % bars_progress_interval == 0):
-                    pct = 5 + int((float(frame_pkt_dts_time) / total_duration) * 7)
-                    pct = min(12, max(5, pct))
+                    pct = int((float(frame_pkt_dts_time) / total_duration) * 5)
+                    pct = min(5, max(0, pct))
                     if pct > bars_last_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         bars_last_progress_pct = pct
@@ -669,10 +669,10 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
         kbeyond[k] = 0
 
     # Progress emission setup: emit every ~1000 frames to avoid overhead
-    # Maps frameCount against total_frames_estimate into the 20→88% range
-    # (reserves 88-98% for audio analysis)
+    # Maps frame timestamp against total_duration into the 5→36% range
+    # (later stages: clamped levels 36→64, audio analysis 64→99)
     progress_emit_interval = 1000
-    last_progress_pct = 0
+    last_progress_pct = 5
 
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
@@ -689,8 +689,8 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
                 # Emit progress periodically
                 if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and frameCount % progress_emit_interval == 0):
-                    pct = 20 + int((float(frame_pkt_dts_time) / total_duration) * 68)
-                    pct = min(88, max(20, pct))
+                    pct = 5 + int((float(frame_pkt_dts_time) / total_duration) * 31)
+                    pct = min(36, max(5, pct))
                     if pct > last_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         last_progress_pct = pct
@@ -1207,7 +1207,7 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
 
     total_frames = 0
     progress_interval = 500
-    last_pct = 20
+    last_pct = 36
 
     try:
         for event, elem in parser_iter:
@@ -1218,8 +1218,8 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
                         total_duration and total_frames % progress_interval == 0):
                     try:
                         frame_time = float(elem.attrib.get(pkt, "0"))
-                        pct = 20 + int((frame_time / total_duration) * 10)
-                        pct = min(30, max(20, pct))
+                        pct = 36 + int((frame_time / total_duration) * 28)
+                        pct = min(64, max(36, pct))
                         if pct > last_pct:
                             signals.qctparse_progress.emit(pct)
                             last_pct = pct
@@ -1377,9 +1377,9 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
 
     total_audio_frames = 0
 
-    # Progress emission setup: maps into the 90→98% range of qctparse_progress
+    # Progress emission setup: maps into the 64→99% range of qctparse_progress
     audio_progress_interval = 500
-    last_audio_progress_pct = 90
+    last_audio_progress_pct = 64
 
     # Clipping state
     clipping_events = []
@@ -1408,11 +1408,11 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                 total_audio_frames += 1
                 frame_pkt_dts_time = elem.attrib.get(pkt, "0")
 
-                # Emit incremental progress during audio analysis (90→98% range)
+                # Emit incremental progress during audio analysis (64→99% range)
                 if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and total_audio_frames % audio_progress_interval == 0):
-                    pct = 90 + int((float(frame_pkt_dts_time) / total_duration) * 8)
-                    pct = min(98, max(90, pct))
+                    pct = 64 + int((float(frame_pkt_dts_time) / total_duration) * 35)
+                    pct = min(99, max(64, pct))
                     if pct > last_audio_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         last_audio_progress_pct = pct
@@ -2495,7 +2495,7 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     bit_depth_10 = detectBitdepth(startObj,pkt,framesList,buffSize)
 
     if signals and hasattr(signals, 'qctparse_progress'):
-        signals.qctparse_progress.emit(5)
+        signals.qctparse_progress.emit(0)
 
     if check_cancelled():
         return None
@@ -2536,22 +2536,18 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         return None
 
     if signals and hasattr(signals, 'qctparse_progress'):
-        signals.qctparse_progress.emit(13)
+        signals.qctparse_progress.emit(5)
 
     ######## Iterate Through the XML for Bars Evaluation ########
     if qct_parse['evaluateBars']:
         bars_fallback = False
-        
+
         if qct_parse['barsDetection'] and durationStart == "" and durationEnd == "":
             logger.warning(f"No color bars found - falling back to SMPTE color bars values from config.\n")
             maxBarsDict = asdict(spex_config.qct_parse_values.smpte_color_bars)
             bars_fallback = True
         elif qct_parse['barsDetection'] and durationStart != "" and durationEnd != "":
-            if signals and hasattr(signals, 'qctparse_progress'):
-                signals.qctparse_progress.emit(14)
             maxBarsDict = evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize)
-            if signals and hasattr(signals, 'qctparse_progress'):
-                signals.qctparse_progress.emit(16)
             if maxBarsDict is None:
                 logger.critical("Something went wrong - Cannot run evaluate color bars\n")
         else:
@@ -2573,8 +2569,6 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             profile = maxBarsDict
             profile_name = 'color_bars_evaluation'
             thumbExportDelay = 9000
-            if signals and hasattr(signals, 'qctparse_progress'):
-                signals.qctparse_progress.emit(18)
             kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled, signals=signals, total_duration=total_duration)
             colorbars_eval_fails_csv_path = os.path.join(report_directory, "qct-parse_colorbars_eval_failures.csv")
             if failureInfo:
@@ -2585,6 +2579,9 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     if check_cancelled():
         return None
+
+    if signals and hasattr(signals, 'qctparse_progress'):
+        signals.qctparse_progress.emit(36)
 
     ######## Clamped Levels Detection ########
     if qct_parse.get('detect_clamped_levels', False):
@@ -2598,6 +2595,9 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     if check_cancelled():
         return None
+
+    if signals and hasattr(signals, 'qctparse_progress'):
+        signals.qctparse_progress.emit(64)
 
     ######## Audio Analysis (Clipping Detection / Channel Imbalance / Audible Timecode) ########
     do_audio_analysis = qct_parse.get('audio_analysis', False)

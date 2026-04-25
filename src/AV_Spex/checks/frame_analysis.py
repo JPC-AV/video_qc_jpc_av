@@ -2969,7 +2969,8 @@ class IntegratedSignalstatsAnalyzer:
             if active_area:
                 logger.debug(f"    Running FFprobe on active area only...")
                 ffprobe_result = self._analyze_with_ffprobe_period(
-                    active_area, start_time, duration, i+1
+                    active_area, start_time, duration, i+1,
+                    progress_range=(period_mid, period_end)
                 )
                 if ffprobe_result:
                     period_comparison['ffprobe_active_area'] = {
@@ -3010,7 +3011,8 @@ class IntegratedSignalstatsAnalyzer:
                 else:
                     logger.info(f"    Using FFprobe on full frame (no border detection)")
                     ffprobe_result = self._analyze_with_ffprobe_period(
-                        None, start_time, duration, i+1
+                        None, start_time, duration, i+1,
+                        progress_range=(period_mid, period_end)
                     )
                     if ffprobe_result:
                         all_results.append(ffprobe_result)
@@ -3331,21 +3333,26 @@ class IntegratedSignalstatsAnalyzer:
         # Use QCTools if violations are minimal or if we have good data
         return True  # Always use QCTools data when available for consistency
     
-    def _analyze_with_ffprobe_period(self, active_area: Tuple, 
-                                start_time: float, duration: int, period_num: int) -> Dict:
-        """Analyze using FFprobe signalstats for specific period - with fast seeking"""
-        
+    def _analyze_with_ffprobe_period(self, active_area: Tuple,
+                                start_time: float, duration: int, period_num: int,
+                                progress_range: Optional[Tuple[int, int]] = None) -> Dict:
+        """Analyze using FFprobe signalstats for specific period - with fast seeking.
+
+        If progress_range is provided as (p_start, p_end), incremental progress is
+        emitted as frames stream out of ffprobe, mapped into that subrange.
+        """
+
         crop_filter = ""
         if active_area:
             x, y, w, h = active_area
             crop_filter = f"crop={w}:{h}:{x}:{y},"
-        
+
         # Use movie filter's seek_point parameter for fast seeking
         # trim=duration limits output to N seconds after seek point
         filter_chain = f"movie={shlex.quote(self.video_path)}:seek_point={start_time}"
         filter_chain += f",{crop_filter}signalstats=stat=brng"
         filter_chain += f",trim=duration={duration}"
-        
+
         cmd = [
             'ffprobe',
             '-f', 'lavfi',
@@ -3353,10 +3360,24 @@ class IntegratedSignalstatsAnalyzer:
             '-show_entries', 'frame_tags=lavfi.signalstats.BRNG',
             '-of', 'csv=p=0'
         ]
-        
+
+        # Estimate frames for the period (~30fps; fine as a denominator for progress)
+        expected_frames = max(1, int(duration * 30))
+        emit_interval = max(20, expected_frames // 50)
+        p_start, p_end = progress_range if progress_range else (0, 0)
+        last_pct = p_start
+
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            while proc.poll() is None:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, bufsize=1)
+            brng_values = []
+            frame_count = 0
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    if proc.poll() is not None:
+                        break
+                    continue
                 if self.check_cancelled():
                     proc.terminate()
                     try:
@@ -3364,22 +3385,25 @@ class IntegratedSignalstatsAnalyzer:
                     except subprocess.TimeoutExpired:
                         proc.kill()
                     return None
+                line = line.strip()
+                if not line:
+                    continue
                 try:
-                    proc.wait(timeout=0.5)
-                except subprocess.TimeoutExpired:
-                    pass
+                    brng_values.append(float(line))
+                except ValueError:
+                    continue
+                frame_count += 1
+                if progress_range and frame_count % emit_interval == 0:
+                    fraction = min(1.0, frame_count / expected_frames)
+                    pct = p_start + int((p_end - p_start) * fraction)
+                    pct = min(p_end, max(p_start, pct))
+                    if pct > last_pct:
+                        self._emit_progress(pct)
+                        last_pct = pct
+
             if proc.returncode != 0:
                 logger.warning(f"    FFprobe failed for period {period_num}")
                 return None
-
-            # Parse output
-            brng_values = []
-            for line in proc.stdout.read().strip().split('\n'):
-                if line.strip():
-                    try:
-                        brng_values.append(float(line.strip()))
-                    except:
-                        pass
 
             frames_with_violations = len([v for v in brng_values if v > 0])
             violation_pct = (frames_with_violations / len(brng_values) * 100) if brng_values else 0
