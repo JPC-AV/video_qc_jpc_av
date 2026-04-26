@@ -18,22 +18,31 @@ def get_duration(video_path):
     return duration
 
 
-def make_access_file(video_path, output_path, check_cancelled=None, signals=None):
-    """Create access file using ffmpeg."""
+def make_access_file(video_path, output_path, check_cancelled=None, signals=None, start_time=None):
+    """Create access file using ffmpeg.
+
+    If start_time (seconds) is provided and > 0, the input is seeked past that
+    point so head content (e.g. color bars detected by qct-parse) is excluded
+    from the access copy.
+    """
 
     logger.debug(f'Running ffmpeg on {os.path.basename(video_path)} to create access copy {os.path.basename(output_path)}\n')
 
     duration_str = get_duration(video_path)
 
-    ffmpeg_command = [
-        'ffmpeg',
-        '-n', '-vsync', '0',
-        '-hide_banner', '-progress', 'pipe:1', '-nostats', '-loglevel', 'error',
+    ffmpeg_command = ['ffmpeg', '-n', '-vsync', '0',
+        '-hide_banner', '-progress', 'pipe:1', '-nostats', '-loglevel', 'error']
+
+    if start_time and start_time > 0:
+        logger.info(f'Trimming first {start_time:.2f}s from access copy (color bars detected by qct-parse)\n')
+        ffmpeg_command.extend(['-ss', f'{start_time:.3f}'])
+
+    ffmpeg_command.extend([
         '-i', video_path,
-        '-movflags', 'faststart', '-map', '0:v:0', '-map', '0:a?', '-c:v', 'libx264', 
-        '-vf', 'yadif=1,format=yuv420p', '-crf', '18', '-preset', 'fast', '-maxrate', '1000k', '-bufsize', '1835k', 
+        '-movflags', 'faststart', '-map', '0:v:0', '-map', '0:a?', '-c:v', 'libx264',
+        '-vf', 'yadif=1,format=yuv420p', '-crf', '18', '-preset', 'fast', '-maxrate', '1000k', '-bufsize', '1835k',
         '-c:a', 'aac', '-strict', '-2', '-b:a', '192k', '-f', 'mp4', output_path
-    ]
+    ])
 
     try:
         ffmpeg_process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -44,6 +53,8 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
             duration_prefix = 'out_time_ms='
             # define prefix of ffmpeg microsecond progress output
             duration = float(duration_str)
+            if start_time and start_time > 0:
+                duration = max(0.001, duration - start_time)
             # Convert string integer
             duration_ms = (duration * 1000000)
             # Calculate the total duration in microseconds
@@ -68,22 +79,26 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
     print("\n")
 
 
-def process_access_file(video_path, source_directory, video_id, check_cancelled=None, signals=None):
+def process_access_file(video_path, source_directory, video_id, check_cancelled=None, signals=None, color_bars_end_time=None):
     """
     Generate access file if configured and not already existing.
-    
+
     Args:
         video_path (str): Path to the input video file
         source_directory (str): Source directory for the video
         video_id (str): Unique identifier for the video
-        command_config (object): Configuration object with tool settings
-        
+        check_cancelled (callable, optional): Function to check if operation was cancelled
+        signals (object, optional): Signal object for progress updates
+        color_bars_end_time (float, optional): End time of color bars in seconds, as
+            detected by qct-parse. When provided, the access copy is trimmed to start
+            after the bars.
+
     Returns:
         str or None: Path to the created access file, or None
     """
     config_mgr = ConfigManager()
     checks_config = config_mgr.get_config('checks', ChecksConfig)
-    
+
     # Check if access file should be generated
     if not checks_config.outputs.access_file:
         return None
@@ -105,7 +120,11 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
             return None
 
         # Generate access file
-        make_access_file(video_path, access_output_path, check_cancelled=check_cancelled, signals=signals)
+        make_access_file(
+            video_path, access_output_path,
+            check_cancelled=check_cancelled, signals=signals,
+            start_time=color_bars_end_time
+        )
         if signals:
             signals.step_completed.emit("Generate Access File")
         return access_output_path

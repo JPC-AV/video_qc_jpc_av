@@ -269,11 +269,13 @@ class ProcessingManager:
             return None
 
         # Generate access file (runs after qct-parse and frame analysis so it can
-        # take advantage of details learned during those steps)
+        # take advantage of details learned during those steps). When qct-parse
+        # detected color bars, color_bars_end_time trims them off the access copy.
         processing_results['access_file'] = process_access_file(
             video_path, source_directory, video_id,
             check_cancelled=self.check_cancelled,
-            signals=self.signals
+            signals=self.signals,
+            color_bars_end_time=color_bars_end_time
         )
 
         if self.signals:
