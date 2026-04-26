@@ -5,6 +5,7 @@ Combines the efficiency of the refactored version with the sophistication of the
 """
 
 import os
+import sys
 import json
 import gzip
 import time
@@ -12,6 +13,7 @@ import cv2
 import numpy as np
 import subprocess
 import shlex
+import re
 import csv
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
@@ -2969,7 +2971,8 @@ class IntegratedSignalstatsAnalyzer:
             if active_area:
                 logger.debug(f"    Running FFprobe on active area only...")
                 ffprobe_result = self._analyze_with_ffprobe_period(
-                    active_area, start_time, duration, i+1
+                    active_area, start_time, duration, i+1,
+                    progress_range=(period_mid, period_end)
                 )
                 if ffprobe_result:
                     period_comparison['ffprobe_active_area'] = {
@@ -3010,7 +3013,8 @@ class IntegratedSignalstatsAnalyzer:
                 else:
                     logger.info(f"    Using FFprobe on full frame (no border detection)")
                     ffprobe_result = self._analyze_with_ffprobe_period(
-                        None, start_time, duration, i+1
+                        None, start_time, duration, i+1,
+                        progress_range=(period_mid, period_end)
                     )
                     if ffprobe_result:
                         all_results.append(ffprobe_result)
@@ -3331,21 +3335,26 @@ class IntegratedSignalstatsAnalyzer:
         # Use QCTools if violations are minimal or if we have good data
         return True  # Always use QCTools data when available for consistency
     
-    def _analyze_with_ffprobe_period(self, active_area: Tuple, 
-                                start_time: float, duration: int, period_num: int) -> Dict:
-        """Analyze using FFprobe signalstats for specific period - with fast seeking"""
-        
+    def _analyze_with_ffprobe_period(self, active_area: Tuple,
+                                start_time: float, duration: int, period_num: int,
+                                progress_range: Optional[Tuple[int, int]] = None) -> Dict:
+        """Analyze using FFprobe signalstats for specific period - with fast seeking.
+
+        If progress_range is provided as (p_start, p_end), incremental progress is
+        emitted as frames stream out of ffprobe, mapped into that subrange.
+        """
+
         crop_filter = ""
         if active_area:
             x, y, w, h = active_area
             crop_filter = f"crop={w}:{h}:{x}:{y},"
-        
+
         # Use movie filter's seek_point parameter for fast seeking
         # trim=duration limits output to N seconds after seek point
         filter_chain = f"movie={shlex.quote(self.video_path)}:seek_point={start_time}"
         filter_chain += f",{crop_filter}signalstats=stat=brng"
         filter_chain += f",trim=duration={duration}"
-        
+
         cmd = [
             'ffprobe',
             '-f', 'lavfi',
@@ -3353,10 +3362,24 @@ class IntegratedSignalstatsAnalyzer:
             '-show_entries', 'frame_tags=lavfi.signalstats.BRNG',
             '-of', 'csv=p=0'
         ]
-        
+
+        # Estimate frames for the period (~30fps; fine as a denominator for progress)
+        expected_frames = max(1, int(duration * 30))
+        emit_interval = max(20, expected_frames // 50)
+        p_start, p_end = progress_range if progress_range else (0, 0)
+        last_pct = p_start
+
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            while proc.poll() is None:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, bufsize=1)
+            brng_values = []
+            frame_count = 0
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    if proc.poll() is not None:
+                        break
+                    continue
                 if self.check_cancelled():
                     proc.terminate()
                     try:
@@ -3364,22 +3387,25 @@ class IntegratedSignalstatsAnalyzer:
                     except subprocess.TimeoutExpired:
                         proc.kill()
                     return None
+                line = line.strip()
+                if not line:
+                    continue
                 try:
-                    proc.wait(timeout=0.5)
-                except subprocess.TimeoutExpired:
-                    pass
+                    brng_values.append(float(line))
+                except ValueError:
+                    continue
+                frame_count += 1
+                if progress_range and frame_count % emit_interval == 0:
+                    fraction = min(1.0, frame_count / expected_frames)
+                    pct = p_start + int((p_end - p_start) * fraction)
+                    pct = min(p_end, max(p_start, pct))
+                    if pct > last_pct:
+                        self._emit_progress(pct)
+                        last_pct = pct
+
             if proc.returncode != 0:
                 logger.warning(f"    FFprobe failed for period {period_num}")
                 return None
-
-            # Parse output
-            brng_values = []
-            for line in proc.stdout.read().strip().split('\n'):
-                if line.strip():
-                    try:
-                        brng_values.append(float(line.strip()))
-                    except:
-                        pass
 
             frames_with_violations = len([v for v in brng_values if v > 0])
             violation_pct = (frames_with_violations / len(brng_values) * 100) if brng_values else 0
@@ -3794,27 +3820,96 @@ class EnhancedFrameAnalysis:
         )
 
     def _generate_spectrogram(self) -> Optional[Path]:
-        """Generate a spectrogram image using FFmpeg's showspectrumpic filter."""
+        """Generate a spectrogram image using FFmpeg's showspectrumpic filter.
+
+        Drives progress from the Python side using elapsed wall-clock time
+        against an estimated processing duration (~100x realtime for
+        showspectrumpic). The bar moves continuously while ffmpeg runs,
+        capped at 90% so we can finalize at p_end on actual completion.
+
+        We don't parse ffmpeg's stderr here: showspectrumpic is a single-
+        output-frame filter so `-progress` reports output time stuck at 0,
+        and `-stats` emits `\\r`-terminated lines that libc holds in its
+        stdio buffer over a pipe. Time-based estimation is the same kind of
+        Python-driven approach used by `generate_color_strip_base64`.
+        """
         output_path = self.output_dir / f"{self.video_id}_spectrogram.png"
 
+        audio_duration, _, _ = self._get_av_durations()
+        p_start, p_end = 0, 95
+        can_track_progress = (
+            self.signals is not None
+            and hasattr(self.signals, 'frame_analysis_progress')
+        )
+
         cmd = [
-            'ffmpeg', '-y', '-i', str(self.video_path),
+            'ffmpeg', '-y',
+            '-hide_banner', '-loglevel', 'error',
+            '-i', str(self.video_path),
             '-vn', '-lavfi', 'showspectrumpic=s=1280x480',
             str(output_path)
         ]
 
+        # ~100x realtime is typical for showspectrumpic (e.g. 30 min audio
+        # ≈ 18s wall-clock). Floor of 4s so very short clips still animate.
+        if audio_duration and audio_duration > 0:
+            estimated_s = max(audio_duration / 100.0, 4.0)
+        else:
+            estimated_s = 30.0
+
         try:
             logger.debug(f"    Generating spectrogram: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode == 0 and output_path.exists():
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, text=True)
+            start_time = time.time()
+            timeout_s = 300.0
+            timed_out = False
+            last_pct = p_start
+            poll_interval = 0.3
+            cap_fraction = 0.9  # leave room for final emit at p_end
+
+            while True:
+                if proc.poll() is not None:
+                    break
+                if self.check_cancelled():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    return None
+                elapsed = time.time() - start_time
+                if elapsed > timeout_s:
+                    timed_out = True
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    break
+                if can_track_progress:
+                    fraction = min(cap_fraction, elapsed / estimated_s)
+                    pct = p_start + int((p_end - p_start) * fraction)
+                    if pct > last_pct:
+                        self.signals.frame_analysis_progress.emit(pct)
+                        last_pct = pct
+                time.sleep(poll_interval)
+
+            stderr_text = proc.stderr.read() if proc.stderr else ''
+
+            if timed_out:
+                logger.warning("Spectrogram generation timed out (300s limit)")
+                return None
+
+            if proc.returncode == 0 and output_path.exists():
                 logger.info(f"Spectrogram saved to: {output_path.name}")
+                if can_track_progress:
+                    self.signals.frame_analysis_progress.emit(p_end)
                 return output_path
             else:
-                logger.warning(f"FFmpeg spectrogram generation failed (exit code {result.returncode})")
-                if result.stderr:
-                    logger.debug(f"FFmpeg stderr: {result.stderr[-500:]}")
-        except subprocess.TimeoutExpired:
-            logger.warning("Spectrogram generation timed out (300s limit)")
+                logger.warning(f"FFmpeg spectrogram generation failed (exit code {proc.returncode})")
+                if stderr_text:
+                    logger.debug(f"FFmpeg stderr: {stderr_text[-500:]}")
         except Exception as e:
             logger.warning(f"Error generating spectrogram: {e}")
 

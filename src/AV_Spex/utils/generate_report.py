@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
+import time
 os.environ["NUMEXPR_MAX_THREADS"] = "11" # troubleshooting goofy numbpy related error "Note: NumExpr detected 11 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8. # NumExpr defaulting to 8 threads."
 
 import csv
@@ -464,7 +466,7 @@ def _extract_frame_at(video_path, timestamp, output_path, height):
     subprocess.run(cmd, check=True)
 
 
-def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max_workers=4, signals=None, progress_start=62, progress_end=73):
+def generate_color_strip_base64(video_path, num_frames=40, strip_height=120, max_workers=4, signals=None, progress_start=22, progress_end=25):
     """
     Generate a frame-strip image from a video and return it as a
     base64-encoded JPEG string.
@@ -653,7 +655,7 @@ def _build_waveform_filter(num_channels, width, height):
     return "\n".join(lines)
 
 
-def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=None, progress_start=75, progress_end=79):
+def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=None, progress_start=25, progress_end=95):
     """
     Generate a compact audio waveform image from a video file and return it
     as a base64-encoded JPEG string.
@@ -695,7 +697,6 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
-                "-stats",
                 "-loglevel", "error",
                 "-i", video_path,
                 "-filter_complex",
@@ -704,46 +705,42 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
                 "-q:v", "5",
                 output_path,
             ]
-            # Use stderr for progress: -stats writes "size=...time=HH:MM:SS.xx..." lines
-            # showing how much input audio has been read, which updates incrementally
-            # even for single-output-frame filters like showwavespic
-            time_pattern = re.compile(r'time=\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+            # Drive progress from Python using elapsed wall-clock time vs. an
+            # estimated processing duration (~100x realtime for showwavespic).
+            # We don't try to parse ffmpeg's output: showwavespic is a single-
+            # output-frame filter so `-progress` reports output time stuck at
+            # 0, and `-stats` emits `\r`-terminated lines that libc holds in
+            # its stdio buffer over a pipe. Same Python-driven pattern used
+            # by `generate_color_strip_base64`.
+            if duration and duration > 0:
+                estimated_s = max(duration / 100.0, 4.0)
+            else:
+                estimated_s = 30.0
+            cap_fraction = 0.9  # leave room for the final emit at progress_end
+            poll_interval = 0.3
             last_pct = progress_start
-            stderr_lines = []
-            # Read stderr byte-by-byte looking for \r or \n delimited progress lines
-            buf = b''
+
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.PIPE, text=True)
+            start_t = time.time()
+
             while True:
-                byte = process.stderr.read(1)
-                if not byte:
+                if process.poll() is not None:
                     break
-                if byte in (b'\r', b'\n'):
-                    if buf:
-                        line = buf.decode('utf-8', errors='replace')
-                        buf = b''
-                        match = time_pattern.search(line)
-                        if match and signals:
-                            hours = float(match.group(1))
-                            minutes = float(match.group(2))
-                            seconds = float(match.group(3))
-                            current_seconds = hours * 3600 + minutes * 60 + seconds
-                            percent_complete = current_seconds / duration
-                            pct = progress_start + int(progress_range * min(1.0, max(0.0, percent_complete)))
-                            if pct > last_pct:
-                                signals.report_progress.emit(pct)
-                                last_pct = pct
-                        elif 'error' in line.lower() or 'warning' in line.lower():
-                            stderr_lines.append(line)
-                else:
-                    buf += byte
-            # Process any remaining buffer
-            if buf:
-                line = buf.decode('utf-8', errors='replace')
-                if 'error' in line.lower() or 'warning' in line.lower():
-                    stderr_lines.append(line)
-            process.wait()
-            if stderr_lines:
-                logger.warning(f"Audio waveform ffmpeg stderr: {'; '.join(stderr_lines)}")
+                elapsed = time.time() - start_t
+                if signals:
+                    fraction = min(cap_fraction, elapsed / estimated_s)
+                    pct = progress_start + int(progress_range * fraction)
+                    if pct > last_pct:
+                        signals.report_progress.emit(pct)
+                        last_pct = pct
+                time.sleep(poll_interval)
+
+            stderr_text = process.stderr.read() if process.stderr else ''
+            if stderr_text:
+                lines = [ln for ln in stderr_text.splitlines() if ln.strip()]
+                if lines:
+                    logger.warning(f"Audio waveform ffmpeg stderr: {'; '.join(lines)}")
 
             if not os.path.isfile(output_path):
                 logger.warning("Audio waveform: ffmpeg produced no output — skipping")
@@ -3912,14 +3909,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
             thumb_key = f"Failed frame \n\n{tag}:{tagValue}\n\n{timestamp}"
             generated_thumbs[thumb_key] = (thumb_path, tag, timestamp)
         if signals and total_thumbs > 0:
-            signals.report_progress.emit(1 + int(18 * (i + 1) / total_thumbs))
-    
+            signals.report_progress.emit(1 + int(9 * (i + 1) / total_thumbs))
+
     # Merge with existing thumbs (for things like color bars detection)
     existing_thumbs = find_qct_thumbs(report_directory)
     thumbs_dict = {**existing_thumbs, **generated_thumbs}
 
     if signals:
-        signals.report_progress.emit(20)
+        signals.report_progress.emit(10)
 
     # Sort thumbs_dict as before
     sorted_thumbs_dict = {}
@@ -3938,7 +3935,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         return
 
     if signals:
-        signals.report_progress.emit(40)
+        signals.report_progress.emit(15)
 
     # Find frame analysis outputs
     frame_outputs = find_frame_analysis_outputs(
@@ -4066,14 +4063,14 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Embed logo as a data URI so the report renders self-contained.
     logo_image_path = image_to_data_uri(config_mgr.get_logo_path('av_spex_the_logo.png'))
     if signals:
-        signals.report_progress.emit(60)
+        signals.report_progress.emit(20)
 
     # Generate a color strip from the video, fall back to the static eq image
     color_strip_b64 = None
     if video_path:
-        color_strip_b64 = generate_color_strip_base64(video_path, signals=signals, progress_start=62, progress_end=74)
+        color_strip_b64 = generate_color_strip_base64(video_path, signals=signals, progress_start=22, progress_end=25)
     if signals:
-        signals.report_progress.emit(75)
+        signals.report_progress.emit(25)
  
     if color_strip_b64:
         # Store the data URI once in a hidden element, reference it via JS
@@ -4108,7 +4105,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     # Generate audio waveform
     waveform_b64 = None
     if video_path:
-        waveform_b64 = generate_audio_waveform_base64(video_path, signals=signals, progress_start=75, progress_end=79)
+        waveform_b64 = generate_audio_waveform_base64(video_path, signals=signals, progress_start=25, progress_end=95)
 
     if waveform_b64:
         # Note: Using class "waveform-data-store" to target via JS
@@ -4576,7 +4573,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     """
 
     if signals:
-        signals.report_progress.emit(80)
+        signals.report_progress.emit(96)
 
     # Minify: collapse runs of whitespace between tags and strip leading whitespace on lines
     html_template = re.sub(r'>\s+<', '>\n<', html_template)
