@@ -268,14 +268,31 @@ class ProcessingManager:
         if self.check_cancelled():
             return None
 
+        # Pull a crop region from sophisticated border detection (BRNG-refined when
+        # available). Skip simple detection — the user has opted not to crop in
+        # that case because the bordered area is a fixed fallback, not a real
+        # measurement. detection_method is 'sophisticated_refined' after BRNG
+        # refinement, plain 'sophisticated' otherwise.
+        access_crop_area = None
+        frame_results = processing_results.get('frame_analysis')
+        if frame_results:
+            border = frame_results.get('border_results')
+            if border:
+                method = border.get('detection_method') or ''
+                if method.startswith('sophisticated') and border.get('active_area'):
+                    access_crop_area = border['active_area']
+
         # Generate access file (runs after qct-parse and frame analysis so it can
         # take advantage of details learned during those steps). When qct-parse
         # detected color bars, color_bars_end_time trims them off the access copy.
+        # When sophisticated border detection produced an active area, crop_area
+        # removes the borders.
         processing_results['access_file'] = process_access_file(
             video_path, source_directory, video_id,
             check_cancelled=self.check_cancelled,
             signals=self.signals,
-            color_bars_end_time=color_bars_end_time
+            color_bars_end_time=color_bars_end_time,
+            crop_area=access_crop_area
         )
 
         if self.signals:
