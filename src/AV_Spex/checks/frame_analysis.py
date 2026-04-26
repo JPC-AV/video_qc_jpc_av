@@ -5,6 +5,7 @@ Combines the efficiency of the refactored version with the sophistication of the
 """
 
 import os
+import sys
 import json
 import gzip
 import time
@@ -12,6 +13,7 @@ import cv2
 import numpy as np
 import subprocess
 import shlex
+import re
 import csv
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
@@ -3818,27 +3820,96 @@ class EnhancedFrameAnalysis:
         )
 
     def _generate_spectrogram(self) -> Optional[Path]:
-        """Generate a spectrogram image using FFmpeg's showspectrumpic filter."""
+        """Generate a spectrogram image using FFmpeg's showspectrumpic filter.
+
+        Drives progress from the Python side using elapsed wall-clock time
+        against an estimated processing duration (~100x realtime for
+        showspectrumpic). The bar moves continuously while ffmpeg runs,
+        capped at 90% so we can finalize at p_end on actual completion.
+
+        We don't parse ffmpeg's stderr here: showspectrumpic is a single-
+        output-frame filter so `-progress` reports output time stuck at 0,
+        and `-stats` emits `\\r`-terminated lines that libc holds in its
+        stdio buffer over a pipe. Time-based estimation is the same kind of
+        Python-driven approach used by `generate_color_strip_base64`.
+        """
         output_path = self.output_dir / f"{self.video_id}_spectrogram.png"
 
+        audio_duration, _, _ = self._get_av_durations()
+        p_start, p_end = 0, 95
+        can_track_progress = (
+            self.signals is not None
+            and hasattr(self.signals, 'frame_analysis_progress')
+        )
+
         cmd = [
-            'ffmpeg', '-y', '-i', str(self.video_path),
+            'ffmpeg', '-y',
+            '-hide_banner', '-loglevel', 'error',
+            '-i', str(self.video_path),
             '-vn', '-lavfi', 'showspectrumpic=s=1280x480',
             str(output_path)
         ]
 
+        # ~100x realtime is typical for showspectrumpic (e.g. 30 min audio
+        # ≈ 18s wall-clock). Floor of 4s so very short clips still animate.
+        if audio_duration and audio_duration > 0:
+            estimated_s = max(audio_duration / 100.0, 4.0)
+        else:
+            estimated_s = 30.0
+
         try:
             logger.debug(f"    Generating spectrogram: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode == 0 and output_path.exists():
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, text=True)
+            start_time = time.time()
+            timeout_s = 300.0
+            timed_out = False
+            last_pct = p_start
+            poll_interval = 0.3
+            cap_fraction = 0.9  # leave room for final emit at p_end
+
+            while True:
+                if proc.poll() is not None:
+                    break
+                if self.check_cancelled():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    return None
+                elapsed = time.time() - start_time
+                if elapsed > timeout_s:
+                    timed_out = True
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    break
+                if can_track_progress:
+                    fraction = min(cap_fraction, elapsed / estimated_s)
+                    pct = p_start + int((p_end - p_start) * fraction)
+                    if pct > last_pct:
+                        self.signals.frame_analysis_progress.emit(pct)
+                        last_pct = pct
+                time.sleep(poll_interval)
+
+            stderr_text = proc.stderr.read() if proc.stderr else ''
+
+            if timed_out:
+                logger.warning("Spectrogram generation timed out (300s limit)")
+                return None
+
+            if proc.returncode == 0 and output_path.exists():
                 logger.info(f"Spectrogram saved to: {output_path.name}")
+                if can_track_progress:
+                    self.signals.frame_analysis_progress.emit(p_end)
                 return output_path
             else:
-                logger.warning(f"FFmpeg spectrogram generation failed (exit code {result.returncode})")
-                if result.stderr:
-                    logger.debug(f"FFmpeg stderr: {result.stderr[-500:]}")
-        except subprocess.TimeoutExpired:
-            logger.warning("Spectrogram generation timed out (300s limit)")
+                logger.warning(f"FFmpeg spectrogram generation failed (exit code {proc.returncode})")
+                if stderr_text:
+                    logger.debug(f"FFmpeg stderr: {stderr_text[-500:]}")
         except Exception as e:
             logger.warning(f"Error generating spectrogram: {e}")
 

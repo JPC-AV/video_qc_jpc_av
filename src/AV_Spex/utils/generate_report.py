@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
+import time
 os.environ["NUMEXPR_MAX_THREADS"] = "11" # troubleshooting goofy numbpy related error "Note: NumExpr detected 11 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8. # NumExpr defaulting to 8 threads."
 
 import csv
@@ -695,7 +697,6 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
-                "-stats",
                 "-loglevel", "error",
                 "-i", video_path,
                 "-filter_complex",
@@ -704,46 +705,42 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
                 "-q:v", "5",
                 output_path,
             ]
-            # Use stderr for progress: -stats writes "size=...time=HH:MM:SS.xx..." lines
-            # showing how much input audio has been read, which updates incrementally
-            # even for single-output-frame filters like showwavespic
-            time_pattern = re.compile(r'time=\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+            # Drive progress from Python using elapsed wall-clock time vs. an
+            # estimated processing duration (~100x realtime for showwavespic).
+            # We don't try to parse ffmpeg's output: showwavespic is a single-
+            # output-frame filter so `-progress` reports output time stuck at
+            # 0, and `-stats` emits `\r`-terminated lines that libc holds in
+            # its stdio buffer over a pipe. Same Python-driven pattern used
+            # by `generate_color_strip_base64`.
+            if duration and duration > 0:
+                estimated_s = max(duration / 100.0, 4.0)
+            else:
+                estimated_s = 30.0
+            cap_fraction = 0.9  # leave room for the final emit at progress_end
+            poll_interval = 0.3
             last_pct = progress_start
-            stderr_lines = []
-            # Read stderr byte-by-byte looking for \r or \n delimited progress lines
-            buf = b''
+
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.PIPE, text=True)
+            start_t = time.time()
+
             while True:
-                byte = process.stderr.read(1)
-                if not byte:
+                if process.poll() is not None:
                     break
-                if byte in (b'\r', b'\n'):
-                    if buf:
-                        line = buf.decode('utf-8', errors='replace')
-                        buf = b''
-                        match = time_pattern.search(line)
-                        if match and signals:
-                            hours = float(match.group(1))
-                            minutes = float(match.group(2))
-                            seconds = float(match.group(3))
-                            current_seconds = hours * 3600 + minutes * 60 + seconds
-                            percent_complete = current_seconds / duration
-                            pct = progress_start + int(progress_range * min(1.0, max(0.0, percent_complete)))
-                            if pct > last_pct:
-                                signals.report_progress.emit(pct)
-                                last_pct = pct
-                        elif 'error' in line.lower() or 'warning' in line.lower():
-                            stderr_lines.append(line)
-                else:
-                    buf += byte
-            # Process any remaining buffer
-            if buf:
-                line = buf.decode('utf-8', errors='replace')
-                if 'error' in line.lower() or 'warning' in line.lower():
-                    stderr_lines.append(line)
-            process.wait()
-            if stderr_lines:
-                logger.warning(f"Audio waveform ffmpeg stderr: {'; '.join(stderr_lines)}")
+                elapsed = time.time() - start_t
+                if signals:
+                    fraction = min(cap_fraction, elapsed / estimated_s)
+                    pct = progress_start + int(progress_range * fraction)
+                    if pct > last_pct:
+                        signals.report_progress.emit(pct)
+                        last_pct = pct
+                time.sleep(poll_interval)
+
+            stderr_text = process.stderr.read() if process.stderr else ''
+            if stderr_text:
+                lines = [ln for ln in stderr_text.splitlines() if ln.strip()]
+                if lines:
+                    logger.warning(f"Audio waveform ffmpeg stderr: {'; '.join(lines)}")
 
             if not os.path.isfile(output_path):
                 logger.warning("Audio waveform: ffmpeg produced no output — skipping")
