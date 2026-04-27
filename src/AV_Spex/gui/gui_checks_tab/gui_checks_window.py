@@ -78,44 +78,70 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
         outputs_layout = QVBoxLayout()
 
-        # Create widgets with descriptions on second line
+        # Access File row: parent checkbox on the left, sub-option checkboxes
+        # stacked on the right (mirrors the Fixity section's row layout).
+        access_row_container = QWidget()
+        access_row_layout = QHBoxLayout(access_row_container)
+        access_row_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Left: Access File checkbox + description
+        access_file_widget = QWidget()
+        access_file_layout = QVBoxLayout(access_file_widget)
+        access_file_layout.setContentsMargins(0, 0, 20, 0)
+        access_file_layout.setSpacing(2)
+
         self.access_file_cb = QCheckBox("Access File")
         self.access_file_cb.setStyleSheet("font-weight: bold;")
         access_file_desc = QLabel("Creates a h264 access file of the input .mkv file")
-        access_file_desc.setIndent(20)  # Indented to align with checkbox text
+        access_file_desc.setIndent(20)
+        access_file_desc.setStyleSheet("color: gray; font-size: 10px;")
 
-        # Access File sub-options. These rely on data produced by qct-parse
-        # (color bars detection) and frame analysis (sophisticated border
-        # detection); they are deeper-indented to read as sub-options of
-        # the Access File checkbox above and are disabled when it is off.
+        access_file_layout.addWidget(self.access_file_cb)
+        access_file_layout.addWidget(access_file_desc)
+        access_file_layout.addStretch()
+
+        access_row_layout.addWidget(access_file_widget)
+
+        # Right: Access File sub-options. These rely on data produced by
+        # qct-parse (color bars detection) and frame analysis (sophisticated
+        # border detection); they are disabled when Access File is off.
+        access_options_widget = QWidget()
+        access_options_layout = QVBoxLayout(access_options_widget)
+        access_options_layout.setContentsMargins(0, 0, 0, 0)
+        access_options_layout.setSpacing(5)
+
         self.access_trim_bars_cb = QCheckBox("Trim color bars from start")
-        self.access_trim_bars_cb.setStyleSheet("font-weight: bold; margin-left: 20px;")
+        self.access_trim_bars_cb.setStyleSheet("font-weight: bold;")
         access_trim_bars_desc = QLabel(
             "If qct-parse detects color bars at the head of the tape, skip them in the access file"
         )
-        access_trim_bars_desc.setIndent(40)
+        access_trim_bars_desc.setIndent(20)
         access_trim_bars_desc.setStyleSheet("color: gray; font-size: 10px;")
 
         self.access_crop_borders_cb = QCheckBox("Crop detected borders")
-        self.access_crop_borders_cb.setStyleSheet("font-weight: bold; margin-left: 20px;")
+        self.access_crop_borders_cb.setStyleSheet("font-weight: bold;")
         access_crop_borders_desc = QLabel(
             "If sophisticated border detection finds an active picture area, crop to it in the access file"
         )
-        access_crop_borders_desc.setIndent(40)
+        access_crop_borders_desc.setIndent(20)
         access_crop_borders_desc.setStyleSheet("color: gray; font-size: 10px;")
 
+        access_options_layout.addWidget(self.access_trim_bars_cb)
+        access_options_layout.addWidget(access_trim_bars_desc)
+        access_options_layout.addWidget(self.access_crop_borders_cb)
+        access_options_layout.addWidget(access_crop_borders_desc)
+
+        access_row_layout.addWidget(access_options_widget)
+        access_row_layout.addStretch()
+
+        outputs_layout.addWidget(access_row_container)
+
+        # HTML Report row stays as a normal stacked checkbox below.
         self.report_cb = QCheckBox("HTML Report")
         self.report_cb.setStyleSheet("font-weight: bold;")
         report_desc = QLabel("Creates a .html report containing the results of Spex Checks")
         report_desc.setIndent(20)
 
-        # Add to layout
-        outputs_layout.addWidget(self.access_file_cb)
-        outputs_layout.addWidget(access_file_desc)
-        outputs_layout.addWidget(self.access_trim_bars_cb)
-        outputs_layout.addWidget(access_trim_bars_desc)
-        outputs_layout.addWidget(self.access_crop_borders_cb)
-        outputs_layout.addWidget(access_crop_borders_desc)
         outputs_layout.addWidget(self.report_cb)
         outputs_layout.addWidget(report_desc)
 
