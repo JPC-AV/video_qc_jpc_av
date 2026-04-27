@@ -233,24 +233,12 @@ class ProcessingManager:
         
         # Process QCTools output and capture color bars detection
         qctools_results = process_qctools_output(
-            video_path, source_directory, destination_directory, video_id, 
+            video_path, source_directory, destination_directory, video_id,
             report_directory=report_directory,
             check_cancelled=self.check_cancelled, signals=self.signals
         )
         color_bars_end_time = qctools_results.get('color_bars_end_time') if qctools_results else None
-        
-        if self.signals:
-            self.signals.output_progress.emit("Creating access file...")
-        if self.check_cancelled():
-            return None
-        
-        # Generate access file
-        processing_results['access_file'] = process_access_file(
-            video_path, source_directory, video_id, 
-            check_cancelled=self.check_cancelled,
-            signals=self.signals
-        )
-        
+
         # Check if frame analysis is enabled
         frame_config = self.checks_config.outputs.frame_analysis
         if any([
@@ -265,21 +253,53 @@ class ProcessingManager:
                 self.signals.output_progress.emit("Performing enhanced frame analysis...")
                 # Reset the detail progress bar before frame analysis begins
                 self.signals.frame_analysis_progress.emit(0)
-            
+
             # Run the new unified frame analysis, passing color bars info from qct-parse
             frame_analysis_results = self.process_frame_analysis(
                 video_path, source_directory, destination_directory, video_id,
                 color_bars_end_time=color_bars_end_time
             )
-            
+
             processing_results['frame_analysis'] = frame_analysis_results
-        
+
         if self.signals:
             self.signals.frame_analysis_progress.emit(0)
+            self.signals.output_progress.emit("Creating access file...")
+        if self.check_cancelled():
+            return None
+
+        # Pull a crop region from sophisticated border detection (BRNG-refined when
+        # available). Skip simple detection — the user has opted not to crop in
+        # that case because the bordered area is a fixed fallback, not a real
+        # measurement. detection_method is 'sophisticated_refined' after BRNG
+        # refinement, plain 'sophisticated' otherwise.
+        access_crop_area = None
+        frame_results = processing_results.get('frame_analysis')
+        if frame_results:
+            border = frame_results.get('border_results')
+            if border:
+                method = border.get('detection_method') or ''
+                if method.startswith('sophisticated') and border.get('active_area'):
+                    access_crop_area = border['active_area']
+
+        # Generate access file (runs after qct-parse and frame analysis so it can
+        # take advantage of details learned during those steps). When qct-parse
+        # detected color bars, color_bars_end_time trims them off the access copy.
+        # When sophisticated border detection produced an active area, crop_area
+        # removes the borders.
+        processing_results['access_file'] = process_access_file(
+            video_path, source_directory, video_id,
+            check_cancelled=self.check_cancelled,
+            signals=self.signals,
+            color_bars_end_time=color_bars_end_time,
+            crop_area=access_crop_area
+        )
+
+        if self.signals:
             self.signals.output_progress.emit("Preparing report...")
         if self.check_cancelled():
             return None
-        
+
         # Generate final HTML report
         processing_results['html_report'] = generate_final_report(
             video_id, source_directory, report_directory, destination_directory,
