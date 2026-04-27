@@ -77,24 +77,48 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.themed_group_boxes['outputs'] = self.outputs_group
 
         outputs_layout = QVBoxLayout()
-        
+
         # Create widgets with descriptions on second line
         self.access_file_cb = QCheckBox("Access File")
         self.access_file_cb.setStyleSheet("font-weight: bold;")
         access_file_desc = QLabel("Creates a h264 access file of the input .mkv file")
         access_file_desc.setIndent(20)  # Indented to align with checkbox text
-        
+
+        # Access File sub-options. These rely on data produced by qct-parse
+        # (color bars detection) and frame analysis (sophisticated border
+        # detection); they are deeper-indented to read as sub-options of
+        # the Access File checkbox above and are disabled when it is off.
+        self.access_trim_bars_cb = QCheckBox("Trim color bars from start")
+        self.access_trim_bars_cb.setStyleSheet("font-weight: bold; margin-left: 20px;")
+        access_trim_bars_desc = QLabel(
+            "If qct-parse detects color bars at the head of the tape, skip them in the access file"
+        )
+        access_trim_bars_desc.setIndent(40)
+        access_trim_bars_desc.setStyleSheet("color: gray; font-size: 10px;")
+
+        self.access_crop_borders_cb = QCheckBox("Crop detected borders")
+        self.access_crop_borders_cb.setStyleSheet("font-weight: bold; margin-left: 20px;")
+        access_crop_borders_desc = QLabel(
+            "If sophisticated border detection finds an active picture area, crop to it in the access file"
+        )
+        access_crop_borders_desc.setIndent(40)
+        access_crop_borders_desc.setStyleSheet("color: gray; font-size: 10px;")
+
         self.report_cb = QCheckBox("HTML Report")
         self.report_cb.setStyleSheet("font-weight: bold;")
         report_desc = QLabel("Creates a .html report containing the results of Spex Checks")
         report_desc.setIndent(20)
-        
+
         # Add to layout
         outputs_layout.addWidget(self.access_file_cb)
         outputs_layout.addWidget(access_file_desc)
+        outputs_layout.addWidget(self.access_trim_bars_cb)
+        outputs_layout.addWidget(access_trim_bars_desc)
+        outputs_layout.addWidget(self.access_crop_borders_cb)
+        outputs_layout.addWidget(access_crop_borders_desc)
         outputs_layout.addWidget(self.report_cb)
         outputs_layout.addWidget(report_desc)
-        
+
         self.outputs_group.setLayout(outputs_layout)
         main_layout.addWidget(self.outputs_group)
     
@@ -394,8 +418,12 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.validate_filename_cb.stateChanged.connect(self.on_validate_filename_changed)
         
         # Outputs section
-        self.access_file_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file'])
+        self.access_file_cb.stateChanged.connect(self.on_access_file_changed)
+        self.access_trim_bars_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_trim_color_bars'])
+        )
+        self.access_crop_borders_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_crop_borders'])
         )
         self.report_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'report'])
@@ -453,6 +481,13 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
         # Outputs - now using booleans directly
         self.access_file_cb.setChecked(checks_config.outputs.access_file)
+        self.access_trim_bars_cb.setChecked(
+            getattr(checks_config.outputs, 'access_file_trim_color_bars', True)
+        )
+        self.access_crop_borders_cb.setChecked(
+            getattr(checks_config.outputs, 'access_file_crop_borders', True)
+        )
+        self._update_access_suboptions_enabled(checks_config.outputs.access_file)
         self.report_cb.setChecked(checks_config.outputs.report)
         
         # Fixity - now using booleans directly
@@ -533,6 +568,19 @@ class ChecksWindow(QWidget, ThemeableMixin):
             updates = {section: {field: new_value}}
             
         config_mgr.update_config('checks', updates)
+
+    def _update_access_suboptions_enabled(self, access_file_enabled):
+        """Enable or disable the Access File sub-options to match the parent checkbox."""
+        self.access_trim_bars_cb.setEnabled(access_file_enabled)
+        self.access_crop_borders_cb.setEnabled(access_file_enabled)
+
+    def on_access_file_changed(self, state):
+        """Persist Access File state and grey out its sub-options when off."""
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        self._update_access_suboptions_enabled(new_value)
+        if self.is_loading:
+            return
+        config_mgr.update_config('checks', {'outputs': {'access_file': new_value}})
 
     def on_validate_filename_changed(self, state):
         """Handle changes in validate filename checkbox"""

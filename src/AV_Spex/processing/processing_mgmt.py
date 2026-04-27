@@ -286,13 +286,18 @@ class ProcessingManager:
         # take advantage of details learned during those steps). When qct-parse
         # detected color bars, color_bars_end_time trims them off the access copy.
         # When sophisticated border detection produced an active area, crop_area
-        # removes the borders.
+        # removes the borders. Both behaviors are gated by user-controlled
+        # config flags so they can be disabled independently of the detection.
+        outputs_cfg = self.checks_config.outputs
+        trim_start = color_bars_end_time if outputs_cfg.access_file_trim_color_bars else None
+        crop_for_access = access_crop_area if outputs_cfg.access_file_crop_borders else None
+
         processing_results['access_file'] = process_access_file(
             video_path, source_directory, video_id,
             check_cancelled=self.check_cancelled,
             signals=self.signals,
-            color_bars_end_time=color_bars_end_time,
-            crop_area=access_crop_area
+            color_bars_end_time=trim_start,
+            crop_area=crop_for_access
         )
 
         if self.signals:
