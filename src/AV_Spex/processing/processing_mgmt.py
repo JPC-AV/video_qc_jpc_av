@@ -20,6 +20,7 @@ from AV_Spex.checks.ffprobe_check import parse_ffprobe
 from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_fixity
 from AV_Spex.checks.make_access import process_access_file
 from AV_Spex.checks.qct_parse import run_qctparse
+from AV_Spex.checks.bars_detection_clams import run_clams_bars_detection
 from AV_Spex.checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
 from AV_Spex.checks.frame_analysis import analyze_frame_quality
 
@@ -238,6 +239,12 @@ class ProcessingManager:
             check_cancelled=self.check_cancelled, signals=self.signals
         )
         color_bars_end_time = qctools_results.get('color_bars_end_time') if qctools_results else None
+        # CLAMS bars detection results (parallel observation; qct-parse remains
+        # authoritative for color_bars_end_time used downstream).
+        clams_bars_start_time = qctools_results.get('clams_bars_start_time') if qctools_results else None
+        clams_bars_end_time = qctools_results.get('clams_bars_end_time') if qctools_results else None
+        processing_results['clams_bars_start_time'] = clams_bars_start_time
+        processing_results['clams_bars_end_time'] = clams_bars_end_time
 
         # Check if frame analysis is enabled
         frame_config = self.checks_config.outputs.frame_analysis
@@ -522,7 +529,9 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
     results = {
         'qctools_output_path': None,
         'qctools_check_output': None,
-        'color_bars_end_time': None
+        'color_bars_end_time': None,
+        'clams_bars_start_time': None,
+        'clams_bars_end_time': None,
     }
 
     if check_cancelled and check_cancelled():
@@ -591,6 +600,35 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                 if end_seconds:
                     results['color_bars_end_time'] = end_seconds
                     logger.debug(f"Color bars detected, ending at {end_seconds:.1f}s\n")
+
+    # Parallel SMPTE bars detector (CLAMS / SSIM-based). Runs straight from the
+    # video file, independent of QCTools / qct-parse. Output is observation-only:
+    # qct-parse stays authoritative for the BRNG skip and access-file trim.
+    clams_bars_cfg = getattr(checks_config.tools, 'clams_bars_detection', None)
+    if clams_bars_cfg and getattr(clams_bars_cfg, 'run_tool', False):
+        if check_cancelled and check_cancelled():
+            return results
+        if not report_directory:
+            report_directory = dir_setup.make_report_dir(source_directory, video_id)
+        logger.info("Running CLAMS bars detection (parallel comparison)")
+        clams_start, clams_end = run_clams_bars_detection(
+            video_path=video_path,
+            report_directory=report_directory,
+            video_id=video_id,
+            threshold=clams_bars_cfg.threshold,
+            sample_ratio=clams_bars_cfg.sample_ratio,
+            stop_at_frame=clams_bars_cfg.stop_at_frame,
+            min_frame_count=clams_bars_cfg.min_frame_count,
+            stop_after_one=clams_bars_cfg.stop_after_one,
+            check_cancelled=check_cancelled,
+            signals=signals,
+        )
+        results['clams_bars_start_time'] = clams_start
+        results['clams_bars_end_time'] = clams_end
+        if clams_end is not None:
+            logger.debug(f"CLAMS bars detected, ending at {clams_end:.1f}s\n")
+        if signals and hasattr(signals, 'step_completed'):
+            signals.step_completed.emit("CLAMS Bars Detection")
 
     return results
 
