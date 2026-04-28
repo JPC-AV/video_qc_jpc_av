@@ -447,7 +447,15 @@ def update_tool_setting(tool_names: List[str], value: bool):
                     logger.warning(f"Invalid field '{field}' for qct_parse")
                     continue
                 updates['tools'][tool_name] = {field: value}
-                
+
+            # CLAMS bars detection: bool flag + tunable numeric parameters
+            elif tool_name == 'clams_bars_detection':
+                if field not in ('run_tool', 'threshold', 'sample_ratio', 'stop_at_frame',
+                                 'min_frame_count', 'stop_after_one'):
+                    logger.warning(f"Invalid field '{field}' for clams_bars_detection")
+                    continue
+                updates['tools'][tool_name] = {field: value}
+
             # Standard tools with check_tool/run_tool fields
             else:
                 if field not in ('check_tool', 'run_tool'):
@@ -1253,6 +1261,14 @@ profile_step1 = {
             "thumbExport": False,
             "audio_analysis": False,
             "detect_clamped_levels": False
+        },
+        "clams_bars_detection": {
+            "run_tool": False,
+            "threshold": 0.7,
+            "sample_ratio": 30,
+            "stop_at_frame": 9000,
+            "min_frame_count": 10,
+            "stop_after_one": True
         }
     },
     "outputs": {
@@ -1307,6 +1323,14 @@ profile_step2 = {
             "thumbExport": True,
             "audio_analysis": True,
             "detect_clamped_levels": True
+        },
+        "clams_bars_detection": {
+            "run_tool": False,
+            "threshold": 0.7,
+            "sample_ratio": 30,
+            "stop_at_frame": 9000,
+            "min_frame_count": 10,
+            "stop_after_one": True
         }
     },
     "outputs": {
@@ -1361,6 +1385,14 @@ profile_allOff = {
             "thumbExport": False,
             "audio_analysis": False,
             "detect_clamped_levels": False
+        },
+        "clams_bars_detection": {
+            "run_tool": False,
+            "threshold": 0.7,
+            "sample_ratio": 30,
+            "stop_at_frame": 9000,
+            "min_frame_count": 10,
+            "stop_after_one": True
         }
     },
     "outputs": {

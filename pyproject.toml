@@ -27,6 +27,7 @@ dependencies = [
     "opencv-python-headless>=4.10.0",
     "scipy>=1.14.0",
     "matplotlib>=3.9.0",
+    "scikit-image>=0.21.0",
 ]
 
 [project.urls]

@@ -67,6 +67,14 @@
       "audio_analysis": false,
       "detect_clamped_levels": false,
       "tagname": ""
+    },
+    "clams_bars_detection": {
+      "run_tool": false,
+      "threshold": 0.7,
+      "sample_ratio": 30,
+      "stop_at_frame": 9000,
+      "min_frame_count": 10,
+      "stop_after_one": true
     }
   },
   "validate_filename": false

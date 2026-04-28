@@ -323,6 +323,15 @@ class QCTParseToolConfig:
     detect_clamped_levels: bool = False
 
 @dataclass
+class ClamsBarsDetectionConfig:
+    run_tool: bool = False
+    threshold: float = 0.7
+    sample_ratio: int = 30
+    stop_at_frame: int = 9000
+    min_frame_count: int = 10
+    stop_after_one: bool = True
+
+@dataclass
 class ToolsConfig:
     exiftool: BasicToolConfig
     ffprobe: BasicToolConfig
@@ -331,6 +340,9 @@ class ToolsConfig:
     mediatrace: BasicToolConfig
     qctools: QCToolsConfig
     qct_parse: QCTParseToolConfig
+    clams_bars_detection: ClamsBarsDetectionConfig = field(
+        default_factory=ClamsBarsDetectionConfig
+    )
 
 @dataclass
 class ChecksConfig:
@@ -397,7 +409,8 @@ class ChecksProfile:
             thumbExport=False,
             audio_analysis=False,
             detect_clamped_levels=False
-        )
+        ),
+        clams_bars_detection=ClamsBarsDetectionConfig()
     ))
 
 @dataclass
