@@ -208,5 +208,5 @@ def run_clams_bars_detection(
         return s_seconds, e_seconds
 
     _write_durations_csv(durations_csv, None, None)
-    logger.debug("CLAMS bars detection: no color bars run met the minimum frame count.")
+    logger.debug("CLAMS bars detection: no color bars run met the minimum frame count.\n")
     return None, None

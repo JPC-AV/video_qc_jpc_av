@@ -1766,6 +1766,136 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
     return colorbars_html
 
 
+def _parse_bars_durations_csv(csv_path):
+    """
+    Parse a bars-detection durations CSV in the qct-parse / CLAMS shared format.
+
+    Row 0 col 0 either contains "color bars found" (then row 1 has start, end
+    timestamps) or "no color bars" (no row 1).
+
+    Returns:
+        (start_seconds, end_seconds) on success, or (None, None) when no bars
+        were detected or the file is unreadable.
+    """
+    if not csv_path or not os.path.isfile(csv_path):
+        return None, None
+
+    def to_seconds(ts):
+        try:
+            h, m, s = ts.split(":")
+            return int(h) * 3600 + int(m) * 60 + float(s)
+        except (ValueError, AttributeError):
+            return None
+
+    try:
+        with open(csv_path, "r") as f:
+            rows = list(csv.reader(f))
+        if len(rows) >= 2 and rows[0] and "color bars found" in rows[0][0]:
+            start = to_seconds(rows[1][0]) if len(rows[1]) > 0 else None
+            end = to_seconds(rows[1][1]) if len(rows[1]) > 1 else None
+            return start, end
+    except Exception as e:
+        logger.warning(f"Could not parse bars durations CSV {csv_path}: {e}")
+    return None, None
+
+
+def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_tolerance_s=1.0):
+    """
+    Render a side-by-side comparison of the qct-parse and CLAMS SSIM bars detectors.
+
+    Returns None when neither detector produced output (so the section is omitted
+    from the report entirely). When only one ran, only that column is shown.
+    """
+    qct_run = bool(qct_csv_path and os.path.isfile(qct_csv_path))
+    clams_run = bool(clams_csv_path and os.path.isfile(clams_csv_path))
+    if not qct_run and not clams_run:
+        return None
+
+    qct_start, qct_end = _parse_bars_durations_csv(qct_csv_path)
+    clams_start, clams_end = _parse_bars_durations_csv(clams_csv_path)
+
+    def fmt(seconds):
+        if seconds is None:
+            return "—"
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = seconds - (h * 3600) - (m * 60)
+        return f"{h:02d}:{m:02d}:{s:06.3f}"
+
+    def found(start, end):
+        return "Yes" if (start is not None and end is not None) else "No"
+
+    # Agreement: both ran, both detected bars, end times within tolerance.
+    agreement_label = "—"
+    agreement_color = "#666"
+    if qct_run and clams_run:
+        if qct_end is not None and clams_end is not None:
+            delta = abs(qct_end - clams_end)
+            if delta <= agreement_tolerance_s:
+                agreement_label = f"Agree (Δ end = {delta:.2f}s)"
+                agreement_color = "#0a5f1c"
+            else:
+                agreement_label = f"Disagree (Δ end = {delta:.2f}s)"
+                agreement_color = "#a02020"
+        elif qct_end is None and clams_end is None:
+            agreement_label = "Both reported no bars"
+            agreement_color = "#0a5f1c"
+        else:
+            which = "qct-parse" if qct_end is not None else "CLAMS"
+            agreement_label = f"Disagree (only {which} detected bars)"
+            agreement_color = "#a02020"
+
+    columns = []
+    if qct_run:
+        columns.append(("qct-parse (authoritative)", qct_start, qct_end))
+    if clams_run:
+        columns.append(("CLAMS SSIM (parallel)", clams_start, clams_end))
+
+    header_cells = "".join(
+        f'<th style="text-align: left; padding: 6px 12px;">{label}</th>'
+        for label, _, _ in columns
+    )
+    found_cells = "".join(
+        f'<td style="padding: 6px 12px;">{found(s, e)}</td>'
+        for _, s, e in columns
+    )
+    start_cells = "".join(
+        f'<td style="padding: 6px 12px;">{fmt(s)}</td>' for _, s, _ in columns
+    )
+    end_cells = "".join(
+        f'<td style="padding: 6px 12px;">{fmt(e)}</td>' for _, _, e in columns
+    )
+
+    note = (
+        "<p style=\"font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;\">"
+        "qct-parse drives downstream behavior (BRNG-skip, access-file trim). "
+        "The CLAMS detector runs in parallel for comparison only."
+        "</p>"
+    )
+
+    html = f"""
+    <table style="border-collapse: collapse; margin-top: 10px;">
+        <thead>
+            <tr style="background-color: #f5e9e3;">
+                <th style="text-align: left; padding: 6px 12px;"></th>
+                {header_cells}
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Bars detected</td>{found_cells}</tr>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Start</td>{start_cells}</tr>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">End</td>{end_cells}</tr>
+        </tbody>
+    </table>
+    <p style="margin: 12px 0 0 0;">
+        <span style="font-weight: bold;">Agreement:</span>
+        <span style="color: {agreement_color};">{agreement_label}</span>
+    </p>
+    {note}
+    """
+    return html
+
+
 def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, video_id, failure_csv_path=None, check_cancelled=None):
     """
     Creates HTML visualizations showing pie charts of profile check results with thumbnails 
@@ -3862,6 +3992,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, difference_csv = find_report_csvs(report_directory)
 
+    # CLAMS bars-detection durations CSV (filename matches the writer in
+    # checks/bars_detection_clams.py); present only when the parallel detector ran.
+    clams_bars_durations_csv = os.path.join(report_directory, "clams_bars_colorbars_durations.csv")
+    if not os.path.isfile(clams_bars_durations_csv):
+        clams_bars_durations_csv = None
+
     if check_cancelled():
         return
     
@@ -4035,6 +4171,13 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     else:
         tags_summary_html = None
 
+    # Side-by-side comparison of qct-parse and CLAMS bars detectors. None
+    # unless at least one of the two CSVs is present.
+    bars_comparison_html = make_bars_detection_comparison_html(
+        qctools_colorbars_duration_output,
+        clams_bars_durations_csv,
+    ) if clams_bars_durations_csv else None
+
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
     audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
@@ -4161,6 +4304,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-qct-parse-notice', 'QCT-Parse Analysis'))
     if colorbars_html:
         toc_entries.append(('section-colorbars', 'Color Bars Detection'))
+    if bars_comparison_html:
+        toc_entries.append(('section-bars-comparison', 'Bars Detection Comparison'))
     if colorbars_eval_html:
         toc_entries.append(('section-colorbars-eval', 'Colorbars Threshold Evaluation'))
     if clamped_levels_html:
@@ -4426,6 +4571,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3 id="section-colorbars">{colorbars_header}</h3>
         {colorbars_html}
+        """
+
+    if bars_comparison_html:
+        html_template += f"""
+        <h3 id="section-bars-comparison">Bars Detection Comparison (qct-parse vs CLAMS SSIM)</h3>
+        {bars_comparison_html}
         """
 
     if colorbars_eval_html:

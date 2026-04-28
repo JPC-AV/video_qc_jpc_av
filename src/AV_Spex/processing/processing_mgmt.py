@@ -610,7 +610,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             return results
         if not report_directory:
             report_directory = dir_setup.make_report_dir(source_directory, video_id)
-        logger.info("Running CLAMS bars detection (parallel comparison)")
+        logger.info("CLAMS bars detection: starting (parallel comparison run)")
         clams_start, clams_end = run_clams_bars_detection(
             video_path=video_path,
             report_directory=report_directory,
@@ -626,7 +626,12 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         results['clams_bars_start_time'] = clams_start
         results['clams_bars_end_time'] = clams_end
         if clams_end is not None:
-            logger.debug(f"CLAMS bars detected, ending at {clams_end:.1f}s\n")
+            logger.info(
+                f"CLAMS bars detection: finished — bars detected, "
+                f"ending at {clams_end:.1f}s\n"
+            )
+        else:
+            logger.info("CLAMS bars detection: finished — no color bars run met the minimum frame count\n")
         if signals and hasattr(signals, 'step_completed'):
             signals.step_completed.emit("CLAMS Bars Detection")
 
