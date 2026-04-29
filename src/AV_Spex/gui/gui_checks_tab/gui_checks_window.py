@@ -461,9 +461,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.access_crop_borders_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_crop_borders'])
         )
-        self.access_crop_to_480_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_crop_to_480'])
-        )
+        self.access_crop_to_480_cb.stateChanged.connect(self.on_access_crop_to_480_changed)
         self.report_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'report'])
         )
@@ -612,10 +610,17 @@ class ChecksWindow(QWidget, ThemeableMixin):
         config_mgr.update_config('checks', updates)
 
     def _update_access_suboptions_enabled(self, access_file_enabled):
-        """Enable or disable the Access File sub-options to match the parent checkbox."""
+        """Enable or disable the Access File sub-options to match the parent checkbox.
+
+        Crop-to-480 must be on for Crop-borders to be available, since border
+        crops are scaled to the chosen output size and the 720x486 path skips
+        the scale entirely.
+        """
         self.access_trim_bars_cb.setEnabled(access_file_enabled)
-        self.access_crop_borders_cb.setEnabled(access_file_enabled)
         self.access_crop_to_480_cb.setEnabled(access_file_enabled)
+        self.access_crop_borders_cb.setEnabled(
+            access_file_enabled and self.access_crop_to_480_cb.isChecked()
+        )
 
     def on_access_file_changed(self, state):
         """Persist Access File state and grey out its sub-options when off."""
@@ -624,6 +629,29 @@ class ChecksWindow(QWidget, ThemeableMixin):
         if self.is_loading:
             return
         config_mgr.update_config('checks', {'outputs': {'access_file': new_value}})
+
+    def on_access_crop_to_480_changed(self, state):
+        """Persist crop-to-480 and gate crop-borders on it.
+
+        Crop-borders only makes sense when the access file is being scaled to
+        720x480 — when crop-to-480 is off, NTSC stays at native 720x486 and we
+        skip the active-area scale, so disable + uncheck crop-borders.
+        """
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        updates = {'outputs': {'access_file_crop_to_480': new_value}}
+
+        if not new_value:
+            self.access_crop_borders_cb.blockSignals(True)
+            self.access_crop_borders_cb.setChecked(False)
+            self.access_crop_borders_cb.blockSignals(False)
+            updates['outputs']['access_file_crop_borders'] = False
+
+        access_file_enabled = self.access_file_cb.isChecked()
+        self.access_crop_borders_cb.setEnabled(access_file_enabled and new_value)
+
+        if self.is_loading:
+            return
+        config_mgr.update_config('checks', updates)
 
     def on_validate_filename_changed(self, state):
         """Handle changes in validate filename checkbox"""
