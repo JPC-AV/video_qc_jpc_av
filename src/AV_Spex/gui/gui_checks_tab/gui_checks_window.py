@@ -113,7 +113,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.access_trim_bars_cb = QCheckBox("Trim color bars from start")
         self.access_trim_bars_cb.setStyleSheet("font-weight: bold;")
         access_trim_bars_desc = QLabel(
-            "If qct-parse detects color bars at the head of the tape, skip them in the access file"
+            "If qct-parse detects color bars at the head of the tape,<br>skip them in the access file"
         )
         access_trim_bars_desc.setIndent(20)
         access_trim_bars_desc.setStyleSheet("color: gray; font-size: 10px;")
@@ -121,7 +121,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.access_crop_borders_cb = QCheckBox("Crop detected borders")
         self.access_crop_borders_cb.setStyleSheet("font-weight: bold;")
         access_crop_borders_desc = QLabel(
-            "If sophisticated border detection finds an active picture area, crop to it in the access file"
+            "If sophisticated border detection finds an active picture area,<br>crop to it in the access file"
         )
         access_crop_borders_desc.setIndent(20)
         access_crop_borders_desc.setStyleSheet("color: gray; font-size: 10px;")
@@ -129,7 +129,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.access_crop_to_480_cb = QCheckBox("Crop NTSC to 720x480")
         self.access_crop_to_480_cb.setStyleSheet("font-weight: bold;")
         access_crop_to_480_desc = QLabel(
-            "Trim NTSC sources to 720x480; if unchecked, keep the native 720x486 height"
+            "Trim NTSC sources to 720x480;<br>if unchecked, keep the native 720x486 height"
         )
         access_crop_to_480_desc.setIndent(20)
         access_crop_to_480_desc.setStyleSheet("color: gray; font-size: 10px;")
