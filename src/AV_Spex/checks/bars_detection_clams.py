@@ -152,14 +152,26 @@ def run_clams_bars_detection(
     start_frame = None
     cur_frame = sampled_frames[0] if sampled_frames else 0
 
+    total_samples = len(sampled_frames)
+    progress_interval = max(1, total_samples // 100)
+    last_progress_pct = 0
+    emit_progress = signals is not None and hasattr(signals, 'clams_bars_progress') and total_samples > 0
+
     try:
         with open(ssim_csv, "w", newline="") as ssim_file:
             ssim_writer = csv.writer(ssim_file)
             ssim_writer.writerow(["frame", "timestamp", "ssim_score", "exceeds_threshold"])
 
-            for cur_frame in sampled_frames:
+            for sample_idx, cur_frame in enumerate(sampled_frames):
                 if check_cancelled and check_cancelled():
                     break
+
+                if emit_progress and sample_idx % progress_interval == 0:
+                    pct = int((sample_idx / total_samples) * 100)
+                    pct = min(99, max(0, pct))
+                    if pct > last_progress_pct:
+                        signals.clams_bars_progress.emit(pct)
+                        last_progress_pct = pct
 
                 seek_target = max(cur_frame - 1, 0)
                 cap.set(cv2.CAP_PROP_POS_FRAMES, seek_target)
@@ -195,6 +207,9 @@ def run_clams_bars_detection(
 
     if in_run and start_frame is not None and cur_frame - start_frame > min_frame_count:
         bars_runs.append((start_frame, cur_frame))
+
+    if emit_progress:
+        signals.clams_bars_progress.emit(100)
 
     if bars_runs:
         s_frame, e_frame = bars_runs[0]

@@ -611,6 +611,8 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         if not report_directory:
             report_directory = dir_setup.make_report_dir(source_directory, video_id)
         logger.info("CLAMS bars detection: starting (parallel comparison run)")
+        if signals and hasattr(signals, 'clams_bars_progress'):
+            signals.clams_bars_progress.emit(0)
         clams_start, clams_end = run_clams_bars_detection(
             video_path=video_path,
             report_directory=report_directory,
