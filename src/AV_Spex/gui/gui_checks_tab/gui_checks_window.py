@@ -136,10 +136,10 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
         access_options_layout.addWidget(self.access_trim_bars_cb)
         access_options_layout.addWidget(access_trim_bars_desc)
-        access_options_layout.addWidget(self.access_crop_borders_cb)
-        access_options_layout.addWidget(access_crop_borders_desc)
         access_options_layout.addWidget(self.access_crop_to_480_cb)
         access_options_layout.addWidget(access_crop_to_480_desc)
+        access_options_layout.addWidget(self.access_crop_borders_cb)
+        access_options_layout.addWidget(access_crop_borders_desc)
 
         access_row_layout.addWidget(access_options_widget)
         access_row_layout.addStretch()
