@@ -126,10 +126,20 @@ class ChecksWindow(QWidget, ThemeableMixin):
         access_crop_borders_desc.setIndent(20)
         access_crop_borders_desc.setStyleSheet("color: gray; font-size: 10px;")
 
+        self.access_crop_to_480_cb = QCheckBox("Crop NTSC to 720x480")
+        self.access_crop_to_480_cb.setStyleSheet("font-weight: bold;")
+        access_crop_to_480_desc = QLabel(
+            "Trim NTSC sources to 720x480; if unchecked, keep the native 720x486 height"
+        )
+        access_crop_to_480_desc.setIndent(20)
+        access_crop_to_480_desc.setStyleSheet("color: gray; font-size: 10px;")
+
         access_options_layout.addWidget(self.access_trim_bars_cb)
         access_options_layout.addWidget(access_trim_bars_desc)
         access_options_layout.addWidget(self.access_crop_borders_cb)
         access_options_layout.addWidget(access_crop_borders_desc)
+        access_options_layout.addWidget(self.access_crop_to_480_cb)
+        access_options_layout.addWidget(access_crop_to_480_desc)
 
         access_row_layout.addWidget(access_options_widget)
         access_row_layout.addStretch()
@@ -451,6 +461,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.access_crop_borders_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_crop_borders'])
         )
+        self.access_crop_to_480_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_crop_to_480'])
+        )
         self.report_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'report'])
         )
@@ -512,6 +525,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
         )
         self.access_crop_borders_cb.setChecked(
             getattr(checks_config.outputs, 'access_file_crop_borders', True)
+        )
+        self.access_crop_to_480_cb.setChecked(
+            getattr(checks_config.outputs, 'access_file_crop_to_480', True)
         )
         self._update_access_suboptions_enabled(checks_config.outputs.access_file)
         self.report_cb.setChecked(checks_config.outputs.report)
@@ -599,6 +615,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         """Enable or disable the Access File sub-options to match the parent checkbox."""
         self.access_trim_bars_cb.setEnabled(access_file_enabled)
         self.access_crop_borders_cb.setEnabled(access_file_enabled)
+        self.access_crop_to_480_cb.setEnabled(access_file_enabled)
 
     def on_access_file_changed(self, state):
         """Persist Access File state and grey out its sub-options when off."""

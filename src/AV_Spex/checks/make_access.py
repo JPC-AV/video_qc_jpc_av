@@ -39,18 +39,20 @@ def get_video_dimensions(video_path):
         return None, None
 
 
-def make_access_file(video_path, output_path, check_cancelled=None, signals=None, start_time=None, crop_area=None):
+def make_access_file(video_path, output_path, check_cancelled=None, signals=None, start_time=None, crop_area=None, crop_to_480=True):
     """Create access file using ffmpeg.
 
     If start_time (seconds) is provided and > 0, the input is seeked past that
     point so head content (e.g. color bars detected by qct-parse) is excluded
     from the access copy.
 
-    Output dimensions follow the source standard: NTSC (720x486 input) → 720x480,
-    PAL (720x576 input) → 720x576. With no crop_area, the NTSC input is trimmed
-    by 3 lines top and bottom; PAL is left at its native height. With a crop_area
-    from frame analysis, the active region is cropped and then scaled to the
-    standard output size for that source.
+    Output dimensions for NTSC sources are controlled by crop_to_480:
+      * crop_to_480=True (default): NTSC (720x486 input) → 720x480 by trimming
+        3 lines top and bottom. With a crop_area, the active region is cropped
+        and then scaled to 720x480.
+      * crop_to_480=False: NTSC stays at native 720x486. With a crop_area, the
+        active region is cropped and then scaled to 720x486.
+    PAL (720x576 input) is left at native height regardless of crop_to_480.
     """
 
     logger.debug(f'Running ffmpeg on {os.path.basename(video_path)} to create access copy {os.path.basename(output_path)}\n')
@@ -70,7 +72,8 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
     if in_h == 576:
         out_w, out_h = 720, 576  # PAL
     elif in_h == 486:
-        out_w, out_h = 720, 480  # NTSC
+        # NTSC: 720x480 when crop_to_480, else native 720x486.
+        out_w, out_h = (720, 480) if crop_to_480 else (720, 486)
     else:
         # Unknown standard — fall back to the input size so we don't distort.
         out_w, out_h = in_w, in_h
@@ -95,11 +98,12 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
             )
         else:
             logger.info(f'Cropping access copy to active area {w}x{h} at offset ({x},{y})\n')
-    elif in_h == 486:
+    elif in_h == 486 and crop_to_480:
         # NTSC 720x486: drop top 3 and bottom 3 lines to produce 720x480
         vf_filters.append('crop=720:480:0:3')
         logger.info('Cropping top/bottom 3 lines of access copy to produce 720x480 output\n')
-    # PAL (576) and unknown sources pass through with no default crop.
+    # PAL (576), NTSC with crop_to_480 disabled, and unknown sources pass
+    # through with no default crop.
     vf_filters.extend(['yadif=1', 'format=yuv420p'])
 
     ffmpeg_command.extend([
@@ -144,7 +148,7 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
     print("\n")
 
 
-def process_access_file(video_path, source_directory, video_id, check_cancelled=None, signals=None, color_bars_end_time=None, crop_area=None):
+def process_access_file(video_path, source_directory, video_id, check_cancelled=None, signals=None, color_bars_end_time=None, crop_area=None, crop_to_480=True):
     """
     Generate access file if configured and not already existing.
 
@@ -160,6 +164,8 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
         crop_area (tuple, optional): (x, y, w, h) active picture area from sophisticated
             border detection (BRNG-refined when available). When provided, borders are
             cropped off the access copy.
+        crop_to_480 (bool): When True (default), NTSC sources are output at 720x480.
+            When False, NTSC sources keep their native 720x486 height.
 
     Returns:
         str or None: Path to the created access file, or None
@@ -192,7 +198,8 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
             video_path, access_output_path,
             check_cancelled=check_cancelled, signals=signals,
             start_time=color_bars_end_time,
-            crop_area=crop_area
+            crop_area=crop_area,
+            crop_to_480=crop_to_480
         )
         if signals:
             signals.step_completed.emit("Generate Access File")

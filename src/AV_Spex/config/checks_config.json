@@ -3,6 +3,7 @@
     "access_file": false,
     "access_file_trim_color_bars": true,
     "access_file_crop_borders": true,
+    "access_file_crop_to_480": true,
     "report": false,
     "qctools_ext": "qctools.xml.gz",
     "frame_analysis": {

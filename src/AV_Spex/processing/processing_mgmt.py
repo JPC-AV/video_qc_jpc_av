@@ -297,7 +297,8 @@ class ProcessingManager:
             check_cancelled=self.check_cancelled,
             signals=self.signals,
             color_bars_end_time=trim_start,
-            crop_area=crop_for_access
+            crop_area=crop_for_access,
+            crop_to_480=outputs_cfg.access_file_crop_to_480
         )
 
         if self.signals:
