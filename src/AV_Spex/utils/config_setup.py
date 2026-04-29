@@ -280,6 +280,9 @@ class OutputsConfig:
     report: bool
     qctools_ext: str # Must be one of VALID_QCTOOLS_EXTENSIONS
     frame_analysis: FrameAnalysisConfig = field(default_factory=FrameAnalysisConfig)
+    access_file_trim_color_bars: bool = True
+    access_file_crop_borders: bool = True
+    access_file_crop_to_480: bool = True
 
 @dataclass
 class ChecksumAlgorithm(Enum):
