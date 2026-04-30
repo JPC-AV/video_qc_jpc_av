@@ -21,6 +21,7 @@ from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_
 from AV_Spex.checks.make_access import process_access_file
 from AV_Spex.checks.qct_parse import run_qctparse
 from AV_Spex.checks.bars_detection_clams import run_clams_bars_detection
+from AV_Spex.checks.tone_detection_clams import run_clams_tone_detection
 from AV_Spex.checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
 from AV_Spex.checks.frame_analysis import analyze_frame_quality
 
@@ -245,6 +246,9 @@ class ProcessingManager:
         clams_bars_end_time = qctools_results.get('clams_bars_end_time') if qctools_results else None
         processing_results['clams_bars_start_time'] = clams_bars_start_time
         processing_results['clams_bars_end_time'] = clams_bars_end_time
+        # CLAMS tone detection results (parallel observation; standalone from
+        # bars detection — uses the audio track instead of the video track).
+        processing_results['clams_tones'] = qctools_results.get('clams_tones', []) if qctools_results else []
 
         # Check if frame analysis is enabled
         frame_config = self.checks_config.outputs.frame_analysis
@@ -532,6 +536,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         'color_bars_end_time': None,
         'clams_bars_start_time': None,
         'clams_bars_end_time': None,
+        'clams_tones': [],
     }
 
     if check_cancelled and check_cancelled():
@@ -636,6 +641,37 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             logger.info("CLAMS bars detection: finished — no color bars run met the minimum frame count\n")
         if signals and hasattr(signals, 'step_completed'):
             signals.step_completed.emit("CLAMS Bars Detection")
+
+    # CLAMS tone detector (cross-correlation on consecutive 250 ms audio chunks).
+    # Runs straight from the video file's audio track, independent of QCTools.
+    clams_tone_cfg = getattr(checks_config.tools, 'clams_tone_detection', None)
+    if clams_tone_cfg and getattr(clams_tone_cfg, 'run_tool', False):
+        if check_cancelled and check_cancelled():
+            return results
+        if not report_directory:
+            report_directory = dir_setup.make_report_dir(source_directory, video_id)
+        logger.info("CLAMS tone detection: starting")
+        if signals and hasattr(signals, 'clams_tone_progress'):
+            signals.clams_tone_progress.emit(0)
+        tone_results = run_clams_tone_detection(
+            video_path=video_path,
+            report_directory=report_directory,
+            video_id=video_id,
+            tolerance=clams_tone_cfg.tolerance,
+            min_tone_duration_ms=clams_tone_cfg.min_tone_duration_ms,
+            stop_at_seconds=clams_tone_cfg.stop_at_seconds,
+            check_cancelled=check_cancelled,
+            signals=signals,
+        )
+        results['clams_tones'] = tone_results
+        if tone_results:
+            logger.info(
+                f"CLAMS tone detection: finished — {len(tone_results)} tone(s) detected\n"
+            )
+        else:
+            logger.info("CLAMS tone detection: finished — no tones met the minimum duration threshold\n")
+        if signals and hasattr(signals, 'step_completed'):
+            signals.step_completed.emit("CLAMS Tone Detection")
 
     return results
 

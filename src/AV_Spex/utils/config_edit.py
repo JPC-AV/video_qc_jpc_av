@@ -456,6 +456,14 @@ def update_tool_setting(tool_names: List[str], value: bool):
                     continue
                 updates['tools'][tool_name] = {field: value}
 
+            # CLAMS tone detection: bool flag + tunable numeric parameters
+            elif tool_name == 'clams_tone_detection':
+                if field not in ('run_tool', 'tolerance', 'min_tone_duration_ms',
+                                 'stop_at_seconds'):
+                    logger.warning(f"Invalid field '{field}' for clams_tone_detection")
+                    continue
+                updates['tools'][tool_name] = {field: value}
+
             # Standard tools with check_tool/run_tool fields
             else:
                 if field not in ('check_tool', 'run_tool'):
@@ -1269,6 +1277,12 @@ profile_step1 = {
             "stop_at_frame": 9000,
             "min_frame_count": 10,
             "stop_after_one": True
+        },
+        "clams_tone_detection": {
+            "run_tool": False,
+            "tolerance": 1.0,
+            "min_tone_duration_ms": 2000,
+            "stop_at_seconds": 3600
         }
     },
     "outputs": {
@@ -1331,6 +1345,12 @@ profile_step2 = {
             "stop_at_frame": 9000,
             "min_frame_count": 10,
             "stop_after_one": True
+        },
+        "clams_tone_detection": {
+            "run_tool": False,
+            "tolerance": 1.0,
+            "min_tone_duration_ms": 2000,
+            "stop_at_seconds": 3600
         }
     },
     "outputs": {
@@ -1393,6 +1413,12 @@ profile_allOff = {
             "stop_at_frame": 9000,
             "min_frame_count": 10,
             "stop_after_one": True
+        },
+        "clams_tone_detection": {
+            "run_tool": False,
+            "tolerance": 1.0,
+            "min_tone_duration_ms": 2000,
+            "stop_at_seconds": 3600
         }
     },
     "outputs": {

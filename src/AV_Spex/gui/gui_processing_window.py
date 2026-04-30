@@ -331,6 +331,9 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             clams_bars_cfg = getattr(checks_config.tools, 'clams_bars_detection', None)
             if clams_bars_cfg and getattr(clams_bars_cfg, 'run_tool', False):
                 self._add_step_item("CLAMS Bars Detection")
+            clams_tone_cfg = getattr(checks_config.tools, 'clams_tone_detection', None)
+            if clams_tone_cfg and getattr(clams_tone_cfg, 'run_tool', False):
+                self._add_step_item("CLAMS Tone Detection")
             
             # Frame Analysis
             if hasattr(checks_config.outputs, 'frame_analysis'):

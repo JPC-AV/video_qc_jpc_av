@@ -332,6 +332,13 @@ class ClamsBarsDetectionConfig:
     stop_after_one: bool = True
 
 @dataclass
+class ClamsToneDetectionConfig:
+    run_tool: bool = False
+    tolerance: float = 1.0
+    min_tone_duration_ms: int = 2000
+    stop_at_seconds: int = 3600
+
+@dataclass
 class ToolsConfig:
     exiftool: BasicToolConfig
     ffprobe: BasicToolConfig
@@ -342,6 +349,9 @@ class ToolsConfig:
     qct_parse: QCTParseToolConfig
     clams_bars_detection: ClamsBarsDetectionConfig = field(
         default_factory=ClamsBarsDetectionConfig
+    )
+    clams_tone_detection: ClamsToneDetectionConfig = field(
+        default_factory=ClamsToneDetectionConfig
     )
 
 @dataclass
@@ -410,7 +420,8 @@ class ChecksProfile:
             audio_analysis=False,
             detect_clamped_levels=False
         ),
-        clams_bars_detection=ClamsBarsDetectionConfig()
+        clams_bars_detection=ClamsBarsDetectionConfig(),
+        clams_tone_detection=ClamsToneDetectionConfig()
     ))
 
 @dataclass

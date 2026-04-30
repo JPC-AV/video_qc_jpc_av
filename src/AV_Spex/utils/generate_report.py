@@ -1896,6 +1896,106 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
     return html
 
 
+def _parse_tone_detection_csv(csv_path):
+    """
+    Parse a CLAMS tone detection durations CSV.
+
+    Row 0 col 0 either contains "tones found" (followed by one row per tone
+    with start, end timestamps) or "no tones" (no further rows).
+
+    Returns:
+        List of (start_seconds, end_seconds) tuples, or [] when no tones.
+    """
+    if not csv_path or not os.path.isfile(csv_path):
+        return []
+
+    def to_seconds(ts):
+        try:
+            h, m, s = ts.split(":")
+            return int(h) * 3600 + int(m) * 60 + float(s)
+        except (ValueError, AttributeError):
+            return None
+
+    tones = []
+    try:
+        with open(csv_path, "r") as f:
+            rows = list(csv.reader(f))
+        if rows and rows[0] and "tones found" in rows[0][0]:
+            for row in rows[1:]:
+                if len(row) >= 2:
+                    s = to_seconds(row[0])
+                    e = to_seconds(row[1])
+                    if s is not None and e is not None:
+                        tones.append((s, e))
+    except Exception as e:
+        logger.warning(f"Could not parse tone detection CSV {csv_path}: {e}")
+    return tones
+
+
+def make_tone_detection_html(tone_csv_path):
+    """
+    Render the CLAMS tone detection results as an HTML table.
+
+    Returns None when the CSV is missing (so the section is omitted from the
+    report). When the detector ran but found nothing, returns a short
+    "no tones detected" notice.
+    """
+    if not tone_csv_path or not os.path.isfile(tone_csv_path):
+        return None
+
+    tones = _parse_tone_detection_csv(tone_csv_path)
+
+    def fmt(seconds):
+        if seconds is None:
+            return "—"
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = seconds - (h * 3600) - (m * 60)
+        return f"{h:02d}:{m:02d}:{s:06.3f}"
+
+    if not tones:
+        return (
+            '<div style="background-color: #f5e9e3; padding: 10px;">'
+            '<p style="margin: 0;">CLAMS tone detector ran on the audio track '
+            'and found no monotonic spans meeting the minimum duration threshold.</p>'
+            '</div>'
+        )
+
+    rows = "".join(
+        f'<tr>'
+        f'<td style="padding: 6px 12px;">{i + 1}</td>'
+        f'<td style="padding: 6px 12px;">{fmt(s)}</td>'
+        f'<td style="padding: 6px 12px;">{fmt(e)}</td>'
+        f'<td style="padding: 6px 12px;">{(e - s):.2f}s</td>'
+        f'</tr>'
+        for i, (s, e) in enumerate(tones)
+    )
+
+    note = (
+        '<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">'
+        'Adapted from the CLAMS tonedetection app: cross-correlation of '
+        'consecutive 250 ms audio chunks at 16 kHz mono.'
+        '</p>'
+    )
+
+    return f"""
+    <table style="border-collapse: collapse; margin-top: 10px;">
+        <thead>
+            <tr style="background-color: #f5e9e3;">
+                <th style="text-align: left; padding: 6px 12px;">#</th>
+                <th style="text-align: left; padding: 6px 12px;">Start</th>
+                <th style="text-align: left; padding: 6px 12px;">End</th>
+                <th style="text-align: left; padding: 6px 12px;">Duration</th>
+            </tr>
+        </thead>
+        <tbody>
+            {rows}
+        </tbody>
+    </table>
+    {note}
+    """
+
+
 def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, video_id, failure_csv_path=None, check_cancelled=None):
     """
     Creates HTML visualizations showing pie charts of profile check results with thumbnails 
@@ -3998,6 +4098,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if not os.path.isfile(clams_bars_durations_csv):
         clams_bars_durations_csv = None
 
+    # CLAMS tone-detection durations CSV (filename matches the writer in
+    # checks/tone_detection_clams.py); present only when the detector ran.
+    clams_tone_durations_csv = os.path.join(report_directory, "clams_tone_detection_durations.csv")
+    if not os.path.isfile(clams_tone_durations_csv):
+        clams_tone_durations_csv = None
+
     if check_cancelled():
         return
     
@@ -4178,6 +4284,9 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         clams_bars_durations_csv,
     ) if clams_bars_durations_csv else None
 
+    # CLAMS tone detection results.
+    tone_detection_html = make_tone_detection_html(clams_tone_durations_csv)
+
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
     audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
@@ -4306,6 +4415,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-colorbars', 'Color Bars Detection'))
     if bars_comparison_html:
         toc_entries.append(('section-bars-comparison', 'Bars Detection Comparison'))
+    if tone_detection_html:
+        toc_entries.append(('section-tone-detection', 'CLAMS Tone Detection'))
     if colorbars_eval_html:
         toc_entries.append(('section-colorbars-eval', 'Colorbars Threshold Evaluation'))
     if clamped_levels_html:
@@ -4577,6 +4688,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3 id="section-bars-comparison">Bars Detection Comparison (qct-parse vs CLAMS SSIM)</h3>
         {bars_comparison_html}
+        """
+
+    if tone_detection_html:
+        html_template += f"""
+        <h3 id="section-tone-detection">CLAMS Tone Detection</h3>
+        {tone_detection_html}
         """
 
     if colorbars_eval_html:

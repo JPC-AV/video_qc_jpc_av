@@ -120,6 +120,7 @@ class MainWindowProcessing:
         self.main_window.signals.qctools_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.qctparse_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.clams_bars_progress.connect(self.main_window.processing_window.update_detail_progress)
+        self.main_window.signals.clams_tone_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.frame_analysis_progress.connect(self.main_window.processing_window.update_detail_progress)
         self.main_window.signals.report_progress.connect(self.main_window.processing_window.update_detail_progress)
             

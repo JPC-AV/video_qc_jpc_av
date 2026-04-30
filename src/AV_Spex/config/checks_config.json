@@ -75,6 +75,12 @@
       "stop_at_frame": 9000,
       "min_frame_count": 10,
       "stop_after_one": true
+    },
+    "clams_tone_detection": {
+      "run_tool": false,
+      "tolerance": 1.0,
+      "min_tone_duration_ms": 2000,
+      "stop_at_seconds": 3600
     }
   },
   "validate_filename": false
