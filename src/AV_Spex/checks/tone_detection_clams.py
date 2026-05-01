@@ -48,7 +48,7 @@ def _format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
 
-def _load_audio_mono_16k(filepath: str) -> Optional[np.ndarray]:
+def load_audio_mono_16k(filepath: str) -> Optional[np.ndarray]:
     """
     Decode the audio track of `filepath` to mono 16 kHz s16le PCM via ffmpeg
     and return a float32 numpy array normalized to [-1, 1].
@@ -79,13 +79,22 @@ def _load_audio_mono_16k(filepath: str) -> Optional[np.ndarray]:
     return raw / 32768.0
 
 
-def _write_durations_csv(path: Path, tones: List[Tuple[float, float]]) -> None:
+def write_durations_csv(report_directory: str, tones: List[Tuple[str, float, float]]) -> None:
+    """
+    Write the tone-detection durations CSV from a combined list of tones.
+
+    Each entry is (pass_label, start_seconds, end_seconds). The pass label is
+    written as the first column so the report can distinguish primary detections
+    from cross-validation second-pass hits.
+    """
+    path = Path(report_directory) / DURATIONS_CSV_NAME
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         if tones:
             writer.writerow(["clams tone detection tones found:"])
-            for start_seconds, end_seconds in tones:
+            for pass_label, start_seconds, end_seconds in tones:
                 writer.writerow([
+                    pass_label,
                     _format_timestamp(start_seconds),
                     _format_timestamp(end_seconds),
                 ])
@@ -174,37 +183,44 @@ def run_clams_tone_detection(
     video_id: str,
     tolerance: float = 1.0,
     min_tone_duration_ms: int = 2000,
+    start_at_seconds: float = 0.0,
     stop_at_seconds: int = 3600,
+    samples: Optional[np.ndarray] = None,
     check_cancelled=None,
     signals=None,
 ) -> List[Tuple[float, float]]:
     """
-    Detect spans of monotonic audio in `video_path`.
+    Detect spans of monotonic audio in `video_path` (or in pre-loaded samples).
 
     Parameters mirror the upstream CLAMS app's runtime parameters, with
-    `stop_at_seconds` exposed in seconds for clarity.
+    `stop_at_seconds` and `start_at_seconds` exposed in seconds. Pass
+    `samples` to skip ffmpeg decoding when scanning the same file repeatedly.
 
     Returns:
-        List of (start_seconds, end_seconds) tones; empty when none qualify.
+        List of (start_seconds, end_seconds) tones whose duration meets the
+        threshold; timestamps are absolute (i.e. include `start_at_seconds`).
 
-    Always writes a durations CSV in the report directory.
+    Does NOT write the durations CSV — the caller composes primary and
+    second-pass results and calls `write_durations_csv` once.
     """
-    report_path = Path(report_directory)
-    report_path.mkdir(parents=True, exist_ok=True)
-    durations_csv = report_path / DURATIONS_CSV_NAME
-
-    samples = _load_audio_mono_16k(video_path)
+    if samples is None:
+        samples = load_audio_mono_16k(video_path)
     if samples is None or len(samples) == 0:
         logger.warning(
             f"CLAMS tone detection: no decodable audio in {video_path}; skipping."
         )
-        _write_durations_csv(durations_csv, [])
         return []
 
-    stop_at_samples = max(int(stop_at_seconds), 0) * SAMPLE_RATE
+    start_offset_samples = max(int(start_at_seconds * SAMPLE_RATE), 0)
+    if start_offset_samples >= len(samples):
+        return []
+    samples_view = samples[start_offset_samples:]
 
-    tones = _detect_tones(
-        samples,
+    span_seconds = max(int(stop_at_seconds) - start_at_seconds, 0)
+    stop_at_samples = int(span_seconds * SAMPLE_RATE)
+
+    tones_relative = _detect_tones(
+        samples_view,
         tolerance=tolerance,
         min_tone_duration_ms=min_tone_duration_ms,
         stop_at_samples=stop_at_samples,
@@ -212,7 +228,7 @@ def run_clams_tone_detection(
         signals=signals,
     )
 
-    _write_durations_csv(durations_csv, tones)
+    tones = [(s + start_at_seconds, e + start_at_seconds) for s, e in tones_relative]
 
     if tones:
         logger.debug(

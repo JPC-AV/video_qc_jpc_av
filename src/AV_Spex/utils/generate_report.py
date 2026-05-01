@@ -1768,17 +1768,19 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
 
 def _parse_bars_durations_csv(csv_path):
     """
-    Parse a bars-detection durations CSV in the qct-parse / CLAMS shared format.
+    Parse a bars-detection durations CSV.
 
-    Row 0 col 0 either contains "color bars found" (then row 1 has start, end
-    timestamps) or "no color bars" (no row 1).
+    Two row schemas are supported:
+      * qct-parse: row 0 sentinel + a single row of [start_ts, end_ts].
+      * CLAMS: row 0 sentinel + N rows of [pass_label, start_ts, end_ts].
 
     Returns:
-        (start_seconds, end_seconds) on success, or (None, None) when no bars
-        were detected or the file is unreadable.
+        List of (pass_label, start_seconds, end_seconds) tuples. The qct-parse
+        single-row format is reported with pass_label="primary". Empty list
+        when no bars were detected or the file is unreadable.
     """
     if not csv_path or not os.path.isfile(csv_path):
-        return None, None
+        return []
 
     def to_seconds(ts):
         try:
@@ -1787,32 +1789,48 @@ def _parse_bars_durations_csv(csv_path):
         except (ValueError, AttributeError):
             return None
 
+    runs = []
     try:
         with open(csv_path, "r") as f:
             rows = list(csv.reader(f))
-        if len(rows) >= 2 and rows[0] and "color bars found" in rows[0][0]:
-            start = to_seconds(rows[1][0]) if len(rows[1]) > 0 else None
-            end = to_seconds(rows[1][1]) if len(rows[1]) > 1 else None
-            return start, end
+        if rows and rows[0] and "color bars found" in rows[0][0]:
+            for row in rows[1:]:
+                if len(row) >= 3:
+                    pass_label = row[0]
+                    start = to_seconds(row[1])
+                    end = to_seconds(row[2])
+                elif len(row) >= 2:
+                    pass_label = "primary"
+                    start = to_seconds(row[0])
+                    end = to_seconds(row[1])
+                else:
+                    continue
+                if start is not None and end is not None:
+                    runs.append((pass_label, start, end))
     except Exception as e:
         logger.warning(f"Could not parse bars durations CSV {csv_path}: {e}")
-    return None, None
+    return runs
 
 
 def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_tolerance_s=1.0):
     """
-    Render a side-by-side comparison of the qct-parse and CLAMS SSIM bars detectors.
+    Render a unified table comparing qct-parse and CLAMS SSIM bars detections.
 
-    Returns None when neither detector produced output (so the section is omitted
-    from the report entirely). When only one ran, only that column is shown.
+    Each detection becomes a row tagged with its source and pass (qct-parse,
+    CLAMS primary, CLAMS second-pass). Agreement analysis still fires only on
+    the qct-parse vs CLAMS-primary pair, since the second-pass scans are
+    targeted, relaxed-threshold confirmation runs.
+
+    Returns None when neither detector produced output (so the section is
+    omitted from the report entirely).
     """
     qct_run = bool(qct_csv_path and os.path.isfile(qct_csv_path))
     clams_run = bool(clams_csv_path and os.path.isfile(clams_csv_path))
     if not qct_run and not clams_run:
         return None
 
-    qct_start, qct_end = _parse_bars_durations_csv(qct_csv_path)
-    clams_start, clams_end = _parse_bars_durations_csv(clams_csv_path)
+    qct_runs = _parse_bars_durations_csv(qct_csv_path)
+    clams_runs = _parse_bars_durations_csv(clams_csv_path)
 
     def fmt(seconds):
         if seconds is None:
@@ -1822,13 +1840,16 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
         s = seconds - (h * 3600) - (m * 60)
         return f"{h:02d}:{m:02d}:{s:06.3f}"
 
-    def found(start, end):
-        return "Yes" if (start is not None and end is not None) else "No"
+    # Agreement: qct-parse run (single) vs CLAMS primary (single).
+    qct_primary = qct_runs[0] if qct_runs else None
+    clams_primary = next((r for r in clams_runs if r[0] == "primary"), None)
+    clams_secondary = [r for r in clams_runs if r[0] != "primary"]
 
-    # Agreement: both ran, both detected bars, end times within tolerance.
     agreement_label = "—"
     agreement_color = "#666"
     if qct_run and clams_run:
+        qct_end = qct_primary[2] if qct_primary else None
+        clams_end = clams_primary[2] if clams_primary else None
         if qct_end is not None and clams_end is not None:
             delta = abs(qct_end - clams_end)
             if delta <= agreement_tolerance_s:
@@ -1845,46 +1866,65 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
             agreement_label = f"Disagree (only {which} detected bars)"
             agreement_color = "#a02020"
 
-    columns = []
+    # Build one row per detection. Source/pass go in the first two cells.
+    body_rows = []
     if qct_run:
-        columns.append(("qct-parse (authoritative)", qct_start, qct_end))
+        if qct_primary:
+            _, qs, qe = qct_primary
+            body_rows.append(("qct-parse (authoritative)", "—", "Yes", fmt(qs), fmt(qe), False))
+        else:
+            body_rows.append(("qct-parse (authoritative)", "—", "No", "—", "—", False))
     if clams_run:
-        columns.append(("CLAMS SSIM (parallel)", clams_start, clams_end))
+        if clams_primary:
+            _, cs, ce = clams_primary
+            body_rows.append(("CLAMS SSIM", "primary", "Yes", fmt(cs), fmt(ce), False))
+        else:
+            body_rows.append(("CLAMS SSIM", "primary", "No", "—", "—", False))
+        for _, ss, se in clams_secondary:
+            body_rows.append(("CLAMS SSIM", "second-pass", "Yes", fmt(ss), fmt(se), True))
 
-    header_cells = "".join(
-        f'<th style="text-align: left; padding: 6px 12px;">{label}</th>'
-        for label, _, _ in columns
-    )
-    found_cells = "".join(
-        f'<td style="padding: 6px 12px;">{found(s, e)}</td>'
-        for _, s, e in columns
-    )
-    start_cells = "".join(
-        f'<td style="padding: 6px 12px;">{fmt(s)}</td>' for _, s, _ in columns
-    )
-    end_cells = "".join(
-        f'<td style="padding: 6px 12px;">{fmt(e)}</td>' for _, _, e in columns
-    )
+    def render_row(source, pass_label, found, start_ts, end_ts, is_secondary):
+        bg = ' style="background-color: #fff3cd;"' if is_secondary else ""
+        return (
+            f'<tr{bg}>'
+            f'<td style="padding: 6px 12px;">{source}</td>'
+            f'<td style="padding: 6px 12px;">{pass_label}</td>'
+            f'<td style="padding: 6px 12px;">{found}</td>'
+            f'<td style="padding: 6px 12px;">{start_ts}</td>'
+            f'<td style="padding: 6px 12px;">{end_ts}</td>'
+            f'</tr>'
+        )
 
-    note = (
-        "<p style=\"font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;\">"
+    rows_html = "".join(render_row(*r) for r in body_rows)
+
+    note_lines = [
         "qct-parse drives downstream behavior (BRNG-skip, access-file trim). "
-        "The CLAMS detector runs in parallel for comparison only."
-        "</p>"
+        "The CLAMS detector runs in parallel for comparison only.",
+    ]
+    if clams_secondary:
+        note_lines.append(
+            "Second-pass rows (highlighted) are targeted scans triggered by tone "
+            "detections that fell outside the primary bars window, run with "
+            "relaxed thresholds (SSIM ≥ 0.6, sample ratio 5)."
+        )
+    note = "".join(
+        f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
+        for line in note_lines
     )
 
     html = f"""
     <table style="border-collapse: collapse; margin-top: 10px;">
         <thead>
             <tr style="background-color: #f5e9e3;">
-                <th style="text-align: left; padding: 6px 12px;"></th>
-                {header_cells}
+                <th style="text-align: left; padding: 6px 12px;">Source</th>
+                <th style="text-align: left; padding: 6px 12px;">Pass</th>
+                <th style="text-align: left; padding: 6px 12px;">Bars detected</th>
+                <th style="text-align: left; padding: 6px 12px;">Start</th>
+                <th style="text-align: left; padding: 6px 12px;">End</th>
             </tr>
         </thead>
         <tbody>
-            <tr><td style="padding: 6px 12px; font-weight: bold;">Bars detected</td>{found_cells}</tr>
-            <tr><td style="padding: 6px 12px; font-weight: bold;">Start</td>{start_cells}</tr>
-            <tr><td style="padding: 6px 12px; font-weight: bold;">End</td>{end_cells}</tr>
+            {rows_html}
         </tbody>
     </table>
     <p style="margin: 12px 0 0 0;">
@@ -1900,11 +1940,13 @@ def _parse_tone_detection_csv(csv_path):
     """
     Parse a CLAMS tone detection durations CSV.
 
-    Row 0 col 0 either contains "tones found" (followed by one row per tone
-    with start, end timestamps) or "no tones" (no further rows).
+    Row 0 col 0 either contains "tones found" (followed by one row per tone)
+    or "no tones" (no further rows). Each tone row is
+    [pass_label, start_ts, end_ts].
 
     Returns:
-        List of (start_seconds, end_seconds) tuples, or [] when no tones.
+        List of (pass_label, start_seconds, end_seconds) tuples, or [] when
+        no tones. Legacy two-column rows are reported with pass_label="primary".
     """
     if not csv_path or not os.path.isfile(csv_path):
         return []
@@ -1922,11 +1964,18 @@ def _parse_tone_detection_csv(csv_path):
             rows = list(csv.reader(f))
         if rows and rows[0] and "tones found" in rows[0][0]:
             for row in rows[1:]:
-                if len(row) >= 2:
+                if len(row) >= 3:
+                    pass_label = row[0]
+                    s = to_seconds(row[1])
+                    e = to_seconds(row[2])
+                elif len(row) >= 2:
+                    pass_label = "primary"
                     s = to_seconds(row[0])
                     e = to_seconds(row[1])
-                    if s is not None and e is not None:
-                        tones.append((s, e))
+                else:
+                    continue
+                if s is not None and e is not None:
+                    tones.append((pass_label, s, e))
     except Exception as e:
         logger.warning(f"Could not parse tone detection CSV {csv_path}: {e}")
     return tones

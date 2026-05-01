@@ -53,7 +53,7 @@ def _resolve_reference_path() -> str:
     return path
 
 
-def _get_video_fps(video_path: str) -> Optional[float]:
+def get_video_fps(video_path: str) -> Optional[float]:
     """Read the video stream's frame rate via ffprobe. Returns None on failure."""
     cmd = [
         "ffprobe", "-v", "error",
@@ -116,53 +116,59 @@ def run_clams_bars_detection(
     video_id: str,
     threshold: float = 0.7,
     sample_ratio: int = 30,
+    start_frame: int = 0,
     stop_at_frame: int = 9000,
     min_frame_count: int = 10,
     stop_after_one: bool = True,
     fps: Optional[float] = None,
+    pass_label: str = "primary",
+    append_ssim_csv: bool = False,
     check_cancelled=None,
     signals=None,
-) -> Tuple[Optional[float], Optional[float]]:
+) -> List[Tuple[float, float]]:
     """
     Detect SMPTE color bars by SSIM comparison against a bundled reference image.
 
-    Parameters mirror the upstream CLAMS app's runtime parameters.
+    Parameters mirror the upstream CLAMS app's runtime parameters; AV Spex adds
+    `start_frame` so a caller can scan a windowed range, and `pass_label` /
+    `append_ssim_csv` so the per-frame SSIM CSV can grow across passes.
 
     Returns:
-        (start_seconds, end_seconds) for the first detected run, or (None, None)
-        if no run met the minimum frame count.
+        List of (start_seconds, end_seconds) for every run that met the minimum
+        frame count, in scan order. Empty list if none were found.
 
-    Always writes a durations CSV in the report directory; also writes a
-    per-sampled-frame SSIM scores CSV alongside it.
+    Writes per-sampled-frame SSIM scores to its own CSV. Does NOT write the
+    durations CSV — the caller composes primary and second-pass results and
+    calls `write_durations_csv` once.
     """
     report_path = Path(report_directory)
     report_path.mkdir(parents=True, exist_ok=True)
-    durations_csv = report_path / DURATIONS_CSV_NAME
     ssim_csv = report_path / f"{video_id}{SSIM_SCORES_CSV_SUFFIX}"
 
     if fps is None:
-        fps = _get_video_fps(video_path)
+        fps = get_video_fps(video_path)
     if not fps or fps <= 0:
         logger.warning(f"CLAMS bars detection: could not determine fps for {video_path}; skipping.")
-        _write_durations_csv(durations_csv, None, None)
-        return None, None
+        return []
 
     reference = cv2.imread(_resolve_reference_path(), cv2.IMREAD_GRAYSCALE)
     if reference is None:
         logger.warning("CLAMS bars detection: failed to load reference PNG; skipping.")
-        _write_durations_csv(durations_csv, None, None)
-        return None, None
+        return []
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         logger.warning(f"CLAMS bars detection: could not open {video_path}; skipping.")
-        _write_durations_csv(durations_csv, None, None)
-        return None, None
+        return []
 
-    sampled_frames = list(range(0, max(stop_at_frame, 0), max(sample_ratio, 1)))
+    sampled_frames = list(range(
+        max(start_frame, 0),
+        max(stop_at_frame, 0),
+        max(sample_ratio, 1),
+    ))
     bars_runs = []
     in_run = False
-    start_frame = None
+    run_start_frame: Optional[int] = None
     cur_frame = sampled_frames[0] if sampled_frames else 0
 
     total_samples = len(sampled_frames)
@@ -170,10 +176,12 @@ def run_clams_bars_detection(
     last_progress_pct = 0
     emit_progress = signals is not None and hasattr(signals, 'clams_detection_progress') and total_samples > 0
 
+    ssim_mode = "a" if append_ssim_csv and ssim_csv.exists() else "w"
     try:
-        with open(ssim_csv, "w", newline="") as ssim_file:
+        with open(ssim_csv, ssim_mode, newline="") as ssim_file:
             ssim_writer = csv.writer(ssim_file)
-            ssim_writer.writerow(["frame", "timestamp", "ssim_score", "exceeds_threshold"])
+            if ssim_mode == "w":
+                ssim_writer.writerow(["pass", "frame", "timestamp", "ssim_score", "exceeds_threshold"])
 
             for sample_idx, cur_frame in enumerate(sampled_frames):
                 if check_cancelled and check_cancelled():
@@ -199,6 +207,7 @@ def run_clams_bars_detection(
                 exceeds = score > threshold
 
                 ssim_writer.writerow([
+                    pass_label,
                     cur_frame,
                     _format_timestamp(cur_frame / fps),
                     f"{score:.6f}",
@@ -208,33 +217,20 @@ def run_clams_bars_detection(
                 if exceeds:
                     if not in_run:
                         in_run = True
-                        start_frame = cur_frame
+                        run_start_frame = cur_frame
                 elif in_run:
                     in_run = False
-                    if cur_frame - start_frame > min_frame_count:
-                        bars_runs.append((start_frame, cur_frame))
+                    if cur_frame - run_start_frame > min_frame_count:
+                        bars_runs.append((run_start_frame, cur_frame))
                     if stop_after_one:
                         break
     finally:
         cap.release()
 
-    if in_run and start_frame is not None and cur_frame - start_frame > min_frame_count:
-        bars_runs.append((start_frame, cur_frame))
+    if in_run and run_start_frame is not None and cur_frame - run_start_frame > min_frame_count:
+        bars_runs.append((run_start_frame, cur_frame))
 
     if emit_progress:
         signals.clams_detection_progress.emit(100)
 
-    if bars_runs:
-        s_frame, e_frame = bars_runs[0]
-        s_seconds = s_frame / fps
-        e_seconds = e_frame / fps
-        _write_durations_csv(durations_csv, s_seconds, e_seconds)
-        logger.debug(
-            f"CLAMS bars detection: bars from {_format_timestamp(s_seconds)} "
-            f"to {_format_timestamp(e_seconds)}"
-        )
-        return s_seconds, e_seconds
-
-    _write_durations_csv(durations_csv, None, None)
-    logger.debug("CLAMS bars detection: no color bars run met the minimum frame count.\n")
-    return None, None
+    return [(s_frame / fps, e_frame / fps) for s_frame, e_frame in bars_runs]

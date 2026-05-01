@@ -20,6 +20,7 @@ from AV_Spex.checks.ffprobe_check import parse_ffprobe
 from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_fixity
 from AV_Spex.checks.make_access import process_access_file
 from AV_Spex.checks.qct_parse import run_qctparse
+from AV_Spex.checks import bars_detection_clams, tone_detection_clams
 from AV_Spex.checks.bars_detection_clams import run_clams_bars_detection
 from AV_Spex.checks.tone_detection_clams import run_clams_tone_detection
 from AV_Spex.checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
@@ -607,10 +608,12 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                     logger.debug(f"Color bars detected, ending at {end_seconds:.1f}s\n")
 
     # Unified CLAMS detection step: runs the SSIM-based SMPTE bars detector and
-    # the cross-correlation tone detector together under one toggle. Both run
-    # straight from the video file, independent of QCTools / qct-parse, and
-    # remain observation-only: qct-parse stays authoritative for the BRNG skip
-    # and access-file trim.
+    # the cross-correlation tone detector together under one toggle, then
+    # cross-validates — for any tone span without an overlapping bars run, a
+    # second-pass bars scan runs over that window with relaxed thresholds, and
+    # vice versa. Both detectors run straight from the video file, independent
+    # of QCTools / qct-parse, and remain observation-only: qct-parse stays
+    # authoritative for the BRNG skip and access-file trim.
     clams_cfg = getattr(checks_config.tools, 'clams_detection', None)
     if clams_cfg and getattr(clams_cfg, 'run_tool', False):
         if check_cancelled and check_cancelled():
@@ -622,7 +625,13 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             signals.clams_detection_progress.emit(0)
 
         bars_params = clams_cfg.bars
-        clams_start, clams_end = run_clams_bars_detection(
+        tone_params = clams_cfg.tone
+
+        # Probe fps once so the cross-validation pass can convert
+        # seconds-based windows to frame ranges for the bars detector.
+        fps = bars_detection_clams.get_video_fps(video_path)
+
+        primary_bars = run_clams_bars_detection(
             video_path=video_path,
             report_directory=report_directory,
             video_id=video_id,
@@ -631,43 +640,153 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             stop_at_frame=bars_params.stop_at_frame,
             min_frame_count=bars_params.min_frame_count,
             stop_after_one=bars_params.stop_after_one,
+            fps=fps,
+            pass_label="primary",
             check_cancelled=check_cancelled,
             signals=signals,
         )
-        results['clams_bars_start_time'] = clams_start
-        results['clams_bars_end_time'] = clams_end
-        if clams_end is not None:
+        if primary_bars:
+            first_start, first_end = primary_bars[0]
+            results['clams_bars_start_time'] = first_start
+            results['clams_bars_end_time'] = first_end
             logger.info(
                 f"CLAMS bars detection: finished — bars detected, "
-                f"ending at {clams_end:.1f}s"
+                f"ending at {first_end:.1f}s"
             )
         else:
             logger.info("CLAMS bars detection: finished — no color bars run met the minimum frame count")
 
         if check_cancelled and check_cancelled():
+            bars_detection_clams.write_durations_csv(
+                report_directory,
+                [("primary", s, e) for s, e in primary_bars],
+            )
+            tone_detection_clams.write_durations_csv(report_directory, [])
             return results
 
-        tone_params = clams_cfg.tone
-        tone_results = run_clams_tone_detection(
+        # Load audio once so the primary tone pass and any second-pass tone
+        # windows reuse the same decoded buffer.
+        audio_samples = tone_detection_clams.load_audio_mono_16k(video_path)
+
+        primary_tones = run_clams_tone_detection(
             video_path=video_path,
             report_directory=report_directory,
             video_id=video_id,
             tolerance=tone_params.tolerance,
             min_tone_duration_ms=tone_params.min_tone_duration_ms,
             stop_at_seconds=tone_params.stop_at_seconds,
+            samples=audio_samples,
             check_cancelled=check_cancelled,
             signals=signals,
         )
-        results['clams_tones'] = tone_results
-        if tone_results:
+        results['clams_tones'] = primary_tones
+        if primary_tones:
             logger.info(
-                f"CLAMS tone detection: finished — {len(tone_results)} tone(s) detected\n"
+                f"CLAMS tone detection: finished — {len(primary_tones)} tone(s) detected"
             )
         else:
-            logger.info("CLAMS tone detection: finished — no tones met the minimum duration threshold\n")
+            logger.info("CLAMS tone detection: finished — no tones met the minimum duration threshold")
+
+        # Cross-validation: window-targeted second passes with relaxed thresholds.
+        # Triggers asymmetrically — each detector's hits are checked against the
+        # other's spans, and a windowed second pass fires for each non-overlapping
+        # span (with WINDOW_SLACK_SECONDS of slack on either side, since the
+        # audio tone and video bars don't always start/stop in lockstep).
+        WINDOW_SLACK_SECONDS = 5.0
+        SECONDARY_BARS_THRESHOLD = 0.6
+        SECONDARY_BARS_SAMPLE_RATIO = 5
+        SECONDARY_TONE_TOLERANCE = 0.7
+        SECONDARY_TONE_MIN_DURATION_MS = 500
+
+        def _spans_overlap(a_start, a_end, b_start, b_end, slack):
+            return a_start - slack <= b_end and b_start - slack <= a_end
+
+        def _overlaps_any(start, end, spans, slack):
+            return any(_spans_overlap(start, end, s, e, slack) for s, e in spans)
+
+        secondary_bars = []
+        if primary_tones and fps and fps > 0:
+            for tone_start, tone_end in primary_tones:
+                if check_cancelled and check_cancelled():
+                    break
+                if _overlaps_any(tone_start, tone_end, primary_bars, WINDOW_SLACK_SECONDS):
+                    continue
+                window_start_frame = max(0, int((tone_start - WINDOW_SLACK_SECONDS) * fps))
+                window_stop_frame = int((tone_end + WINDOW_SLACK_SECONDS) * fps)
+                logger.info(
+                    f"CLAMS bars second-pass: scanning "
+                    f"{tone_start:.1f}s–{tone_end:.1f}s (relaxed threshold)"
+                )
+                hits = run_clams_bars_detection(
+                    video_path=video_path,
+                    report_directory=report_directory,
+                    video_id=video_id,
+                    threshold=SECONDARY_BARS_THRESHOLD,
+                    sample_ratio=SECONDARY_BARS_SAMPLE_RATIO,
+                    start_frame=window_start_frame,
+                    stop_at_frame=window_stop_frame,
+                    min_frame_count=bars_params.min_frame_count,
+                    stop_after_one=False,
+                    fps=fps,
+                    pass_label="second-pass",
+                    append_ssim_csv=True,
+                    check_cancelled=check_cancelled,
+                    signals=signals,
+                )
+                if hits:
+                    logger.info(
+                        f"CLAMS bars second-pass: found {len(hits)} additional run(s) "
+                        f"in tone-anchored window"
+                    )
+                secondary_bars.extend(hits)
+
+        secondary_tones = []
+        if primary_bars and audio_samples is not None:
+            for bars_start, bars_end in primary_bars:
+                if check_cancelled and check_cancelled():
+                    break
+                if _overlaps_any(bars_start, bars_end, primary_tones, WINDOW_SLACK_SECONDS):
+                    continue
+                window_start = max(0.0, bars_start - WINDOW_SLACK_SECONDS)
+                window_stop = int(bars_end + WINDOW_SLACK_SECONDS)
+                logger.info(
+                    f"CLAMS tone second-pass: scanning "
+                    f"{bars_start:.1f}s–{bars_end:.1f}s (relaxed thresholds)"
+                )
+                hits = run_clams_tone_detection(
+                    video_path=video_path,
+                    report_directory=report_directory,
+                    video_id=video_id,
+                    tolerance=SECONDARY_TONE_TOLERANCE,
+                    min_tone_duration_ms=SECONDARY_TONE_MIN_DURATION_MS,
+                    start_at_seconds=window_start,
+                    stop_at_seconds=window_stop,
+                    samples=audio_samples,
+                    check_cancelled=check_cancelled,
+                    signals=signals,
+                )
+                if hits:
+                    logger.info(
+                        f"CLAMS tone second-pass: found {len(hits)} additional tone(s) "
+                        f"in bars-anchored window"
+                    )
+                secondary_tones.extend(hits)
+
+        # Compose primary + second-pass into the on-disk durations CSVs.
+        bars_detection_clams.write_durations_csv(
+            report_directory,
+            [("primary", s, e) for s, e in primary_bars]
+            + [("second-pass", s, e) for s, e in secondary_bars],
+        )
+        tone_detection_clams.write_durations_csv(
+            report_directory,
+            [("primary", s, e) for s, e in primary_tones]
+            + [("second-pass", s, e) for s, e in secondary_tones],
+        )
 
         if signals and hasattr(signals, 'step_completed'):
             signals.step_completed.emit("CLAMS Detection")
+        logger.info("")  # blank line for readability
 
     return results
 
