@@ -4413,10 +4413,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-qct-parse-notice', 'QCT-Parse Analysis'))
     if colorbars_html:
         toc_entries.append(('section-colorbars', 'Color Bars Detection'))
-    if bars_comparison_html:
-        toc_entries.append(('section-bars-comparison', 'Bars Detection Comparison'))
-    if tone_detection_html:
-        toc_entries.append(('section-tone-detection', 'CLAMS Tone Detection'))
+    if bars_comparison_html or tone_detection_html:
+        toc_entries.append(('section-clams-detection', 'CLAMS Detection'))
     if colorbars_eval_html:
         toc_entries.append(('section-colorbars-eval', 'Colorbars Threshold Evaluation'))
     if clamped_levels_html:
@@ -4684,17 +4682,18 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         {colorbars_html}
         """
 
-    if bars_comparison_html:
-        html_template += f"""
-        <h3 id="section-bars-comparison">Bars Detection Comparison (qct-parse vs CLAMS SSIM)</h3>
-        {bars_comparison_html}
-        """
-
-    if tone_detection_html:
-        html_template += f"""
-        <h3 id="section-tone-detection">CLAMS Tone Detection</h3>
-        {tone_detection_html}
-        """
+    if bars_comparison_html or tone_detection_html:
+        html_template += '<h3 id="section-clams-detection">CLAMS Detection</h3>'
+        if bars_comparison_html:
+            html_template += f"""
+            <h4 style="font-size: 16px; margin-top: 16px; color: #4d2b12;">Bars Detection (qct-parse vs CLAMS SSIM)</h4>
+            {bars_comparison_html}
+            """
+        if tone_detection_html:
+            html_template += f"""
+            <h4 style="font-size: 16px; margin-top: 16px; color: #4d2b12;">Tone Detection</h4>
+            {tone_detection_html}
+            """
 
     if colorbars_eval_html:
         if smpte_fallback:

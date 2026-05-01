@@ -448,19 +448,14 @@ def update_tool_setting(tool_names: List[str], value: bool):
                     continue
                 updates['tools'][tool_name] = {field: value}
 
-            # CLAMS bars detection: bool flag + tunable numeric parameters
-            elif tool_name == 'clams_bars_detection':
-                if field not in ('run_tool', 'threshold', 'sample_ratio', 'stop_at_frame',
-                                 'min_frame_count', 'stop_after_one'):
-                    logger.warning(f"Invalid field '{field}' for clams_bars_detection")
-                    continue
-                updates['tools'][tool_name] = {field: value}
-
-            # CLAMS tone detection: bool flag + tunable numeric parameters
-            elif tool_name == 'clams_tone_detection':
-                if field not in ('run_tool', 'tolerance', 'min_tone_duration_ms',
-                                 'stop_at_seconds'):
-                    logger.warning(f"Invalid field '{field}' for clams_tone_detection")
+            # CLAMS detection: top-level run_tool runs both bars and tone
+            # detectors. Numeric tuning is JSON-only (nested under bars/tone).
+            elif tool_name == 'clams_detection':
+                if field != 'run_tool':
+                    logger.warning(
+                        f"Invalid field '{field}' for clams_detection. Only 'run_tool' "
+                        f"is settable from the CLI; tune bars/tone parameters in the JSON config."
+                    )
                     continue
                 updates['tools'][tool_name] = {field: value}
 
@@ -1270,19 +1265,20 @@ profile_step1 = {
             "audio_analysis": False,
             "detect_clamped_levels": False
         },
-        "clams_bars_detection": {
+        "clams_detection": {
             "run_tool": False,
-            "threshold": 0.7,
-            "sample_ratio": 30,
-            "stop_at_frame": 9000,
-            "min_frame_count": 10,
-            "stop_after_one": True
-        },
-        "clams_tone_detection": {
-            "run_tool": False,
-            "tolerance": 1.0,
-            "min_tone_duration_ms": 2000,
-            "stop_at_seconds": 3600
+            "bars": {
+                "threshold": 0.7,
+                "sample_ratio": 30,
+                "stop_at_frame": 9000,
+                "min_frame_count": 10,
+                "stop_after_one": True
+            },
+            "tone": {
+                "tolerance": 1.0,
+                "min_tone_duration_ms": 2000,
+                "stop_at_seconds": 3600
+            }
         }
     },
     "outputs": {
@@ -1338,19 +1334,20 @@ profile_step2 = {
             "audio_analysis": True,
             "detect_clamped_levels": True
         },
-        "clams_bars_detection": {
+        "clams_detection": {
             "run_tool": False,
-            "threshold": 0.7,
-            "sample_ratio": 30,
-            "stop_at_frame": 9000,
-            "min_frame_count": 10,
-            "stop_after_one": True
-        },
-        "clams_tone_detection": {
-            "run_tool": False,
-            "tolerance": 1.0,
-            "min_tone_duration_ms": 2000,
-            "stop_at_seconds": 3600
+            "bars": {
+                "threshold": 0.7,
+                "sample_ratio": 30,
+                "stop_at_frame": 9000,
+                "min_frame_count": 10,
+                "stop_after_one": True
+            },
+            "tone": {
+                "tolerance": 1.0,
+                "min_tone_duration_ms": 2000,
+                "stop_at_seconds": 3600
+            }
         }
     },
     "outputs": {
@@ -1406,19 +1403,20 @@ profile_allOff = {
             "audio_analysis": False,
             "detect_clamped_levels": False
         },
-        "clams_bars_detection": {
+        "clams_detection": {
             "run_tool": False,
-            "threshold": 0.7,
-            "sample_ratio": 30,
-            "stop_at_frame": 9000,
-            "min_frame_count": 10,
-            "stop_after_one": True
-        },
-        "clams_tone_detection": {
-            "run_tool": False,
-            "tolerance": 1.0,
-            "min_tone_duration_ms": 2000,
-            "stop_at_seconds": 3600
+            "bars": {
+                "threshold": 0.7,
+                "sample_ratio": 30,
+                "stop_at_frame": 9000,
+                "min_frame_count": 10,
+                "stop_after_one": True
+            },
+            "tone": {
+                "tolerance": 1.0,
+                "min_tone_duration_ms": 2000,
+                "stop_at_seconds": 3600
+            }
         }
     },
     "outputs": {

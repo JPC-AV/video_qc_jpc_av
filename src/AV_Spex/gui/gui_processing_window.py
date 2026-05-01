@@ -325,15 +325,12 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
                 self._add_step_item("QCTools")
             if checks_config.tools.qct_parse.run_tool:
                 self._add_step_item("QCT Parse")
-            # CLAMS bars detection runs straight from the video file, independent
-            # of QCTools / qct-parse. Step label matches the step_completed payload
-            # emitted from processing_mgmt.process_qctools_output.
-            clams_bars_cfg = getattr(checks_config.tools, 'clams_bars_detection', None)
-            if clams_bars_cfg and getattr(clams_bars_cfg, 'run_tool', False):
-                self._add_step_item("CLAMS Bars Detection")
-            clams_tone_cfg = getattr(checks_config.tools, 'clams_tone_detection', None)
-            if clams_tone_cfg and getattr(clams_tone_cfg, 'run_tool', False):
-                self._add_step_item("CLAMS Tone Detection")
+            # CLAMS detection (bars + tone) runs straight from the video file,
+            # independent of QCTools / qct-parse. Step label matches the
+            # step_completed payload emitted from process_qctools_output.
+            clams_cfg = getattr(checks_config.tools, 'clams_detection', None)
+            if clams_cfg and getattr(clams_cfg, 'run_tool', False):
+                self._add_step_item("CLAMS Detection")
             
             # Frame Analysis
             if hasattr(checks_config.outputs, 'frame_analysis'):

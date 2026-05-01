@@ -23,7 +23,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 from skimage.metrics import structural_similarity
@@ -87,12 +87,25 @@ def _format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
 
-def _write_durations_csv(path: Path, start_seconds: Optional[float], end_seconds: Optional[float]) -> None:
+def write_durations_csv(report_directory: str, runs: List[Tuple[str, float, float]]) -> None:
+    """
+    Write the bars-detection durations CSV from a combined list of runs.
+
+    Each entry is (pass_label, start_seconds, end_seconds). The pass label is
+    written as the first column so the report can distinguish primary detections
+    from cross-validation second-pass hits.
+    """
+    path = Path(report_directory) / DURATIONS_CSV_NAME
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        if start_seconds is not None and end_seconds is not None:
+        if runs:
             writer.writerow(["clams bars detection color bars found:"])
-            writer.writerow([_format_timestamp(start_seconds), _format_timestamp(end_seconds)])
+            for pass_label, start_seconds, end_seconds in runs:
+                writer.writerow([
+                    pass_label,
+                    _format_timestamp(start_seconds),
+                    _format_timestamp(end_seconds),
+                ])
         else:
             writer.writerow(["clams bars detection found no color bars"])
 
@@ -155,7 +168,7 @@ def run_clams_bars_detection(
     total_samples = len(sampled_frames)
     progress_interval = max(1, total_samples // 100)
     last_progress_pct = 0
-    emit_progress = signals is not None and hasattr(signals, 'clams_bars_progress') and total_samples > 0
+    emit_progress = signals is not None and hasattr(signals, 'clams_detection_progress') and total_samples > 0
 
     try:
         with open(ssim_csv, "w", newline="") as ssim_file:
@@ -170,7 +183,7 @@ def run_clams_bars_detection(
                     pct = int((sample_idx / total_samples) * 100)
                     pct = min(99, max(0, pct))
                     if pct > last_progress_pct:
-                        signals.clams_bars_progress.emit(pct)
+                        signals.clams_detection_progress.emit(pct)
                         last_progress_pct = pct
 
                 seek_target = max(cur_frame - 1, 0)
@@ -209,7 +222,7 @@ def run_clams_bars_detection(
         bars_runs.append((start_frame, cur_frame))
 
     if emit_progress:
-        signals.clams_bars_progress.emit(100)
+        signals.clams_detection_progress.emit(100)
 
     if bars_runs:
         s_frame, e_frame = bars_runs[0]

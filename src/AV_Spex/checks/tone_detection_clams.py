@@ -123,7 +123,7 @@ def _detect_tones(
 
     progress_total = max(endpoint, 1)
     last_progress_pct = 0
-    emit_progress = signals is not None and hasattr(signals, "clams_tone_progress")
+    emit_progress = signals is not None and hasattr(signals, "clams_detection_progress")
 
     while chunk_len >= duration and start_sample < endpoint:
         if check_cancelled and check_cancelled():
@@ -133,7 +133,7 @@ def _detect_tones(
             pct = int((start_sample / progress_total) * 100)
             pct = min(99, max(0, pct))
             if pct > last_progress_pct:
-                signals.clams_tone_progress.emit(pct)
+                signals.clams_detection_progress.emit(pct)
                 last_progress_pct = pct
 
         similarity = float(np.average(np.correlate(ref_chunk, curr_chunk, mode="valid")))
@@ -161,7 +161,7 @@ def _detect_tones(
         duration = SAMPLE_SIZE
 
     if emit_progress:
-        signals.clams_tone_progress.emit(100)
+        signals.clams_detection_progress.emit(100)
 
     threshold_seconds = min_tone_duration_ms / 1000.0
     filtered = [(s, e) for s, e in out if (e - s) >= threshold_seconds]
