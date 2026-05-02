@@ -2010,21 +2010,35 @@ def make_tone_detection_html(tone_csv_path):
             '</div>'
         )
 
-    rows = "".join(
-        f'<tr>'
-        f'<td style="padding: 6px 12px;">{i + 1}</td>'
-        f'<td style="padding: 6px 12px;">{fmt(s)}</td>'
-        f'<td style="padding: 6px 12px;">{fmt(e)}</td>'
-        f'<td style="padding: 6px 12px;">{(e - s):.2f}s</td>'
-        f'</tr>'
-        for i, (s, e) in enumerate(tones)
-    )
+    has_secondary = any(p != "primary" for p, _, _ in tones)
 
-    note = (
-        '<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">'
-        'Adapted from the CLAMS tonedetection app: cross-correlation of '
-        'consecutive 250 ms audio chunks at 16 kHz mono.'
-        '</p>'
+    def render_row(i, pass_label, s, e):
+        bg = ' style="background-color: #fff3cd;"' if pass_label != "primary" else ""
+        return (
+            f'<tr{bg}>'
+            f'<td style="padding: 6px 12px;">{i + 1}</td>'
+            f'<td style="padding: 6px 12px;">{pass_label}</td>'
+            f'<td style="padding: 6px 12px;">{fmt(s)}</td>'
+            f'<td style="padding: 6px 12px;">{fmt(e)}</td>'
+            f'<td style="padding: 6px 12px;">{(e - s):.2f}s</td>'
+            f'</tr>'
+        )
+
+    rows = "".join(render_row(i, p, s, e) for i, (p, s, e) in enumerate(tones))
+
+    note_lines = [
+        "Adapted from the CLAMS tonedetection app: cross-correlation of "
+        "consecutive 250 ms audio chunks at 16 kHz mono.",
+    ]
+    if has_secondary:
+        note_lines.append(
+            "Second-pass rows (highlighted) are targeted scans triggered by bars "
+            "detections that fell outside the primary tone window, run with "
+            "relaxed thresholds (tolerance 0.7, min duration 500 ms)."
+        )
+    note = "".join(
+        f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
+        for line in note_lines
     )
 
     return f"""
@@ -2032,6 +2046,7 @@ def make_tone_detection_html(tone_csv_path):
         <thead>
             <tr style="background-color: #f5e9e3;">
                 <th style="text-align: left; padding: 6px 12px;">#</th>
+                <th style="text-align: left; padding: 6px 12px;">Pass</th>
                 <th style="text-align: left; padding: 6px 12px;">Start</th>
                 <th style="text-align: left; padding: 6px 12px;">End</th>
                 <th style="text-align: left; padding: 6px 12px;">Duration</th>
