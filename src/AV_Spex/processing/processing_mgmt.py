@@ -704,18 +704,47 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         def _overlaps_any(start, end, spans, slack):
             return any(_spans_overlap(start, end, s, e, slack) for s, e in spans)
 
+        def _merge_adjacent_spans(spans, gap_seconds):
+            """Merge (start, end) tuples whose gap is <= gap_seconds."""
+            if not spans:
+                return []
+            sorted_spans = sorted(spans, key=lambda t: t[0])
+            merged = [sorted_spans[0]]
+            for start, end in sorted_spans[1:]:
+                prev_start, prev_end = merged[-1]
+                if start - prev_end <= gap_seconds:
+                    merged[-1] = (prev_start, max(prev_end, end))
+                else:
+                    merged.append((start, end))
+            return merged
+
         secondary_bars = []
         if primary_tones and fps and fps > 0:
-            for tone_start, tone_end in primary_tones:
+            # Cluster uncovered primary tones into merged scan windows so that
+            # an adjacent group of tones triggers one combined SSIM scan
+            # instead of several heavily-overlapping scans.
+            uncovered_tones = [
+                (s, e) for s, e in primary_tones
+                if not _overlaps_any(s, e, primary_bars, WINDOW_SLACK_SECONDS)
+            ]
+            padded_windows = [
+                (max(0.0, s - WINDOW_SLACK_SECONDS), e + WINDOW_SLACK_SECONDS)
+                for s, e in uncovered_tones
+            ]
+            scan_windows = _merge_adjacent_spans(padded_windows, gap_seconds=0.0)
+            if len(scan_windows) < len(uncovered_tones):
+                logger.info(
+                    f"CLAMS bars second-pass: clustered {len(uncovered_tones)} "
+                    f"tone trigger(s) into {len(scan_windows)} scan window(s)"
+                )
+            for window_start, window_stop in scan_windows:
                 if check_cancelled and check_cancelled():
                     break
-                if _overlaps_any(tone_start, tone_end, primary_bars, WINDOW_SLACK_SECONDS):
-                    continue
-                window_start_frame = max(0, int((tone_start - WINDOW_SLACK_SECONDS) * fps))
-                window_stop_frame = int((tone_end + WINDOW_SLACK_SECONDS) * fps)
+                window_start_frame = max(0, int(window_start * fps))
+                window_stop_frame = int(window_stop * fps)
                 logger.info(
                     f"CLAMS bars second-pass: scanning "
-                    f"{tone_start:.1f}s–{tone_end:.1f}s (relaxed threshold)"
+                    f"{window_start:.1f}s–{window_stop:.1f}s (relaxed threshold)"
                 )
                 hits = run_clams_bars_detection(
                     video_path=video_path,
@@ -739,6 +768,15 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                         f"in tone-anchored window"
                     )
                 secondary_bars.extend(hits)
+
+        if secondary_bars:
+            before = len(secondary_bars)
+            secondary_bars = _merge_adjacent_spans(secondary_bars, gap_seconds=1.0)
+            if len(secondary_bars) < before:
+                logger.info(
+                    f"CLAMS bars second-pass: merged {before} overlapping run(s) "
+                    f"into {len(secondary_bars)} run(s)"
+                )
 
         secondary_tones = []
         if primary_bars and audio_samples is not None:
@@ -774,9 +812,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
 
         if secondary_tones:
             before = len(secondary_tones)
-            secondary_tones = tone_detection_clams.merge_adjacent_tones(
-                secondary_tones, gap_seconds=1.0
-            )
+            secondary_tones = _merge_adjacent_spans(secondary_tones, gap_seconds=1.0)
             if len(secondary_tones) < before:
                 logger.info(
                     f"CLAMS tone second-pass: merged {before} fragments into "
