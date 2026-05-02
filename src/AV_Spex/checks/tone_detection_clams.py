@@ -102,6 +102,31 @@ def write_durations_csv(report_directory: str, tones: List[Tuple[str, float, flo
             writer.writerow(["clams tone detection found no tones"])
 
 
+def merge_adjacent_tones(
+    tones: List[Tuple[float, float]],
+    gap_seconds: float = 1.0,
+) -> List[Tuple[float, float]]:
+    """
+    Merge tones whose gap is <= gap_seconds into a single span.
+
+    Cross-correlation can fragment one continuous tone into many short spans
+    when correlation jitters around the tolerance threshold (e.g. low signal
+    level, channel imbalance, intermittent dropouts). This collapses those
+    fragments back into single tones for reporting.
+    """
+    if not tones:
+        return []
+    sorted_tones = sorted(tones, key=lambda t: t[0])
+    merged: List[Tuple[float, float]] = [sorted_tones[0]]
+    for start, end in sorted_tones[1:]:
+        prev_start, prev_end = merged[-1]
+        if start - prev_end <= gap_seconds:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def _detect_tones(
     samples: np.ndarray,
     tolerance: float,

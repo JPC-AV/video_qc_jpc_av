@@ -772,6 +772,17 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                     )
                 secondary_tones.extend(hits)
 
+        if secondary_tones:
+            before = len(secondary_tones)
+            secondary_tones = tone_detection_clams.merge_adjacent_tones(
+                secondary_tones, gap_seconds=1.0
+            )
+            if len(secondary_tones) < before:
+                logger.info(
+                    f"CLAMS tone second-pass: merged {before} fragments into "
+                    f"{len(secondary_tones)} tone(s)"
+                )
+
         # Compose primary + second-pass into the on-disk durations CSVs.
         bars_detection_clams.write_durations_csv(
             report_directory,
