@@ -348,6 +348,22 @@ class ClamsDetectionConfig:
     tone: ClamsToneParams = field(default_factory=ClamsToneParams)
 
 @dataclass
+class SceneDetectionConfig:
+    """PySceneDetect scene-cut detection.
+
+    Standalone for Stage 1: produces a scene-boundaries CSV. Stage 2 will use
+    frame_padding / audio_padding_seconds to suppress false positives in
+    frame_analysis (BRNG, signalstats, duplicate frames) and qct-parse audio
+    (clipping, dropout, imbalance, timecode) when a finding lies near a cut.
+    """
+    run_tool: bool = False
+    detector: str = "content"          # 'content' | 'adaptive'
+    threshold: float = 27.0            # ContentDetector default
+    min_scene_len: int = 15            # frames; rejects <0.5s scenes at 30fps
+    frame_padding: int = 2             # ± frames around cut for visual filtering
+    audio_padding_seconds: float = 0.2 # ± seconds around cut for audio filtering
+
+@dataclass
 class ToolsConfig:
     exiftool: BasicToolConfig
     ffprobe: BasicToolConfig
@@ -358,6 +374,9 @@ class ToolsConfig:
     qct_parse: QCTParseToolConfig
     clams_detection: ClamsDetectionConfig = field(
         default_factory=ClamsDetectionConfig
+    )
+    scene_detection: SceneDetectionConfig = field(
+        default_factory=SceneDetectionConfig
     )
 
 @dataclass
@@ -426,7 +445,8 @@ class ChecksProfile:
             audio_analysis=False,
             detect_clamped_levels=False
         ),
-        clams_detection=ClamsDetectionConfig()
+        clams_detection=ClamsDetectionConfig(),
+        scene_detection=SceneDetectionConfig()
     ))
 
 @dataclass

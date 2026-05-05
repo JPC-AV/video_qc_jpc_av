@@ -249,6 +249,7 @@ class AVSpexProcessor:
             self.checks_config.tools.qctools.run_tool or
             self.checks_config.tools.qct_parse.run_tool or
             self.checks_config.tools.clams_detection.run_tool or
+            self.checks_config.tools.scene_detection.run_tool or
             frame_config.enable_bitplane_check or
             frame_config.enable_border_detection or
             frame_config.enable_brng_analysis or

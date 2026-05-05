@@ -87,6 +87,14 @@
         "stop_at_seconds": 3600,
         "merge_gap_seconds": 5.0
       }
+    },
+    "scene_detection": {
+      "run_tool": false,
+      "detector": "content",
+      "threshold": 27.0,
+      "min_scene_len": 15,
+      "frame_padding": 2,
+      "audio_padding_seconds": 0.2
     }
   },
   "validate_filename": false

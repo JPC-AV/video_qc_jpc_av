@@ -331,6 +331,10 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             clams_cfg = getattr(checks_config.tools, 'clams_detection', None)
             if clams_cfg and getattr(clams_cfg, 'run_tool', False):
                 self._add_step_item("CLAMS Detection")
+            # Scene detection (PySceneDetect) — also independent of QCTools.
+            scene_cfg = getattr(checks_config.tools, 'scene_detection', None)
+            if scene_cfg and getattr(scene_cfg, 'run_tool', False):
+                self._add_step_item("Scene Detection")
             
             # Frame Analysis
             if hasattr(checks_config.outputs, 'frame_analysis'):

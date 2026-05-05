@@ -459,6 +459,18 @@ def update_tool_setting(tool_names: List[str], value: bool):
                     continue
                 updates['tools'][tool_name] = {field: value}
 
+            # Scene detection: only run_tool is settable via --on/--off.
+            # Detector / threshold / paddings have dedicated CLI flags.
+            elif tool_name == 'scene_detection':
+                if field != 'run_tool':
+                    logger.warning(
+                        f"Invalid field '{field}' for scene_detection. Only 'run_tool' "
+                        f"is settable via --on/--off; use --scene-detector / "
+                        f"--scene-threshold for tuning."
+                    )
+                    continue
+                updates['tools'][tool_name] = {field: value}
+
             # Standard tools with check_tool/run_tool fields
             else:
                 if field not in ('check_tool', 'run_tool'):
@@ -1279,6 +1291,14 @@ profile_step1 = {
                 "min_tone_duration_ms": 2000,
                 "stop_at_seconds": 3600
             }
+        },
+        "scene_detection": {
+            "run_tool": False,
+            "detector": "content",
+            "threshold": 27.0,
+            "min_scene_len": 15,
+            "frame_padding": 2,
+            "audio_padding_seconds": 0.2
         }
     },
     "outputs": {
@@ -1348,6 +1368,14 @@ profile_step2 = {
                 "min_tone_duration_ms": 2000,
                 "stop_at_seconds": 3600
             }
+        },
+        "scene_detection": {
+            "run_tool": True,
+            "detector": "content",
+            "threshold": 27.0,
+            "min_scene_len": 15,
+            "frame_padding": 2,
+            "audio_padding_seconds": 0.2
         }
     },
     "outputs": {
@@ -1417,6 +1445,14 @@ profile_allOff = {
                 "min_tone_duration_ms": 2000,
                 "stop_at_seconds": 3600
             }
+        },
+        "scene_detection": {
+            "run_tool": False,
+            "detector": "content",
+            "threshold": 27.0,
+            "min_scene_len": 15,
+            "frame_padding": 2,
+            "audio_padding_seconds": 0.2
         }
     },
     "outputs": {

@@ -92,6 +92,9 @@ class ParsedArguments:
     frame_no_colorbar_skip: bool
     frame_brng_duration: Optional[int]
     enable_clamped_levels: Optional[str]
+    enable_scene_detection: Optional[str]
+    scene_detector: Optional[str]
+    scene_threshold: Optional[float]
     exiftool_profile: Optional[str]
     mediainfo_profile: Optional[str]
     ffprobe_profile: Optional[str]
@@ -230,6 +233,23 @@ The scripts will confirm that the digital files conform to predetermined specifi
         help='Enable/disable clamped video levels detection in qct-parse'
     )
 
+    # Scene detection (PySceneDetect) — Stage 1: standalone CSV output.
+    parser.add_argument(
+        '--enable-scene-detection',
+        choices=['on', 'off'],
+        help='Enable/disable PySceneDetect scene-cut detection'
+    )
+    parser.add_argument(
+        '--scene-detector',
+        choices=['content', 'adaptive'],
+        help='Scene detector to use (content = default; adaptive for noisy analog footage)'
+    )
+    parser.add_argument(
+        '--scene-threshold',
+        type=float,
+        help='Scene detection threshold (lower = more sensitive; default 27.0 for content)'
+    )
+
     args = parser.parse_args()
 
     input_paths = args.paths if args.paths else []
@@ -283,6 +303,9 @@ The scripts will confirm that the digital files conform to predetermined specifi
         frame_no_colorbar_skip=getattr(args, 'frame_no_colorbar_skip', False),
         frame_brng_duration=getattr(args, 'frame_brng_duration', None),
         enable_clamped_levels=getattr(args, 'enable_clamped_levels', None),
+        enable_scene_detection=getattr(args, 'enable_scene_detection', None),
+        scene_detector=getattr(args, 'scene_detector', None),
+        scene_threshold=getattr(args, 'scene_threshold', None),
         exiftool_profile=args.exiftool_profile,
         mediainfo_profile=args.mediainfo_profile,
         ffprobe_profile=args.ffprobe_profile,
@@ -491,6 +514,19 @@ def run_cli_mode(args):
     if args.enable_clamped_levels:
         config_mgr.update_config('checks', {
             'tools': {'qct_parse': {'detect_clamped_levels': (args.enable_clamped_levels == 'on')}}
+        })
+        config_mgr.save_config('checks', is_last_used=True)
+
+    scene_updates = {}
+    if args.enable_scene_detection:
+        scene_updates['run_tool'] = (args.enable_scene_detection == 'on')
+    if args.scene_detector is not None:
+        scene_updates['detector'] = args.scene_detector
+    if args.scene_threshold is not None:
+        scene_updates['threshold'] = args.scene_threshold
+    if scene_updates:
+        config_mgr.update_config('checks', {
+            'tools': {'scene_detection': scene_updates}
         })
         config_mgr.save_config('checks', is_last_used=True)
 

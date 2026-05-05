@@ -35,6 +35,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.setup_qctools_section(main_layout)
         self.setup_qct_parse_section(main_layout)
         self.setup_clams_detection_section(main_layout)
+        self.setup_scene_detection_section(main_layout)
         self.setup_frame_analysis_sections(main_layout)
         self.connect_signals()
 
@@ -168,6 +169,37 @@ class ComplexWindow(QWidget, ThemeableMixin):
 
         self.clams_detection_group.setLayout(clams_layout)
         main_layout.addWidget(self.clams_detection_group)
+
+    # Scene Detection Section (PySceneDetect cut detector — Stage 1: standalone CSV)
+    def setup_scene_detection_section(self, main_layout):
+        """Run PySceneDetect to identify scene cuts in the source video."""
+        theme_manager = ThemeManager.instance()
+
+        self.scene_detection_group = QGroupBox("Scene Detection")
+        theme_manager.style_groupbox(self.scene_detection_group, "top center")
+        self.themed_group_boxes['scene_detection'] = self.scene_detection_group
+
+        scene_layout = QVBoxLayout()
+
+        self.run_scene_detection_cb = QCheckBox("Run Tool")
+        self.run_scene_detection_cb.setStyleSheet("font-weight: bold;")
+        run_scene_desc = QLabel(
+            "Detect scene cuts using PySceneDetect. Stage 1 writes a "
+            "scene-boundaries CSV alongside the other qc_metadata sidecars. "
+            "Stage 2 will use these boundaries to suppress false-positive "
+            "findings from frame analysis (BRNG, signalstats, duplicate "
+            "frames) and qct-parse audio analysis (clipping, dropout, "
+            "imbalance) when they coincide with a cut. Detector ('content' "
+            "or 'adaptive') and threshold are tunable in the JSON config."
+        )
+        run_scene_desc.setWordWrap(True)
+        run_scene_desc.setIndent(20)
+
+        scene_layout.addWidget(self.run_scene_detection_cb)
+        scene_layout.addWidget(run_scene_desc)
+
+        self.scene_detection_group.setLayout(scene_layout)
+        main_layout.addWidget(self.scene_detection_group)
 
     # Frame Analysis Sections (restructured)
     def setup_frame_analysis_sections(self, main_layout):
@@ -698,6 +730,12 @@ class ComplexWindow(QWidget, ThemeableMixin):
             lambda state: self.on_boolean_changed(state, ['tools', 'clams_detection', 'run_tool'])
         )
 
+        # Scene detection — single Run Tool checkbox. Detector / threshold /
+        # paddings are JSON-only (or via the dedicated CLI flags).
+        self.run_scene_detection_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['tools', 'scene_detection', 'run_tool'])
+        )
+
     def load_config_values(self):
         """Load current config values into UI elements"""
         # Set loading flag to True
@@ -784,6 +822,10 @@ class ComplexWindow(QWidget, ThemeableMixin):
         clams = getattr(checks_config.tools, 'clams_detection', None)
         self.run_clams_detection_cb.setChecked(bool(getattr(clams, 'run_tool', False)))
 
+        # Scene detection — single toggle (Stage 1: standalone CSV output).
+        scene = getattr(checks_config.tools, 'scene_detection', None)
+        self.run_scene_detection_cb.setChecked(bool(getattr(scene, 'run_tool', False)))
+
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
 
@@ -827,6 +869,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
             config_mgr.update_config('checks', updates)
         elif path[0] == "tools" and path[1] == "clams_detection":
             updates = {'tools': {'clams_detection': {path[2]: new_value}}}
+            config_mgr.update_config('checks', updates)
+        elif path[0] == "tools" and path[1] == "scene_detection":
+            updates = {'tools': {'scene_detection': {path[2]: new_value}}}
             config_mgr.update_config('checks', updates)
         elif path[0] == "outputs" and path[1] == "frame_analysis":
             updates = {'outputs': {'frame_analysis': {path[2]: new_value}}}
