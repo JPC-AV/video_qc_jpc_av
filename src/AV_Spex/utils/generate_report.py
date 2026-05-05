@@ -4748,6 +4748,80 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     if bars_comparison_html or tone_detection_html:
         html_template += '<h3 id="section-clams-detection">CLAMS Detection</h3>'
+        html_template += """
+        <a id="link_clams_methodology" href="javascript:void(0);"
+           onclick="toggleContent('clams_methodology', 'What is CLAMS Detection? ▼', 'What is CLAMS Detection? ▲')"
+           style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+           What is CLAMS Detection? ▼</a>
+        <div id="clams_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+             margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+            <p style="margin: 0 0 10px 0;">
+                <strong>CLAMS</strong> (Computational Linguistics Applications for Multimedia Services) is an
+                open-source project led by Brandeis University that builds reusable tools for analyzing
+                audiovisual collections. AV Spex adapts two CLAMS apps —
+                <a href="https://github.com/clamsproject/app-barsdetection" style="color: #378d6a;">app-barsdetection</a>
+                and <a href="https://github.com/clamsproject/app-tonedetection" style="color: #378d6a;">app-tonedetection</a> —
+                porting just their detection cores into the AV Spex pipeline. Both upstream apps are
+                distributed under the Apache License 2.0.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">How bars detection works:</p>
+            <p style="margin: 0 0 10px 0;">
+                Frames are sampled (every 30th frame by default) and converted to grayscale. Each sample
+                is compared to a bundled SMPTE color bars reference image using
+                <strong>structural similarity (SSIM)</strong>. A frame is considered to match when its
+                SSIM score exceeds the primary threshold (<code style="background:#eee; padding:1px 4px; border-radius:2px;">0.7</code>),
+                and a run of consecutive matching samples becomes a detected bars span once it
+                exceeds the minimum frame count.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">How tone detection works:</p>
+            <p style="margin: 0 0 10px 0;">
+                The audio track is decoded to 16 kHz mono via ffmpeg and split into consecutive 250 ms
+                chunks. Adjacent chunks are compared using <strong>numpy cross-correlation</strong>;
+                when their similarity stays at or above the tolerance
+                (<code style="background:#eee; padding:1px 4px; border-radius:2px;">1.0</code> by default),
+                the run is extended. Runs that survive a minimum-duration filter
+                (<code style="background:#eee; padding:1px 4px; border-radius:2px;">2000 ms</code> by default)
+                are reported as detected tones.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">Two-pass cross-validation:</p>
+            <p style="margin: 0 0 6px 0;">
+                Color bars and reference tone are typically authored together at the head of a tape, so
+                the two detectors should largely agree. AV Spex runs them in two passes:
+            </p>
+            <ol style="margin: 4px 0 10px 20px; padding: 0;">
+                <li style="margin-bottom: 4px;"><strong>Primary pass</strong> — each detector scans the
+                    file independently with its default thresholds.</li>
+                <li style="margin-bottom: 4px;"><strong>Second pass</strong> — when one detector finds a
+                    span the other missed, a targeted windowed scan is run on the other detector with
+                    <em>relaxed</em> thresholds (bars: SSIM ≥
+                    <code style="background:#eee; padding:1px 4px; border-radius:2px;">0.6</code>, sample
+                    ratio <code style="background:#eee; padding:1px 4px; border-radius:2px;">5</code>;
+                    tone: tolerance
+                    <code style="background:#eee; padding:1px 4px; border-radius:2px;">0.7</code>,
+                    min duration
+                    <code style="background:#eee; padding:1px 4px; border-radius:2px;">500 ms</code>).
+                    A ±5 s slack is added around the trigger window because bars and tone don't always
+                    start and stop in lockstep.</li>
+            </ol>
+            <p style="margin: 0 0 10px 0;">
+                Second-pass rows are highlighted in the result tables below. They are confirmation hits
+                only — qct-parse remains authoritative for downstream behavior such as the BRNG-skip
+                window and access-file trim.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">Fragment merging:</p>
+            <p style="margin: 0 0 10px 0;">
+                A continuous tone or bars span can dip below threshold for a brief chunk and be reported
+                as several adjacent fragments. After detection, AV Spex coalesces fragments separated by
+                less than the configured <code style="background:#eee; padding:1px 4px; border-radius:2px;">merge_gap_seconds</code>
+                (defaults: 1 s for bars, 5 s for tone) back into a single span so the report reflects
+                the underlying continuous signal.
+            </p>
+            <p style="margin: 0; color: #777;">
+                Both detectors write a per-pass durations CSV alongside the report; the bars detector
+                additionally writes a per-sampled-frame SSIM scores CSV for review.
+            </p>
+        </div>
+        """
         if bars_comparison_html:
             html_template += f"""
             <h4 style="font-size: 16px; margin-top: 16px; color: #4d2b12;">Bars Detection (qct-parse vs CLAMS SSIM)</h4>
