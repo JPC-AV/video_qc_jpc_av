@@ -77,24 +77,84 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.themed_group_boxes['outputs'] = self.outputs_group
 
         outputs_layout = QVBoxLayout()
-        
-        # Create widgets with descriptions on second line
+
+        # Access File row: parent checkbox on the left, sub-option checkboxes
+        # stacked on the right (mirrors the Fixity section's row layout).
+        access_row_container = QWidget()
+        access_row_layout = QHBoxLayout(access_row_container)
+        access_row_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Left: Access File checkbox + description
+        access_file_widget = QWidget()
+        access_file_layout = QVBoxLayout(access_file_widget)
+        access_file_layout.setContentsMargins(0, 0, 20, 0)
+        access_file_layout.setSpacing(2)
+
         self.access_file_cb = QCheckBox("Access File")
         self.access_file_cb.setStyleSheet("font-weight: bold;")
         access_file_desc = QLabel("Creates a h264 access file of the input .mkv file")
-        access_file_desc.setIndent(20)  # Indented to align with checkbox text
-        
+        access_file_desc.setIndent(20)
+        access_file_desc.setStyleSheet("color: gray; font-size: 10px;")
+
+        access_file_layout.addWidget(self.access_file_cb)
+        access_file_layout.addWidget(access_file_desc)
+        access_file_layout.addStretch()
+
+        access_row_layout.addWidget(access_file_widget)
+
+        # Right: Access File sub-options. These rely on data produced by
+        # qct-parse (color bars detection) and frame analysis (sophisticated
+        # border detection); they are disabled when Access File is off.
+        access_options_widget = QWidget()
+        access_options_layout = QVBoxLayout(access_options_widget)
+        access_options_layout.setContentsMargins(0, 0, 0, 0)
+        access_options_layout.setSpacing(5)
+
+        self.access_trim_bars_cb = QCheckBox("Trim color bars from start")
+        self.access_trim_bars_cb.setStyleSheet("font-weight: bold;")
+        access_trim_bars_desc = QLabel(
+            "If qct-parse detects color bars at the head of the tape,<br>skip them in the access file"
+        )
+        access_trim_bars_desc.setIndent(20)
+        access_trim_bars_desc.setStyleSheet("color: gray; font-size: 10px;")
+
+        self.access_crop_borders_cb = QCheckBox("Crop detected borders")
+        self.access_crop_borders_cb.setStyleSheet("font-weight: bold;")
+        access_crop_borders_desc = QLabel(
+            "If sophisticated border detection finds an active picture area,<br>crop to it in the access file"
+        )
+        access_crop_borders_desc.setIndent(20)
+        access_crop_borders_desc.setStyleSheet("color: gray; font-size: 10px;")
+
+        self.access_crop_to_480_cb = QCheckBox("Crop NTSC to 720x480")
+        self.access_crop_to_480_cb.setStyleSheet("font-weight: bold;")
+        access_crop_to_480_desc = QLabel(
+            "Trim NTSC sources to 720x480;<br>if unchecked, keep the native 720x486 height"
+        )
+        access_crop_to_480_desc.setIndent(20)
+        access_crop_to_480_desc.setStyleSheet("color: gray; font-size: 10px;")
+
+        access_options_layout.addWidget(self.access_trim_bars_cb)
+        access_options_layout.addWidget(access_trim_bars_desc)
+        access_options_layout.addWidget(self.access_crop_to_480_cb)
+        access_options_layout.addWidget(access_crop_to_480_desc)
+        access_options_layout.addWidget(self.access_crop_borders_cb)
+        access_options_layout.addWidget(access_crop_borders_desc)
+
+        access_row_layout.addWidget(access_options_widget)
+        access_row_layout.addStretch()
+
+        outputs_layout.addWidget(access_row_container)
+
+        # HTML Report row stays as a normal stacked checkbox below.
         self.report_cb = QCheckBox("HTML Report")
         self.report_cb.setStyleSheet("font-weight: bold;")
         report_desc = QLabel("Creates a .html report containing the results of Spex Checks")
         report_desc.setIndent(20)
-        
-        # Add to layout
-        outputs_layout.addWidget(self.access_file_cb)
-        outputs_layout.addWidget(access_file_desc)
+
         outputs_layout.addWidget(self.report_cb)
         outputs_layout.addWidget(report_desc)
-        
+
         self.outputs_group.setLayout(outputs_layout)
         main_layout.addWidget(self.outputs_group)
     
@@ -394,9 +454,14 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.validate_filename_cb.stateChanged.connect(self.on_validate_filename_changed)
         
         # Outputs section
-        self.access_file_cb.stateChanged.connect(
-            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file'])
+        self.access_file_cb.stateChanged.connect(self.on_access_file_changed)
+        self.access_trim_bars_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_trim_color_bars'])
         )
+        self.access_crop_borders_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_crop_borders'])
+        )
+        self.access_crop_to_480_cb.stateChanged.connect(self.on_access_crop_to_480_changed)
         self.report_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'report'])
         )
@@ -453,6 +518,16 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
         # Outputs - now using booleans directly
         self.access_file_cb.setChecked(checks_config.outputs.access_file)
+        self.access_trim_bars_cb.setChecked(
+            getattr(checks_config.outputs, 'access_file_trim_color_bars', True)
+        )
+        self.access_crop_borders_cb.setChecked(
+            getattr(checks_config.outputs, 'access_file_crop_borders', True)
+        )
+        self.access_crop_to_480_cb.setChecked(
+            getattr(checks_config.outputs, 'access_file_crop_to_480', True)
+        )
+        self._update_access_suboptions_enabled(checks_config.outputs.access_file)
         self.report_cb.setChecked(checks_config.outputs.report)
         
         # Fixity - now using booleans directly
@@ -532,6 +607,50 @@ class ChecksWindow(QWidget, ThemeableMixin):
             field = path[1]
             updates = {section: {field: new_value}}
             
+        config_mgr.update_config('checks', updates)
+
+    def _update_access_suboptions_enabled(self, access_file_enabled):
+        """Enable or disable the Access File sub-options to match the parent checkbox.
+
+        Crop-to-480 must be on for Crop-borders to be available, since border
+        crops are scaled to the chosen output size and the 720x486 path skips
+        the scale entirely.
+        """
+        self.access_trim_bars_cb.setEnabled(access_file_enabled)
+        self.access_crop_to_480_cb.setEnabled(access_file_enabled)
+        self.access_crop_borders_cb.setEnabled(
+            access_file_enabled and self.access_crop_to_480_cb.isChecked()
+        )
+
+    def on_access_file_changed(self, state):
+        """Persist Access File state and grey out its sub-options when off."""
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        self._update_access_suboptions_enabled(new_value)
+        if self.is_loading:
+            return
+        config_mgr.update_config('checks', {'outputs': {'access_file': new_value}})
+
+    def on_access_crop_to_480_changed(self, state):
+        """Persist crop-to-480 and gate crop-borders on it.
+
+        Crop-borders only makes sense when the access file is being scaled to
+        720x480 — when crop-to-480 is off, NTSC stays at native 720x486 and we
+        skip the active-area scale, so disable + uncheck crop-borders.
+        """
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        updates = {'outputs': {'access_file_crop_to_480': new_value}}
+
+        if not new_value:
+            self.access_crop_borders_cb.blockSignals(True)
+            self.access_crop_borders_cb.setChecked(False)
+            self.access_crop_borders_cb.blockSignals(False)
+            updates['outputs']['access_file_crop_borders'] = False
+
+        access_file_enabled = self.access_file_cb.isChecked()
+        self.access_crop_borders_cb.setEnabled(access_file_enabled and new_value)
+
+        if self.is_loading:
+            return
         config_mgr.update_config('checks', updates)
 
     def on_validate_filename_changed(self, state):
