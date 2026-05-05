@@ -627,6 +627,27 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         bars_params = clams_cfg.bars
         tone_params = clams_cfg.tone
 
+        # The detectors split a single continuous bars/tone run into multiple
+        # short fragments when SSIM or cross-correlation dips below threshold
+        # for a chunk. _merge_adjacent_spans collapses fragments separated by
+        # less than the configured gap back into one span.
+        def _merge_adjacent_spans(spans, gap_seconds):
+            """Merge (start, end) tuples whose gap is <= gap_seconds."""
+            if not spans:
+                return []
+            sorted_spans = sorted(spans, key=lambda t: t[0])
+            merged = [sorted_spans[0]]
+            for start, end in sorted_spans[1:]:
+                prev_start, prev_end = merged[-1]
+                if start - prev_end <= gap_seconds:
+                    merged[-1] = (prev_start, max(prev_end, end))
+                else:
+                    merged.append((start, end))
+            return merged
+
+        bars_merge_gap = getattr(bars_params, 'merge_gap_seconds', 1.0)
+        tone_merge_gap = getattr(tone_params, 'merge_gap_seconds', 5.0)
+
         # Probe fps once so the cross-validation pass can convert
         # seconds-based windows to frame ranges for the bars detector.
         fps = bars_detection_clams.get_video_fps(video_path)
@@ -646,6 +667,13 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             signals=signals,
         )
         if primary_bars:
+            before = len(primary_bars)
+            primary_bars = _merge_adjacent_spans(primary_bars, gap_seconds=bars_merge_gap)
+            if len(primary_bars) < before:
+                logger.info(
+                    f"CLAMS bars detection: merged {before} adjacent run(s) "
+                    f"into {len(primary_bars)} (gap ≤ {bars_merge_gap:.1f}s)"
+                )
             first_start, first_end = primary_bars[0]
             results['clams_bars_start_time'] = first_start
             results['clams_bars_end_time'] = first_end
@@ -679,6 +707,14 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             check_cancelled=check_cancelled,
             signals=signals,
         )
+        if primary_tones:
+            before = len(primary_tones)
+            primary_tones = _merge_adjacent_spans(primary_tones, gap_seconds=tone_merge_gap)
+            if len(primary_tones) < before:
+                logger.info(
+                    f"CLAMS tone detection: merged {before} adjacent fragment(s) "
+                    f"into {len(primary_tones)} tone(s) (gap ≤ {tone_merge_gap:.1f}s)"
+                )
         results['clams_tones'] = primary_tones
         if primary_tones:
             logger.info(
@@ -703,20 +739,6 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
 
         def _overlaps_any(start, end, spans, slack):
             return any(_spans_overlap(start, end, s, e, slack) for s, e in spans)
-
-        def _merge_adjacent_spans(spans, gap_seconds):
-            """Merge (start, end) tuples whose gap is <= gap_seconds."""
-            if not spans:
-                return []
-            sorted_spans = sorted(spans, key=lambda t: t[0])
-            merged = [sorted_spans[0]]
-            for start, end in sorted_spans[1:]:
-                prev_start, prev_end = merged[-1]
-                if start - prev_end <= gap_seconds:
-                    merged[-1] = (prev_start, max(prev_end, end))
-                else:
-                    merged.append((start, end))
-            return merged
 
         secondary_bars = []
         if primary_tones and fps and fps > 0:
@@ -771,11 +793,11 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
 
         if secondary_bars:
             before = len(secondary_bars)
-            secondary_bars = _merge_adjacent_spans(secondary_bars, gap_seconds=1.0)
+            secondary_bars = _merge_adjacent_spans(secondary_bars, gap_seconds=bars_merge_gap)
             if len(secondary_bars) < before:
                 logger.info(
                     f"CLAMS bars second-pass: merged {before} overlapping run(s) "
-                    f"into {len(secondary_bars)} run(s)"
+                    f"into {len(secondary_bars)} run(s) (gap ≤ {bars_merge_gap:.1f}s)"
                 )
 
         secondary_tones = []
@@ -812,11 +834,11 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
 
         if secondary_tones:
             before = len(secondary_tones)
-            secondary_tones = _merge_adjacent_spans(secondary_tones, gap_seconds=1.0)
+            secondary_tones = _merge_adjacent_spans(secondary_tones, gap_seconds=tone_merge_gap)
             if len(secondary_tones) < before:
                 logger.info(
                     f"CLAMS tone second-pass: merged {before} fragments into "
-                    f"{len(secondary_tones)} tone(s)"
+                    f"{len(secondary_tones)} tone(s) (gap ≤ {tone_merge_gap:.1f}s)"
                 )
 
         # Compose primary + second-pass into the on-disk durations CSVs.

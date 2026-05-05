@@ -329,12 +329,14 @@ class ClamsBarsParams:
     stop_at_frame: int = 9000
     min_frame_count: int = 10
     stop_after_one: bool = True
+    merge_gap_seconds: float = 1.0
 
 @dataclass
 class ClamsToneParams:
     tolerance: float = 1.0
     min_tone_duration_ms: int = 2000
     stop_at_seconds: int = 3600
+    merge_gap_seconds: float = 5.0
 
 @dataclass
 class ClamsDetectionConfig:
