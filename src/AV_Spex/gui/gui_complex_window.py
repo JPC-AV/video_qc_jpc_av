@@ -34,6 +34,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
 
         self.setup_qctools_section(main_layout)
         self.setup_qct_parse_section(main_layout)
+        self.setup_clams_detection_section(main_layout)
         self.setup_frame_analysis_sections(main_layout)
         self.connect_signals()
 
@@ -138,6 +139,35 @@ class ComplexWindow(QWidget, ThemeableMixin):
         
         self.qct_group.setLayout(qct_layout)
         main_layout.addWidget(self.qct_group)
+
+    # Unified CLAMS Detection Section (SSIM-based bars + cross-correlation tone)
+    def setup_clams_detection_section(self, main_layout):
+        """Run CLAMS bars and tone detectors together in one step."""
+        theme_manager = ThemeManager.instance()
+
+        self.clams_detection_group = QGroupBox("CLAMS Detection")
+        theme_manager.style_groupbox(self.clams_detection_group, "top center")
+        self.themed_group_boxes['clams_detection'] = self.clams_detection_group
+
+        clams_layout = QVBoxLayout()
+
+        self.run_clams_detection_cb = QCheckBox("Run Tool")
+        self.run_clams_detection_cb.setStyleSheet("font-weight: bold;")
+        run_clams_desc = QLabel(
+            "Run the CLAMS SSIM-based SMPTE bars detector and the cross-correlation "
+            "tone detector together. The bars detector runs in parallel with qct-parse "
+            "for side-by-side comparison; the tone detector identifies spans of "
+            "monotonic audio (e.g. the tones in SMPTE bars-and-tones). qct-parse "
+            "remains authoritative for downstream BRNG-skip and access-file trim."
+        )
+        run_clams_desc.setWordWrap(True)
+        run_clams_desc.setIndent(20)
+
+        clams_layout.addWidget(self.run_clams_detection_cb)
+        clams_layout.addWidget(run_clams_desc)
+
+        self.clams_detection_group.setLayout(clams_layout)
+        main_layout.addWidget(self.clams_detection_group)
 
     # Frame Analysis Sections (restructured)
     def setup_frame_analysis_sections(self, main_layout):
@@ -662,6 +692,12 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.audio_analysis_cb.stateChanged.connect(self.on_audio_analysis_changed)
         self.detect_clamped_levels_cb.stateChanged.connect(self.on_detect_clamped_levels_changed)
 
+        # CLAMS detection — single Run Tool checkbox runs both bars and tone
+        # detectors. Numeric tuning is JSON-only.
+        self.run_clams_detection_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['tools', 'clams_detection', 'run_tool'])
+        )
+
     def load_config_values(self):
         """Load current config values into UI elements"""
         # Set loading flag to True
@@ -744,6 +780,10 @@ class ComplexWindow(QWidget, ThemeableMixin):
             thumbnail_should_be_enabled = qct.barsDetection or qct.evaluateBars
             self.thumb_export_cb.setEnabled(thumbnail_should_be_enabled)
 
+        # CLAMS detection — single toggle runs both bars and tone detectors.
+        clams = getattr(checks_config.tools, 'clams_detection', None)
+        self.run_clams_detection_cb.setChecked(bool(getattr(clams, 'run_tool', False)))
+
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
 
@@ -784,6 +824,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
             config_mgr.update_config('checks', updates)
         elif path[0] == "tools" and path[1] == "qctools":
             updates = {'tools': {'qctools': {path[2]: new_value}}}
+            config_mgr.update_config('checks', updates)
+        elif path[0] == "tools" and path[1] == "clams_detection":
+            updates = {'tools': {'clams_detection': {path[2]: new_value}}}
             config_mgr.update_config('checks', updates)
         elif path[0] == "outputs" and path[1] == "frame_analysis":
             updates = {'outputs': {'frame_analysis': {path[2]: new_value}}}

@@ -326,6 +326,28 @@ class QCTParseToolConfig:
     detect_clamped_levels: bool = False
 
 @dataclass
+class ClamsBarsParams:
+    threshold: float = 0.7
+    sample_ratio: int = 30
+    stop_at_frame: int = 9000
+    min_frame_count: int = 10
+    stop_after_one: bool = True
+    merge_gap_seconds: float = 1.0
+
+@dataclass
+class ClamsToneParams:
+    tolerance: float = 1.0
+    min_tone_duration_ms: int = 2000
+    stop_at_seconds: int = 3600
+    merge_gap_seconds: float = 5.0
+
+@dataclass
+class ClamsDetectionConfig:
+    run_tool: bool = False
+    bars: ClamsBarsParams = field(default_factory=ClamsBarsParams)
+    tone: ClamsToneParams = field(default_factory=ClamsToneParams)
+
+@dataclass
 class ToolsConfig:
     exiftool: BasicToolConfig
     ffprobe: BasicToolConfig
@@ -334,6 +356,9 @@ class ToolsConfig:
     mediatrace: BasicToolConfig
     qctools: QCToolsConfig
     qct_parse: QCTParseToolConfig
+    clams_detection: ClamsDetectionConfig = field(
+        default_factory=ClamsDetectionConfig
+    )
 
 @dataclass
 class ChecksConfig:
@@ -400,7 +425,8 @@ class ChecksProfile:
             thumbExport=False,
             audio_analysis=False,
             detect_clamped_levels=False
-        )
+        ),
+        clams_detection=ClamsDetectionConfig()
     ))
 
 @dataclass

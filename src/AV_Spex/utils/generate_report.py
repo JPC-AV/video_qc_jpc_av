@@ -1766,6 +1766,300 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
     return colorbars_html
 
 
+def _parse_bars_durations_csv(csv_path):
+    """
+    Parse a bars-detection durations CSV.
+
+    Two row schemas are supported:
+      * qct-parse: row 0 sentinel + a single row of [start_ts, end_ts].
+      * CLAMS: row 0 sentinel + N rows of [pass_label, start_ts, end_ts].
+
+    Returns:
+        List of (pass_label, start_seconds, end_seconds) tuples. The qct-parse
+        single-row format is reported with pass_label="primary". Empty list
+        when no bars were detected or the file is unreadable.
+    """
+    if not csv_path or not os.path.isfile(csv_path):
+        return []
+
+    def to_seconds(ts):
+        try:
+            h, m, s = ts.split(":")
+            return int(h) * 3600 + int(m) * 60 + float(s)
+        except (ValueError, AttributeError):
+            return None
+
+    runs = []
+    try:
+        with open(csv_path, "r") as f:
+            rows = list(csv.reader(f))
+        if rows and rows[0] and "color bars found" in rows[0][0]:
+            for row in rows[1:]:
+                if len(row) >= 3:
+                    pass_label = row[0]
+                    start = to_seconds(row[1])
+                    end = to_seconds(row[2])
+                elif len(row) >= 2:
+                    pass_label = "primary"
+                    start = to_seconds(row[0])
+                    end = to_seconds(row[1])
+                else:
+                    continue
+                if start is not None and end is not None:
+                    runs.append((pass_label, start, end))
+    except Exception as e:
+        logger.warning(f"Could not parse bars durations CSV {csv_path}: {e}")
+    return runs
+
+
+def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_tolerance_s=1.0):
+    """
+    Render a unified table comparing qct-parse and CLAMS SSIM bars detections.
+
+    Each detection becomes a row tagged with its source and pass (qct-parse,
+    CLAMS primary, CLAMS second-pass). Agreement analysis still fires only on
+    the qct-parse vs CLAMS-primary pair, since the second-pass scans are
+    targeted, relaxed-threshold confirmation runs.
+
+    Returns None when neither detector produced output (so the section is
+    omitted from the report entirely).
+    """
+    qct_run = bool(qct_csv_path and os.path.isfile(qct_csv_path))
+    clams_run = bool(clams_csv_path and os.path.isfile(clams_csv_path))
+    if not qct_run and not clams_run:
+        return None
+
+    qct_runs = _parse_bars_durations_csv(qct_csv_path)
+    clams_runs = _parse_bars_durations_csv(clams_csv_path)
+
+    def fmt(seconds):
+        if seconds is None:
+            return "—"
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = seconds - (h * 3600) - (m * 60)
+        return f"{h:02d}:{m:02d}:{s:06.3f}"
+
+    # Agreement: qct-parse run (single) vs CLAMS primary (single).
+    qct_primary = qct_runs[0] if qct_runs else None
+    clams_primary = next((r for r in clams_runs if r[0] == "primary"), None)
+    clams_secondary = [r for r in clams_runs if r[0] != "primary"]
+
+    agreement_label = "—"
+    agreement_color = "#666"
+    if qct_run and clams_run:
+        qct_end = qct_primary[2] if qct_primary else None
+        clams_end = clams_primary[2] if clams_primary else None
+        if qct_end is not None and clams_end is not None:
+            delta = abs(qct_end - clams_end)
+            if delta <= agreement_tolerance_s:
+                agreement_label = f"Agree (Δ end = {delta:.2f}s)"
+                agreement_color = "#0a5f1c"
+            else:
+                agreement_label = f"Disagree (Δ end = {delta:.2f}s)"
+                agreement_color = "#a02020"
+        elif qct_end is None and clams_end is None:
+            agreement_label = "Both reported no bars"
+            agreement_color = "#0a5f1c"
+        else:
+            which = "qct-parse" if qct_end is not None else "CLAMS"
+            agreement_label = f"Disagree (only {which} detected bars)"
+            agreement_color = "#a02020"
+
+    # Build one row per detection. Source/pass go in the first two cells.
+    body_rows = []
+    if qct_run:
+        if qct_primary:
+            _, qs, qe = qct_primary
+            body_rows.append(("qct-parse (authoritative)", "—", "Yes", fmt(qs), fmt(qe), False))
+        else:
+            body_rows.append(("qct-parse (authoritative)", "—", "No", "—", "—", False))
+    if clams_run:
+        if clams_primary:
+            _, cs, ce = clams_primary
+            body_rows.append(("CLAMS SSIM", "primary", "Yes", fmt(cs), fmt(ce), False))
+        else:
+            body_rows.append(("CLAMS SSIM", "primary", "No", "—", "—", False))
+        for _, ss, se in clams_secondary:
+            body_rows.append(("CLAMS SSIM", "second-pass", "Yes", fmt(ss), fmt(se), True))
+
+    def render_row(source, pass_label, found, start_ts, end_ts, is_secondary):
+        bg = ' style="background-color: #fff3cd;"' if is_secondary else ""
+        return (
+            f'<tr{bg}>'
+            f'<td style="padding: 6px 12px;">{source}</td>'
+            f'<td style="padding: 6px 12px;">{pass_label}</td>'
+            f'<td style="padding: 6px 12px;">{found}</td>'
+            f'<td style="padding: 6px 12px;">{start_ts}</td>'
+            f'<td style="padding: 6px 12px;">{end_ts}</td>'
+            f'</tr>'
+        )
+
+    rows_html = "".join(render_row(*r) for r in body_rows)
+
+    note_lines = [
+        "qct-parse drives downstream behavior (BRNG-skip, access-file trim). "
+        "The CLAMS detector runs in parallel for comparison only.",
+    ]
+    if clams_secondary:
+        note_lines.append(
+            "Second-pass rows (highlighted) are targeted scans triggered by tone "
+            "detections that fell outside the primary bars window, run with "
+            "relaxed thresholds (SSIM ≥ 0.6, sample ratio 5)."
+        )
+    note = "".join(
+        f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
+        for line in note_lines
+    )
+
+    html = f"""
+    <table style="border-collapse: collapse; margin-top: 10px;">
+        <thead>
+            <tr style="background-color: #f5e9e3;">
+                <th style="text-align: left; padding: 6px 12px;">Source</th>
+                <th style="text-align: left; padding: 6px 12px;">Pass</th>
+                <th style="text-align: left; padding: 6px 12px;">Bars detected</th>
+                <th style="text-align: left; padding: 6px 12px;">Start</th>
+                <th style="text-align: left; padding: 6px 12px;">End</th>
+            </tr>
+        </thead>
+        <tbody>
+            {rows_html}
+        </tbody>
+    </table>
+    <p style="margin: 12px 0 0 0;">
+        <span style="font-weight: bold;">Agreement:</span>
+        <span style="color: {agreement_color};">{agreement_label}</span>
+    </p>
+    {note}
+    """
+    return html
+
+
+def _parse_tone_detection_csv(csv_path):
+    """
+    Parse a CLAMS tone detection durations CSV.
+
+    Row 0 col 0 either contains "tones found" (followed by one row per tone)
+    or "no tones" (no further rows). Each tone row is
+    [pass_label, start_ts, end_ts].
+
+    Returns:
+        List of (pass_label, start_seconds, end_seconds) tuples, or [] when
+        no tones. Legacy two-column rows are reported with pass_label="primary".
+    """
+    if not csv_path or not os.path.isfile(csv_path):
+        return []
+
+    def to_seconds(ts):
+        try:
+            h, m, s = ts.split(":")
+            return int(h) * 3600 + int(m) * 60 + float(s)
+        except (ValueError, AttributeError):
+            return None
+
+    tones = []
+    try:
+        with open(csv_path, "r") as f:
+            rows = list(csv.reader(f))
+        if rows and rows[0] and "tones found" in rows[0][0]:
+            for row in rows[1:]:
+                if len(row) >= 3:
+                    pass_label = row[0]
+                    s = to_seconds(row[1])
+                    e = to_seconds(row[2])
+                elif len(row) >= 2:
+                    pass_label = "primary"
+                    s = to_seconds(row[0])
+                    e = to_seconds(row[1])
+                else:
+                    continue
+                if s is not None and e is not None:
+                    tones.append((pass_label, s, e))
+    except Exception as e:
+        logger.warning(f"Could not parse tone detection CSV {csv_path}: {e}")
+    return tones
+
+
+def make_tone_detection_html(tone_csv_path):
+    """
+    Render the CLAMS tone detection results as an HTML table.
+
+    Returns None when the CSV is missing (so the section is omitted from the
+    report). When the detector ran but found nothing, returns a short
+    "no tones detected" notice.
+    """
+    if not tone_csv_path or not os.path.isfile(tone_csv_path):
+        return None
+
+    tones = _parse_tone_detection_csv(tone_csv_path)
+
+    def fmt(seconds):
+        if seconds is None:
+            return "—"
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = seconds - (h * 3600) - (m * 60)
+        return f"{h:02d}:{m:02d}:{s:06.3f}"
+
+    if not tones:
+        return (
+            '<div style="background-color: #f5e9e3; padding: 10px;">'
+            '<p style="margin: 0;">CLAMS tone detector ran on the audio track '
+            'and found no monotonic spans meeting the minimum duration threshold.</p>'
+            '</div>'
+        )
+
+    has_secondary = any(p != "primary" for p, _, _ in tones)
+
+    def render_row(i, pass_label, s, e):
+        bg = ' style="background-color: #fff3cd;"' if pass_label != "primary" else ""
+        return (
+            f'<tr{bg}>'
+            f'<td style="padding: 6px 12px;">{i + 1}</td>'
+            f'<td style="padding: 6px 12px;">{pass_label}</td>'
+            f'<td style="padding: 6px 12px;">{fmt(s)}</td>'
+            f'<td style="padding: 6px 12px;">{fmt(e)}</td>'
+            f'<td style="padding: 6px 12px;">{(e - s):.2f}s</td>'
+            f'</tr>'
+        )
+
+    rows = "".join(render_row(i, p, s, e) for i, (p, s, e) in enumerate(tones))
+
+    note_lines = [
+        "Adapted from the CLAMS tonedetection app: cross-correlation of "
+        "consecutive 250 ms audio chunks at 16 kHz mono.",
+    ]
+    if has_secondary:
+        note_lines.append(
+            "Second-pass rows (highlighted) are targeted scans triggered by bars "
+            "detections that fell outside the primary tone window, run with "
+            "relaxed thresholds (tolerance 0.7, min duration 500 ms)."
+        )
+    note = "".join(
+        f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
+        for line in note_lines
+    )
+
+    return f"""
+    <table style="border-collapse: collapse; margin-top: 10px;">
+        <thead>
+            <tr style="background-color: #f5e9e3;">
+                <th style="text-align: left; padding: 6px 12px;">#</th>
+                <th style="text-align: left; padding: 6px 12px;">Pass</th>
+                <th style="text-align: left; padding: 6px 12px;">Start</th>
+                <th style="text-align: left; padding: 6px 12px;">End</th>
+                <th style="text-align: left; padding: 6px 12px;">Duration</th>
+            </tr>
+        </thead>
+        <tbody>
+            {rows}
+        </tbody>
+    </table>
+    {note}
+    """
+
+
 def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, video_id, failure_csv_path=None, check_cancelled=None):
     """
     Creates HTML visualizations showing pie charts of profile check results with thumbnails 
@@ -3862,6 +4156,18 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, difference_csv = find_report_csvs(report_directory)
 
+    # CLAMS bars-detection durations CSV (filename matches the writer in
+    # checks/bars_detection_clams.py); present only when the parallel detector ran.
+    clams_bars_durations_csv = os.path.join(report_directory, "clams_bars_colorbars_durations.csv")
+    if not os.path.isfile(clams_bars_durations_csv):
+        clams_bars_durations_csv = None
+
+    # CLAMS tone-detection durations CSV (filename matches the writer in
+    # checks/tone_detection_clams.py); present only when the detector ran.
+    clams_tone_durations_csv = os.path.join(report_directory, "clams_tone_detection_durations.csv")
+    if not os.path.isfile(clams_tone_durations_csv):
+        clams_tone_durations_csv = None
+
     if check_cancelled():
         return
     
@@ -4035,6 +4341,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     else:
         tags_summary_html = None
 
+    # Side-by-side comparison of qct-parse and CLAMS bars detectors. None
+    # unless at least one of the two CSVs is present.
+    bars_comparison_html = make_bars_detection_comparison_html(
+        qctools_colorbars_duration_output,
+        clams_bars_durations_csv,
+    ) if clams_bars_durations_csv else None
+
+    # CLAMS tone detection results.
+    tone_detection_html = make_tone_detection_html(clams_tone_durations_csv)
+
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
     audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
@@ -4161,6 +4477,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-qct-parse-notice', 'QCT-Parse Analysis'))
     if colorbars_html:
         toc_entries.append(('section-colorbars', 'Color Bars Detection'))
+    if bars_comparison_html or tone_detection_html:
+        toc_entries.append(('section-clams-detection', 'CLAMS Detection'))
     if colorbars_eval_html:
         toc_entries.append(('section-colorbars-eval', 'Colorbars Threshold Evaluation'))
     if clamped_levels_html:
@@ -4427,6 +4745,93 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h3 id="section-colorbars">{colorbars_header}</h3>
         {colorbars_html}
         """
+
+    if bars_comparison_html or tone_detection_html:
+        html_template += '<h3 id="section-clams-detection">CLAMS Detection</h3>'
+        html_template += """
+        <a id="link_clams_methodology" href="javascript:void(0);"
+           onclick="toggleContent('clams_methodology', 'What is CLAMS Detection? ▼', 'What is CLAMS Detection? ▲')"
+           style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+           What is CLAMS Detection? ▼</a>
+        <div id="clams_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+             margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+            <p style="margin: 0 0 10px 0;">
+                <strong>CLAMS</strong> (Computational Linguistics Applications for Multimedia Services) is an
+                open-source project led by Brandeis University that builds reusable tools for analyzing
+                audiovisual collections. AV Spex adapts two CLAMS apps —
+                <a href="https://github.com/clamsproject/app-barsdetection" style="color: #378d6a;">app-barsdetection</a>
+                and <a href="https://github.com/clamsproject/app-tonedetection" style="color: #378d6a;">app-tonedetection</a> —
+                porting just their detection cores into the AV Spex pipeline. Both upstream apps are
+                distributed under the Apache License 2.0.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">How bars detection works:</p>
+            <p style="margin: 0 0 10px 0;">
+                Frames are sampled (every 30th frame by default) and converted to grayscale. Each sample
+                is compared to a bundled SMPTE color bars reference image using
+                <strong>structural similarity (SSIM)</strong>. A frame is considered to match when its
+                SSIM score exceeds the primary threshold (<code style="background:#eee; padding:1px 4px; border-radius:2px;">0.7</code>),
+                and a run of consecutive matching samples becomes a detected bars span once it
+                exceeds the minimum frame count.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">How tone detection works:</p>
+            <p style="margin: 0 0 10px 0;">
+                The audio track is decoded to 16 kHz mono via ffmpeg and split into consecutive 250 ms
+                chunks. Adjacent chunks are compared using <strong>numpy cross-correlation</strong>;
+                when their similarity stays at or above the tolerance
+                (<code style="background:#eee; padding:1px 4px; border-radius:2px;">1.0</code> by default),
+                the run is extended. Runs that survive a minimum-duration filter
+                (<code style="background:#eee; padding:1px 4px; border-radius:2px;">2000 ms</code> by default)
+                are reported as detected tones.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">Two-pass cross-validation:</p>
+            <p style="margin: 0 0 6px 0;">
+                Color bars and reference tone are typically authored together at the head of a tape, so
+                the two detectors should largely agree. AV Spex runs them in two passes:
+            </p>
+            <ol style="margin: 4px 0 10px 20px; padding: 0;">
+                <li style="margin-bottom: 4px;"><strong>Primary pass</strong> — each detector scans the
+                    file independently with its default thresholds.</li>
+                <li style="margin-bottom: 4px;"><strong>Second pass</strong> — when one detector finds a
+                    span the other missed, a targeted windowed scan is run on the other detector with
+                    <em>relaxed</em> thresholds (bars: SSIM ≥
+                    <code style="background:#eee; padding:1px 4px; border-radius:2px;">0.6</code>, sample
+                    ratio <code style="background:#eee; padding:1px 4px; border-radius:2px;">5</code>;
+                    tone: tolerance
+                    <code style="background:#eee; padding:1px 4px; border-radius:2px;">0.7</code>,
+                    min duration
+                    <code style="background:#eee; padding:1px 4px; border-radius:2px;">500 ms</code>).
+                    A ±5 s slack is added around the trigger window because bars and tone don't always
+                    start and stop in lockstep.</li>
+            </ol>
+            <p style="margin: 0 0 10px 0;">
+                Second-pass rows are highlighted in the result tables below. They are confirmation hits
+                only — qct-parse remains authoritative for downstream behavior such as the BRNG-skip
+                window and access-file trim.
+            </p>
+            <p style="margin: 0 0 6px 0; font-weight: bold;">Fragment merging:</p>
+            <p style="margin: 0 0 10px 0;">
+                A continuous tone or bars span can dip below threshold for a brief chunk and be reported
+                as several adjacent fragments. After detection, AV Spex coalesces fragments separated by
+                less than the configured <code style="background:#eee; padding:1px 4px; border-radius:2px;">merge_gap_seconds</code>
+                (defaults: 1 s for bars, 5 s for tone) back into a single span so the report reflects
+                the underlying continuous signal.
+            </p>
+            <p style="margin: 0; color: #777;">
+                Both detectors write a per-pass durations CSV alongside the report; the bars detector
+                additionally writes a per-sampled-frame SSIM scores CSV for review.
+            </p>
+        </div>
+        """
+        if bars_comparison_html:
+            html_template += f"""
+            <h4 style="font-size: 16px; margin-top: 16px; color: #4d2b12;">Bars Detection (qct-parse vs CLAMS SSIM)</h4>
+            {bars_comparison_html}
+            """
+        if tone_detection_html:
+            html_template += f"""
+            <h4 style="font-size: 16px; margin-top: 16px; color: #4d2b12;">Tone Detection</h4>
+            {tone_detection_html}
+            """
 
     if colorbars_eval_html:
         if smpte_fallback:
