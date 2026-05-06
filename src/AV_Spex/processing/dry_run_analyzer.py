@@ -16,6 +16,7 @@ from enum import Enum
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, VALID_QCTOOLS_EXTENSIONS
 from AV_Spex.utils.config_manager import ConfigManager
+from AV_Spex.utils.filename_validate import is_valid_filename
 
 # Import MessageType for color-coded console output
 try:
@@ -42,6 +43,10 @@ class StepAnalysis:
     precondition_met: bool
     reason: str
     details: Optional[str] = None
+    # Inconsistencies that won't block the step from running but will cause
+    # an enabled feature to be silently dropped at runtime. Surfaced as
+    # warning-level lines in _log_analysis_summary.
+    warnings: Optional[List[str]] = None
 
 
 class DryRunAnalyzer:
@@ -114,17 +119,21 @@ class DryRunAnalyzer:
         logger.info(f"Video ID: {video_id}")
         logger.info(f"Destination: {destination_directory}\n")
         
-        # Analyze each processing step
+        # Analyze each processing step in the same order the real pipeline runs them
+        analyses.extend(self._analyze_filename_validation(video_path))
         analyses.extend(self._analyze_fixity_steps(source_directory, video_path, video_id))
         analyses.extend(self._analyze_mediaconch(video_path, destination_directory, video_id))
         analyses.extend(self._analyze_metadata_tools(video_path, destination_directory, video_id))
-        analyses.extend(self._analyze_output_steps(
-            video_path, source_directory, destination_directory, video_id, access_file_found
+        analyses.extend(self._analyze_qctools_steps(
+            source_directory, destination_directory, video_id
         ))
+        analyses.extend(self._analyze_clams_detection())
         analyses.extend(self._analyze_frame_analysis(
             video_path, source_directory, destination_directory, video_id
         ))
-        
+        analyses.extend(self._analyze_access_file(access_file_found))
+        analyses.extend(self._analyze_html_report())
+
         return analyses
     
     # -------------------------------------------------------------------------
@@ -177,10 +186,57 @@ class DryRunAnalyzer:
         return video_path, video_id, destination_directory, access_file_found
     
     # -------------------------------------------------------------------------
+    # Filename Validation
+    # -------------------------------------------------------------------------
+
+    def _analyze_filename_validation(self, video_path: str) -> List[StepAnalysis]:
+        """Analyze filename validation step.
+
+        The real pipeline calls is_valid_filename() in dir_setup.initialize_directory()
+        before any processing runs. When validation fails, the directory is skipped
+        entirely. When the toggle is off, validation is bypassed.
+        """
+        validate_enabled = self.checks_config.validate_filename
+
+        if not validate_enabled:
+            return [self._analyze_step(
+                step_name="Filename Validation",
+                enabled=False,
+                precondition_met=True,
+                precondition_reason="Validation disabled — filename not checked, processing will proceed regardless"
+            )]
+
+        # When enabled, actually run the validator so the user knows whether
+        # processing would be aborted for this directory. is_valid_filename
+        # returns False on mismatch; suppress the side-effect warnings here.
+        try:
+            valid = is_valid_filename(video_path)
+        except Exception as e:
+            logger.warning(f"Could not validate filename: {e}")
+            valid = None
+
+        if valid is True:
+            reason = f"Filename matches configured pattern: {os.path.basename(video_path)}"
+        elif valid is False:
+            reason = (
+                f"Filename does NOT match configured pattern: {os.path.basename(video_path)} "
+                "— real run would skip this directory"
+            )
+        else:
+            reason = "Could not run filename validation"
+
+        return [self._analyze_step(
+            step_name="Filename Validation",
+            enabled=True,
+            precondition_met=valid is True,
+            precondition_reason=reason
+        )]
+
+    # -------------------------------------------------------------------------
     # Fixity Analysis
     # -------------------------------------------------------------------------
-    
-    def _analyze_fixity_steps(self, source_directory: str, video_path: str, 
+
+    def _analyze_fixity_steps(self, source_directory: str, video_path: str,
                               video_id: str) -> List[StepAnalysis]:
         """Analyze all fixity-related steps."""
         analyses = []
@@ -367,23 +423,22 @@ class DryRunAnalyzer:
         
         return None
     # -------------------------------------------------------------------------
-    # Output Steps Analysis
+    # QCTools / QCT Parse Analysis
     # -------------------------------------------------------------------------
-    
-    def _analyze_output_steps(self, video_path: str, source_directory: str,
-                               destination_directory: str, video_id: str,
-                               access_file_found: bool) -> List[StepAnalysis]:
-        """Analyze output generation steps."""
+
+    def _analyze_qctools_steps(self, source_directory: str,
+                                destination_directory: str,
+                                video_id: str) -> List[StepAnalysis]:
+        """Analyze QCTools report generation and QCT Parse steps."""
         analyses = []
-        outputs_config = self.checks_config.outputs
         qctools_config = self.checks_config.tools.qctools
         qct_parse_config = self.checks_config.tools.qct_parse
-        
-        # QCTools
+
+        # QCTools — report generation may be skipped if an existing report is found
         existing_qctools = self._find_qctools_report(source_directory, video_id)
         qctools_reason = None
         qctools_status_override = None
-        
+
         if existing_qctools and qctools_config.run_tool:
             qctools_reason = f"Existing report found: {os.path.basename(existing_qctools)} (will use existing)"
             qctools_status_override = StepStatus.SKIPPED_ALREADY_EXISTS
@@ -391,7 +446,7 @@ class DryRunAnalyzer:
             qctools_reason = f"Existing report found: {os.path.basename(existing_qctools)}"
         else:
             qctools_reason = "Will create new report"
-            
+
         analyses.append(self._analyze_step(
             step_name="QCTools (generate report)",
             enabled=qctools_config.run_tool,
@@ -399,8 +454,8 @@ class DryRunAnalyzer:
             precondition_reason=qctools_reason,
             status_override=qctools_status_override
         ))
-        
-        # QCT Parse
+
+        # QCT Parse — needs a QCTools report (existing or about to be generated)
         can_parse = existing_qctools is not None or qctools_config.run_tool
         analyses.append(self._analyze_step(
             step_name="QCT Parse (analyze QCTools report)",
@@ -408,31 +463,148 @@ class DryRunAnalyzer:
             precondition_met=can_parse,
             precondition_reason="No QCTools report available and QCTools run is disabled" if not can_parse else None
         ))
-        
-        # Access File
+
+        return analyses
+
+    # -------------------------------------------------------------------------
+    # CLAMS Detection Analysis
+    # -------------------------------------------------------------------------
+
+    def _analyze_clams_detection(self) -> List[StepAnalysis]:
+        """Analyze CLAMS bars + tone detection step.
+
+        CLAMS detection runs straight from the video file (independent of QCTools)
+        and combines bars detection, tone detection, and a cross-validation
+        second pass under one toggle.
+        """
+        clams_cfg = getattr(self.checks_config.tools, 'clams_detection', None)
+        if clams_cfg is None:
+            return []
+
+        enabled = getattr(clams_cfg, 'run_tool', False)
+
+        # Build a parameter summary so the user can see what thresholds will be used
+        details = []
+        bars = getattr(clams_cfg, 'bars', None)
+        tone = getattr(clams_cfg, 'tone', None)
+        if bars is not None:
+            details.append(
+                f"bars: threshold={bars.threshold}, sample_ratio={bars.sample_ratio}, "
+                f"min_frames={bars.min_frame_count}"
+            )
+        if tone is not None:
+            details.append(
+                f"tone: tolerance={tone.tolerance}, min_duration={tone.min_tone_duration_ms}ms"
+            )
+        reason = "; ".join(details) if details else None
+
+        return [self._analyze_step(
+            step_name="CLAMS Detection (bars + tone, cross-validated)",
+            enabled=enabled,
+            precondition_met=True,
+            precondition_reason=reason
+        )]
+
+    # -------------------------------------------------------------------------
+    # Access File Analysis
+    # -------------------------------------------------------------------------
+
+    def _analyze_access_file(self, access_file_found: bool) -> List[StepAnalysis]:
+        """Analyze access file (proxy) creation, including pre-processing options.
+
+        Flags silent misconfigurations: at runtime the access-file modifiers
+        are gated on upstream results, and if the gate fails the modifier is
+        dropped without an error. We surface those gates here so the user
+        sees the inconsistency before kicking off a real run.
+
+        Modifier → upstream requirement:
+          - access_file_crop_borders → enable_border_detection AND
+            border_detection_mode == "sophisticated"
+            (processing_mgmt.py:288-295 only consumes a 'sophisticated*'
+            detection_method)
+          - access_file_trim_color_bars → qct_parse.run_tool (color_bars_end_time
+            is only populated when qct-parse runs and writes
+            qct-parse_colorbars_durations.csv)
+          - access_file_crop_to_480 → no upstream dependency (fixed NTSC
+            line trim, applied directly in make_access_file)
+        """
+        outputs_config = self.checks_config.outputs
+        frame_config = self.checks_config.outputs.frame_analysis
+        qct_parse_config = self.checks_config.tools.qct_parse
+
         access_status = None
-        access_reason = None
+        warnings = None
         if access_file_found:
             access_status = StepStatus.SKIPPED_ALREADY_EXISTS
-            access_reason = "Access file already exists in directory"
-        
-        analyses.append(self._analyze_step(
+            reason = "Access file already exists in directory"
+        else:
+            # Evaluate each modifier and whether its runtime preconditions are met.
+            active_modifiers = []
+            blocked_modifiers = []
+
+            if outputs_config.access_file_trim_color_bars:
+                if qct_parse_config.run_tool:
+                    active_modifiers.append("trim color bars")
+                else:
+                    blocked_modifiers.append(
+                        "trim color bars — qct-parse is not enabled, "
+                        "color bars end time will not be detected"
+                    )
+
+            if outputs_config.access_file_crop_borders:
+                sophisticated_borders = (
+                    frame_config.enable_border_detection
+                    and frame_config.border_detection_mode == "sophisticated"
+                )
+                if sophisticated_borders:
+                    active_modifiers.append("crop borders")
+                else:
+                    if not frame_config.enable_border_detection:
+                        blocked_modifiers.append(
+                            "crop borders — border detection is disabled, "
+                            "crop will be silently dropped"
+                        )
+                    else:
+                        blocked_modifiers.append(
+                            f"crop borders — border detection mode is "
+                            f"'{frame_config.border_detection_mode}', "
+                            "needs 'sophisticated' for active-area measurement"
+                        )
+
+            if outputs_config.access_file_crop_to_480:
+                active_modifiers.append("crop to 480 lines")
+
+            if active_modifiers:
+                reason = "With: " + ", ".join(active_modifiers)
+            elif not blocked_modifiers:
+                reason = "No pre-processing modifiers enabled"
+            else:
+                reason = "All requested modifiers are blocked — see warnings"
+
+            if blocked_modifiers:
+                warnings = blocked_modifiers
+
+        return [self._analyze_step(
             step_name="Access File (create proxy)",
             enabled=outputs_config.access_file,
             precondition_met=not access_file_found,
-            precondition_reason=access_reason,
-            status_override=access_status
-        ))
-        
-        # HTML Report
-        analyses.append(self._analyze_step(
+            precondition_reason=reason,
+            status_override=access_status,
+            warnings=warnings
+        )]
+
+    # -------------------------------------------------------------------------
+    # HTML Report Analysis
+    # -------------------------------------------------------------------------
+
+    def _analyze_html_report(self) -> List[StepAnalysis]:
+        """Analyze final HTML report generation."""
+        return [self._analyze_step(
             step_name="HTML Report",
-            enabled=outputs_config.report,
+            enabled=self.checks_config.outputs.report,
             precondition_met=True,
             precondition_reason=None
-        ))
-        
-        return analyses
+        )]
     
     def _find_qctools_report(self, source_directory: str, video_id: str) -> Optional[str]:
         """Find existing QCTools report."""
@@ -458,61 +630,106 @@ class DryRunAnalyzer:
     # -------------------------------------------------------------------------
     
     def _analyze_frame_analysis(self, video_path: str, source_directory: str,
-                                 destination_directory: str, 
+                                 destination_directory: str,
                                  video_id: str) -> List[StepAnalysis]:
-        """Analyze frame analysis steps (border detection, BRNG analysis, signalstats)."""
+        """Analyze frame analysis steps.
+
+        Mirrors the order in checks/frame_analysis.py: bitplane → border →
+        BRNG → signalstats → dropped sample → duplicate frame.
+        """
         analyses = []
         frame_config = self.checks_config.outputs.frame_analysis
         qctools_config = self.checks_config.tools.qctools
-        qct_parse_config = self.checks_config.tools.qct_parse
-        
-        # Check for existing QCTools report (needed for BRNG and signalstats)
+
+        # Check for existing QCTools report (needed for duplicate frame; used
+        # by BRNG/signalstats when present, fallback to ffmpeg when absent)
         existing_qctools = self._find_qctools_report(source_directory, video_id)
         has_qctools = existing_qctools is not None or qctools_config.run_tool
-        
+
+        # Bitplane Check — runs ffprobe bitplanenoise filter, no QCTools dependency
+        analyses.append(self._analyze_step(
+            step_name="Frame Analysis: Bitplane Check (10-bit truncation detection)",
+            enabled=frame_config.enable_bitplane_check,
+            precondition_met=True,
+            precondition_reason="Samples 20 frames evenly across video"
+        ))
+
         # Border Detection
+        border_reason = f"Mode: {frame_config.border_detection_mode}"
+        if frame_config.border_detection_mode == "sophisticated" and frame_config.auto_retry_borders:
+            border_reason += f" (auto-retry up to {frame_config.max_border_retries} iterations)"
+        elif frame_config.border_detection_mode == "simple":
+            border_reason += f" ({frame_config.simple_border_pixels}px crop)"
+
         analyses.append(self._analyze_step(
             step_name="Frame Analysis: Border Detection",
             enabled=frame_config.enable_border_detection,
             precondition_met=True,
-            precondition_reason=f"Mode: {frame_config.border_detection_mode}"
+            precondition_reason=border_reason
         ))
-        
-        # BRNG Analysis
-        brng_reason = None
+
+        # BRNG Analysis — works with or without QCTools (ffmpeg fallback)
+        brng_details = [f"Duration limit: {frame_config.brng_duration_limit}s"]
+        if frame_config.brng_skip_color_bars:
+            brng_details.append("will skip color bars region")
         if not has_qctools:
-            brng_reason = "No QCTools report available and QCTools run is disabled (needed for QCTools-based BRNG analysis)"
+            brng_details.append("no QCTools report — will use ffmpeg fallback")
         else:
-            details = []
-            details.append(f"Duration limit: {frame_config.brng_duration_limit}s")
-            if frame_config.brng_skip_color_bars:
-                details.append("Will skip color bars region")
-            brng_reason = ", ".join(details)
-        
+            brng_details.append("will use QCTools data")
+
         analyses.append(self._analyze_step(
             step_name="Frame Analysis: BRNG Violation Analysis",
             enabled=frame_config.enable_brng_analysis,
-            precondition_met=True,  # Can run with or without QCTools (uses FFmpeg fallback)
-            precondition_reason=brng_reason
+            precondition_met=True,
+            precondition_reason=", ".join(brng_details)
         ))
-        
-        # Signalstats
-        signalstats_reason = None
-        signalstats_met = True
-        
+
+        # Signalstats — falls back to full-frame active area when border
+        # detection is disabled (frame_analysis.py:4677-4688), so it does NOT
+        # require border detection to run.
+        signalstats_details = [
+            f"Periods: {frame_config.analysis_period_count}",
+            f"duration: {frame_config.analysis_period_duration}s each"
+        ]
         if not frame_config.enable_border_detection:
-            signalstats_reason = "Border detection is disabled (signalstats requires border data for region-based analysis)"
-            signalstats_met = False
-        else:
-            signalstats_reason = f"Periods: {frame_config.analysis_period_count}, duration: {frame_config.analysis_period_duration}s each"
-        
+            signalstats_details.append("border detection off — using full frame")
+
         analyses.append(self._analyze_step(
             step_name="Frame Analysis: Signalstats",
             enabled=frame_config.enable_signalstats,
-            precondition_met=signalstats_met,
-            precondition_reason=signalstats_reason
+            precondition_met=True,
+            precondition_reason=", ".join(signalstats_details)
         ))
-        
+
+        # Dropped Sample Detection — audio-only, no QCTools dependency
+        dropped_enabled = getattr(frame_config, 'enable_dropped_sample_detection', False)
+        analyses.append(self._analyze_step(
+            step_name="Frame Analysis: Dropped Sample Detection (audio)",
+            enabled=dropped_enabled,
+            precondition_met=True,
+            precondition_reason="Audio-only analysis, runs independently of QCTools"
+        ))
+
+        # Duplicate Frame Detection — requires QCTools YDIF/UDIF/VDIF data
+        duplicate_enabled = getattr(frame_config, 'enable_duplicate_frame_detection', False)
+        duplicate_min_run = getattr(frame_config, 'duplicate_min_run_length', 2)
+        if has_qctools:
+            duplicate_reason = (
+                f"Min run length: {duplicate_min_run} frames, "
+                "uses QCTools YDIF/UDIF/VDIF as candidate filter"
+            )
+            duplicate_met = True
+        else:
+            duplicate_reason = "No QCTools report available — duplicate frame detection requires it"
+            duplicate_met = False
+
+        analyses.append(self._analyze_step(
+            step_name="Frame Analysis: Duplicate Frame Detection",
+            enabled=duplicate_enabled,
+            precondition_met=duplicate_met,
+            precondition_reason=duplicate_reason
+        ))
+
         return analyses
     
     # -------------------------------------------------------------------------
@@ -521,9 +738,10 @@ class DryRunAnalyzer:
     
     def _analyze_step(self, step_name: str, enabled: bool, precondition_met: bool,
                       precondition_reason: Optional[str] = None,
-                      status_override: Optional[StepStatus] = None) -> StepAnalysis:
+                      status_override: Optional[StepStatus] = None,
+                      warnings: Optional[List[str]] = None) -> StepAnalysis:
         """Create a StepAnalysis with appropriate status."""
-        
+
         if status_override:
             status = status_override
         elif not enabled:
@@ -532,7 +750,7 @@ class DryRunAnalyzer:
             status = StepStatus.SKIPPED_PRECONDITION
         else:
             status = StepStatus.WILL_RUN
-        
+
         # Build reason string
         if status == StepStatus.SKIPPED_DISABLED:
             reason = "Disabled in configuration"
@@ -542,13 +760,14 @@ class DryRunAnalyzer:
             reason = precondition_reason or "Output already exists"
         else:
             reason = precondition_reason or "Ready to run"
-        
+
         return StepAnalysis(
             step_name=step_name,
             status=status,
             enabled_in_config=enabled,
             precondition_met=precondition_met,
-            reason=reason
+            reason=reason,
+            warnings=warnings
         )
     
     def _log_header(self, text: str):
@@ -561,7 +780,10 @@ class DryRunAnalyzer:
     def _log_config_summary(self):
         """Log a summary of current configuration."""
         logger.info("Current Configuration Summary:")
-        
+
+        # Filename validation
+        logger.info(f"  Validate Filename: {self.checks_config.validate_filename}")
+
         # Fixity
         fx = self.checks_config.fixity
         logger.info(f"  Fixity:")
@@ -569,34 +791,44 @@ class DryRunAnalyzer:
         logger.info(f"    - Validate Stream Fixity: {fx.validate_stream_fixity}")
         logger.info(f"    - Output Fixity: {fx.output_fixity}")
         logger.info(f"    - Check Fixity: {fx.check_fixity}")
-        
+
         # Tools
         logger.info(f"  Tools:")
         for tool in ['mediainfo', 'mediatrace', 'exiftool', 'ffprobe']:
             t = getattr(self.checks_config.tools, tool)
             logger.info(f"    - {tool}: run={t.run_tool}, check={t.check_tool}")
-        
+
         mc = self.checks_config.tools.mediaconch
         logger.info(f"    - mediaconch: run={mc.run_mediaconch}, policy={mc.mediaconch_policy}")
-        
+
         qc = self.checks_config.tools.qctools
         logger.info(f"    - qctools: run={qc.run_tool}")
-        
+
         qp = self.checks_config.tools.qct_parse
         logger.info(f"    - qct_parse: run={qp.run_tool}")
-        
+
+        clams = getattr(self.checks_config.tools, 'clams_detection', None)
+        if clams is not None:
+            logger.info(f"    - clams_detection: run={getattr(clams, 'run_tool', False)}")
+
         # Outputs
         out = self.checks_config.outputs
         logger.info(f"  Outputs:")
         logger.info(f"    - Access File: {out.access_file}")
+        logger.info(f"        trim color bars: {out.access_file_trim_color_bars}")
+        logger.info(f"        crop borders: {out.access_file_crop_borders}")
+        logger.info(f"        crop to 480: {out.access_file_crop_to_480}")
         logger.info(f"    - Report: {out.report}")
-        
+
         # Frame Analysis
         fa = self.checks_config.outputs.frame_analysis
         logger.info(f"  Frame Analysis:")
+        logger.info(f"    - Bitplane Check: {fa.enable_bitplane_check}")
         logger.info(f"    - Border Detection: {fa.enable_border_detection} (mode: {fa.border_detection_mode})")
         logger.info(f"    - BRNG Analysis: {fa.enable_brng_analysis}")
         logger.info(f"    - Signalstats: {fa.enable_signalstats}")
+        logger.info(f"    - Dropped Sample Detection: {getattr(fa, 'enable_dropped_sample_detection', False)}")
+        logger.info(f"    - Duplicate Frame Detection: {getattr(fa, 'enable_duplicate_frame_detection', False)}")
         logger.info("")
     
     def _log_analysis_summary(self, analyses: List[StepAnalysis]):
@@ -612,30 +844,46 @@ class DryRunAnalyzer:
             if MessageType is not None:
                 return {'msg_type': msg_type}
             return {}
-        
+
+        # Emit each warning on its own line at warning level so the GUI
+        # console renders it in the warning color (visually distinct from
+        # the surrounding step text).
+        def emit_warnings(analysis):
+            if not analysis.warnings:
+                return
+            for w in analysis.warnings:
+                logger.warning(
+                    f"      MISCONFIGURED: {w}",
+                    extra=get_msg_extra(MessageType.WARNING if MessageType else None)
+                )
+
         if will_run:
             logger.info("Steps that WILL RUN:", extra=get_msg_extra(MessageType.SUCCESS if MessageType else None))
             for analysis in will_run:
                 logger.info(f"  ✓ {analysis.step_name}", extra=get_msg_extra(MessageType.SUCCESS if MessageType else None))
                 if analysis.reason and analysis.reason != "Ready to run":
                     logger.debug(f"      {analysis.reason}")
-        
+                emit_warnings(analysis)
+
         if skipped_disabled:
             logger.info("\nSteps DISABLED in configuration:", extra=get_msg_extra(MessageType.NORMAL if MessageType else None))
             for analysis in skipped_disabled:
                 logger.info(f"  ○ {analysis.step_name}", extra=get_msg_extra(MessageType.NORMAL if MessageType else None))
                 logger.info(f"      Reason: {analysis.reason}", extra=get_msg_extra(MessageType.NORMAL if MessageType else None))
-        
+                emit_warnings(analysis)
+
         if skipped_precondition:
             logger.info("\nSteps SKIPPED (precondition not met):", extra=get_msg_extra(MessageType.WARNING if MessageType else None))
             for analysis in skipped_precondition:
                 logger.info(f"  ✗ {analysis.step_name}", extra=get_msg_extra(MessageType.WARNING if MessageType else None))
                 logger.info(f"      Reason: {analysis.reason}", extra=get_msg_extra(MessageType.WARNING if MessageType else None))
-        
+                emit_warnings(analysis)
+
         if skipped_exists:
             logger.info("\nSteps SKIPPED (output already exists):", extra=get_msg_extra(MessageType.INFO if MessageType else None))
             for analysis in skipped_exists:
                 logger.info(f"  ● {analysis.step_name}", extra=get_msg_extra(MessageType.INFO if MessageType else None))
                 logger.info(f"      Reason: {analysis.reason}", extra=get_msg_extra(MessageType.INFO if MessageType else None))
-        
+                emit_warnings(analysis)
+
         logger.info("")
