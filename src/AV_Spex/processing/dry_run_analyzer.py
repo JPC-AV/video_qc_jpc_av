@@ -43,6 +43,10 @@ class StepAnalysis:
     precondition_met: bool
     reason: str
     details: Optional[str] = None
+    # Inconsistencies that won't block the step from running but will cause
+    # an enabled feature to be silently dropped at runtime. Surfaced as
+    # warning-level lines in _log_analysis_summary.
+    warnings: Optional[List[str]] = None
 
 
 class DryRunAnalyzer:
@@ -529,6 +533,7 @@ class DryRunAnalyzer:
         qct_parse_config = self.checks_config.tools.qct_parse
 
         access_status = None
+        warnings = None
         if access_file_found:
             access_status = StepStatus.SKIPPED_ALREADY_EXISTS
             reason = "Access file already exists in directory"
@@ -569,21 +574,23 @@ class DryRunAnalyzer:
             if outputs_config.access_file_crop_to_480:
                 active_modifiers.append("crop to 480 lines")
 
-            parts = []
             if active_modifiers:
-                parts.append("With: " + ", ".join(active_modifiers))
+                reason = "With: " + ", ".join(active_modifiers)
+            elif not blocked_modifiers:
+                reason = "No pre-processing modifiers enabled"
+            else:
+                reason = "All requested modifiers are blocked — see warnings"
+
             if blocked_modifiers:
-                parts.append("MISCONFIGURED: " + "; ".join(blocked_modifiers))
-            if not active_modifiers and not blocked_modifiers:
-                parts.append("No pre-processing modifiers enabled")
-            reason = ". ".join(parts)
+                warnings = blocked_modifiers
 
         return [self._analyze_step(
             step_name="Access File (create proxy)",
             enabled=outputs_config.access_file,
             precondition_met=not access_file_found,
             precondition_reason=reason,
-            status_override=access_status
+            status_override=access_status,
+            warnings=warnings
         )]
 
     # -------------------------------------------------------------------------
@@ -731,9 +738,10 @@ class DryRunAnalyzer:
     
     def _analyze_step(self, step_name: str, enabled: bool, precondition_met: bool,
                       precondition_reason: Optional[str] = None,
-                      status_override: Optional[StepStatus] = None) -> StepAnalysis:
+                      status_override: Optional[StepStatus] = None,
+                      warnings: Optional[List[str]] = None) -> StepAnalysis:
         """Create a StepAnalysis with appropriate status."""
-        
+
         if status_override:
             status = status_override
         elif not enabled:
@@ -742,7 +750,7 @@ class DryRunAnalyzer:
             status = StepStatus.SKIPPED_PRECONDITION
         else:
             status = StepStatus.WILL_RUN
-        
+
         # Build reason string
         if status == StepStatus.SKIPPED_DISABLED:
             reason = "Disabled in configuration"
@@ -752,13 +760,14 @@ class DryRunAnalyzer:
             reason = precondition_reason or "Output already exists"
         else:
             reason = precondition_reason or "Ready to run"
-        
+
         return StepAnalysis(
             step_name=step_name,
             status=status,
             enabled_in_config=enabled,
             precondition_met=precondition_met,
-            reason=reason
+            reason=reason,
+            warnings=warnings
         )
     
     def _log_header(self, text: str):
@@ -835,30 +844,46 @@ class DryRunAnalyzer:
             if MessageType is not None:
                 return {'msg_type': msg_type}
             return {}
-        
+
+        # Emit each warning on its own line at warning level so the GUI
+        # console renders it in the warning color (visually distinct from
+        # the surrounding step text).
+        def emit_warnings(analysis):
+            if not analysis.warnings:
+                return
+            for w in analysis.warnings:
+                logger.warning(
+                    f"      MISCONFIGURED: {w}",
+                    extra=get_msg_extra(MessageType.WARNING if MessageType else None)
+                )
+
         if will_run:
             logger.info("Steps that WILL RUN:", extra=get_msg_extra(MessageType.SUCCESS if MessageType else None))
             for analysis in will_run:
                 logger.info(f"  ✓ {analysis.step_name}", extra=get_msg_extra(MessageType.SUCCESS if MessageType else None))
                 if analysis.reason and analysis.reason != "Ready to run":
                     logger.debug(f"      {analysis.reason}")
-        
+                emit_warnings(analysis)
+
         if skipped_disabled:
             logger.info("\nSteps DISABLED in configuration:", extra=get_msg_extra(MessageType.NORMAL if MessageType else None))
             for analysis in skipped_disabled:
                 logger.info(f"  ○ {analysis.step_name}", extra=get_msg_extra(MessageType.NORMAL if MessageType else None))
                 logger.info(f"      Reason: {analysis.reason}", extra=get_msg_extra(MessageType.NORMAL if MessageType else None))
-        
+                emit_warnings(analysis)
+
         if skipped_precondition:
             logger.info("\nSteps SKIPPED (precondition not met):", extra=get_msg_extra(MessageType.WARNING if MessageType else None))
             for analysis in skipped_precondition:
                 logger.info(f"  ✗ {analysis.step_name}", extra=get_msg_extra(MessageType.WARNING if MessageType else None))
                 logger.info(f"      Reason: {analysis.reason}", extra=get_msg_extra(MessageType.WARNING if MessageType else None))
-        
+                emit_warnings(analysis)
+
         if skipped_exists:
             logger.info("\nSteps SKIPPED (output already exists):", extra=get_msg_extra(MessageType.INFO if MessageType else None))
             for analysis in skipped_exists:
                 logger.info(f"  ● {analysis.step_name}", extra=get_msg_extra(MessageType.INFO if MessageType else None))
                 logger.info(f"      Reason: {analysis.reason}", extra=get_msg_extra(MessageType.INFO if MessageType else None))
-        
+                emit_warnings(analysis)
+
         logger.info("")
