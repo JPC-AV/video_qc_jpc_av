@@ -3,6 +3,7 @@ import json
 import pytest
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional
+from unittest.mock import MagicMock
 
 # Import the modules you want to test
 # Adjust the import path to match your project structure
@@ -179,6 +180,21 @@ def test_config():
 def test_logger():
     """Create a test logger without using MagicMock"""
     return Logger()
+
+@pytest.fixture
+def patch_config_mgr(test_config, monkeypatch):
+    """Patch ConfigManager in mediainfo_check so get_config returns the test config."""
+    mock_mgr = MagicMock()
+
+    def fake_get_config(name, _cls):
+        if name == 'spex':
+            return test_config
+        return MagicMock()
+
+    mock_mgr.get_config.side_effect = fake_get_config
+    monkeypatch.setattr('AV_Spex.checks.mediainfo_check.ConfigManager',
+                        lambda: mock_mgr)
+    return mock_mgr
 
 @pytest.fixture
 def sample_json_file(tmp_path):
@@ -358,20 +374,16 @@ def test_parse_mediainfo_json_missing_file(monkeypatch):
     assert section_data == {"General": {}, "Video": {}, "Audio": {}}
 
 # Test check_mediainfo_spex with matching values
-def test_check_mediainfo_spex_matching(section_data, test_config, monkeypatch):
-    # Monkeypatch the config and logger
-    monkeypatch.setattr('AV_Spex.checks.mediainfo_check.spex_config', test_config)
+def test_check_mediainfo_spex_matching(section_data, patch_config_mgr, monkeypatch):
     monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
-    
+
     differences = check_mediainfo_spex(section_data)
     assert differences == {}  # No differences expected
 
 # Test check_mediainfo_spex with mismatching values
-def test_check_mediainfo_spex_mismatching(mismatched_section_data, test_config, monkeypatch):
-    # Monkeypatch the config and logger
-    monkeypatch.setattr('AV_Spex.checks.mediainfo_check.spex_config', test_config)
+def test_check_mediainfo_spex_mismatching(mismatched_section_data, patch_config_mgr, monkeypatch):
     monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
-    
+
     differences = check_mediainfo_spex(mismatched_section_data)
     
     # Check that differences were detected
@@ -385,9 +397,7 @@ def test_check_mediainfo_spex_mismatching(mismatched_section_data, test_config, 
     assert differences["Channels"][0] == "5.1"
 
 # Integration test for parse_mediainfo function
-def test_parse_mediainfo_integration(sample_json_file, test_config, monkeypatch):
-    # Monkeypatch the config and logger
-    monkeypatch.setattr('AV_Spex.checks.mediainfo_check.spex_config', test_config)
+def test_parse_mediainfo_integration(sample_json_file, patch_config_mgr, monkeypatch):
     monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
     
     # Since we're using the actual JSON file with values that match the config,

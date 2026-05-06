@@ -327,17 +327,17 @@ def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, 
     try:
         bars_frame_count = 0
         bars_progress_interval = 500  # Emit progress every 500 frames
-        bars_last_progress_pct = 5
+        bars_last_progress_pct = 0
         for event, elem in parser_iter: #iterparse the xml doc
             if elem.attrib['media_type'] == "video": #get just the video frames
                 frame_pkt_dts_time = elem.attrib[pkt] #get the timestamps for the current frame we're looking at
-                
-                # Emit progress during bars detection (maps into 5→12% range)
+
+                # Emit progress during bars detection (maps into 0→5% range)
                 bars_frame_count += 1
-                if (signals and hasattr(signals, 'qctparse_progress') and 
+                if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and bars_frame_count % bars_progress_interval == 0):
-                    pct = 5 + int((float(frame_pkt_dts_time) / total_duration) * 7)
-                    pct = min(12, max(5, pct))
+                    pct = int((float(frame_pkt_dts_time) / total_duration) * 5)
+                    pct = min(5, max(0, pct))
                     if pct > bars_last_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         bars_last_progress_pct = pct
@@ -669,10 +669,10 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
         kbeyond[k] = 0
 
     # Progress emission setup: emit every ~1000 frames to avoid overhead
-    # Maps frameCount against total_frames_estimate into the 20→88% range
-    # (reserves 88-98% for audio analysis)
+    # Maps frame timestamp against total_duration into the 5→36% range
+    # (later stages: clamped levels 36→64, audio analysis 64→99)
     progress_emit_interval = 1000
-    last_progress_pct = 0
+    last_progress_pct = 5
 
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
@@ -689,8 +689,8 @@ def analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durat
                 # Emit progress periodically
                 if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and frameCount % progress_emit_interval == 0):
-                    pct = 20 + int((float(frame_pkt_dts_time) / total_duration) * 68)
-                    pct = min(88, max(20, pct))
+                    pct = 5 + int((float(frame_pkt_dts_time) / total_duration) * 31)
+                    pct = min(36, max(5, pct))
                     if pct > last_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         last_progress_pct = pct
@@ -1144,6 +1144,205 @@ class _DropoutEvent:
     corroborating: list = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Clamped levels detection — broadcast-range limits by bit depth
+# ---------------------------------------------------------------------------
+
+# An ADC that clamps at broadcast (legal) range will truncate excursions past
+# these limits. Values are native to the bit depth reported by QCTools.
+CLAMP_LIMITS_10BIT = {
+    'Y':  {'floor': 64,  'ceiling': 940},
+    'UV': {'floor': 64,  'ceiling': 960},
+}
+CLAMP_LIMITS_8BIT = {
+    'Y':  {'floor': 16,  'ceiling': 235},
+    'UV': {'floor': 16,  'ceiling': 240},
+}
+
+# A clamp is flagged when at least this many frames hit the limit exactly
+# AND at least this percentage of total frames hit it, with zero excursions past.
+CLAMP_MIN_HIT_FRAMES = 10
+CLAMP_MIN_HIT_PCT = 1.0
+
+
+def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=None, total_duration=None):
+    """
+    Detect clamped video levels — an ADC artifact where signal excursions are
+    truncated at the broadcast (legal) range limits. Flags a clamp when, for a
+    given channel/direction, frames pile up exactly at the limit and zero
+    frames go past it.
+
+    Parameters:
+        startObj (str): Path to the QCTools report file (.qctools.xml.gz).
+        pkt (str): Timestamp attribute key (pkt_dts_time or pkt_pts_time).
+        report_directory (str): Path to {video_id}_report_csvs directory for CSV output.
+        bit_depth_10 (bool): True for 10-bit-scale values (0-1023), False for 8-bit (0-255).
+        signals: Optional signals object for progress updates.
+        total_duration (float or None): Total video duration in seconds for progress reporting.
+
+    Returns:
+        dict or None: Results dict (also written to CSV), or None on failure / no frames.
+    """
+    etree = load_etree()
+    if etree is None:
+        return None
+
+    parser_iter = safe_gzip_iterparse(startObj, etree)
+    if parser_iter is None:
+        logger.error(f"Failed to parse {startObj} for clamped-levels analysis")
+        return None
+
+    limits = CLAMP_LIMITS_10BIT if bit_depth_10 else CLAMP_LIMITS_8BIT
+
+    stats = {
+        ch: {
+            'floor': limits['Y' if ch == 'Y' else 'UV']['floor'],
+            'ceiling': limits['Y' if ch == 'Y' else 'UV']['ceiling'],
+            'min': None, 'max': None,
+            'hit_floor': 0, 'hit_ceiling': 0,
+            'below_floor': 0, 'above_ceiling': 0,
+        }
+        for ch in ('Y', 'U', 'V')
+    }
+
+    total_frames = 0
+    progress_interval = 500
+    last_pct = 36
+
+    try:
+        for event, elem in parser_iter:
+            if elem.attrib.get('media_type') == 'video':
+                total_frames += 1
+
+                if (signals and hasattr(signals, 'qctparse_progress') and
+                        total_duration and total_frames % progress_interval == 0):
+                    try:
+                        frame_time = float(elem.attrib.get(pkt, "0"))
+                        pct = 36 + int((frame_time / total_duration) * 28)
+                        pct = min(64, max(36, pct))
+                        if pct > last_pct:
+                            signals.qctparse_progress.emit(pct)
+                            last_pct = pct
+                    except ValueError:
+                        pass
+
+                for t in list(elem):
+                    key = t.attrib.get('key', '')
+                    if not key.startswith('lavfi.signalstats.'):
+                        continue
+                    metric = key.rsplit('.', 1)[-1]
+                    if metric not in ('YMIN', 'UMIN', 'VMIN', 'YMAX', 'UMAX', 'VMAX'):
+                        continue
+                    try:
+                        val = float(t.attrib['value'])
+                    except (ValueError, KeyError):
+                        continue
+
+                    s = stats[metric[0]]
+                    if metric.endswith('MIN'):
+                        if s['min'] is None or val < s['min']:
+                            s['min'] = val
+                        if val < s['floor']:
+                            s['below_floor'] += 1
+                        elif val == s['floor']:
+                            s['hit_floor'] += 1
+                    else:
+                        if s['max'] is None or val > s['max']:
+                            s['max'] = val
+                        if val > s['ceiling']:
+                            s['above_ceiling'] += 1
+                        elif val == s['ceiling']:
+                            s['hit_ceiling'] += 1
+
+            elem.clear()
+    except Exception as e:
+        logger.error(f"Error during clamped-levels analysis: {e}")
+        return None
+
+    if total_frames == 0:
+        logger.warning("No video frames found in QCTools report for clamped-levels analysis\n")
+        return None
+
+    findings = []
+    any_clamp = False
+    for ch in ('Y', 'U', 'V'):
+        s = stats[ch]
+        for direction in ('floor', 'ceiling'):
+            if direction == 'floor':
+                limit, hits, beyond, extreme = s['floor'], s['hit_floor'], s['below_floor'], s['min']
+            else:
+                limit, hits, beyond, extreme = s['ceiling'], s['hit_ceiling'], s['above_ceiling'], s['max']
+
+            hit_pct = (hits / total_frames) * 100 if total_frames else 0.0
+            sufficient_hits = hits >= CLAMP_MIN_HIT_FRAMES and hit_pct >= CLAMP_MIN_HIT_PCT
+
+            if beyond > 0:
+                verdict = 'Not Clamped'
+            elif sufficient_hits and extreme is not None and extreme == limit:
+                verdict = 'Clamped'
+                any_clamp = True
+            else:
+                verdict = 'Inconclusive'
+
+            findings.append({
+                'channel': ch,
+                'direction': direction,
+                'limit': limit,
+                'global_extreme': extreme,
+                'hits': hits,
+                'hit_pct': hit_pct,
+                'beyond': beyond,
+                'verdict': verdict,
+            })
+
+    results = {
+        'total_video_frames': total_frames,
+        'bit_depth_10': bit_depth_10,
+        'findings': findings,
+        'any_clamp_detected': any_clamp,
+    }
+
+    _write_clamped_levels_results(report_directory, results)
+    return results
+
+
+def _write_clamped_levels_results(report_directory, results):
+    """Write clamped-levels detection results to CSV and log a summary."""
+    csv_path = os.path.join(report_directory, "qct-parse_clamped_levels.csv")
+    total_frames = results['total_video_frames']
+    bit_depth = 10 if results['bit_depth_10'] else 8
+
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Clamped Levels Detection Results"])
+        writer.writerow(["Bit Depth", bit_depth])
+        writer.writerow(["Total Video Frames", total_frames])
+        writer.writerow(["Min Hit Frames (absolute)", CLAMP_MIN_HIT_FRAMES])
+        writer.writerow(["Min Hit Frames (%)", f"{CLAMP_MIN_HIT_PCT:.2f}"])
+        writer.writerow(["Any Clamp Detected", "Yes" if results['any_clamp_detected'] else "No"])
+        writer.writerow([])
+
+        writer.writerow([
+            "Channel", "Direction", "Limit", "Global Extreme",
+            "Frames at Limit", "Hit %", "Frames Beyond Limit", "Verdict"
+        ])
+        for r in results['findings']:
+            extreme_str = f"{r['global_extreme']:g}" if r['global_extreme'] is not None else "N/A"
+            writer.writerow([
+                r['channel'], r['direction'], r['limit'], extreme_str,
+                r['hits'], f"{r['hit_pct']:.2f}", r['beyond'], r['verdict']
+            ])
+
+    if results['any_clamp_detected']:
+        clamped_summary = ", ".join(
+            f"{r['channel']}-{r['direction']}"
+            for r in results['findings'] if r['verdict'] == 'Clamped'
+        )
+        logger.warning(f"Clamped levels detected: {clamped_summary}. See {os.path.basename(csv_path)}\n")
+    else:
+        logger.debug(f"No clamped levels detected (bit depth {bit_depth}). Results in {os.path.basename(csv_path)}\n")
+
+
 def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None):
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
@@ -1178,9 +1377,9 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
 
     total_audio_frames = 0
 
-    # Progress emission setup: maps into the 90→98% range of qctparse_progress
+    # Progress emission setup: maps into the 64→99% range of qctparse_progress
     audio_progress_interval = 500
-    last_audio_progress_pct = 90
+    last_audio_progress_pct = 64
 
     # Clipping state
     clipping_events = []
@@ -1209,11 +1408,11 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                 total_audio_frames += 1
                 frame_pkt_dts_time = elem.attrib.get(pkt, "0")
 
-                # Emit incremental progress during audio analysis (90→98% range)
+                # Emit incremental progress during audio analysis (64→99% range)
                 if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and total_audio_frames % audio_progress_interval == 0):
-                    pct = 90 + int((float(frame_pkt_dts_time) / total_duration) * 8)
-                    pct = min(98, max(90, pct))
+                    pct = 64 + int((float(frame_pkt_dts_time) / total_duration) * 35)
+                    pct = min(99, max(64, pct))
                     if pct > last_audio_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         last_audio_progress_pct = pct
@@ -2296,7 +2495,7 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     bit_depth_10 = detectBitdepth(startObj,pkt,framesList,buffSize)
 
     if signals and hasattr(signals, 'qctparse_progress'):
-        signals.qctparse_progress.emit(5)
+        signals.qctparse_progress.emit(0)
 
     if check_cancelled():
         return None
@@ -2337,22 +2536,18 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         return None
 
     if signals and hasattr(signals, 'qctparse_progress'):
-        signals.qctparse_progress.emit(13)
+        signals.qctparse_progress.emit(5)
 
     ######## Iterate Through the XML for Bars Evaluation ########
     if qct_parse['evaluateBars']:
         bars_fallback = False
-        
+
         if qct_parse['barsDetection'] and durationStart == "" and durationEnd == "":
             logger.warning(f"No color bars found - falling back to SMPTE color bars values from config.\n")
             maxBarsDict = asdict(spex_config.qct_parse_values.smpte_color_bars)
             bars_fallback = True
         elif qct_parse['barsDetection'] and durationStart != "" and durationEnd != "":
-            if signals and hasattr(signals, 'qctparse_progress'):
-                signals.qctparse_progress.emit(14)
             maxBarsDict = evalBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize)
-            if signals and hasattr(signals, 'qctparse_progress'):
-                signals.qctparse_progress.emit(16)
             if maxBarsDict is None:
                 logger.critical("Something went wrong - Cannot run evaluate color bars\n")
         else:
@@ -2374,8 +2569,6 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             profile = maxBarsDict
             profile_name = 'color_bars_evaluation'
             thumbExportDelay = 9000
-            if signals and hasattr(signals, 'qctparse_progress'):
-                signals.qctparse_progress.emit(18)
             kbeyond, frameCount, overallFrameFail, failureInfo = analyzeIt(qct_parse, video_path, profile, profile_name, startObj, pkt, durationStart, durationEnd, thumbPath, thumbDelay, thumbExportDelay, framesList, frameCount=0, overallFrameFail=0, adhoc_tag=False, check_cancelled=check_cancelled, signals=signals, total_duration=total_duration)
             colorbars_eval_fails_csv_path = os.path.join(report_directory, "qct-parse_colorbars_eval_failures.csv")
             if failureInfo:
@@ -2386,6 +2579,25 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     if check_cancelled():
         return None
+
+    if signals and hasattr(signals, 'qctparse_progress'):
+        signals.qctparse_progress.emit(36)
+
+    ######## Clamped Levels Detection ########
+    if qct_parse.get('detect_clamped_levels', False):
+        logger.debug(f"Starting clamped-levels detection on {baseName}\n")
+        clamped_results = analyzeClampedLevels(
+            startObj, pkt, report_directory, bit_depth_10,
+            signals=signals, total_duration=total_duration
+        )
+        if clamped_results is None:
+            logger.warning("Clamped-levels detection could not be performed\n")
+
+    if check_cancelled():
+        return None
+
+    if signals and hasattr(signals, 'qctparse_progress'):
+        signals.qctparse_progress.emit(64)
 
     ######## Audio Analysis (Clipping Detection / Channel Imbalance / Audible Timecode) ########
     do_audio_analysis = qct_parse.get('audio_analysis', False)

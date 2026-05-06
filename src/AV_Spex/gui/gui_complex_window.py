@@ -34,6 +34,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
 
         self.setup_qctools_section(main_layout)
         self.setup_qct_parse_section(main_layout)
+        self.setup_clams_detection_section(main_layout)
         self.setup_frame_analysis_sections(main_layout)
         self.connect_signals()
 
@@ -117,6 +118,11 @@ class ComplexWindow(QWidget, ThemeableMixin):
         audio_analysis_desc = QLabel("Detect audio clipping, channel imbalance, audible timecode, and audio dropout")
         audio_analysis_desc.setIndent(20)
 
+        self.detect_clamped_levels_cb = QCheckBox("Detect Clamped Levels")
+        self.detect_clamped_levels_cb.setStyleSheet("font-weight: bold;")
+        detect_clamped_levels_desc = QLabel("Detect broadcast-range level clamping from the analog-to-digital converter")
+        detect_clamped_levels_desc.setIndent(20)
+
         # Add all widgets to the qct layout
         qct_layout.addWidget(self.run_qctparse_cb)
         qct_layout.addWidget(run_qctparse_desc)
@@ -128,9 +134,40 @@ class ComplexWindow(QWidget, ThemeableMixin):
         qct_layout.addWidget(thumb_export_desc)
         qct_layout.addWidget(self.audio_analysis_cb)
         qct_layout.addWidget(audio_analysis_desc)
+        qct_layout.addWidget(self.detect_clamped_levels_cb)
+        qct_layout.addWidget(detect_clamped_levels_desc)
         
         self.qct_group.setLayout(qct_layout)
         main_layout.addWidget(self.qct_group)
+
+    # Unified CLAMS Detection Section (SSIM-based bars + cross-correlation tone)
+    def setup_clams_detection_section(self, main_layout):
+        """Run CLAMS bars and tone detectors together in one step."""
+        theme_manager = ThemeManager.instance()
+
+        self.clams_detection_group = QGroupBox("CLAMS Detection")
+        theme_manager.style_groupbox(self.clams_detection_group, "top center")
+        self.themed_group_boxes['clams_detection'] = self.clams_detection_group
+
+        clams_layout = QVBoxLayout()
+
+        self.run_clams_detection_cb = QCheckBox("Run Tool")
+        self.run_clams_detection_cb.setStyleSheet("font-weight: bold;")
+        run_clams_desc = QLabel(
+            "Run the CLAMS SSIM-based SMPTE bars detector and the cross-correlation "
+            "tone detector together. The bars detector runs in parallel with qct-parse "
+            "for side-by-side comparison; the tone detector identifies spans of "
+            "monotonic audio (e.g. the tones in SMPTE bars-and-tones). qct-parse "
+            "remains authoritative for downstream BRNG-skip and access-file trim."
+        )
+        run_clams_desc.setWordWrap(True)
+        run_clams_desc.setIndent(20)
+
+        clams_layout.addWidget(self.run_clams_detection_cb)
+        clams_layout.addWidget(run_clams_desc)
+
+        self.clams_detection_group.setLayout(clams_layout)
+        main_layout.addWidget(self.clams_detection_group)
 
     # Frame Analysis Sections (restructured)
     def setup_frame_analysis_sections(self, main_layout):
@@ -653,6 +690,13 @@ class ComplexWindow(QWidget, ThemeableMixin):
             lambda state: self.on_boolean_changed(state, ['tools', 'qct_parse', 'thumbExport'])
         )
         self.audio_analysis_cb.stateChanged.connect(self.on_audio_analysis_changed)
+        self.detect_clamped_levels_cb.stateChanged.connect(self.on_detect_clamped_levels_changed)
+
+        # CLAMS detection — single Run Tool checkbox runs both bars and tone
+        # detectors. Numeric tuning is JSON-only.
+        self.run_clams_detection_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['tools', 'clams_detection', 'run_tool'])
+        )
 
     def load_config_values(self):
         """Load current config values into UI elements"""
@@ -715,13 +759,15 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.evaluate_bars_cb.setChecked(qct.evaluateBars)
         self.thumb_export_cb.setChecked(qct.thumbExport)
         self.audio_analysis_cb.setChecked(getattr(qct, 'audio_analysis', False))
+        self.detect_clamped_levels_cb.setChecked(getattr(qct, 'detect_clamped_levels', False))
 
         # Set initial enabled state for QCT Parse dependent checkboxes
         dependent_checkboxes = [
             self.bars_detection_cb,
             self.evaluate_bars_cb,
             self.thumb_export_cb,
-            self.audio_analysis_cb
+            self.audio_analysis_cb,
+            self.detect_clamped_levels_cb
         ]
 
         # Enable/disable dependent checkboxes based on run_tool state
@@ -733,6 +779,10 @@ class ComplexWindow(QWidget, ThemeableMixin):
             # Thumbnail is only enabled if at least one of bars detection or evaluate bars is checked
             thumbnail_should_be_enabled = qct.barsDetection or qct.evaluateBars
             self.thumb_export_cb.setEnabled(thumbnail_should_be_enabled)
+
+        # CLAMS detection — single toggle runs both bars and tone detectors.
+        clams = getattr(checks_config.tools, 'clams_detection', None)
+        self.run_clams_detection_cb.setChecked(bool(getattr(clams, 'run_tool', False)))
 
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
@@ -774,6 +824,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
             config_mgr.update_config('checks', updates)
         elif path[0] == "tools" and path[1] == "qctools":
             updates = {'tools': {'qctools': {path[2]: new_value}}}
+            config_mgr.update_config('checks', updates)
+        elif path[0] == "tools" and path[1] == "clams_detection":
+            updates = {'tools': {'clams_detection': {path[2]: new_value}}}
             config_mgr.update_config('checks', updates)
         elif path[0] == "outputs" and path[1] == "frame_analysis":
             updates = {'outputs': {'frame_analysis': {path[2]: new_value}}}
@@ -846,7 +899,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.bars_detection_cb,
             self.evaluate_bars_cb,
             self.thumb_export_cb,
-            self.audio_analysis_cb
+            self.audio_analysis_cb,
+            self.detect_clamped_levels_cb
         ]
 
         if Qt.CheckState(state) == Qt.CheckState.Checked:
@@ -864,7 +918,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
                         'barsDetection': True,
                         'evaluateBars': True,
                         'thumbExport': True,
-                        'audio_analysis': True
+                        'audio_analysis': True,
+                        'detect_clamped_levels': True
                     }
                 }
             }
@@ -941,14 +996,27 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Check overall dependencies
         self.check_qct_dependencies()
 
+    def on_detect_clamped_levels_changed(self, state):
+        """Handle changes in clamped levels detection checkbox with dependency logic"""
+        if self.is_loading:
+            return
+
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        updates = {'tools': {'qct_parse': {'detect_clamped_levels': new_value}}}
+        config_mgr.update_config('checks', updates)
+
+        # Check overall dependencies
+        self.check_qct_dependencies()
+
     def check_qct_dependencies(self):
         """Check and enforce QCT Parse dependencies"""
         # If bars detection is off, then evaluate bars and thumbnail should already be disabled
         # This check is for the case where both bars detection and evaluate bars are unchecked
-        # Audio clipping is independent, so only auto-uncheck run_tool if nothing is active
+        # Audio clipping and clamped levels are independent, so only auto-uncheck run_tool if nothing is active
         if (not self.bars_detection_cb.isChecked() and
             not self.evaluate_bars_cb.isChecked() and
-            not self.audio_analysis_cb.isChecked()):
+            not self.audio_analysis_cb.isChecked() and
+            not self.detect_clamped_levels_cb.isChecked()):
             # Uncheck run tool since no detection methods are active
             self.run_qctparse_cb.blockSignals(True)
             self.run_qctparse_cb.setChecked(False)
@@ -959,6 +1027,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.evaluate_bars_cb.setEnabled(False)
             self.thumb_export_cb.setEnabled(False)
             self.audio_analysis_cb.setEnabled(False)
+            self.detect_clamped_levels_cb.setEnabled(False)
 
             # Update config for run_tool change
             run_tool_updates = {

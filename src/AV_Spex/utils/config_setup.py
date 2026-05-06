@@ -276,10 +276,13 @@ VALID_QCTOOLS_EXTENSIONS = ("qctools.xml.gz", "qctools.mkv")
 # Output configuration
 @dataclass
 class OutputsConfig:
-    access_file: str
-    report: str
+    access_file: bool
+    report: bool
     qctools_ext: str # Must be one of VALID_QCTOOLS_EXTENSIONS
     frame_analysis: FrameAnalysisConfig = field(default_factory=FrameAnalysisConfig)
+    access_file_trim_color_bars: bool = True
+    access_file_crop_borders: bool = True
+    access_file_crop_to_480: bool = True
 
 @dataclass
 class ChecksumAlgorithm(Enum):
@@ -320,6 +323,29 @@ class QCTParseToolConfig:
     evaluateBars: bool
     thumbExport: bool
     audio_analysis: bool = False
+    detect_clamped_levels: bool = False
+
+@dataclass
+class ClamsBarsParams:
+    threshold: float = 0.7
+    sample_ratio: int = 30
+    stop_at_frame: int = 9000
+    min_frame_count: int = 10
+    stop_after_one: bool = True
+    merge_gap_seconds: float = 1.0
+
+@dataclass
+class ClamsToneParams:
+    tolerance: float = 1.0
+    min_tone_duration_ms: int = 2000
+    stop_at_seconds: int = 3600
+    merge_gap_seconds: float = 5.0
+
+@dataclass
+class ClamsDetectionConfig:
+    run_tool: bool = False
+    bars: ClamsBarsParams = field(default_factory=ClamsBarsParams)
+    tone: ClamsToneParams = field(default_factory=ClamsToneParams)
 
 @dataclass
 class ToolsConfig:
@@ -330,6 +356,9 @@ class ToolsConfig:
     mediatrace: BasicToolConfig
     qctools: QCToolsConfig
     qct_parse: QCTParseToolConfig
+    clams_detection: ClamsDetectionConfig = field(
+        default_factory=ClamsDetectionConfig
+    )
 
 @dataclass
 class ChecksConfig:
@@ -394,8 +423,10 @@ class ChecksProfile:
             barsDetection=False,
             evaluateBars=False,
             thumbExport=False,
-            audio_analysis=False
-        )
+            audio_analysis=False,
+            detect_clamped_levels=False
+        ),
+        clams_detection=ClamsDetectionConfig()
     ))
 
 @dataclass
