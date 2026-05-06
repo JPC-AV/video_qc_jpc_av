@@ -120,32 +120,45 @@ class ParsedArguments:
     import_config: Optional[str]
     mediaconch_policy: Optional[str]
     use_default_config: bool
+    # Frame analysis sub-step toggles
+    enable_bitplane_check: Optional[str]
     enable_border_detection: Optional[str]
     enable_brng_analysis: Optional[str]
     enable_signalstats: Optional[str]
+    enable_duplicate_frame_detection: Optional[str]
+    # Frame analysis tuning
     frame_borders: Optional[str]
     frame_border_pixels: Optional[int]
     frame_no_colorbar_skip: bool
     frame_brng_duration: Optional[int]
+    # qct-parse sub-option
+    enable_clamped_levels: Optional[str]
+    # Apply named expected-value profiles to spex config
     exiftool_profile: Optional[str]
     mediainfo_profile: Optional[str]
     ffprobe_profile: Optional[str]
+    # Import a new expected-value profile from a tool-output file (saves & applies)
+    exiftool_from_file: Optional[str]
+    mediainfo_from_file: Optional[str]
+    ffprobe_from_file: Optional[str]
 ```
 
 Examples of supported CLI flags:
 
 * `--profile`: applies a predefined processing profile (`step1`, `step2`, or `off`)
-* `--on` / `--off`: selectively toggle individual tools (e.g. `mediainfo.run_tool`)
+* `--on` / `--off`: selectively toggle individual tools (e.g. `mediainfo.run_tool`, `clams_detection.run_tool`, `qct_parse.detect_clamped_levels`)
 * `--signalflow` / `--filename`: apply specialized configuration structures by profile name
 * `--exiftool-profile` / `--mediainfo-profile` / `--ffprobe-profile`: apply named expected-value profiles for metadata tools
+* `--exiftool-from-file` / `--mediainfo-from-file` / `--ffprobe-from-file`: import a new expected-value profile from a raw tool-output file (saves the profile and applies it)
 * `--export-config` / `--import-config`: serialize and load JSON-based configurations
 * `--dryrun`: skip processing and apply config changes only
 * `--printprofile`: print selected config values for review
-* `--enable-border-detection` / `--enable-brng-analysis` / `--enable-signalstats`: toggle individual frame analysis sub-steps on or off
+* `--enable-bitplane-check` / `--enable-border-detection` / `--enable-brng-analysis` / `--enable-signalstats` / `--enable-duplicate-frame-detection`: toggle individual frame analysis sub-steps on or off
 * `--frame-borders`: set border detection mode (`simple` or `sophisticated`)
 * `--frame-border-pixels`: set pixel crop width for simple border mode
 * `--frame-brng-duration`: set max duration (in seconds) for BRNG analysis
 * `--frame-no-colorbar-skip`: disable automatic color bar skipping in frame analysis
+* `--enable-clamped-levels`: toggle qct-parse's broadcast-range level-clamping detector (writes to `tools.qct_parse.detect_clamped_levels`, **not** `outputs.frame_analysis`)
 
 The parsed values are passed downstream as a `ParsedArguments` instance.
 
@@ -202,6 +215,25 @@ def run_cli_mode(args):
             available = config_edit.get_available_ffprobe_profiles()
             print(f"Error: FFprobe profile '{args.ffprobe_profile}' not found. Available: {available}")
 
+    # Import a brand-new expected-value profile from a tool-output file.
+    # _import_profile_from_file() reads the file, converts it to a profile dict,
+    # saves it under the file's stem name, applies it, and persists last_used spex.
+    if args.exiftool_from_file:
+        _import_profile_from_file(args.exiftool_from_file, 'exiftool',
+            exiftool_import.import_exiftool_file_to_profile,
+            config_edit.save_exiftool_profile,
+            config_edit.apply_exiftool_profile)
+    if args.mediainfo_from_file:
+        _import_profile_from_file(args.mediainfo_from_file, 'mediainfo',
+            mediainfo_import.import_mediainfo_file_to_profile,
+            config_edit.save_mediainfo_profile,
+            config_edit.apply_mediainfo_profile)
+    if args.ffprobe_from_file:
+        _import_profile_from_file(args.ffprobe_from_file, 'ffprobe',
+            ffprobe_import.import_ffprobe_file_to_profile,
+            config_edit.save_ffprobe_profile,
+            config_edit.apply_ffprobe_profile)
+
     # Spex config: signal flow and filename profiles (with legacy short-name aliases)
     if args.sn_config_changes:
         _sn_aliases = {'JPC_AV_SVHS': 'JPC_AV_SVHS Signal Flow', 'BVH3100': 'BVH3100 Signal Flow'}
@@ -245,12 +277,16 @@ def run_cli_mode(args):
     # Frame analysis sub-step configuration
     frame_updates = {'outputs': {'frame_analysis': {}}}
 
+    if args.enable_bitplane_check:
+        frame_updates['outputs']['frame_analysis']['enable_bitplane_check'] = (args.enable_bitplane_check == 'on')
     if args.enable_border_detection:
         frame_updates['outputs']['frame_analysis']['enable_border_detection'] = (args.enable_border_detection == 'on')
     if args.enable_brng_analysis:
         frame_updates['outputs']['frame_analysis']['enable_brng_analysis'] = (args.enable_brng_analysis == 'on')
     if args.enable_signalstats:
         frame_updates['outputs']['frame_analysis']['enable_signalstats'] = (args.enable_signalstats == 'on')
+    if args.enable_duplicate_frame_detection:
+        frame_updates['outputs']['frame_analysis']['enable_duplicate_frame_detection'] = (args.enable_duplicate_frame_detection == 'on')
     if args.frame_borders is not None:
         frame_updates['outputs']['frame_analysis']['border_detection_mode'] = args.frame_borders
     if args.frame_border_pixels is not None:
@@ -264,6 +300,13 @@ def run_cli_mode(args):
         config_mgr.update_config('checks', frame_updates)
         config_mgr.save_config('checks', is_last_used=True)
 
+    # qct-parse clamped-levels detector lives outside frame_analysis
+    if args.enable_clamped_levels:
+        config_mgr.update_config('checks', {
+            'tools': {'qct_parse': {'detect_clamped_levels': (args.enable_clamped_levels == 'on')}}
+        })
+        config_mgr.save_config('checks', is_last_used=True)
+
     if args.dry_run_only:
         logger.critical("Dry run selected. Exiting now.")
         sys.exit(1)
@@ -273,11 +316,14 @@ This function performs the following:
 
 * Verifies external dependencies
 * Applies predefined profiles and tool-level toggles to the checks config
-* Applies named custom profiles for exiftool, mediainfo, and ffprobe expected values
+* Applies named custom profiles for exiftool, mediainfo, and ffprobe expected values (and imports new ones from tool-output files when `--*-from-file` is supplied)
 * Applies signal flow and filename profiles to the spex config (supporting legacy short-name aliases)
 * Handles config import/export
 * Applies frame analysis sub-step configuration flags
+* Toggles the qct-parse clamped-levels detector (`--enable-clamped-levels`)
 * Optionally skips processing if `--dryrun` is used
+
+> **Note on dry runs**: In CLI mode, `--dryrun` applies any config changes and then immediately calls `sys.exit(1)` — no input video is touched. The GUI has a separate, richer "Dry Run" mode driven by `processing/dry_run_analyzer.py` (`DryRunAnalyzer`), instantiated by `ProcessingWorker(dry_run=True)`. That class walks the input directory and reports what *would* run without producing any output files; it is not exposed via the CLI.
 
 ### Frame Analysis CLI Flags
 
@@ -285,15 +331,19 @@ The frame analysis sub-system is configured via `checks_config.outputs.frame_ana
 
 | Flag | Config field | Effect |
 |------|-------------|--------|
+| `--enable-bitplane-check {on,off}` | `enable_bitplane_check` | Toggle 9th/10th-bit verification step |
 | `--enable-border-detection {on,off}` | `enable_border_detection` | Toggle border detection step |
 | `--enable-brng-analysis {on,off}` | `enable_brng_analysis` | Toggle BRNG out-of-range analysis |
 | `--enable-signalstats {on,off}` | `enable_signalstats` | Toggle FFmpeg signalstats step |
+| `--enable-duplicate-frame-detection {on,off}` | `enable_duplicate_frame_detection` | Toggle duplicate-frame detection |
 | `--frame-borders {simple,sophisticated}` | `border_detection_mode` | Border detection algorithm |
 | `--frame-border-pixels N` | `simple_border_pixels` | Crop width (px) for simple mode |
 | `--frame-brng-duration N` | `brng_duration_limit` | Max seconds analyzed for BRNG |
 | `--frame-no-colorbar-skip` | `brng_skip_color_bars` → `False` | Disable automatic color bar skipping |
 
 All frame analysis updates are applied as a single deep-merge `update_config('checks', ...)` call at the end of `run_cli_mode`. If none of the frame analysis flags are supplied, the config is unchanged.
+
+`--enable-clamped-levels {on,off}` is a related flag but lives **outside** `frame_analysis` — it writes to `tools.qct_parse.detect_clamped_levels`, since it tunes a qct-parse sub-option rather than a frame-analysis sub-step. It's also applied as its own separate `update_config('checks', ...)` call.
 
 Color bar skipping relies on the `color_bars_end_time` value from qct-parse being passed through `process_video_outputs()` → `process_frame_analysis()` → `analyze_frame_quality()`. Passing `--frame-no-colorbar-skip` sets `brng_skip_color_bars = False` in the config so that color bars at the head of the tape are included in BRNG analysis.
 
@@ -310,6 +360,18 @@ av-spex --ffprobe-profile "My FFprobe Profile"
 ```
 
 Each flag resolves the profile by name, applies it to the spex config, and persists the change as `last_used_spex_config.json`. If the profile name is not found, an error is printed listing the available names (use `-pp exiftool`, `-pp mediainfo`, or `-pp ffprobe` to list profiles without processing).
+
+#### Importing a New Profile from a Tool-Output File
+
+`--exiftool-from-file FILE`, `--mediainfo-from-file FILE`, and `--ffprobe-from-file FILE` create a brand-new expected-value profile from raw tool output, save it under a name derived from the file's stem, and apply it.
+
+```bash
+av-spex --mediainfo-from-file ./reference_master.json
+av-spex --ffprobe-from-file ./reference_master.json
+av-spex --exiftool-from-file ./reference_master.json   # JSON or text exiftool output
+```
+
+The mechanics are encapsulated in the small helper `_import_profile_from_file()` in `av_spex_the_file.py`, which delegates parsing/saving/applying to module-specific helpers in `utils/{tool}_import.py` and `utils/config_edit.py`. Errors during file read, parse, or save are reported with a leading `Error:` line and do not abort the rest of the CLI invocation.
 
 Signal flow and filename profiles similarly support **legacy short-name aliases** for backward compatibility:
 
@@ -502,6 +564,8 @@ If cancellation occurs at any point, the method returns early with `False`.
 * Extracts the absolute path to the input video, the derived `video_id`, the target destination directory, and whether an access file already exists.
 * The `video_id` (typically the filename without extension) is used for log banners, file naming, and output report generation.
 * Returns `False` if the directory is invalid or cannot be prepared (e.g., missing expected video file).
+
+   **Per-file logging**: Immediately after `initialize_directory()` returns, `process_single_directory()` calls `start_file_log(destination_directory, video_id)` to attach a `FileHandler` that captures all subsequent log records for this file into `{destination_directory}/YYYY-MM-DD_HH-MM-SS_{video_id}_log.log`. The remainder of the per-directory work runs inside a `try/finally`, with `stop_file_log()` in the `finally` block — so the per-file log handler is always detached, even on cancellation or unhandled exception.
 
 2. **Processing Manager Setup**
 
@@ -815,11 +879,19 @@ This modular structure supports flexible validation of media metadata across too
 After metadata checks are complete, the application can optionally generate additional output files depending on which tools and features are enabled in the Checks Config.
 
 ```python
+frame_config = self.checks_config.outputs.frame_analysis
 outputs_enabled = (
     self.checks_config.outputs.access_file or
     self.checks_config.outputs.report or
     self.checks_config.tools.qctools.run_tool or
-    self.checks_config.tools.qct_parse.run_tool
+    self.checks_config.tools.qct_parse.run_tool or
+    self.checks_config.tools.clams_detection.run_tool or
+    frame_config.enable_bitplane_check or
+    frame_config.enable_border_detection or
+    frame_config.enable_brng_analysis or
+    frame_config.enable_signalstats or
+    frame_config.enable_dropped_sample_detection or
+    getattr(frame_config, 'enable_duplicate_frame_detection', False)
 )
 
 if outputs_enabled:
@@ -828,6 +900,8 @@ if outputs_enabled:
         video_id, metadata_differences
     )
 ```
+
+The output stage runs whenever **any** access-file, report, qctools/qct-parse, CLAMS detection, or frame-analysis sub-step is enabled — so toggling on a single frame-analysis sub-step (e.g. `--enable-brng-analysis on`) is enough to trigger output processing even if no other outputs are configured.
 
 ---
 
@@ -920,14 +994,20 @@ flowchart TD
 
 ### Outputs Summary
 
-| Output Type            | Enabled by                    | File(s) Created              |
-| ---------------------- | ----------------------------- | ---------------------------- |
-| Metadata Differences   | `checks_config.outputs.report`              | `*_metadata_difference.csv`  |
-| QCTools XML/Thumbnails | `checks_config.tools.qctools` / `qct_parse` | `.xml`, `.jpg`, `.png`, etc. |
-| Access Copy            | `checks_config.outputs.access_file`         | `*_access.mp4`               |
-| Final HTML Report      | `checks_config,outputs.report`              | `*_avspex_report.html`       |
+| Output Type             | Enabled by                                                | File(s) Created                  |
+| ----------------------- | --------------------------------------------------------- | -------------------------------- |
+| Metadata Differences    | `checks_config.outputs.report`                            | `*_metadata_difference.csv`      |
+| QCTools XML/Thumbnails  | `checks_config.tools.qctools` / `qct_parse`               | `.qctools.xml.gz`, `.jpg`, etc.  |
+| CLAMS Bars + Tone       | `checks_config.tools.clams_detection.run_tool`            | `*_clams_bars.json`, `*_clams_tone.json` |
+| Frame Analysis Reports  | `checks_config.outputs.frame_analysis.*` sub-step toggles | `*_brng_report.html`, thumbnails, etc. |
+| Access Copy             | `checks_config.outputs.access_file`                       | `*_access.mp4`                   |
+| Final HTML Report       | `checks_config.outputs.report`                            | `*_avspex_report.html`           |
 
 All outputs are conditional. If all selected outputs succeed, a results dictionary is returned from `process_video_outputs()`.
+
+#### CLAMS Detection (Bars + Tone)
+
+When `tools.clams_detection.run_tool` is true, `process_video_outputs()` runs the CLAMS SSIM-based SMPTE bars detector and the cross-correlation tone detector together as one step. The bars detector runs in parallel with qct-parse for side-by-side comparison; the tone detector identifies spans of monotonic audio (e.g. the tones in SMPTE bars-and-tones segments). Numeric tuning of the `bars`/`tone` parameters is JSON-only — only `clams_detection.run_tool` is settable from the CLI (`av-spex --on clams_detection.run_tool`). qct-parse remains authoritative for downstream BRNG-skip and access-file trim.
 
 7. **Completion**
     Upon completion of the single directory loop, the CLI app outputs the video ID in ASCII art, and, if additional source directories were provided, begins the loop again.
