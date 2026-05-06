@@ -46,32 +46,41 @@ class ConsoleTextEdit(QTextEdit):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setMinimumWidth(300)
         
+    def _is_scrolled_to_bottom(self):
+        # Tolerance in px so a near-bottom position still counts as "stuck."
+        sb = self.verticalScrollBar()
+        return sb.value() >= sb.maximum() - 4
+
     def append_message(self, text, msg_type=MessageType.NORMAL):
         """
         Append text with specific styling based on message type.
-        
+
         Args:
             text (str): The message text to append
             msg_type (MessageType): Type of message for styling
         """
         # Get the format for this message type
         text_format = self._get_format_for_type(msg_type)
-        
+
+        # Capture stickiness before mutating the document.
+        was_at_bottom = self._is_scrolled_to_bottom()
+
         # Store cursor position and selection
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        
+
         # If not empty, add a newline
         if not self.toPlainText().isspace() and self.toPlainText():
             cursor.insertText("\n")
-        
+
         # Set the format and insert the text
         cursor.setCharFormat(text_format)
-            
+
         cursor.insertText(text)
-        
-        # Scroll to bottom
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+
+        if was_at_bottom:
+            sb = self.verticalScrollBar()
+            sb.setValue(sb.maximum())
     
     def get_current_font_size(self):
         """Get the current font size."""
@@ -187,34 +196,38 @@ class ConsoleTextEdit(QTextEdit):
         Args:
             text (str): Optional text to display in the divider
         """
+        # Capture stickiness before mutating the document.
+        was_at_bottom = self._is_scrolled_to_bottom()
+
         # Store cursor position
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        
+
         # Add a newline if text exists
         if not self.toPlainText().isspace() and self.toPlainText():
             cursor.insertText("\n\n")
-        
+
         # Create a divider format - now using current font size
         divider_format = QTextCharFormat()
         font = font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         font.setPointSize(self._current_font_size)  # Use current font size
         divider_format.setFont(font)
         divider_format.setForeground(QColor(100, 100, 255))  # Blue color for the divider
-        
+
         # Set the format
         cursor.setCharFormat(divider_format)
-        
+
         # Calculate divider width to fill the visible space
         line_char = "═"  # Unicode double line character
         divider_text = f"\n{line_char * 20} {text} {line_char * 20}\n"
-        
+
         # Insert the divider
         cursor.insertText(divider_text)
-        
+
         # Add a newline after the divider
         cursor.setCharFormat(self._get_format_for_type(MessageType.NORMAL))
         cursor.insertText("\n")
-        
-        # Scroll to the divider
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+
+        if was_at_bottom:
+            sb = self.verticalScrollBar()
+            sb.setValue(sb.maximum())
