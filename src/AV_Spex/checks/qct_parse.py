@@ -1159,8 +1159,16 @@ CLAMP_LIMITS_8BIT = {
     'UV': {'floor': 16,  'ceiling': 240},
 }
 
-# A clamp is flagged when at least this many frames hit the limit exactly
-# AND at least this percentage of total frames hit it, with zero excursions past.
+# Tolerance window (in code values) inside the legal range from each broadcast
+# limit. Frames whose extreme lands in this window count as evidence of
+# clamping. 8-bit requires an exact hit; 10-bit allows ±2 codes (≈ the same
+# IRE precision as 8-bit) to absorb dithering and ADC calibration drift near
+# the wall.
+CLAMP_TOLERANCE_8BIT = 0
+CLAMP_TOLERANCE_10BIT = 2
+
+# A clamp is flagged when at least this many frames sit at or near the limit
+# AND at least this percentage of total frames do, with zero excursions past.
 CLAMP_MIN_HIT_FRAMES = 10
 CLAMP_MIN_HIT_PCT = 1.0
 
@@ -1169,8 +1177,8 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
     """
     Detect clamped video levels — an ADC artifact where signal excursions are
     truncated at the broadcast (legal) range limits. Flags a clamp when, for a
-    given channel/direction, frames pile up exactly at the limit and zero
-    frames go past it.
+    given channel/direction, frames pile up at (or within a bit-depth-scaled
+    tolerance of) the broadcast limit and zero frames go past it.
 
     Parameters:
         startObj (str): Path to the QCTools report file (.qctools.xml.gz).
@@ -1193,6 +1201,7 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
         return None
 
     limits = CLAMP_LIMITS_10BIT if bit_depth_10 else CLAMP_LIMITS_8BIT
+    tolerance = CLAMP_TOLERANCE_10BIT if bit_depth_10 else CLAMP_TOLERANCE_8BIT
 
     stats = {
         ch: {
@@ -1244,14 +1253,14 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
                             s['min'] = val
                         if val < s['floor']:
                             s['below_floor'] += 1
-                        elif val == s['floor']:
+                        elif val <= s['floor'] + tolerance:
                             s['hit_floor'] += 1
                     else:
                         if s['max'] is None or val > s['max']:
                             s['max'] = val
                         if val > s['ceiling']:
                             s['above_ceiling'] += 1
-                        elif val == s['ceiling']:
+                        elif val >= s['ceiling'] - tolerance:
                             s['hit_ceiling'] += 1
 
             elem.clear()
@@ -1278,7 +1287,7 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
 
             if beyond > 0:
                 verdict = 'Not Clamped'
-            elif sufficient_hits and extreme is not None and extreme == limit:
+            elif sufficient_hits:
                 verdict = 'Clamped'
                 any_clamp = True
             else:
@@ -1298,6 +1307,7 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
     results = {
         'total_video_frames': total_frames,
         'bit_depth_10': bit_depth_10,
+        'tolerance': tolerance,
         'findings': findings,
         'any_clamp_detected': any_clamp,
     }
@@ -1311,12 +1321,14 @@ def _write_clamped_levels_results(report_directory, results):
     csv_path = os.path.join(report_directory, "qct-parse_clamped_levels.csv")
     total_frames = results['total_video_frames']
     bit_depth = 10 if results['bit_depth_10'] else 8
+    tolerance = results.get('tolerance', 0)
 
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["Clamped Levels Detection Results"])
         writer.writerow(["Bit Depth", bit_depth])
         writer.writerow(["Total Video Frames", total_frames])
+        writer.writerow(["Tolerance Window (codes)", tolerance])
         writer.writerow(["Min Hit Frames (absolute)", CLAMP_MIN_HIT_FRAMES])
         writer.writerow(["Min Hit Frames (%)", f"{CLAMP_MIN_HIT_PCT:.2f}"])
         writer.writerow(["Any Clamp Detected", "Yes" if results['any_clamp_detected'] else "No"])
@@ -1324,7 +1336,7 @@ def _write_clamped_levels_results(report_directory, results):
 
         writer.writerow([
             "Channel", "Direction", "Limit", "Global Extreme",
-            "Frames at Limit", "Hit %", "Frames Beyond Limit", "Verdict"
+            "Frames at/near Limit", "Hit %", "Frames Beyond Limit", "Verdict"
         ])
         for r in results['findings']:
             extreme_str = f"{r['global_extreme']:g}" if r['global_extreme'] is not None else "N/A"

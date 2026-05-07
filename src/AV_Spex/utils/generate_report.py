@@ -1539,15 +1539,16 @@ def make_clamped_levels_html(clamped_levels_csv):
         logger.error(f"Error reading clamped levels CSV: {e}")
         return None
 
-    if len(rows) < 8:
+    if len(rows) < 9:
         return None
 
     bit_depth = rows[1][1] if len(rows[1]) > 1 else "N/A"
     total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
-    any_clamp = rows[5][1] if len(rows[5]) > 1 else "N/A"
+    tolerance = rows[3][1] if len(rows[3]) > 1 else "0"
+    any_clamp = rows[6][1] if len(rows[6]) > 1 else "N/A"
 
-    # Findings table starts at row 7 (header) then rows 8+
-    findings = [r for r in rows[8:] if len(r) >= 8]
+    # Findings table starts at row 8 (header) then rows 9+
+    findings = [r for r in rows[9:] if len(r) >= 8]
 
     if any_clamp == "Yes":
         status_color = "#dc3545"
@@ -1594,13 +1595,16 @@ def make_clamped_levels_html(clamped_levels_csv):
         <p style="margin: 0 0 10px 0;">
             <strong>Clamped-levels detection</strong> flags analog-to-digital converters that truncate
             the video signal at the broadcast (legal) range limits. A clamped channel will pile up at
-            the limit value and never exceed it, whereas an unclamped source will show excursions past
-            the legal range caused by sync pulses, noise, or peak whites/superblacks.
+            (or just inside) the limit value and never exceed it, whereas an unclamped source will show
+            excursions past the legal range caused by sync pulses, noise, or peak whites/superblacks.
+            The check is anchored to the SMPTE broadcast-range values &mdash; clamping at any other
+            level is unlikely, so the broadcast limit is the only point evaluated.
         </p>
         <p style="margin: 0 0 10px 0; font-weight: bold;">Verdicts:</p>
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
-            <li style="margin-bottom: 4px;"><strong>Clamped</strong> &mdash; frames hit the limit exactly
-                with zero excursions past it; indicates the ADC is truncating the signal.</li>
+            <li style="margin-bottom: 4px;"><strong>Clamped</strong> &mdash; enough frames sit at or near
+                the broadcast limit (within the bit-depth tolerance) with zero excursions past it;
+                indicates the ADC is truncating the signal.</li>
             <li style="margin-bottom: 4px;"><strong>Not Clamped</strong> &mdash; one or more frames went
                 past the limit; the signal is free to exceed broadcast range.</li>
             <li style="margin-bottom: 4px;"><strong>Inconclusive</strong> &mdash; the signal never reached
@@ -1608,7 +1612,9 @@ def make_clamped_levels_html(clamped_levels_csv):
         </ul>
         <p style="margin: 0;">
             Limits are derived from SMPTE broadcast-range values (bit-depth aware): 10-bit Y 64&ndash;940,
-            U/V 64&ndash;960; 8-bit Y 16&ndash;235, U/V 16&ndash;240. Measurements come from FFmpeg's
+            U/V 64&ndash;960; 8-bit Y 16&ndash;235, U/V 16&ndash;240. The tolerance window scales with
+            bit depth (8-bit: exact match required; 10-bit: &plusmn;2 codes to absorb dithering and ADC
+            calibration drift, matching 8-bit precision). Measurements come from FFmpeg's
             <code>signalstats</code> filter as recorded in the QCTools report.
         </p>
     </div>
@@ -1618,6 +1624,7 @@ def make_clamped_levels_html(clamped_levels_csv):
     <table style="border-collapse: collapse; margin: 10px 0;">
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Bit Depth</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{bit_depth}</td></tr>
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Video Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Tolerance Window (codes)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{tolerance}</td></tr>
     </table>
     <table style="border-collapse: collapse; margin: 10px 0;">
         <tr>
@@ -1625,7 +1632,7 @@ def make_clamped_levels_html(clamped_levels_csv):
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Direction</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Limit</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Global Extreme</th>
-            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames at Limit</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames at/near Limit</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Hit %</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames Beyond Limit</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Verdict</th>
