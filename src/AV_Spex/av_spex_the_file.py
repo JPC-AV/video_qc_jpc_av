@@ -86,12 +86,19 @@ class ParsedArguments:
     enable_border_detection: Optional[str]
     enable_brng_analysis: Optional[str]
     enable_signalstats: Optional[str]
+    enable_dropped_sample_detection: Optional[str]
     enable_duplicate_frame_detection: Optional[str]
     frame_borders: Optional[str]
     frame_border_pixels: Optional[int]
     frame_no_colorbar_skip: bool
     frame_brng_duration: Optional[int]
     enable_clamped_levels: Optional[str]
+    access_trim_color_bars: Optional[str]
+    access_crop_borders: Optional[str]
+    access_crop_to_480: Optional[str]
+    qctools_ext: Optional[str]
+    checksum_algorithm: Optional[str]
+    stream_hash_algorithm: Optional[str]
     exiftool_profile: Optional[str]
     mediainfo_profile: Optional[str]
     ffprobe_profile: Optional[str]
@@ -200,6 +207,11 @@ The scripts will confirm that the digital files conform to predetermined specifi
         help='Enable/disable signalstats in frame analysis'
     )
     parser.add_argument(
+        '--enable-dropped-sample-detection',
+        choices=['on', 'off'],
+        help='Enable/disable dropped sample detection in frame analysis'
+    )
+    parser.add_argument(
         '--enable-duplicate-frame-detection',
         choices=['on', 'off'],
         help='Enable/disable duplicate frame detection in frame analysis'
@@ -228,6 +240,42 @@ The scripts will confirm that the digital files conform to predetermined specifi
         '--enable-clamped-levels',
         choices=['on', 'off'],
         help='Enable/disable clamped video levels detection in qct-parse'
+    )
+
+    # Access file sub-options (only applied when access_file output is enabled)
+    parser.add_argument(
+        '--access-trim-color-bars',
+        choices=['on', 'off'],
+        help='If qct-parse detects color bars at the head of the tape, skip them in the access file'
+    )
+    parser.add_argument(
+        '--access-crop-borders',
+        choices=['on', 'off'],
+        help='If sophisticated border detection finds an active picture area, crop to it in the access file (requires --access-crop-to-480 on)'
+    )
+    parser.add_argument(
+        '--access-crop-to-480',
+        choices=['on', 'off'],
+        help='Trim NTSC sources to 720x480 in the access file; off keeps the native 720x486 height'
+    )
+
+    # QCTools output extension
+    parser.add_argument(
+        '--qctools-ext',
+        choices=['qctools.xml.gz', 'qctools.mkv'],
+        help='Extension for QCTools output files'
+    )
+
+    # Fixity hash algorithms
+    parser.add_argument(
+        '--checksum-algorithm',
+        choices=['md5', 'sha256'],
+        help='Hash algorithm for whole-file (output/validate) fixity'
+    )
+    parser.add_argument(
+        '--stream-hash-algorithm',
+        choices=['md5', 'sha256'],
+        help='Hash algorithm for embedded stream fixity'
     )
 
     args = parser.parse_args()
@@ -277,12 +325,19 @@ The scripts will confirm that the digital files conform to predetermined specifi
         enable_border_detection=getattr(args, 'enable_border_detection', None),
         enable_brng_analysis=getattr(args, 'enable_brng_analysis', None),
         enable_signalstats=getattr(args, 'enable_signalstats', None),
+        enable_dropped_sample_detection=getattr(args, 'enable_dropped_sample_detection', None),
         enable_duplicate_frame_detection=getattr(args, 'enable_duplicate_frame_detection', None),
         frame_borders=getattr(args, 'frame_borders', None),
         frame_border_pixels=getattr(args, 'frame_border_pixels', None),
         frame_no_colorbar_skip=getattr(args, 'frame_no_colorbar_skip', False),
         frame_brng_duration=getattr(args, 'frame_brng_duration', None),
         enable_clamped_levels=getattr(args, 'enable_clamped_levels', None),
+        access_trim_color_bars=getattr(args, 'access_trim_color_bars', None),
+        access_crop_borders=getattr(args, 'access_crop_borders', None),
+        access_crop_to_480=getattr(args, 'access_crop_to_480', None),
+        qctools_ext=getattr(args, 'qctools_ext', None),
+        checksum_algorithm=getattr(args, 'checksum_algorithm', None),
+        stream_hash_algorithm=getattr(args, 'stream_hash_algorithm', None),
         exiftool_profile=args.exiftool_profile,
         mediainfo_profile=args.mediainfo_profile,
         ffprobe_profile=args.ffprobe_profile,
@@ -467,6 +522,9 @@ def run_cli_mode(args):
     if args.enable_signalstats:
         frame_updates['outputs']['frame_analysis']['enable_signalstats'] = (args.enable_signalstats == 'on')
 
+    if args.enable_dropped_sample_detection:
+        frame_updates['outputs']['frame_analysis']['enable_dropped_sample_detection'] = (args.enable_dropped_sample_detection == 'on')
+
     if args.enable_duplicate_frame_detection:
         frame_updates['outputs']['frame_analysis']['enable_duplicate_frame_detection'] = (args.enable_duplicate_frame_detection == 'on')
 
@@ -486,6 +544,30 @@ def run_cli_mode(args):
     # Only update config if there are actual changes
     if frame_updates['outputs']['frame_analysis']:
         config_mgr.update_config('checks', frame_updates)
+        config_mgr.save_config('checks', is_last_used=True)
+
+    # Outputs config: access file sub-options + qctools extension
+    outputs_updates = {}
+    if args.access_trim_color_bars:
+        outputs_updates['access_file_trim_color_bars'] = (args.access_trim_color_bars == 'on')
+    if args.access_crop_borders:
+        outputs_updates['access_file_crop_borders'] = (args.access_crop_borders == 'on')
+    if args.access_crop_to_480:
+        outputs_updates['access_file_crop_to_480'] = (args.access_crop_to_480 == 'on')
+    if args.qctools_ext:
+        outputs_updates['qctools_ext'] = args.qctools_ext
+    if outputs_updates:
+        config_mgr.update_config('checks', {'outputs': outputs_updates})
+        config_mgr.save_config('checks', is_last_used=True)
+
+    # Fixity hash algorithms
+    fixity_updates = {}
+    if args.checksum_algorithm:
+        fixity_updates['checksum_algorithm'] = args.checksum_algorithm
+    if args.stream_hash_algorithm:
+        fixity_updates['stream_hash_algorithm'] = args.stream_hash_algorithm
+    if fixity_updates:
+        config_mgr.update_config('checks', {'fixity': fixity_updates})
         config_mgr.save_config('checks', is_last_used=True)
 
     if args.enable_clamped_levels:
