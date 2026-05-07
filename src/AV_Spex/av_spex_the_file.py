@@ -14,7 +14,7 @@ from .processing.avspex_processor import AVSpexProcessor
 from .utils import dir_setup
 from .utils import config_edit
 from .utils.log_setup import logger
-from .utils.config_setup import SpexConfig, FilenameConfig
+from .utils.config_setup import SpexConfig, FilenameConfig, ChecksConfig
 from .utils import exiftool_import, mediainfo_import, ffprobe_import
 from .utils.config_manager import ConfigManager
 from .utils.config_io import ConfigIO
@@ -556,7 +556,25 @@ def run_cli_mode(args):
         outputs_updates['access_file_crop_to_480'] = (args.access_crop_to_480 == 'on')
     if args.qctools_ext:
         outputs_updates['qctools_ext'] = args.qctools_ext
+
     if outputs_updates:
+        # access_file_crop_borders requires access_file_crop_to_480 — the access
+        # file pipeline only scales to the active picture area when crop_to_480
+        # is on. Mirrors the GUI gating in gui_checks_window.on_access_crop_to_480_changed.
+        current_outputs = config_mgr.get_config('checks', ChecksConfig).outputs
+        final_crop_to_480 = outputs_updates.get(
+            'access_file_crop_to_480', current_outputs.access_file_crop_to_480
+        )
+        final_crop_borders = outputs_updates.get(
+            'access_file_crop_borders', current_outputs.access_file_crop_borders
+        )
+        if not final_crop_to_480 and final_crop_borders:
+            outputs_updates['access_file_crop_borders'] = False
+            logger.warning(
+                "access_file_crop_borders requires access_file_crop_to_480; "
+                "forcing --access-crop-borders off."
+            )
+
         config_mgr.update_config('checks', {'outputs': outputs_updates})
         config_mgr.save_config('checks', is_last_used=True)
 
