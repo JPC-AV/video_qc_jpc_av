@@ -152,7 +152,7 @@ The scripts will confirm that the digital files conform to predetermined specifi
     profiles_group.add_argument("-fn","--filename",
                                 help="Select filename profile by name (e.g. 'JPC Filename Profile'). Use -pp to list available profiles.")
     profiles_group.add_argument("-pp", "--printprofile", type=str, nargs='?', const='all', default=None,
-                                help="Show config profile(s) and optional subsection. For current settings: 'config[,subsection]'. Examples: 'all', 'spex', 'checks', 'checks,tools', 'spex,filename_values'. For custom profiles: 'exiftool', 'mediainfo', 'ffprobe', 'signalflow'")
+                                help="Show config profile(s) and optional subsection. For current settings: 'config[,subsection]'. Examples: 'all', 'spex', 'checks', 'checks,outputs', 'checks,fixity', 'checks,tools', 'spex,filename_values'. For custom profiles: 'exiftool', 'mediainfo', 'ffprobe', 'signalflow'")
     profiles_group.add_argument("--exiftool-profile",
                                 help="Apply an exiftool expected-values profile by name. Use -pp exiftool to list available exiftool profiles.")
     profiles_group.add_argument("--mediainfo-profile",
