@@ -610,6 +610,19 @@ def run_cli_mode(args):
         tools_updates.setdefault('qct_parse', {})['audio_analysis'] = (args.enable_audio_analysis == 'on')
     if args.enable_clams_detection:
         tools_updates.setdefault('clams_detection', {})['run_tool'] = (args.enable_clams_detection == 'on')
+
+    # qct-parse sub-features (audio_analysis, detect_clamped_levels) only run
+    # inside run_qctparse(), so qct_parse.run_tool must also be on. Auto-enable
+    # it when the user turns either sub-feature on.
+    if (args.enable_audio_analysis == 'on') or (args.enable_clamped_levels == 'on'):
+        current_qct_run = config_mgr.get_config('checks', ChecksConfig).tools.qct_parse.run_tool
+        if not current_qct_run:
+            tools_updates.setdefault('qct_parse', {})['run_tool'] = True
+            logger.warning(
+                "audio_analysis / detect_clamped_levels require qct_parse.run_tool; "
+                "turning qct_parse.run_tool on."
+            )
+
     if tools_updates:
         config_mgr.update_config('checks', {'tools': tools_updates})
         config_mgr.save_config('checks', is_last_used=True)
