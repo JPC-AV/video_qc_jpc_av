@@ -93,6 +93,8 @@ class ParsedArguments:
     frame_no_colorbar_skip: bool
     frame_brng_duration: Optional[int]
     enable_clamped_levels: Optional[str]
+    enable_clams_detection: Optional[str]
+    enable_audio_analysis: Optional[str]
     access_trim_color_bars: Optional[str]
     access_crop_borders: Optional[str]
     access_crop_to_480: Optional[str]
@@ -241,6 +243,16 @@ The scripts will confirm that the digital files conform to predetermined specifi
         choices=['on', 'off'],
         help='Enable/disable clamped video levels detection in qct-parse'
     )
+    parser.add_argument(
+        '--enable-clams-detection',
+        choices=['on', 'off'],
+        help='Enable/disable CLAMS detection (SSIM-based SMPTE bars detector + cross-correlation tone detector). Runs in parallel with qct-parse.'
+    )
+    parser.add_argument(
+        '--enable-audio-analysis',
+        choices=['on', 'off'],
+        help='Enable/disable qct-parse audio analysis (clipping, channel imbalance, audible timecode, audio dropout). Requires qct_parse.run_tool on.'
+    )
 
     # Access file sub-options (only applied when access_file output is enabled)
     parser.add_argument(
@@ -332,6 +344,8 @@ The scripts will confirm that the digital files conform to predetermined specifi
         frame_no_colorbar_skip=getattr(args, 'frame_no_colorbar_skip', False),
         frame_brng_duration=getattr(args, 'frame_brng_duration', None),
         enable_clamped_levels=getattr(args, 'enable_clamped_levels', None),
+        enable_clams_detection=getattr(args, 'enable_clams_detection', None),
+        enable_audio_analysis=getattr(args, 'enable_audio_analysis', None),
         access_trim_color_bars=getattr(args, 'access_trim_color_bars', None),
         access_crop_borders=getattr(args, 'access_crop_borders', None),
         access_crop_to_480=getattr(args, 'access_crop_to_480', None),
@@ -588,10 +602,16 @@ def run_cli_mode(args):
         config_mgr.update_config('checks', {'fixity': fixity_updates})
         config_mgr.save_config('checks', is_last_used=True)
 
+    # Tools sub-toggles: qct-parse audio analysis / clamped levels, CLAMS detection
+    tools_updates = {}
     if args.enable_clamped_levels:
-        config_mgr.update_config('checks', {
-            'tools': {'qct_parse': {'detect_clamped_levels': (args.enable_clamped_levels == 'on')}}
-        })
+        tools_updates.setdefault('qct_parse', {})['detect_clamped_levels'] = (args.enable_clamped_levels == 'on')
+    if args.enable_audio_analysis:
+        tools_updates.setdefault('qct_parse', {})['audio_analysis'] = (args.enable_audio_analysis == 'on')
+    if args.enable_clams_detection:
+        tools_updates.setdefault('clams_detection', {})['run_tool'] = (args.enable_clams_detection == 'on')
+    if tools_updates:
+        config_mgr.update_config('checks', {'tools': tools_updates})
         config_mgr.save_config('checks', is_last_used=True)
 
     if args.dry_run_only:
