@@ -6,17 +6,24 @@ The ConfigManager is a singleton class. It handles loading, caching, updating, a
 
 ## Configuration Architecture
 
-The AV Spex application uses four primary configs:
+The AV Spex application uses seven primary configs:
 
-1. **ChecksConfig**: Controls which tools run and how processing steps are executed
-2. **SpexConfig**: Defines expected metadata values for validation against actual file metadata  
-3. **FilenameConfig**: Contains filename parsing profiles for different naming conventions
-4. **SignalflowConfig**: Stores signal flow profiles for metadata embedding
+| Config key | Dataclass | JSON file | Purpose |
+|------------|-----------|-----------|---------|
+| `checks` | `ChecksConfig` | `checks_config.json` | Which tools run, fixity options, output options |
+| `spex` | `SpexConfig` | `spex_config.json` | Expected metadata values for validation |
+| `filename` | `FilenameConfig` | `filename_config.json` | Filename profile patterns |
+| `signalflow` | `SignalflowConfig` | `signalflow_config.json` | Equipment signal chain profiles |
+| `ffprobe` | `FfprobeConfig` | `ffprobe_config.json` | Custom FFprobe expected-value profiles |
+| `mediainfo` | `MediainfoConfig` | `mediainfo_config.json` | Custom MediaInfo expected-value profiles |
+| `exiftool` | `ExiftoolConfig` | `exiftool_config.json` | Custom ExifTool expected-value profiles |
 
 Each configuration type is backed by:
 - **JSON configuration files**: Default configurations bundled with the application
 - **Dataclass definitions**: Type-safe Python objects defined in `config_setup.py`
 - **User overrides**: Last-used configurations stored in the user's config directory
+
+> **Note on boolean fields:** Boolean settings (`run_tool`, `check_tool`, `check_fixity`, etc.) are stored as native Python `bool` values. Older config JSON files used `"yes"`/`"no"` strings; `ConfigManager._migrate_yes_no_to_bool()` converts these on load for backward compatibility. New code should always use `True`/`False`.
 
 ## Instantiation and Singleton Pattern
 
@@ -51,7 +58,7 @@ config_mgr2 = ConfigManager()
 config_mgr3 = ConfigManager()
 
 # Changes made through one affect all others
-config_mgr1.update_config('checks', {'tools': {'mediainfo': {'run_tool': 'yes'}}})
+config_mgr1.update_config('checks', {'tools': {'mediainfo': {'run_tool': True}}})
 config_mgr2.get_config('checks', ChecksConfig)  # Will see the update made through config_mgr1
 ```
 
@@ -89,78 +96,146 @@ Controls processing workflow and tool execution:
 ```python
 @dataclass
 class ChecksConfig:
-    outputs: OutputsConfig           # Controls report and access file generation
-    fixity: FixityConfig            # Fixity checking and validation settings
-    tools: ToolsConfig              # Individual tool configurations
+    outputs: OutputsConfig           # Controls report, access file, and frame analysis
+    fixity: FixityConfig             # Fixity checking and validation settings
+    tools: ToolsConfig               # Individual tool configurations
+    validate_filename: bool = True   # Whether to run filename validation
 ```
 
 **OutputsConfig**: Controls output generation
 ```python
 @dataclass
 class OutputsConfig:
-    access_file: str         # "yes" or "no" - Create low-resolution access copies
-    report: str              # "yes" or "no" - Generate HTML reports
-    qctools_ext: str         # File extension for QCTools output (e.g., "qctools.xml.gz")
+    access_file: bool                            # Create low-resolution access copies
+    report: bool                                 # Generate HTML reports
+    qctools_ext: str                             # File extension for QCTools output (e.g., "qctools.xml.gz")
+    frame_analysis: FrameAnalysisConfig          # Border/BRNG/signalstats/etc. sub-steps
+    access_file_trim_color_bars: bool = True     # Trim color bars from access copy head
+    access_file_crop_borders: bool = True        # Crop detected borders in access copy
 ```
 
 **FixityConfig**: Manages file integrity checking
 ```python
 @dataclass
 class FixityConfig:
-    check_fixity: str               # "yes" or "no" - Compare against stored checksums
-    validate_stream_fixity: str     # "yes" or "no" - Validate embedded stream hashes
-    embed_stream_fixity: str        # "yes" or "no" - Embed MD5 hashes in MKV tags
-    output_fixity: str              # "yes" or "no" - Generate checksum files
-    overwrite_stream_fixity: str    # "yes" or "no" - Overwrite existing embedded hashes
+    check_fixity: bool                  # Compare against stored checksums
+    validate_stream_fixity: bool        # Validate embedded stream hashes
+    embed_stream_fixity: bool           # Embed MD5 hashes in MKV tags
+    output_fixity: bool                 # Generate checksum files
+    overwrite_stream_fixity: bool       # Overwrite existing embedded hashes
+    checksum_algorithm: str = "md5"     # File-level checksum algorithm
+    stream_hash_algorithm: str = "md5"  # Stream-level hash algorithm
 ```
 
 **ToolsConfig**: Individual tool configurations with different structures for different tool types
 ```python
 @dataclass
 class ToolsConfig:
-    exiftool: BasicToolConfig       # Standard metadata extraction tool
-    ffprobe: BasicToolConfig        # FFmpeg metadata probe tool
-    mediainfo: BasicToolConfig      # MediaInfo metadata tool
-    mediatrace: BasicToolConfig     # MediaTrace container analysis
-    qctools: QCToolsConfig          # QCTools video analysis (run_tool only)
-    mediaconch: MediaConchConfig    # Policy-based validation
-    qct_parse: QCTParseToolConfig   # Advanced QCTools parsing with multiple options
+    exiftool: BasicToolConfig                # Standard metadata extraction tool
+    ffprobe: BasicToolConfig                 # FFmpeg metadata probe tool
+    mediaconch: MediaConchConfig             # Policy-based validation
+    mediainfo: BasicToolConfig               # MediaInfo metadata tool
+    mediatrace: BasicToolConfig              # MediaTrace container analysis
+    qctools: QCToolsConfig                   # QCTools video analysis (run_tool only)
+    qct_parse: QCTParseToolConfig            # Advanced QCTools parsing with multiple options
+    clams_detection: ClamsDetectionConfig    # CLAMS bars + tone detector (default: off)
 ```
 
 **Basic Tool Configuration** (ExifTool, FFprobe, MediaInfo, MediaTrace):
 ```python
 @dataclass
 class BasicToolConfig:
-    check_tool: str    # "yes" or "no" - Whether to validate output against expected values
-    run_tool: str      # "yes" or "no" - Whether to execute the tool
+    check_tool: bool    # Whether to validate output against expected values
+    run_tool: bool      # Whether to execute the tool
 ```
 
 **QCTools Configuration**:
 ```python
 @dataclass
 class QCToolsConfig:
-    run_tool: str      # "yes" or "no" - Whether to run QCTools analysis
+    run_tool: bool      # Whether to run QCTools analysis
 ```
 
 **MediaConch Configuration**:
 ```python
 @dataclass
 class MediaConchConfig:
-    mediaconch_policy: str    # Filename of XML policy file (e.g., "JPC_AV_NTSC_MKV_2025.xml")
-    run_mediaconch: str       # "yes" or "no" - Whether to run MediaConch validation
+    mediaconch_policy: str    # Filename of XML policy file (e.g., "JPC_AV_NTSC_MKV_2025_03_26.xml")
+    run_mediaconch: bool      # Whether to run MediaConch validation
 ```
 
 **QCT Parse Configuration** (Advanced QCTools parsing):
 ```python
 @dataclass
 class QCTParseToolConfig:
-    run_tool: str               # "yes" or "no" - Whether to run QCT parsing
-    barsDetection: bool         # True/False - Detect color bars in video
-    evaluateBars: bool          # True/False - Evaluate detected color bars
-    contentFilter: List[str]    # List of content filters to apply
-    profile: List[str]          # List of analysis profiles to use
-    tagname: Optional[str]      # Optional tag name for analysis
-    thumbExport: bool           # True/False - Export thumbnail images
+    run_tool: bool                       # Whether to run qct-parse
+    barsDetection: bool                  # Detect color bars in video
+    evaluateBars: bool                   # Compare content to detected bars
+    thumbExport: bool                    # Export thumbnail images of failed frames
+    audio_analysis: bool = False         # Detect audio clipping, channel imbalance, dropout
+    detect_clamped_levels: bool = False  # Detect broadcast-range level clamping
+```
+
+**CLAMS Detection Configuration** (SSIM-based bars + cross-correlation tone detector):
+```python
+@dataclass
+class ClamsBarsParams:
+    threshold: float = 0.7
+    sample_ratio: int = 30
+    stop_at_frame: int = 9000
+    min_frame_count: int = 10
+    stop_after_one: bool = True
+    merge_gap_seconds: float = 1.0
+
+@dataclass
+class ClamsToneParams:
+    tolerance: float = 1.0
+    min_tone_duration_ms: int = 2000
+    stop_at_seconds: int = 3600
+    merge_gap_seconds: float = 5.0
+
+@dataclass
+class ClamsDetectionConfig:
+    run_tool: bool = False
+    bars: ClamsBarsParams = field(default_factory=ClamsBarsParams)
+    tone: ClamsToneParams = field(default_factory=ClamsToneParams)
+```
+
+CLAMS detection runs the bars detector in parallel with qct-parse for side-by-side comparison; the tone detector identifies spans of monotonic audio. qct-parse remains authoritative for downstream BRNG-skip and access-file trim. Numeric tuning of `bars`/`tone` parameters is JSON-only — only `clams_detection.run_tool` is settable from the CLI.
+
+**FrameAnalysisConfig** — controls all per-frame analysis sub-steps under `outputs.frame_analysis`:
+
+```python
+@dataclass
+class FrameAnalysisConfig:
+    # Top-level enable flags for each sub-step
+    enable_bitplane_check: bool = True
+    enable_border_detection: bool = True
+    enable_brng_analysis: bool = True
+    enable_signalstats: bool = True
+    enable_dropped_sample_detection: bool = True
+    enable_duplicate_frame_detection: bool = True
+
+    # Border detection mode and parameters
+    border_detection_mode: str = "simple"      # "simple" or "sophisticated"
+    simple_border_pixels: int = 25
+    sophisticated_threshold: int = 10
+    sophisticated_edge_sample_width: int = 100
+    sophisticated_sample_frames: int = 30
+    sophisticated_padding: int = 5
+    auto_retry_borders: bool = True
+    max_border_retries: int = 3
+
+    # BRNG analysis parameters
+    brng_duration_limit: int = 300       # Max seconds analyzed
+    brng_skip_color_bars: bool = True    # Use qct-parse color_bars_end_time to skip head
+
+    # Shared analysis-period settings (BRNG + signalstats)
+    analysis_period_duration: int = 60   # Seconds per window
+    analysis_period_count: int = 3       # Number of windows
+
+    # Duplicate frame detection
+    duplicate_min_run_length: int = 2
 ```
 
 #### SpexConfig
@@ -175,7 +250,7 @@ class SpexConfig:
     ffmpeg_values: Dict[str, Union[FFmpegVideoStream, FFmpegAudioStream, FFmpegFormat]]
     mediatrace_values: MediaTraceValues
     qct_parse_values: QCTParseValues
-    signalflow_profiles: Dict[str, Dict]
+    signalflow_profiles: Dict[str, Dict] = field(default_factory=dict)
 ```
 
 **Key Components**:
@@ -187,7 +262,7 @@ class SpexConfig:
 - **QCT Parse Values**: Quality control thresholds and analysis profiles
 
 #### FilenameConfig and SignalflowConfig
-Management of default and user created profiles for file names and embedded signal flow metadata:
+Management of default and user-created profiles for filenames and embedded signal flow metadata:
 
 ```python
 @dataclass
@@ -196,8 +271,49 @@ class FilenameConfig:
 
 @dataclass  
 class SignalflowConfig:
-    signalflow_profiles: Dict[str, SignalflowProfile]
+    signalflow_profiles: Dict[str, SignalflowProfile] = field(default_factory=dict)
 ```
+
+Use `replace_config_section()` (not `update_config()`) when applying these profiles, so a smaller replacement profile doesn't inherit leftover fields from the previous one.
+
+#### Custom Tool-Profile Configs (ExiftoolConfig, MediainfoConfig, FfprobeConfig)
+
+Each metadata tool also has its own dedicated config holding named "expected-values" profiles. Each profile is a complete set of expected fields the tool's parser will compare against. Default profiles are bundled in `config/{tool}_config.json`; user-saved profiles are merged in from the user config dir at load time.
+
+```python
+@dataclass
+class ExiftoolConfig:
+    exiftool_profiles: Dict[str, ExiftoolProfile] = field(default_factory=dict)
+
+@dataclass
+class MediainfoConfig:
+    mediainfo_profiles: Dict[str, MediainfoProfile] = field(default_factory=dict)
+
+@dataclass
+class FfprobeConfig:
+    ffprobe_profiles: Dict[str, FfprobeProfile] = field(default_factory=dict)
+```
+
+Applying a profile (via `apply_exiftool_profile` / `apply_mediainfo_profile` / `apply_ffprobe_profile`) writes the profile's values into the relevant section of `SpexConfig` (`exiftool_values`, `mediainfo_values`, or `ffmpeg_values`). The profile *config* and the *spex* config are kept separate so that switching profiles is non-destructive.
+
+#### ChecksProfilesConfig
+
+```python
+@dataclass
+class ChecksProfile:
+    name: str
+    description: str = ""
+    validate_filename: bool = True
+    outputs: OutputsConfig = field(default_factory=lambda: OutputsConfig(...))
+    fixity: FixityConfig = field(default_factory=lambda: FixityConfig(...))
+    tools: ToolsConfig = field(default_factory=lambda: ToolsConfig(...))
+
+@dataclass
+class ChecksProfilesConfig:
+    custom_profiles: Dict[str, ChecksProfile] = field(default_factory=dict)
+```
+
+Holds user-created snapshots of `ChecksConfig` that can be re-applied later from the GUI.
 
 ## The Merge Process
 
@@ -371,28 +487,58 @@ def _handle_dict(self, key_type: Type, value_type: Type, data: Dict) -> Dict:
     return data
 ```
 
+### Backward-Compatibility Migration
+
+When an older user JSON file is loaded, `_load_json_config()` runs `_migrate_config_data()` against the parsed dict before deserialization. The migration handles two main concerns:
+
+1. **`"yes"`/`"no"` → `bool`** for every boolean field across the checks config (outputs, fixity, every tool's `check_tool`/`run_tool`, `mediaconch.run_mediaconch`, etc.). Done by `_migrate_yes_no_to_bool()`.
+2. **Missing-field defaults**, e.g., adding `validate_filename: True` to old checks configs, or normalizing `outputs.qctools_ext` to one of the allowed extensions.
+
+A reverse helper, `_migrate_bool_to_yes_no()`, exists for the temporary case where booleans must be written back as `"yes"`/`"no"` strings (used during the migration window).
+
+```python
+def _migrate_yes_no_to_bool(self, value: Any) -> Any:
+    if isinstance(value, str):
+        if value.lower() == "yes": return True
+        if value.lower() == "no":  return False
+    return value
+```
+
+A separate helper, `_cleanup_corrupted_configs()`, runs at startup and removes any `last_used_*_config.json` files that fail to parse (e.g., truncated writes from a crashed session) so the app can fall back to the bundled defaults instead of refusing to start.
+
 ### Configuration File Mapping Examples
 
 #### ChecksConfig JSON Structure
 ```json
 {
+  "validate_filename": true,
   "outputs": {
-    "access_file": "no",
-    "report": "no"
+    "access_file": false,
+    "report": false,
+    "qctools_ext": "qctools.xml.gz",
+    "frame_analysis": {
+      "enable_border_detection": true,
+      "enable_brng_analysis": true,
+      "enable_signalstats": true
+    }
   },
   "fixity": {
-    "check_fixity": "no",
-    "embed_stream_fixity": "yes"
+    "check_fixity": false,
+    "embed_stream_fixity": true
   },
   "tools": {
     "mediainfo": {
-      "check_tool": "yes",
-      "run_tool": "yes"
+      "check_tool": true,
+      "run_tool": true
     },
     "qct_parse": {
-      "run_tool": "no",
+      "run_tool": false,
       "barsDetection": true,
-      "contentFilter": []
+      "evaluateBars": false,
+      "thumbExport": false
+    },
+    "clams_detection": {
+      "run_tool": false
     }
   }
 }
@@ -436,12 +582,12 @@ The conversion process handles:
 
 The first instance of the various config types are loaded at different points in the CLI and GUI modes.  
 
-**GUI Mode**   
-In `gui_main_window.py`, the configuration objects are first created when the main window is initialized:
+**GUI Mode**
+Configurations are first loaded at module-import time in the GUI tab modules (e.g., `gui_main.py`, `gui_checks_tab/gui_checks_window.py`, `gui_complex_window.py`):
 ```python
-self.config_mgr = ConfigManager()
-self.checks_config = self.config_mgr.get_config('checks', ChecksConfig)
-self.spex_config = self.config_mgr.get_config('spex', SpexConfig)
+config_mgr = ConfigManager()
+checks_config = config_mgr.get_config('checks', ChecksConfig)
+spex_config = config_mgr.get_config('spex', SpexConfig)
 ```
 
 **CLI Mode**    
@@ -638,22 +784,25 @@ The GUI uses this mechanism to handle checkbox state changes:
 
 ```python
 def on_checkbox_changed(self, state, path):
-    """Handle changes in yes/no checkboxes"""
-    new_value = 'yes' if Qt.CheckState(state) == Qt.CheckState.Checked else 'no'
-    
+    """Handle changes in boolean checkboxes."""
+    if self.is_loading:
+        return
+
+    new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+
     if path[0] == "tools" and len(path) > 2:
         tool_name = path[1]
         field = path[2]
         updates = {'tools': {tool_name: {field: new_value}}}
+    elif len(path) == 3:  # nested e.g. ['outputs', 'frame_analysis', 'enable_brng_analysis']
+        updates = {path[0]: {path[1]: {path[2]: new_value}}}
     else:
-        section = path[0]
-        field = path[1]
-        updates = {section: {field: new_value}}
-        
-    self.config_mgr.update_config('checks', updates)
+        updates = {path[0]: {path[1]: new_value}}
+
+    config_mgr.update_config('checks', updates)
 ```
 
-This allows each checkbox in the interface to directly modify its corresponding field in the configuration, with changes immediately reflected in the config.
+This allows each checkbox to directly modify its corresponding field in the configuration. The `is_loading` guard prevents spurious writes when populating widgets during `load_config_values()`.
 
 ### Section Replacement
 
@@ -713,49 +862,49 @@ The system supports applying predefined Checks Config profiles that modify multi
 ```python
 def apply_profile(selected_profile):
     """Apply profile changes to checks_config.
-    
+
     Args:
         selected_profile (dict): The profile configuration to apply
     """
-    # Prepare the updates dictionary with the structure matching the dataclass
     updates = {}
-    
-    # Handle outputs section
+
+    # Handle top-level validate_filename
+    if 'validate_filename' in selected_profile:
+        updates['validate_filename'] = selected_profile['validate_filename']
+
+    # Handle outputs / fixity sections (deep-merged by update_config)
     if 'outputs' in selected_profile:
         updates['outputs'] = selected_profile['outputs']
-    
-    # Handle fixity section
     if 'fixity' in selected_profile:
         updates['fixity'] = selected_profile['fixity']
-    
-    # Handle tools section with special cases
+
+    # Handle tools section
     if 'tools' in selected_profile:
-        tools_updates = {}
-        
-        for tool_name, tool_updates in selected_profile['tools'].items():
-            # No need for special cases - the update_config method will handle it
-            tools_updates[tool_name] = tool_updates
-        
-        updates['tools'] = tools_updates
-    
-    # Apply all updates at once using the new update_config method
+        updates['tools'] = dict(selected_profile['tools'])
+
     if updates:
         config_mgr.update_config('checks', updates)
 ```
 
-Predefined Checks Config profiles are stored as dictionaries in `config_edit.py`:
+Predefined Checks Config profiles are stored as dictionaries in `config_edit.py` and use native booleans:
 
 ```python
 profile_step1 = {
-    'tools': {
-        'mediainfo': {'check_tool': 'yes', 'run_tool': 'yes'},
-        'ffprobe': {'check_tool': 'yes', 'run_tool': 'yes'},
-        'mediaconch': {'run_mediaconch': 'yes'},
-        'qctools': {'run_tool': 'yes'},
-        'qct_parse': {'run_tool': 'yes'},
-        'exiftool': {'check_tool': 'yes', 'run_tool': 'yes'}
+    "validate_filename": True,
+    "tools": {
+        "exiftool":   {"check_tool": True, "run_tool": True},
+        "ffprobe":    {"check_tool": True, "run_tool": True},
+        "mediaconch": {"mediaconch_policy": "JPC_AV_NTSC_MKV_2025_03_26.xml", "run_mediaconch": True},
+        "mediainfo":  {"check_tool": True, "run_tool": True},
+        "mediatrace": {"check_tool": True, "run_tool": True},
+        "qctools":    {"run_tool": False},
+        "qct_parse":  {"run_tool": False, "barsDetection": False, "evaluateBars": False,
+                       "thumbExport": False, "audio_analysis": False, "detect_clamped_levels": False},
+        "clams_detection": {"run_tool": False},
     },
-    'fixity': {'check_fixity': 'yes'}
+    "outputs": {"access_file": False, "report": False, "qctools_ext": "qctools.xml.gz"},
+    "fixity":  {"check_fixity": False, "validate_stream_fixity": False,
+                "embed_stream_fixity": True, "output_fixity": True, "overwrite_stream_fixity": False},
 }
 ```
 
@@ -1033,8 +1182,8 @@ def format_config_value(value, indent=0, is_nested=False):
         # Handle nested dictionaries with proper indentation
     if isinstance(value, list):
         return ', '.join(str(item) for item in value)
-    if value == 'yes': return "✅"
-    if value == 'no': return "❌"
+    if value is True:  return "✅"
+    if value is False: return "❌"
     return str(value)
 ```
 
@@ -1044,44 +1193,54 @@ The system includes several predefined profiles for common workflows:
 
 #### Processing Profiles
 
-**Profile Step 1 - Initial Processing:**
+**Profile Step 1 — Initial Processing** (metadata extraction + embedded fixity):
 ```python
 profile_step1 = {
+    "validate_filename": True,
     "tools": {
-        "exiftool": {"check_tool": "yes", "run_tool": "yes"},
-        "ffprobe": {"check_tool": "yes", "run_tool": "yes"},
-        "mediaconch": {"run_mediaconch": "yes"},
-        "mediainfo": {"check_tool": "yes", "run_tool": "yes"},
-        "mediatrace": {"check_tool": "yes", "run_tool": "yes"},
-        "qctools": {"run_tool": "no"},
-        "qct_parse": {"run_tool": "no"}
+        "exiftool":  {"check_tool": True, "run_tool": True},
+        "ffprobe":   {"check_tool": True, "run_tool": True},
+        "mediaconch": {"run_mediaconch": True},
+        "mediainfo": {"check_tool": True, "run_tool": True},
+        "mediatrace": {"check_tool": True, "run_tool": True},
+        "qctools":   {"run_tool": False},
+        "qct_parse": {"run_tool": False},
+        "clams_detection": {"run_tool": False},
     },
-    "fixity": {
-        "embed_stream_fixity": "yes",
-        "output_fixity": "yes"
-    }
+    "outputs": {"access_file": False, "report": False},
+    "fixity":  {"embed_stream_fixity": True, "output_fixity": True},
 }
 ```
 
-**Profile Step 2 - Quality Analysis:**
+**Profile Step 2 — Quality Analysis** (QCTools, qct-parse, frame analysis, HTML report):
 ```python
 profile_step2 = {
+    "validate_filename": True,
     "tools": {
-        "qctools": {"run_tool": "yes"},
+        "qctools":   {"run_tool": True},
         "qct_parse": {
-            "run_tool": "yes",
+            "run_tool": True,
             "barsDetection": True,
             "evaluateBars": True,
-            "thumbExport": True
-        }
+            "thumbExport": True,
+            "audio_analysis": True,
+            "detect_clamped_levels": True,
+        },
+        "clams_detection": {"run_tool": False},
     },
-    "outputs": {"report": "yes"},
-    "fixity": {
-        "check_fixity": "yes",
-        "validate_stream_fixity": "yes"
-    }
+    "outputs": {
+        "report": True,
+        "frame_analysis": {
+            "enable_border_detection": True,
+            "enable_brng_analysis": True,
+            "enable_signalstats": True,
+        },
+    },
+    "fixity": {"check_fixity": True, "validate_stream_fixity": True},
 }
 ```
+
+**Profile All Off** (`profile_allOff`): turns every tool/output/fixity option to `False`. Useful for starting from a clean slate before toggling individual options.
 
 #### Signal Flow Equipment Profiles
 
@@ -1109,67 +1268,77 @@ BVH3100 = {
 
 ### CLI Checks Config Options
 
-The command-line interface provides options for targeted configuration changes through the `--on` and `--off` flags, which are processed by the `toggle_on()` and `toggle_off()` functions:
+The command-line interface provides options for targeted configuration changes through the `--on` and `--off` flags, which are processed by the `toggle_on()` and `toggle_off()` functions. All settings now take native booleans:
 
 ```python
-def update_tool_setting(tool_names: List[str], value: str):
+def update_tool_setting(tool_names: List[str], value: bool):
     """
-    Update specific tool settings using config_mgr.update_config
+    Update specific tool/fixity settings using config_mgr.update_config.
     Args:
         tool_names: List of strings in format 'tool.field'
-        value: 'yes' or 'no' (or True/False for qct_parse)
+        value: True or False
     """
-    updates = {'tools': {}}
-    
+    updates = {'tools': {}, 'fixity': {}}
+
     for tool_spec in tool_names:
         try:
             tool_name, field = tool_spec.split('.')
-            
-            # Special handling for qct_parse which uses booleans instead of yes/no
-            if tool_name == 'qct_parse':
-                if value.lower() not in ('yes', 'no'):
-                    logger.warning(f"Invalid value '{value}' for qct_parse. Must be 'yes' or 'no'")
-                    continue
-                bool_value = True if value.lower() == 'yes' else False
-                updates['tools'][tool_name] = {field: bool_value}
-                
-            # Special handling for mediaconch which has different field names
-            elif tool_name == 'mediaconch':
-                if field not in ('run_mediaconch'):
-                    logger.warning(f"Invalid field '{field}' for mediaconch. To turn mediaconch on/off use 'mediaconch.run_mediaconch'.")
-                    continue
-                updates['tools'][tool_name] = {field: value}
 
-            elif tool_name == 'fixity':
-                updates['fixity'] = {}
-                if field not in ('check_fixity','validate_stream_fixity','embed_stream_fixity','output_fixity','overwrite_stream_fixity'):
+            if tool_name == 'fixity':
+                if field not in ('check_fixity', 'validate_stream_fixity', 'embed_stream_fixity',
+                                 'output_fixity', 'overwrite_stream_fixity'):
                     logger.warning(f"Invalid field '{field}' for fixity settings")
                     continue
                 updates['fixity'][field] = value
-                
-            # Standard tools with check_tool/run_tool fields
-            else:
-                if field not in ('check_tool', 'run_tool'):
-                    logger.warning(f"Invalid field '{field}' for {tool_name}. Must be 'check_tool' or 'run_tool'")
+
+            elif tool_name == 'mediaconch':
+                if field not in ('run_mediaconch',):
+                    logger.warning(f"Invalid field '{field}' for mediaconch.")
                     continue
                 updates['tools'][tool_name] = {field: value}
-                
-            logger.debug(f"{tool_name}.{field} will be set to '{value}'")
-            
+
+            elif tool_name == 'qctools':
+                if field not in ('run_tool',):
+                    logger.warning(f"Invalid field '{field}' for qctools.")
+                    continue
+                updates['tools'][tool_name] = {field: value}
+
+            elif tool_name == 'qct_parse':
+                if field not in ('run_tool', 'barsDetection', 'evaluateBars', 'thumbExport',
+                                 'audio_analysis', 'detect_clamped_levels'):
+                    logger.warning(f"Invalid field '{field}' for qct_parse")
+                    continue
+                updates['tools'][tool_name] = {field: value}
+
+            elif tool_name == 'clams_detection':
+                # Only run_tool is settable from CLI; tune bars/tone parameters in JSON.
+                if field != 'run_tool':
+                    logger.warning(f"Invalid field '{field}' for clams_detection.")
+                    continue
+                updates['tools'][tool_name] = {field: value}
+
+            else:  # Standard tools with check_tool/run_tool
+                if field not in ('check_tool', 'run_tool'):
+                    logger.warning(f"Invalid field '{field}' for {tool_name}.")
+                    continue
+                updates['tools'][tool_name] = {field: value}
+
         except ValueError:
             logger.warning(f"Invalid format '{tool_spec}'. Expected format: tool.field")
-    
-    if updates:  # Only update if we have changes
+
+    # Drop any empty top-level sections before updating
+    if not updates['tools']:  del updates['tools']
+    if not updates['fixity']: del updates['fixity']
+
+    if updates:
         config_mgr.update_config('checks', updates)
 
-def toggle_on(tool_names: List[str]):
-    update_tool_setting(tool_names, 'yes')
 
-def toggle_off(tool_names: List[str]):
-    update_tool_setting(tool_names, 'no')
+def toggle_on(tool_names: List[str]):  update_tool_setting(tool_names, True)
+def toggle_off(tool_names: List[str]): update_tool_setting(tool_names, False)
 ```
 
-This implementation allows for precise control through the command line:
+This allows precise control from the command line:
 
 ```bash
 # Turn on mediainfo tool
@@ -1177,6 +1346,12 @@ av-spex --on mediainfo.run_tool
 
 # Turn off exiftool and fixity
 av-spex --off exiftool.run_tool --off fixity.check_fixity
+
+# Toggle a qct-parse sub-option
+av-spex --on qct_parse.detect_clamped_levels
+
+# Enable CLAMS bars+tone detection (numeric tuning is JSON-only)
+av-spex --on clams_detection.run_tool
 ```
 
 ### Persisting Configuration Changes
@@ -1255,11 +1430,14 @@ The AV Spex config system uses multiple JSON files to organize different aspects
 ```
 config/
 ├── checks_config.json          # Processing workflow controls
-├── spex_config.json           # Expected metadata values
-├── filename_config.json       # Filename parsing profiles  
-├── signalflow_config.json     # Equipment signal flow profiles
-└── mediaconch_policies/       # MediaConch policy files
-    ├── JPC_AV_NTSC_MKV_2025.xml
+├── spex_config.json            # Expected metadata values
+├── filename_config.json        # Filename parsing profiles
+├── signalflow_config.json      # Equipment signal flow profiles
+├── exiftool_config.json        # Custom ExifTool expected-value profiles
+├── mediainfo_config.json       # Custom MediaInfo expected-value profiles
+├── ffprobe_config.json         # Custom FFprobe expected-value profiles
+└── mediaconch_policies/        # MediaConch policy files
+    ├── JPC_AV_NTSC_MKV_2025_03_26.xml
     └── [other policy files]
 ```
 
@@ -1274,7 +1452,19 @@ The ConfigManager follows a consistent loading priority:
 
 ### Custom Configuration Dialogs
 
-The application includes dialog windows for creating custom filename patterns and signal flow profiles through GUI forms.
+The application includes dialog windows for creating five categories of custom profiles through GUI forms:
+
+| Dialog module | Purpose | Persisted to |
+|---------------|---------|--------------|
+| `gui/gui_custom_filename.py` | Filename pattern profiles | `filename_config.json` |
+| `gui/gui_custom_signalflow.py` | Equipment signal flow profiles | `signalflow_config.json` |
+| `gui/gui_custom_exiftool.py` | ExifTool expected-value profiles | `exiftool_config.json` |
+| `gui/gui_custom_mediainfo.py` | MediaInfo expected-value profiles | `mediainfo_config.json` |
+| `gui/gui_custom_ffprobe.py` | FFprobe expected-value profiles | `ffprobe_config.json` |
+
+A shared profile manager (`gui/gui_custom_profiles.py`) lists, loads, and deletes saved profiles for any of these categories.
+
+The metadata-tool dialogs (ExifTool, MediaInfo, FFprobe) are also reachable from the CLI via `--{tool}-from-file <FILE>`, which uses the corresponding helper in `utils/{tool}_import.py` to convert raw tool output (e.g., the JSON written by `mediainfo --Output=JSON`) into a profile, save it, and apply it.
 
 #### Custom Filename Pattern Dialog
 
@@ -1446,28 +1636,25 @@ The Checks Config values decide which processing steps are run:
 
 ```python
 # Check if any fixity operations are enabled
-fixity_enabled = False
 fixity_config = self.checks_config.fixity
+fixity_enabled = (
+    fixity_config.check_fixity or
+    fixity_config.validate_stream_fixity or
+    fixity_config.embed_stream_fixity or
+    fixity_config.output_fixity
+)
 
-if (fixity_config.check_fixity == "yes" or 
-    fixity_config.validate_stream_fixity == "yes" or 
-    fixity_config.embed_stream_fixity == "yes" or 
-    fixity_config.output_fixity == "yes"):
-    fixity_enabled = True
-    
 if fixity_enabled:
     processing_mgmt.process_fixity(source_directory, video_path, video_id)
 
 # Check if any metadata tools are enabled
-metadata_tools_enabled = False
 tools_config = self.checks_config.tools
+metadata_tools_enabled = any(
+    getattr(getattr(tools_config, name), 'check_tool', False) or
+    getattr(getattr(tools_config, name), 'run_tool', False)
+    for name in ('mediainfo', 'mediatrace', 'exiftool', 'ffprobe')
+)
 
-if (hasattr(tools_config.mediainfo, 'check_tool') and tools_config.mediainfo.check_tool == "yes" or
-    hasattr(tools_config.mediatrace, 'check_tool') and tools_config.mediatrace.check_tool == "yes" or
-    hasattr(tools_config.exiftool, 'check_tool') and tools_config.exiftool.check_tool == "yes" or
-    hasattr(tools_config.ffprobe, 'check_tool') and tools_config.ffprobe.check_tool == "yes"):
-    metadata_tools_enabled = True
-    
 if metadata_tools_enabled:
     metadata_differences = processing_mgmt.process_video_metadata(
         video_path, destination_directory, video_id
@@ -1498,9 +1685,9 @@ def import_config(self):
         self.main_window.checks_profile_dropdown.blockSignals(True)
         
         # Set dropdown based on what tools are actually enabled
-        if checks_config.tools.exiftool.run_tool == "yes":
+        if checks_config.tools.exiftool.run_tool:
             self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
-        elif checks_config.tools.exiftool.run_tool == "no":
+        else:
             self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
             
         self.main_window.checks_profile_dropdown.blockSignals(False)
@@ -1538,27 +1725,27 @@ def setup_mediaconch_policy(user_policy_path: str = None) -> str:
 ```
 
 #### CLI Config Mapping
-The CLI maps simple text arguments to actual config objects:
+The CLI maps the `--profile` argument to predefined Checks Config dictionaries:
 
 ```python
-# Map CLI argument strings to the actual profile dictionaries
 PROFILE_MAPPING = {
-    "step1": config_edit.profile_step1,    # Metadata extraction profile
-    "step2": config_edit.profile_step2,    # Quality analysis profile  
-    "off": config_edit.profile_allOff      # Turn off all tools
+    "step1": config_edit.profile_step1,   # Metadata extraction profile
+    "step2": config_edit.profile_step2,   # Quality analysis profile
+    "off":   config_edit.profile_allOff,  # Turn off all tools
 }
-
-# Load filename profiles from the config file and map them to CLI arguments
-filename_config = config_mgr.get_config("filename", FilenameConfig)
-FILENAME_MAPPING = {
-    "jpc": filename_config.filename_profiles["JPC Filename Profile"],
-    "bowser": filename_config.filename_profiles["Bowser Filename Profile"]
-}
-
-# Usage: python av_spex_the_file.py --profile step1 --filename jpc
 ```
 
-This lets users type simple commands like `--profile step1` instead of having to specify all the individual tool settings.
+Filename and signal-flow profiles are looked up by **profile name** at runtime — there is no hard-coded dict mapping. The CLI also accepts a small set of legacy short-name aliases for backward compatibility:
+
+```python
+_sn_aliases = {'JPC_AV_SVHS': 'JPC_AV_SVHS Signal Flow', 'BVH3100': 'BVH3100 Signal Flow'}
+_fn_aliases = {'jpc': 'JPC Filename Profile', 'bowser': 'Bowser Filename Profile'}
+
+# av-spex -fn "JPC Filename Profile"   ← canonical
+# av-spex -fn jpc                      ← legacy short alias (still resolves correctly)
+```
+
+If the supplied name doesn't match an existing profile, the CLI prints the list of available profile names from the relevant config.
 
 ### Configuration Persistence Best Practices
 
