@@ -125,14 +125,25 @@ class ParsedArguments:
     enable_border_detection: Optional[str]
     enable_brng_analysis: Optional[str]
     enable_signalstats: Optional[str]
+    enable_dropped_sample_detection: Optional[str]
     enable_duplicate_frame_detection: Optional[str]
     # Frame analysis tuning
     frame_borders: Optional[str]
     frame_border_pixels: Optional[int]
     frame_no_colorbar_skip: bool
     frame_brng_duration: Optional[int]
-    # qct-parse sub-option
+    # qct-parse / CLAMS feature toggles
     enable_clamped_levels: Optional[str]
+    enable_clams_detection: Optional[str]
+    enable_audio_analysis: Optional[str]
+    # Access file sub-options
+    access_trim_color_bars: Optional[str]
+    access_crop_borders: Optional[str]
+    access_crop_to_480: Optional[str]
+    # Output / fixity settings
+    qctools_ext: Optional[str]
+    checksum_algorithm: Optional[str]
+    stream_hash_algorithm: Optional[str]
     # Apply named expected-value profiles to spex config
     exiftool_profile: Optional[str]
     mediainfo_profile: Optional[str]
@@ -143,6 +154,8 @@ class ParsedArguments:
     ffprobe_from_file: Optional[str]
 ```
 
+Argparse organizes flags into named groups so `av-spex --help` reads as a navigable reference: *Config profiles*, *Config import/export*, *Tool toggles*, *qct-parse / CLAMS*, *Frame analysis*, *Output settings*, *Fixity*. Group definitions live near the top of `parse_arguments()`; adding a new flag means picking the right `add_argument_group` to attach it to.
+
 Examples of supported CLI flags:
 
 * `--profile`: applies a predefined processing profile (`step1`, `step2`, or `off`)
@@ -152,13 +165,18 @@ Examples of supported CLI flags:
 * `--exiftool-from-file` / `--mediainfo-from-file` / `--ffprobe-from-file`: import a new expected-value profile from a raw tool-output file (saves the profile and applies it)
 * `--export-config` / `--import-config`: serialize and load JSON-based configurations
 * `--dryrun`: skip processing and apply config changes only
-* `--printprofile`: print selected config values for review
-* `--enable-bitplane-check` / `--enable-border-detection` / `--enable-brng-analysis` / `--enable-signalstats` / `--enable-duplicate-frame-detection`: toggle individual frame analysis sub-steps on or off
+* `--printprofile`: print selected config values for review (e.g. `-pp checks,outputs` to see all frame_analysis fields)
+* `--enable-bitplane-check` / `--enable-border-detection` / `--enable-brng-analysis` / `--enable-signalstats` / `--enable-dropped-sample-detection` / `--enable-duplicate-frame-detection`: toggle individual frame analysis sub-steps on or off
 * `--frame-borders`: set border detection mode (`simple` or `sophisticated`)
 * `--frame-border-pixels`: set pixel crop width for simple border mode
 * `--frame-brng-duration`: set max duration (in seconds) for BRNG analysis
 * `--frame-no-colorbar-skip`: disable automatic color bar skipping in frame analysis
-* `--enable-clamped-levels`: toggle qct-parse's broadcast-range level-clamping detector (writes to `tools.qct_parse.detect_clamped_levels`, **not** `outputs.frame_analysis`)
+* `--enable-audio-analysis`: toggle qct-parse audio analysis (clipping / channel imbalance / audible-timecode / dropout). Auto-enables `qct_parse.run_tool` if currently off.
+* `--enable-clamped-levels`: toggle qct-parse's broadcast-range level-clamping detector. Auto-enables `qct_parse.run_tool` if currently off. Writes to `tools.qct_parse.detect_clamped_levels`, **not** `outputs.frame_analysis`.
+* `--enable-clams-detection`: toggle CLAMS detection (SSIM bars + cross-correlation tone). Writes to `tools.clams_detection.run_tool`. Independent of qct-parse.
+* `--access-trim-color-bars` / `--access-crop-borders` / `--access-crop-to-480`: access-file sub-options. `crop-borders` requires `crop-to-480`; the CLI enforces this with a warning.
+* `--qctools-ext`: choose `qctools.xml.gz` or `qctools.mkv` for QCTools output
+* `--checksum-algorithm` / `--stream-hash-algorithm`: choose `md5` or `sha256` for whole-file vs embedded-stream fixity
 
 The parsed values are passed downstream as a `ParsedArguments` instance.
 
@@ -285,6 +303,8 @@ def run_cli_mode(args):
         frame_updates['outputs']['frame_analysis']['enable_brng_analysis'] = (args.enable_brng_analysis == 'on')
     if args.enable_signalstats:
         frame_updates['outputs']['frame_analysis']['enable_signalstats'] = (args.enable_signalstats == 'on')
+    if args.enable_dropped_sample_detection:
+        frame_updates['outputs']['frame_analysis']['enable_dropped_sample_detection'] = (args.enable_dropped_sample_detection == 'on')
     if args.enable_duplicate_frame_detection:
         frame_updates['outputs']['frame_analysis']['enable_duplicate_frame_detection'] = (args.enable_duplicate_frame_detection == 'on')
     if args.frame_borders is not None:
@@ -300,11 +320,64 @@ def run_cli_mode(args):
         config_mgr.update_config('checks', frame_updates)
         config_mgr.save_config('checks', is_last_used=True)
 
-    # qct-parse clamped-levels detector lives outside frame_analysis
+    # Outputs config: access file sub-options + qctools extension
+    outputs_updates = {}
+    if args.access_trim_color_bars:
+        outputs_updates['access_file_trim_color_bars'] = (args.access_trim_color_bars == 'on')
+    if args.access_crop_borders:
+        outputs_updates['access_file_crop_borders'] = (args.access_crop_borders == 'on')
+    if args.access_crop_to_480:
+        outputs_updates['access_file_crop_to_480'] = (args.access_crop_to_480 == 'on')
+    if args.qctools_ext:
+        outputs_updates['qctools_ext'] = args.qctools_ext
+
+    if outputs_updates:
+        # access_file_crop_borders requires access_file_crop_to_480 — mirrors GUI gating.
+        # Compute final state from current config + this invocation's updates.
+        current_outputs = config_mgr.get_config('checks', ChecksConfig).outputs
+        final_crop_to_480 = outputs_updates.get(
+            'access_file_crop_to_480', current_outputs.access_file_crop_to_480
+        )
+        final_crop_borders = outputs_updates.get(
+            'access_file_crop_borders', current_outputs.access_file_crop_borders
+        )
+        if not final_crop_to_480 and final_crop_borders:
+            outputs_updates['access_file_crop_borders'] = False
+            logger.warning("access_file_crop_borders requires access_file_crop_to_480; "
+                           "forcing --access-crop-borders off.")
+        config_mgr.update_config('checks', {'outputs': outputs_updates})
+        config_mgr.save_config('checks', is_last_used=True)
+
+    # Fixity hash algorithms
+    fixity_updates = {}
+    if args.checksum_algorithm:
+        fixity_updates['checksum_algorithm'] = args.checksum_algorithm
+    if args.stream_hash_algorithm:
+        fixity_updates['stream_hash_algorithm'] = args.stream_hash_algorithm
+    if fixity_updates:
+        config_mgr.update_config('checks', {'fixity': fixity_updates})
+        config_mgr.save_config('checks', is_last_used=True)
+
+    # Tools sub-toggles: qct-parse audio analysis / clamped levels, CLAMS detection
+    tools_updates = {}
     if args.enable_clamped_levels:
-        config_mgr.update_config('checks', {
-            'tools': {'qct_parse': {'detect_clamped_levels': (args.enable_clamped_levels == 'on')}}
-        })
+        tools_updates.setdefault('qct_parse', {})['detect_clamped_levels'] = (args.enable_clamped_levels == 'on')
+    if args.enable_audio_analysis:
+        tools_updates.setdefault('qct_parse', {})['audio_analysis'] = (args.enable_audio_analysis == 'on')
+    if args.enable_clams_detection:
+        tools_updates.setdefault('clams_detection', {})['run_tool'] = (args.enable_clams_detection == 'on')
+
+    # qct-parse sub-features (audio_analysis, detect_clamped_levels) only run inside
+    # run_qctparse(), so qct_parse.run_tool must also be on. Auto-enable + warn.
+    if (args.enable_audio_analysis == 'on') or (args.enable_clamped_levels == 'on'):
+        current_qct_run = config_mgr.get_config('checks', ChecksConfig).tools.qct_parse.run_tool
+        if not current_qct_run:
+            tools_updates.setdefault('qct_parse', {})['run_tool'] = True
+            logger.warning("audio_analysis / detect_clamped_levels require qct_parse.run_tool; "
+                           "turning qct_parse.run_tool on.")
+
+    if tools_updates:
+        config_mgr.update_config('checks', {'tools': tools_updates})
         config_mgr.save_config('checks', is_last_used=True)
 
     if args.dry_run_only:
@@ -319,8 +392,10 @@ This function performs the following:
 * Applies named custom profiles for exiftool, mediainfo, and ffprobe expected values (and imports new ones from tool-output files when `--*-from-file` is supplied)
 * Applies signal flow and filename profiles to the spex config (supporting legacy short-name aliases)
 * Handles config import/export
-* Applies frame analysis sub-step configuration flags
-* Toggles the qct-parse clamped-levels detector (`--enable-clamped-levels`)
+* Applies frame analysis sub-step configuration flags (incl. `--enable-dropped-sample-detection`)
+* Applies access-file sub-option flags and `--qctools-ext` to the `outputs` section, with a `crop_borders` ↔ `crop_to_480` dependency guardrail
+* Applies `--checksum-algorithm` and `--stream-hash-algorithm` to the `fixity` section
+* Toggles qct-parse audio analysis (`--enable-audio-analysis`), the qct-parse clamped-levels detector (`--enable-clamped-levels`), and CLAMS detection (`--enable-clams-detection`); auto-enables `qct_parse.run_tool` when a qct-parse sub-feature requires it
 * Optionally skips processing if `--dryrun` is used
 
 > **Note on dry runs**: In CLI mode, `--dryrun` applies any config changes and then immediately calls `sys.exit(1)` — no input video is touched. The GUI has a separate, richer "Dry Run" mode driven by `processing/dry_run_analyzer.py` (`DryRunAnalyzer`), instantiated by `ProcessingWorker(dry_run=True)`. That class walks the input directory and reports what *would* run without producing any output files; it is not exposed via the CLI.
@@ -335,6 +410,7 @@ The frame analysis sub-system is configured via `checks_config.outputs.frame_ana
 | `--enable-border-detection {on,off}` | `enable_border_detection` | Toggle border detection step |
 | `--enable-brng-analysis {on,off}` | `enable_brng_analysis` | Toggle BRNG out-of-range analysis |
 | `--enable-signalstats {on,off}` | `enable_signalstats` | Toggle FFmpeg signalstats step |
+| `--enable-dropped-sample-detection {on,off}` | `enable_dropped_sample_detection` | Toggle dropped-sample detection (audio spectrogram + audio/video duration delta) |
 | `--enable-duplicate-frame-detection {on,off}` | `enable_duplicate_frame_detection` | Toggle duplicate-frame detection |
 | `--frame-borders {simple,sophisticated}` | `border_detection_mode` | Border detection algorithm |
 | `--frame-border-pixels N` | `simple_border_pixels` | Crop width (px) for simple mode |
@@ -343,9 +419,55 @@ The frame analysis sub-system is configured via `checks_config.outputs.frame_ana
 
 All frame analysis updates are applied as a single deep-merge `update_config('checks', ...)` call at the end of `run_cli_mode`. If none of the frame analysis flags are supplied, the config is unchanged.
 
-`--enable-clamped-levels {on,off}` is a related flag but lives **outside** `frame_analysis` — it writes to `tools.qct_parse.detect_clamped_levels`, since it tunes a qct-parse sub-option rather than a frame-analysis sub-step. It's also applied as its own separate `update_config('checks', ...)` call.
+Tuning parameters that the GUI exposes but the CLI does not (sophisticated border thresholds / sample frames / padding / max retries, analysis-period duration & count, duplicate-frame `min_run_length`, and the CLAMS bars/tone numerics) are JSON-only. Use `-pp checks,outputs` to inspect the live values, or edit `last_used_checks_config.json` directly.
 
 Color bar skipping relies on the `color_bars_end_time` value from qct-parse being passed through `process_video_outputs()` → `process_frame_analysis()` → `analyze_frame_quality()`. Passing `--frame-no-colorbar-skip` sets `brng_skip_color_bars = False` in the config so that color bars at the head of the tape are included in BRNG analysis.
+
+---
+
+### qct-parse / CLAMS Feature Flags
+
+Three flags toggle features that live in `tools.qct_parse` or `tools.clams_detection`:
+
+| Flag | Config field | Effect |
+|------|--------------|--------|
+| `--enable-audio-analysis {on,off}` | `tools.qct_parse.audio_analysis` | Toggle clipping / channel imbalance / audible-timecode / dropout detection |
+| `--enable-clamped-levels {on,off}` | `tools.qct_parse.detect_clamped_levels` | Toggle broadcast-range level clamping detection |
+| `--enable-clams-detection {on,off}` | `tools.clams_detection.run_tool` | Toggle CLAMS SSIM bars detector + cross-correlation tone detector (runs in parallel with qct-parse) |
+
+All three are applied as a single deep-merge `update_config('checks', ...)` call sharing the `tools` section.
+
+**Auto-enable guardrail**: Both `audio_analysis` and `detect_clamped_levels` only run inside `run_qctparse()`, so they are no-ops when `tools.qct_parse.run_tool` is off. When the user passes `--enable-audio-analysis on` or `--enable-clamped-levels on` and `qct_parse.run_tool` is currently off, the CLI auto-enables `qct_parse.run_tool` and emits a `logger.warning`. CLAMS detection runs independently and has no such gating.
+
+CLAMS bars/tone numeric tuning (thresholds, durations, etc.) is JSON-only — `--enable-clams-detection` toggles `run_tool` but the `bars` and `tone` sub-dicts are not exposed via individual flags. See `ClamsDetectionConfig` in `utils/config_setup.py`.
+
+---
+
+### Output Settings Flags
+
+Four flags live in `outputs` (sibling of `frame_analysis`):
+
+| Flag | Config field | Effect |
+|------|--------------|--------|
+| `--access-trim-color-bars {on,off}` | `outputs.access_file_trim_color_bars` | Skip head color bars when generating access file |
+| `--access-crop-borders {on,off}` | `outputs.access_file_crop_borders` | Crop access file to active picture area detected by sophisticated borders |
+| `--access-crop-to-480 {on,off}` | `outputs.access_file_crop_to_480` | Trim NTSC sources to 720x480; off keeps native 720x486 |
+| `--qctools-ext {qctools.xml.gz,qctools.mkv}` | `outputs.qctools_ext` | Extension for QCTools output files |
+
+All four are applied as a single deep-merge `update_config('checks', ...)` call sharing the `outputs` section.
+
+**Crop-to-480 dependency guardrail**: `access_file_crop_borders` is only meaningful when `access_file_crop_to_480` is on (the access-file pipeline only scales to the active picture area in that path). After computing the final state from current config + this invocation's updates, the CLI forces `access_file_crop_borders = False` if `crop_to_480` would end up off, and emits a `logger.warning`. This mirrors the GUI gating in `gui_checks_window.on_access_crop_to_480_changed`.
+
+---
+
+### Fixity Algorithm Flags
+
+| Flag | Config field | Effect |
+|------|--------------|--------|
+| `--checksum-algorithm {md5,sha256}` | `fixity.checksum_algorithm` | Hash algorithm for whole-file (output/validate) fixity |
+| `--stream-hash-algorithm {md5,sha256}` | `fixity.stream_hash_algorithm` | Hash algorithm for embedded stream fixity |
+
+Both flags are applied together as a single `update_config('checks', ...)` call to the `fixity` section.
 
 ---
 
