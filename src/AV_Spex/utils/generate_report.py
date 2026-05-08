@@ -1597,8 +1597,6 @@ def make_clamped_levels_html(clamped_levels_csv):
             the video signal at the broadcast (legal) range limits. A clamped channel will pile up at
             (or just inside) the limit value and never exceed it, whereas an unclamped source will show
             excursions past the legal range caused by sync pulses, noise, or peak whites/superblacks.
-            The check is anchored to the SMPTE broadcast-range values &mdash; clamping at any other
-            level is unlikely, so the broadcast limit is the only point evaluated.
         </p>
         <p style="margin: 0 0 10px 0; font-weight: bold;">Verdicts:</p>
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
@@ -1613,8 +1611,7 @@ def make_clamped_levels_html(clamped_levels_csv):
         <p style="margin: 0;">
             Limits are derived from SMPTE broadcast-range values (bit-depth aware): 10-bit Y 64&ndash;940,
             U/V 64&ndash;960; 8-bit Y 16&ndash;235, U/V 16&ndash;240. The tolerance window scales with
-            bit depth (8-bit: exact match required; 10-bit: &plusmn;2 codes to absorb dithering and ADC
-            calibration drift, matching 8-bit precision). Measurements come from FFmpeg's
+            bit depth (8-bit: exact match required; 10-bit: &plusmn;2 codes). Measurements come from FFmpeg's
             <code>signalstats</code> filter as recorded in the QCTools report.
         </p>
     </div>
