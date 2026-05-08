@@ -1159,8 +1159,16 @@ CLAMP_LIMITS_8BIT = {
     'UV': {'floor': 16,  'ceiling': 240},
 }
 
-# A clamp is flagged when at least this many frames hit the limit exactly
-# AND at least this percentage of total frames hit it, with zero excursions past.
+# Tolerance window (in code values) inside the legal range from each broadcast
+# limit. Frames whose extreme lands in this window count as evidence of
+# clamping. 8-bit requires an exact hit; 10-bit allows ±2 codes (≈ the same
+# IRE precision as 8-bit) to absorb dithering and ADC calibration drift near
+# the wall.
+CLAMP_TOLERANCE_8BIT = 0
+CLAMP_TOLERANCE_10BIT = 2
+
+# A clamp is flagged when at least this many frames sit at or near the limit
+# AND at least this percentage of total frames do, with zero excursions past.
 CLAMP_MIN_HIT_FRAMES = 10
 CLAMP_MIN_HIT_PCT = 1.0
 
@@ -1169,8 +1177,8 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
     """
     Detect clamped video levels — an ADC artifact where signal excursions are
     truncated at the broadcast (legal) range limits. Flags a clamp when, for a
-    given channel/direction, frames pile up exactly at the limit and zero
-    frames go past it.
+    given channel/direction, frames pile up at (or within a bit-depth-scaled
+    tolerance of) the broadcast limit and zero frames go past it.
 
     Parameters:
         startObj (str): Path to the QCTools report file (.qctools.xml.gz).
@@ -1193,6 +1201,7 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
         return None
 
     limits = CLAMP_LIMITS_10BIT if bit_depth_10 else CLAMP_LIMITS_8BIT
+    tolerance = CLAMP_TOLERANCE_10BIT if bit_depth_10 else CLAMP_TOLERANCE_8BIT
 
     stats = {
         ch: {
@@ -1205,6 +1214,11 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
         for ch in ('Y', 'U', 'V')
     }
 
+    # Per-frame trace data, kept for graphing any channel/direction that ends
+    # up flagged as clamped. Six parallel value arrays keyed by metric.
+    trace_times = []
+    trace_values = {m: [] for m in ('YMIN', 'YMAX', 'UMIN', 'UMAX', 'VMIN', 'VMAX')}
+
     total_frames = 0
     progress_interval = 500
     last_pct = 36
@@ -1214,17 +1228,21 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
             if elem.attrib.get('media_type') == 'video':
                 total_frames += 1
 
+                try:
+                    frame_time = float(elem.attrib.get(pkt, "0"))
+                except (TypeError, ValueError):
+                    frame_time = float(total_frames)
+                trace_times.append(frame_time)
+
                 if (signals and hasattr(signals, 'qctparse_progress') and
                         total_duration and total_frames % progress_interval == 0):
-                    try:
-                        frame_time = float(elem.attrib.get(pkt, "0"))
-                        pct = 36 + int((frame_time / total_duration) * 28)
-                        pct = min(64, max(36, pct))
-                        if pct > last_pct:
-                            signals.qctparse_progress.emit(pct)
-                            last_pct = pct
-                    except ValueError:
-                        pass
+                    pct = 36 + int((frame_time / total_duration) * 28)
+                    pct = min(64, max(36, pct))
+                    if pct > last_pct:
+                        signals.qctparse_progress.emit(pct)
+                        last_pct = pct
+
+                frame_metrics = {m: None for m in trace_values}
 
                 for t in list(elem):
                     key = t.attrib.get('key', '')
@@ -1238,21 +1256,25 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
                     except (ValueError, KeyError):
                         continue
 
+                    frame_metrics[metric] = val
                     s = stats[metric[0]]
                     if metric.endswith('MIN'):
                         if s['min'] is None or val < s['min']:
                             s['min'] = val
                         if val < s['floor']:
                             s['below_floor'] += 1
-                        elif val == s['floor']:
+                        elif val <= s['floor'] + tolerance:
                             s['hit_floor'] += 1
                     else:
                         if s['max'] is None or val > s['max']:
                             s['max'] = val
                         if val > s['ceiling']:
                             s['above_ceiling'] += 1
-                        elif val == s['ceiling']:
+                        elif val >= s['ceiling'] - tolerance:
                             s['hit_ceiling'] += 1
+
+                for m, v in frame_metrics.items():
+                    trace_values[m].append(v)
 
             elem.clear()
     except Exception as e:
@@ -1278,7 +1300,7 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
 
             if beyond > 0:
                 verdict = 'Not Clamped'
-            elif sufficient_hits and extreme is not None and extreme == limit:
+            elif sufficient_hits:
                 verdict = 'Clamped'
                 any_clamp = True
             else:
@@ -1298,12 +1320,77 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
     results = {
         'total_video_frames': total_frames,
         'bit_depth_10': bit_depth_10,
+        'tolerance': tolerance,
         'findings': findings,
         'any_clamp_detected': any_clamp,
     }
 
     _write_clamped_levels_results(report_directory, results)
+    if any_clamp:
+        _write_clamped_levels_traces(
+            report_directory, findings, trace_times, trace_values
+        )
     return results
+
+
+CLAMP_TRACE_TARGET_POINTS = 5000
+
+
+def _downsample_trace(times, values, target_points, mode):
+    """
+    Bucket a per-frame trace down to ~target_points by selecting the per-bucket
+    extreme. mode='max' keeps the bucket maximum (for ceiling traces),
+    mode='min' keeps the bucket minimum (for floor traces). Preserves brief
+    wall-hit events that mean-based downsampling would smooth away.
+    """
+    n = len(values)
+    if n == 0:
+        return [], []
+    pairs = [(t, v) for t, v in zip(times, values) if v is not None]
+    if not pairs:
+        return [], []
+    if len(pairs) <= target_points:
+        return [p[0] for p in pairs], [p[1] for p in pairs]
+    bucket_size = max(1, math.ceil(len(pairs) / target_points))
+    out_times, out_values = [], []
+    select = max if mode == 'max' else min
+    for i in range(0, len(pairs), bucket_size):
+        chunk = pairs[i:i + bucket_size]
+        t_pick, v_pick = select(chunk, key=lambda p: p[1])
+        out_times.append(t_pick)
+        out_values.append(v_pick)
+    return out_times, out_values
+
+
+def _write_clamped_levels_traces(report_directory, findings, trace_times, trace_values):
+    """
+    Write downsampled per-frame traces for each channel/direction flagged as
+    Clamped. One CSV with all traces in long format so the report can plot
+    each one as its own graph.
+    """
+    csv_path = os.path.join(report_directory, "qct-parse_clamped_traces.csv")
+    rows_to_write = []
+    for r in findings:
+        if r['verdict'] != 'Clamped':
+            continue
+        metric = f"{r['channel']}{'MIN' if r['direction'] == 'floor' else 'MAX'}"
+        mode = 'min' if r['direction'] == 'floor' else 'max'
+        times, values = _downsample_trace(
+            trace_times, trace_values[metric], CLAMP_TRACE_TARGET_POINTS, mode
+        )
+        for t, v in zip(times, values):
+            rows_to_write.append([
+                r['channel'], r['direction'], r['limit'], f"{t:.4f}", f"{v:g}"
+            ])
+
+    if not rows_to_write:
+        return
+
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["channel", "direction", "limit", "time_seconds", "value"])
+        writer.writerows(rows_to_write)
+    logger.debug(f"Clamped-levels trace data written to {os.path.basename(csv_path)}\n")
 
 
 def _write_clamped_levels_results(report_directory, results):
@@ -1311,12 +1398,14 @@ def _write_clamped_levels_results(report_directory, results):
     csv_path = os.path.join(report_directory, "qct-parse_clamped_levels.csv")
     total_frames = results['total_video_frames']
     bit_depth = 10 if results['bit_depth_10'] else 8
+    tolerance = results.get('tolerance', 0)
 
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["Clamped Levels Detection Results"])
         writer.writerow(["Bit Depth", bit_depth])
         writer.writerow(["Total Video Frames", total_frames])
+        writer.writerow(["Tolerance Window (codes)", tolerance])
         writer.writerow(["Min Hit Frames (absolute)", CLAMP_MIN_HIT_FRAMES])
         writer.writerow(["Min Hit Frames (%)", f"{CLAMP_MIN_HIT_PCT:.2f}"])
         writer.writerow(["Any Clamp Detected", "Yes" if results['any_clamp_detected'] else "No"])
@@ -1324,7 +1413,7 @@ def _write_clamped_levels_results(report_directory, results):
 
         writer.writerow([
             "Channel", "Direction", "Limit", "Global Extreme",
-            "Frames at Limit", "Hit %", "Frames Beyond Limit", "Verdict"
+            "Frames at/near Limit", "Hit %", "Frames Beyond Limit", "Verdict"
         ])
         for r in results['findings']:
             extreme_str = f"{r['global_extreme']:g}" if r['global_extreme'] is not None else "N/A"

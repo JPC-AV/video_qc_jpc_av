@@ -357,6 +357,7 @@ def find_report_csvs(report_directory):
     audible_timecode_csv = None
     audio_dropout_csv = None
     clamped_levels_csv = None
+    clamped_traces_csv = None
     difference_csv = None
 
     if os.path.isdir(report_directory):
@@ -390,12 +391,14 @@ def find_report_csvs(report_directory):
                         audible_timecode_csv = file_path
                     elif "qct-parse_audio_dropout" in file:
                         audio_dropout_csv = file_path
+                    elif "qct-parse_clamped_traces" in file:
+                        clamped_traces_csv = file_path
                     elif "qct-parse_clamped_levels" in file:
                         clamped_levels_csv = file_path
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -1517,14 +1520,16 @@ def make_audio_dropout_html(audio_dropout_csv):
     return html
 
 
-def make_clamped_levels_html(clamped_levels_csv):
+def make_clamped_levels_html(clamped_levels_csv, clamped_traces_csv=None):
     """
     Generates an HTML section summarizing clamped-levels detection results.
     Always renders when the CSV is present, including when no clamping was
     found — so the report shows that the check was run.
 
     Args:
-        clamped_levels_csv (str): Path to the clamped-levels CSV file.
+        clamped_levels_csv (str): Path to the clamped-levels summary CSV.
+        clamped_traces_csv (str): Optional path to per-frame trace CSV; when
+            present, one plotly graph is rendered per clamped channel/direction.
 
     Returns:
         str: HTML string, or None if the file cannot be read.
@@ -1539,15 +1544,16 @@ def make_clamped_levels_html(clamped_levels_csv):
         logger.error(f"Error reading clamped levels CSV: {e}")
         return None
 
-    if len(rows) < 8:
+    if len(rows) < 9:
         return None
 
     bit_depth = rows[1][1] if len(rows[1]) > 1 else "N/A"
     total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
-    any_clamp = rows[5][1] if len(rows[5]) > 1 else "N/A"
+    tolerance = rows[3][1] if len(rows[3]) > 1 else "0"
+    any_clamp = rows[6][1] if len(rows[6]) > 1 else "N/A"
 
-    # Findings table starts at row 7 (header) then rows 8+
-    findings = [r for r in rows[8:] if len(r) >= 8]
+    # Findings table starts at row 8 (header) then rows 9+
+    findings = [r for r in rows[9:] if len(r) >= 8]
 
     if any_clamp == "Yes":
         status_color = "#dc3545"
@@ -1584,6 +1590,8 @@ def make_clamped_levels_html(clamped_levels_csv):
             f'</tr>\n'
         )
 
+    graphs_html = _make_clamped_traces_graphs(clamped_traces_csv, bit_depth)
+
     html = f'''
     <a id="link_clamp_methodology" href="javascript:void(0);"
        onclick="toggleContent('clamp_methodology', 'What is clamped-levels detection? ▼', 'What is clamped-levels detection? ▲')"
@@ -1594,13 +1602,14 @@ def make_clamped_levels_html(clamped_levels_csv):
         <p style="margin: 0 0 10px 0;">
             <strong>Clamped-levels detection</strong> flags analog-to-digital converters that truncate
             the video signal at the broadcast (legal) range limits. A clamped channel will pile up at
-            the limit value and never exceed it, whereas an unclamped source will show excursions past
-            the legal range caused by sync pulses, noise, or peak whites/superblacks.
+            (or just inside) the limit value and never exceed it, whereas an unclamped source will show
+            excursions past the legal range caused by sync pulses, noise, or peak whites/superblacks.
         </p>
         <p style="margin: 0 0 10px 0; font-weight: bold;">Verdicts:</p>
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
-            <li style="margin-bottom: 4px;"><strong>Clamped</strong> &mdash; frames hit the limit exactly
-                with zero excursions past it; indicates the ADC is truncating the signal.</li>
+            <li style="margin-bottom: 4px;"><strong>Clamped</strong> &mdash; enough frames sit at or near
+                the broadcast limit (within the bit-depth tolerance) with zero excursions past it;
+                indicates the ADC is truncating the signal.</li>
             <li style="margin-bottom: 4px;"><strong>Not Clamped</strong> &mdash; one or more frames went
                 past the limit; the signal is free to exceed broadcast range.</li>
             <li style="margin-bottom: 4px;"><strong>Inconclusive</strong> &mdash; the signal never reached
@@ -1608,7 +1617,8 @@ def make_clamped_levels_html(clamped_levels_csv):
         </ul>
         <p style="margin: 0;">
             Limits are derived from SMPTE broadcast-range values (bit-depth aware): 10-bit Y 64&ndash;940,
-            U/V 64&ndash;960; 8-bit Y 16&ndash;235, U/V 16&ndash;240. Measurements come from FFmpeg's
+            U/V 64&ndash;960; 8-bit Y 16&ndash;235, U/V 16&ndash;240. The tolerance window scales with
+            bit depth (8-bit: exact match required; 10-bit: &plusmn;2 codes). Measurements come from FFmpeg's
             <code>signalstats</code> filter as recorded in the QCTools report.
         </p>
     </div>
@@ -1618,6 +1628,7 @@ def make_clamped_levels_html(clamped_levels_csv):
     <table style="border-collapse: collapse; margin: 10px 0;">
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Bit Depth</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{bit_depth}</td></tr>
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Video Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Tolerance Window (codes)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{tolerance}</td></tr>
     </table>
     <table style="border-collapse: collapse; margin: 10px 0;">
         <tr>
@@ -1625,15 +1636,143 @@ def make_clamped_levels_html(clamped_levels_csv):
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Direction</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Limit</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Global Extreme</th>
-            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames at Limit</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames at/near Limit</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Hit %</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames Beyond Limit</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Verdict</th>
         </tr>
         {rows_html}
     </table>
+    {graphs_html}
     '''
     return html
+
+
+def _make_clamped_traces_graphs(clamped_traces_csv, bit_depth):
+    """
+    Render one plotly graph per clamped channel/direction from the trace CSV.
+    Each graph shows the per-frame extreme value over time with a dashed line
+    at the broadcast limit and shaded tolerance window. Returns "" when no
+    trace CSV is present (no clamps, or feature disabled).
+    """
+    if not clamped_traces_csv or not os.path.isfile(clamped_traces_csv):
+        return ""
+
+    try:
+        import plotly.graph_objs as go
+    except ImportError as e:
+        logger.warning(f"plotly unavailable; skipping clamped-levels graphs: {e}")
+        return ""
+
+    try:
+        with open(clamped_traces_csv, 'r') as f:
+            reader = csv.DictReader(f)
+            traces = {}
+            for row in reader:
+                key = (row['channel'], row['direction'])
+                if key not in traces:
+                    traces[key] = {'limit': float(row['limit']), 'time': [], 'value': []}
+                try:
+                    traces[key]['time'].append(float(row['time_seconds']))
+                    traces[key]['value'].append(float(row['value']))
+                except ValueError:
+                    continue
+    except Exception as e:
+        logger.error(f"Error reading clamped traces CSV: {e}")
+        return ""
+
+    if not traces:
+        return ""
+
+    try:
+        bit_depth_int = int(bit_depth)
+    except (TypeError, ValueError):
+        bit_depth_int = 8
+    code_max = 1023 if bit_depth_int == 10 else 255
+    tolerance = 2 if bit_depth_int == 10 else 0
+
+    graphs = []
+    for (channel, direction), t in traces.items():
+        limit = t['limit']
+        metric_name = f"{channel}{'MIN' if direction == 'floor' else 'MAX'}"
+        title = f"{metric_name} over time — broadcast {direction} = {limit:g} ({bit_depth_int}-bit)"
+
+        if direction == 'floor':
+            shaded_y0, shaded_y1 = 0, limit
+            tol_y0, tol_y1 = limit, min(limit + tolerance, code_max)
+            extreme_value = min(t['value']) if t['value'] else limit
+            y_lo = max(0, min(extreme_value, limit) - 8)
+            y_hi = min(code_max, limit + max(20, tolerance + 10))
+        else:
+            shaded_y0, shaded_y1 = limit, code_max
+            tol_y0, tol_y1 = max(0, limit - tolerance), limit
+            extreme_value = max(t['value']) if t['value'] else limit
+            y_hi = min(code_max, max(extreme_value, limit) + 8)
+            y_lo = max(0, limit - max(20, tolerance + 10))
+
+        x_min = t['time'][0] if t['time'] else 0
+        x_max = t['time'][-1] if t['time'] else 1
+
+        fig = go.Figure()
+
+        fig.add_shape(
+            type='rect', xref='x', yref='y',
+            x0=x_min, x1=x_max, y0=shaded_y0, y1=shaded_y1,
+            fillcolor='rgba(220, 53, 69, 0.08)', line=dict(width=0), layer='below'
+        )
+        if tolerance > 0:
+            fig.add_shape(
+                type='rect', xref='x', yref='y',
+                x0=x_min, x1=x_max, y0=tol_y0, y1=tol_y1,
+                fillcolor='rgba(255, 193, 7, 0.18)', line=dict(width=0), layer='below'
+            )
+
+        fig.add_trace(go.Scattergl(
+            x=t['time'], y=t['value'], mode='lines',
+            name=metric_name, line=dict(color='#378d6a', width=1),
+            hovertemplate='%{x:.2f}s<br>' + metric_name + '=%{y}<extra></extra>',
+        ))
+
+        fig.add_hline(
+            y=limit, line=dict(color='#dc3545', width=2, dash='dash'),
+            annotation_text=f"Broadcast {direction}: {limit:g}",
+            annotation_position='top right',
+            annotation_font=dict(color='#dc3545', size=11),
+        )
+
+        fig.update_layout(
+            title=dict(text=title, font=dict(size=14)),
+            xaxis_title='Time (seconds)',
+            yaxis_title=f'{metric_name} (code value)',
+            yaxis=dict(range=[y_lo, y_hi]),
+            margin=dict(l=60, r=20, t=50, b=50),
+            height=320,
+            showlegend=False,
+            plot_bgcolor='#fafafa',
+        )
+
+        config = {
+            'toImageButtonOptions': {
+                'format': 'png',
+                'filename': f'clamped_{channel}_{direction}',
+                'height': 400, 'width': 900, 'scale': 1,
+            }
+        }
+        graphs.append(fig.to_html(full_html=False, include_plotlyjs='cdn', config=config))
+
+    if not graphs:
+        return ""
+
+    return (
+        '<h4 style="margin-top: 20px;">Clamped Channel Traces</h4>'
+        '<p style="font-size: 13px; color: #555; margin: 0 0 10px 0;">'
+        'Per-frame extreme over time for each channel/direction flagged as clamped. '
+        'The dashed red line marks the broadcast limit; the shaded red region is past the limit '
+        '(no excursions = a wall). Long files are downsampled to ~5,000 points per trace; '
+        'each point is the per-bucket extreme so brief wall-hit events are preserved.'
+        '</p>'
+        + '\n'.join(f'<div style="margin: 10px 0;">{g}</div>' for g in graphs)
+    )
 
 
 def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict):
@@ -4154,7 +4293,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, difference_csv = find_report_csvs(report_directory)
 
     # CLAMS bars-detection durations CSV (filename matches the writer in
     # checks/bars_detection_clams.py); present only when the parallel detector ran.
@@ -4355,7 +4494,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
     audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
     audio_dropout_html = make_audio_dropout_html(audio_dropout_csv) if audio_dropout_csv else None
-    clamped_levels_html = make_clamped_levels_html(clamped_levels_csv) if clamped_levels_csv else None
+    clamped_levels_html = make_clamped_levels_html(clamped_levels_csv, clamped_traces_csv) if clamped_levels_csv else None
     dropped_sample_html = generate_dropped_sample_html(frame_outputs) if frame_outputs else ""
     duplicate_frame_html = generate_duplicate_frame_html(frame_outputs) if frame_outputs else ""
     bitplane_html = generate_bitplane_html(frame_outputs) if frame_outputs else ""
