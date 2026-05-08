@@ -282,12 +282,12 @@ def test_find_qct_thumbs_sorts_by_timestamp_when_tag_names_unknown(tmp_path):
 
 def test_find_report_csvs_empty_directory_returns_all_none(tmp_path):
     out = gr.find_report_csvs(str(tmp_path))
-    # 15-tuple, all None except qctools_content_check_outputs which is []
+    # 16-tuple, all None except qctools_content_check_outputs which is []
     assert isinstance(out, tuple)
-    assert len(out) == 15
+    assert len(out) == 16
     none_count = sum(1 for x in out if x is None)
     list_count = sum(1 for x in out if x == [])
-    assert none_count == 14
+    assert none_count == 15
     assert list_count == 1
 
 
@@ -306,19 +306,20 @@ def test_find_report_csvs_picks_up_known_filenames(tmp_path):
         "qct-parse_audible_timecode.csv":       "audible_timecode_csv",
         "qct-parse_audio_dropout.csv":          "audio_dropout_csv",
         "qct-parse_clamped_levels.csv":         "clamped_levels_csv",
+        "qct-parse_clamped_traces.csv":         "clamped_traces_csv",
         "JPC_AV_metadata_difference.csv":       "difference_csv",
     }
     for name in files:
         (tmp_path / name).write_text("")
 
     out = gr.find_report_csvs(str(tmp_path))
-    # Unpack the 15-tuple in the order the function returns it
+    # Unpack the 16-tuple in the order the function returns it
     (
         colorbars_duration_output, bars_eval_check_output, colorbars_values_output,
         content_check_outputs, profile_check_output, profile_fails_csv,
         tags_check_output, tag_fails_csv, colorbars_eval_fails_csv,
         audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv,
-        audio_dropout_csv, clamped_levels_csv, difference_csv,
+        audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, difference_csv,
     ) = out
     assert colorbars_duration_output.endswith("qct-parse_colorbars_durations.csv")
     assert bars_eval_check_output.endswith("qct-parse_colorbars_eval_summary.csv")
@@ -332,6 +333,7 @@ def test_find_report_csvs_picks_up_known_filenames(tmp_path):
     assert audible_timecode_csv.endswith("qct-parse_audible_timecode.csv")
     assert audio_dropout_csv.endswith("qct-parse_audio_dropout.csv")
     assert clamped_levels_csv.endswith("qct-parse_clamped_levels.csv")
+    assert clamped_traces_csv.endswith("qct-parse_clamped_traces.csv")
     assert difference_csv.endswith("metadata_difference.csv")
 
 
