@@ -24,6 +24,7 @@ from AV_Spex.checks import bars_detection_clams, tone_detection_clams
 from AV_Spex.checks.bars_detection_clams import run_clams_bars_detection
 from AV_Spex.checks.tone_detection_clams import run_clams_tone_detection
 from AV_Spex.checks.speech_segmenter_clams import run_ina_speech_segmenter, write_segments_csv
+from AV_Spex.checks.speech_context_annotation import annotate_audio_csvs
 from AV_Spex.checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
 from AV_Spex.checks.frame_analysis import analyze_frame_quality
 
@@ -892,6 +893,19 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         write_segments_csv(report_directory, segments)
         results['ina_segments'] = segments
         logger.info(f"inaSpeechSegmenter: {len(segments)} segment(s) written to {report_directory}")
+
+        # Annotate qct-parse audio CSVs (dropout, clipping, channel imbalance)
+        # with speech-context labels from this segmenter run. The audio CSVs
+        # were written earlier in this same call by qct-parse; we rewrite them
+        # in place to add the context column / summary block. Best-effort: any
+        # missing CSV (because the corresponding qct-parse step was disabled)
+        # is silently skipped.
+        if segments:
+            try:
+                annotate_audio_csvs(report_directory, segments=segments)
+            except Exception as e:
+                logger.warning(f"Speech-context annotation failed: {e}")
+
         if signals and hasattr(signals, 'step_completed'):
             signals.step_completed.emit("inaSpeechSegmenter")
         logger.info("")

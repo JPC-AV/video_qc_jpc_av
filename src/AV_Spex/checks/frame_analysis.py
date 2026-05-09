@@ -93,6 +93,10 @@ class DroppedSampleResult:
     sample_rate: int = 0  # audio sample rate in Hz
     spectrogram_path: Optional[str] = None
     spike_timestamps: List[float] = None
+    # Per-spike speech-context labels from inaSpeechSegmenter
+    # ('speech', 'silence', 'music', 'noise', or 'unknown'). Parallel to
+    # spike_timestamps. None when the segmenter did not run.
+    spike_speech_contexts: Optional[List[str]] = None
 
 @dataclass
 class DuplicateFrameRun:
@@ -3581,7 +3585,25 @@ class EnhancedFrameAnalysis:
                     logger.info(f"  Duration difference is smaller than detected spikes — "
                                 f"some spikes may be content transients rather than drops")
 
-        # Step 5: Compute combined score and status
+        # Step 5: Pull speech-context labels for each spike, if the segmenter
+        # ran for this video. Loads ina_speech_segments.csv from the report
+        # CSVs dir (alongside the spectrogram); absent CSV → no contexts.
+        spike_speech_contexts: Optional[List[str]] = None
+        if spike_timestamps:
+            try:
+                from AV_Spex.checks.speech_segmenter_clams import (
+                    SpeechContextLookup,
+                    load_speech_segments_csv,
+                )
+                report_csvs_dir = self.video_path.parent / f"{self.video_id}_report_csvs"
+                segments = load_speech_segments_csv(str(report_csvs_dir))
+                if segments:
+                    lookup = SpeechContextLookup(segments)
+                    spike_speech_contexts = [lookup.label_at(ts) for ts in spike_timestamps]
+            except Exception as e:
+                logger.debug(f"Could not load speech context for dropped sample spikes: {e}")
+
+        # Step 6: Compute combined score and status
         combined_score, status = self._compute_dropped_sample_score(spike_count, duration_diff_ms)
 
         # Build message
@@ -3610,7 +3632,8 @@ class EnhancedFrameAnalysis:
             estimated_loss_ms=estimated_loss_ms,
             sample_rate=sample_rate,
             spectrogram_path=str(spectrogram_path) if spectrogram_path else None,
-            spike_timestamps=spike_timestamps
+            spike_timestamps=spike_timestamps,
+            spike_speech_contexts=spike_speech_contexts,
         )
 
     def _detect_duplicate_frames(

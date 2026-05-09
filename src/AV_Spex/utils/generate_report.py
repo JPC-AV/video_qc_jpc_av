@@ -3984,6 +3984,7 @@ def generate_dropped_sample_html(frame_outputs):
     estimated_loss_ms = dropped_sample_data.get('estimated_loss_ms', 0.0)
     sample_rate = dropped_sample_data.get('sample_rate', 0)
     spike_timestamps = dropped_sample_data.get('spike_timestamps', [])
+    spike_speech_contexts = dropped_sample_data.get('spike_speech_contexts')
 
     if status == 'critical':
         status_color = '#cc0000'
@@ -4089,6 +4090,11 @@ def generate_dropped_sample_html(frame_outputs):
 
     # Spike timestamps (collapsible, if any)
     if spike_timestamps:
+        has_contexts = (
+            spike_speech_contexts is not None
+            and len(spike_speech_contexts) == len(spike_timestamps)
+        )
+
         html += f"""
         <a id="link_spike_timestamps" href="javascript:void(0);"
            onclick="toggleContent('spike_timestamps', 'Estimated spike timestamps ({len(spike_timestamps)}) ▼', 'Estimated spike timestamps ▲')"
@@ -4099,15 +4105,21 @@ def generate_dropped_sample_html(frame_outputs):
             <tr style="background-color: #f0ebe4;">
                 <th style="padding: 6px 12px; border: 1px solid #d0c0b0;">#</th>
                 <th style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">Timestamp (s)</th>
-            </tr>
         """
+        if has_contexts:
+            html += '<th style="padding: 6px 12px; border: 1px solid #d0c0b0;">Speech context</th>'
+        html += "</tr>"
+
         for i, ts in enumerate(spike_timestamps, 1):
             html += f"""
             <tr>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{i}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{ts:.2f}</td>
-            </tr>
             """
+            if has_contexts:
+                ctx = spike_speech_contexts[i - 1]
+                html += f'<td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{ctx}</td>'
+            html += "</tr>"
         html += "</table></div>"
 
     return html
