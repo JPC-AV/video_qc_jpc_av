@@ -23,6 +23,7 @@ from AV_Spex.checks.qct_parse import run_qctparse
 from AV_Spex.checks import bars_detection_clams, tone_detection_clams
 from AV_Spex.checks.bars_detection_clams import run_clams_bars_detection
 from AV_Spex.checks.tone_detection_clams import run_clams_tone_detection
+from AV_Spex.checks.speech_segmenter_clams import run_ina_speech_segmenter, write_segments_csv
 from AV_Spex.checks.mediaconch_check import find_mediaconch_policy, run_mediaconch_command, parse_mediaconch_output
 from AV_Spex.checks.frame_analysis import analyze_frame_quality
 
@@ -250,6 +251,7 @@ class ProcessingManager:
         # CLAMS tone detection results (parallel observation; standalone from
         # bars detection — uses the audio track instead of the video track).
         processing_results['clams_tones'] = qctools_results.get('clams_tones', []) if qctools_results else []
+        processing_results['ina_segments'] = qctools_results.get('ina_segments', []) if qctools_results else []
 
         # Check if frame analysis is enabled
         frame_config = self.checks_config.outputs.frame_analysis
@@ -544,6 +546,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         'clams_bars_start_time': None,
         'clams_bars_end_time': None,
         'clams_tones': [],
+        'ina_segments': [],
     }
 
     if check_cancelled and check_cancelled():
@@ -862,6 +865,36 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         if signals and hasattr(signals, 'step_completed'):
             signals.step_completed.emit("CLAMS Detection")
         logger.info("")  # blank line for readability
+
+    ina_cfg = getattr(checks_config.tools, 'ina_segmenter', None)
+    if ina_cfg and getattr(ina_cfg, 'run_tool', False):
+        if check_cancelled and check_cancelled():
+            return results
+        if not report_directory:
+            report_directory = dir_setup.make_report_dir(source_directory, video_id)
+        logger.info("inaSpeechSegmenter: starting audio content classification")
+        if signals and hasattr(signals, 'ina_segmenter_progress'):
+            signals.ina_segmenter_progress.emit(0)
+
+        ina_params = getattr(ina_cfg, 'params', None)
+        silence_ratio = getattr(ina_params, 'silence_ratio', 3) if ina_params else 3
+        min_segment_ms = getattr(ina_params, 'min_segment_duration_ms', 0) if ina_params else 0
+
+        segments = run_ina_speech_segmenter(
+            video_path=video_path,
+            report_directory=report_directory,
+            video_id=video_id,
+            silence_ratio=silence_ratio,
+            min_segment_duration_ms=min_segment_ms,
+            check_cancelled=check_cancelled,
+            signals=signals,
+        )
+        write_segments_csv(report_directory, segments)
+        results['ina_segments'] = segments
+        logger.info(f"inaSpeechSegmenter: {len(segments)} segment(s) written to {report_directory}")
+        if signals and hasattr(signals, 'step_completed'):
+            signals.step_completed.emit("inaSpeechSegmenter")
+        logger.info("")
 
     return results
 

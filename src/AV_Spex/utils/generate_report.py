@@ -2199,6 +2199,92 @@ def make_tone_detection_html(tone_csv_path):
     """
 
 
+def make_ina_segments_html(csv_path):
+    """
+    Render the inaSpeechSegmenter content-classification results as an HTML table.
+
+    Returns None when the CSV is missing (so the section is omitted from the
+    report). When the segmenter ran but produced nothing, returns a short
+    "no segments" notice.
+    """
+    if not csv_path or not os.path.isfile(csv_path):
+        return None
+
+    import csv as _csv
+
+    segments = []
+    no_segments = False
+    with open(csv_path, newline="") as f:
+        reader = _csv.reader(f)
+        rows = list(reader)
+    if not rows:
+        return None
+    first = rows[0]
+    if first and first[0].startswith("inaSpeechSegmenter produced no segments"):
+        no_segments = True
+    elif first[0] == "label":
+        # header row — parse data rows
+        for row in rows[1:]:
+            if len(row) >= 4:
+                segments.append((row[0], row[1], row[2], row[3]))
+    else:
+        no_segments = True
+
+    if no_segments or not segments:
+        return (
+            '<div style="background-color: #f5e9e3; padding: 10px;">'
+            '<p style="margin: 0;">inaSpeechSegmenter ran on the audio track '
+            'and produced no segments meeting the minimum duration threshold.</p>'
+            '</div>'
+        )
+
+    _label_colors = {
+        'speech': '#d4edda',
+        'music':  '#cce5ff',
+        'noise':  '#fff3cd',
+        'silence': '#f8f9fa',
+    }
+
+    def render_row(i, label, orig_label, start, end):
+        bg_color = _label_colors.get(label, '#ffffff')
+        gender = f" ({orig_label})" if orig_label in ('male', 'female') else ""
+        return (
+            f'<tr style="background-color: {bg_color};">'
+            f'<td style="padding: 6px 12px;">{i + 1}</td>'
+            f'<td style="padding: 6px 12px;">{label}{gender}</td>'
+            f'<td style="padding: 6px 12px;">{start}</td>'
+            f'<td style="padding: 6px 12px;">{end}</td>'
+            f'</tr>'
+        )
+
+    rows_html = "".join(
+        render_row(i, label, orig, start, end)
+        for i, (label, orig, start, end) in enumerate(segments)
+    )
+
+    return f"""
+    <table style="border-collapse: collapse; margin-top: 10px;">
+        <thead>
+            <tr style="background-color: #f5e9e3;">
+                <th style="text-align: left; padding: 6px 12px;">#</th>
+                <th style="text-align: left; padding: 6px 12px;">Label</th>
+                <th style="text-align: left; padding: 6px 12px;">Start</th>
+                <th style="text-align: left; padding: 6px 12px;">End</th>
+            </tr>
+        </thead>
+        <tbody>
+            {rows_html}
+        </tbody>
+    </table>
+    <p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">
+        Adapted from the CLAMS inaSpeechSegmenter wrapper: CNN-based audio
+        classification into speech (male/female), music, noise, and silence.
+        Content labels contextualize QC flags — noise or clipping events within
+        a music or noise segment are expected rather than anomalous.
+    </p>
+    """
+
+
 def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, failureInfoSummary, video_id, failure_csv_path=None, check_cancelled=None):
     """
     Creates HTML visualizations showing pie charts of profile check results with thumbnails 
@@ -4307,6 +4393,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if not os.path.isfile(clams_tone_durations_csv):
         clams_tone_durations_csv = None
 
+    # inaSpeechSegmenter segments CSV (filename matches the writer in
+    # checks/speech_segmenter_clams.py); present only when the check ran.
+    ina_segments_csv = os.path.join(report_directory, "ina_speech_segments.csv")
+    if not os.path.isfile(ina_segments_csv):
+        ina_segments_csv = None
+
     if check_cancelled():
         return
     
@@ -4489,6 +4581,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # CLAMS tone detection results.
     tone_detection_html = make_tone_detection_html(clams_tone_durations_csv)
+
+    ina_segments_html = make_ina_segments_html(ina_segments_csv)
 
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
@@ -4971,6 +5065,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
             <h4 style="font-size: 16px; margin-top: 16px; color: #4d2b12;">Tone Detection</h4>
             {tone_detection_html}
             """
+
+    if ina_segments_html:
+        html_template += f"""
+        <h3 id="section-ina-segmenter">Audio Content Classification (inaSpeechSegmenter)</h3>
+        {ina_segments_html}
+        """
 
     if colorbars_eval_html:
         if smpte_fallback:

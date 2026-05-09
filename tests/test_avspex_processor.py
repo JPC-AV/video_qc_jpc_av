@@ -47,6 +47,7 @@ def _make_checks_config(
     qctools=False,
     qct_parse=False,
     clams_detection=False,
+    ina_segmenter=False,
     access_file=False,
     report=False,
     frame_flags=None,
@@ -74,6 +75,7 @@ def _make_checks_config(
     cfg.tools.qctools.run_tool = qctools
     cfg.tools.qct_parse.run_tool = qct_parse
     cfg.tools.clams_detection.run_tool = clams_detection
+    cfg.tools.ina_segmenter.run_tool = ina_segmenter
     # frame analysis sub-steps
     cfg.outputs.frame_analysis.enable_bitplane_check = frame_flags.get("bitplane", False)
     cfg.outputs.frame_analysis.enable_border_detection = frame_flags.get("border", False)
@@ -377,6 +379,7 @@ def test_no_outputs_flags_skips_process_video_outputs(monkeypatch):
     {"qctools": True},
     {"qct_parse": True},
     {"clams_detection": True},
+    {"ina_segmenter": True},
     {"frame_flags": {"bitplane": True}},
     {"frame_flags": {"border": True}},
     {"frame_flags": {"brng": True}},

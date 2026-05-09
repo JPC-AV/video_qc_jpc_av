@@ -94,6 +94,7 @@ class ParsedArguments:
     frame_brng_duration: Optional[int]
     enable_clamped_levels: Optional[str]
     enable_clams_detection: Optional[str]
+    enable_ina_segmenter: Optional[str]
     enable_audio_analysis: Optional[str]
     access_trim_color_bars: Optional[str]
     access_crop_borders: Optional[str]
@@ -196,6 +197,8 @@ The scripts will confirm that the digital files conform to predetermined specifi
                            help='Enable/disable clamped video levels detection in qct-parse. Auto-enables qct_parse.run_tool.')
     qct_group.add_argument('--enable-clams-detection', choices=['on', 'off'],
                            help='Enable/disable CLAMS detection (SSIM-based SMPTE bars detector + cross-correlation tone detector). Runs in parallel with qct-parse.')
+    qct_group.add_argument('--enable-ina-segmenter', choices=['on', 'off'],
+                           help='Enable/disable inaSpeechSegmenter audio content classification (speech/music/silence/noise timeline).')
 
     # Frame analysis sub-steps + tuning
     frame_group = parser.add_argument_group("Frame analysis")
@@ -293,6 +296,7 @@ The scripts will confirm that the digital files conform to predetermined specifi
         frame_brng_duration=getattr(args, 'frame_brng_duration', None),
         enable_clamped_levels=getattr(args, 'enable_clamped_levels', None),
         enable_clams_detection=getattr(args, 'enable_clams_detection', None),
+        enable_ina_segmenter=getattr(args, 'enable_ina_segmenter', None),
         enable_audio_analysis=getattr(args, 'enable_audio_analysis', None),
         access_trim_color_bars=getattr(args, 'access_trim_color_bars', None),
         access_crop_borders=getattr(args, 'access_crop_borders', None),
@@ -558,6 +562,8 @@ def run_cli_mode(args):
         tools_updates.setdefault('qct_parse', {})['audio_analysis'] = (args.enable_audio_analysis == 'on')
     if args.enable_clams_detection:
         tools_updates.setdefault('clams_detection', {})['run_tool'] = (args.enable_clams_detection == 'on')
+    if args.enable_ina_segmenter:
+        tools_updates.setdefault('ina_segmenter', {})['run_tool'] = (args.enable_ina_segmenter == 'on')
 
     # qct-parse sub-features (audio_analysis, detect_clamped_levels) only run
     # inside run_qctparse(), so qct_parse.run_tool must also be on. Auto-enable

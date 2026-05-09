@@ -331,7 +331,10 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             clams_cfg = getattr(checks_config.tools, 'clams_detection', None)
             if clams_cfg and getattr(clams_cfg, 'run_tool', False):
                 self._add_step_item("CLAMS Detection")
-            
+            ina_cfg = getattr(checks_config.tools, 'ina_segmenter', None)
+            if ina_cfg and getattr(ina_cfg, 'run_tool', False):
+                self._add_step_item("inaSpeechSegmenter")
+
             # Frame Analysis
             if hasattr(checks_config.outputs, 'frame_analysis'):
                 frame_config = checks_config.outputs.frame_analysis

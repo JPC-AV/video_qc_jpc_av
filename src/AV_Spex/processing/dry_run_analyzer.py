@@ -128,6 +128,7 @@ class DryRunAnalyzer:
             source_directory, destination_directory, video_id
         ))
         analyses.extend(self._analyze_clams_detection())
+        analyses.extend(self._analyze_ina_segmenter())
         analyses.extend(self._analyze_frame_analysis(
             video_path, source_directory, destination_directory, video_id
         ))
@@ -500,6 +501,30 @@ class DryRunAnalyzer:
 
         return [self._analyze_step(
             step_name="CLAMS Detection (bars + tone, cross-validated)",
+            enabled=enabled,
+            precondition_met=True,
+            precondition_reason=reason
+        )]
+
+    def _analyze_ina_segmenter(self) -> List[StepAnalysis]:
+        """Analyze inaSpeechSegmenter audio content classification step."""
+        ina_cfg = getattr(self.checks_config.tools, 'ina_segmenter', None)
+        if ina_cfg is None:
+            return []
+
+        enabled = getattr(ina_cfg, 'run_tool', False)
+
+        params = getattr(ina_cfg, 'params', None)
+        details = []
+        if params is not None:
+            details.append(
+                f"silence_ratio={params.silence_ratio}, "
+                f"min_segment_duration_ms={params.min_segment_duration_ms}"
+            )
+        reason = details[0] if details else None
+
+        return [self._analyze_step(
+            step_name="inaSpeechSegmenter (audio content classification)",
             enabled=enabled,
             precondition_met=True,
             precondition_reason=reason

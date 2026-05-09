@@ -459,6 +459,16 @@ def update_tool_setting(tool_names: List[str], value: bool):
                     continue
                 updates['tools'][tool_name] = {field: value}
 
+            # inaSpeechSegmenter: top-level run_tool toggle. Params are JSON-only.
+            elif tool_name == 'ina_segmenter':
+                if field != 'run_tool':
+                    logger.warning(
+                        f"Invalid field '{field}' for ina_segmenter. Only 'run_tool' "
+                        f"is settable from the CLI; tune params in the JSON config."
+                    )
+                    continue
+                updates['tools'][tool_name] = {field: value}
+
             # Standard tools with check_tool/run_tool fields
             else:
                 if field not in ('check_tool', 'run_tool'):
@@ -1279,6 +1289,9 @@ profile_step1 = {
                 "min_tone_duration_ms": 2000,
                 "stop_at_seconds": 3600
             }
+        },
+        "ina_segmenter": {
+            "run_tool": False
         }
     },
     "outputs": {
@@ -1348,6 +1361,9 @@ profile_step2 = {
                 "min_tone_duration_ms": 2000,
                 "stop_at_seconds": 3600
             }
+        },
+        "ina_segmenter": {
+            "run_tool": False
         }
     },
     "outputs": {
@@ -1417,6 +1433,9 @@ profile_allOff = {
                 "min_tone_duration_ms": 2000,
                 "stop_at_seconds": 3600
             }
+        },
+        "ina_segmenter": {
+            "run_tool": False
         }
     },
     "outputs": {

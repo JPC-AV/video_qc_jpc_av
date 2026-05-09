@@ -35,6 +35,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.setup_qctools_section(main_layout)
         self.setup_qct_parse_section(main_layout)
         self.setup_clams_detection_section(main_layout)
+        self.setup_ina_segmenter_section(main_layout)
         self.setup_frame_analysis_sections(main_layout)
         self.connect_signals()
 
@@ -168,6 +169,34 @@ class ComplexWindow(QWidget, ThemeableMixin):
 
         self.clams_detection_group.setLayout(clams_layout)
         main_layout.addWidget(self.clams_detection_group)
+
+    def setup_ina_segmenter_section(self, main_layout):
+        """Run inaSpeechSegmenter to classify audio content."""
+        theme_manager = ThemeManager.instance()
+
+        self.ina_segmenter_group = QGroupBox("inaSpeechSegmenter")
+        theme_manager.style_groupbox(self.ina_segmenter_group, "top center")
+        self.themed_group_boxes['ina_segmenter'] = self.ina_segmenter_group
+
+        ina_layout = QVBoxLayout()
+
+        self.run_ina_segmenter_cb = QCheckBox("Run Tool")
+        self.run_ina_segmenter_cb.setStyleSheet("font-weight: bold;")
+        run_ina_desc = QLabel(
+            "Run inaSpeechSegmenter to classify audio content as speech, music, "
+            "silence, or noise. Produces a timestamped content timeline that can "
+            "contextualize QC flags — for example, noise spikes during a music "
+            "segment are expected rather than anomalous. Requires the "
+            "inaSpeechSegmenter Python library (pip install inaSpeechSegmenter)."
+        )
+        run_ina_desc.setWordWrap(True)
+        run_ina_desc.setIndent(20)
+
+        ina_layout.addWidget(self.run_ina_segmenter_cb)
+        ina_layout.addWidget(run_ina_desc)
+
+        self.ina_segmenter_group.setLayout(ina_layout)
+        main_layout.addWidget(self.ina_segmenter_group)
 
     # Frame Analysis Sections (restructured)
     def setup_frame_analysis_sections(self, main_layout):
@@ -698,6 +727,11 @@ class ComplexWindow(QWidget, ThemeableMixin):
             lambda state: self.on_boolean_changed(state, ['tools', 'clams_detection', 'run_tool'])
         )
 
+        # inaSpeechSegmenter — single Run Tool checkbox.
+        self.run_ina_segmenter_cb.stateChanged.connect(
+            lambda state: self.on_boolean_changed(state, ['tools', 'ina_segmenter', 'run_tool'])
+        )
+
     def load_config_values(self):
         """Load current config values into UI elements"""
         # Set loading flag to True
@@ -784,6 +818,10 @@ class ComplexWindow(QWidget, ThemeableMixin):
         clams = getattr(checks_config.tools, 'clams_detection', None)
         self.run_clams_detection_cb.setChecked(bool(getattr(clams, 'run_tool', False)))
 
+        # inaSpeechSegmenter — single toggle.
+        ina = getattr(checks_config.tools, 'ina_segmenter', None)
+        self.run_ina_segmenter_cb.setChecked(bool(getattr(ina, 'run_tool', False)))
+
         # Set loading flag back to False after everything is loaded
         self.is_loading = False
 
@@ -827,6 +865,9 @@ class ComplexWindow(QWidget, ThemeableMixin):
             config_mgr.update_config('checks', updates)
         elif path[0] == "tools" and path[1] == "clams_detection":
             updates = {'tools': {'clams_detection': {path[2]: new_value}}}
+            config_mgr.update_config('checks', updates)
+        elif path[0] == "tools" and path[1] == "ina_segmenter":
+            updates = {'tools': {'ina_segmenter': {path[2]: new_value}}}
             config_mgr.update_config('checks', updates)
         elif path[0] == "outputs" and path[1] == "frame_analysis":
             updates = {'outputs': {'frame_analysis': {path[2]: new_value}}}

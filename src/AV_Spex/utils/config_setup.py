@@ -348,6 +348,16 @@ class ClamsDetectionConfig:
     tone: ClamsToneParams = field(default_factory=ClamsToneParams)
 
 @dataclass
+class InaSegmenterParams:
+    silence_ratio: int = 3
+    min_segment_duration_ms: int = 0
+
+@dataclass
+class InaSegmenterConfig:
+    run_tool: bool = False
+    params: InaSegmenterParams = field(default_factory=InaSegmenterParams)
+
+@dataclass
 class ToolsConfig:
     exiftool: BasicToolConfig
     ffprobe: BasicToolConfig
@@ -358,6 +368,9 @@ class ToolsConfig:
     qct_parse: QCTParseToolConfig
     clams_detection: ClamsDetectionConfig = field(
         default_factory=ClamsDetectionConfig
+    )
+    ina_segmenter: InaSegmenterConfig = field(
+        default_factory=InaSegmenterConfig
     )
 
 @dataclass
@@ -426,7 +439,8 @@ class ChecksProfile:
             audio_analysis=False,
             detect_clamped_levels=False
         ),
-        clams_detection=ClamsDetectionConfig()
+        clams_detection=ClamsDetectionConfig(),
+        ina_segmenter=InaSegmenterConfig()
     ))
 
 @dataclass
