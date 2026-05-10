@@ -1084,18 +1084,30 @@ _TC_R128_C_LRA_HIGH_UPPER = -24.0
 _TC_R128_C_M_MIN = -60.0
 
 # astats thresholds (per-channel detection)
-_TC_ASTATS_WINDOW_FRAMES = 7     # ~7 frames at ~4.6s each ~ 30s window
+# Calibrated against three audible-TC samples (164811/246492/389332) and two
+# non-TC negatives: a silence pad (JPC_AV_00011 1:06–3:08) and a 1 kHz bars+tone
+# leader (JPC_AV_01663 0–45 s). Each gate independently rejects at least one
+# non-TC regime — TC is "stable mid-level biphase mark", so means and *stdevs*
+# both matter.
+_TC_ASTATS_WINDOW_SEC = 30.0     # rolling window size in seconds (matches R128)
 _TC_ASTATS_MIN_WINDOWS = 2       # minimum consecutive windows to confirm TC
 
-# Per-channel TC indicators in astats
-_TC_ASTATS_RMS_LEVEL_MIN = -30.0
-_TC_ASTATS_RMS_LEVEL_MAX = -5.0
-_TC_ASTATS_RMS_STDEV_MAX = 3.0
-_TC_ASTATS_CREST_FACTOR_MAX = 2.0
-_TC_ASTATS_DYNAMIC_RANGE_MAX = 20.0
-_TC_ASTATS_ZERO_CROSSINGS_RATE_MIN = 0.06
-_TC_ASTATS_ZERO_CROSSINGS_RATE_MAX = 0.15
-_TC_ASTATS_ENTROPY_MAX = 0.35
+# Per-channel TC indicators in astats — mean bands
+_TC_ASTATS_RMS_LEVEL_MIN = -30.0          # excludes silence (≪ -55 dBFS)
+_TC_ASTATS_RMS_LEVEL_MAX = -10.0
+_TC_ASTATS_CREST_FACTOR_MIN = 1.55        # excludes pure sine tone (≈1.41)
+_TC_ASTATS_CREST_FACTOR_MAX = 2.20        # excludes program audio (≈3.0)
+_TC_ASTATS_ZERO_CROSSINGS_RATE_MIN = 0.05  # excludes sub-kHz tones (≪0.05)
+_TC_ASTATS_ZERO_CROSSINGS_RATE_MAX = 0.10  # excludes silence (≈0.45)
+_TC_ASTATS_ENTROPY_MIN = 0.60             # excludes silence (≈0.28)
+_TC_ASTATS_ENTROPY_MAX = 0.80
+
+# Per-channel TC indicators in astats — stability gates (TC sits rock-stable;
+# program audio swings every metric)
+_TC_ASTATS_RMS_STDEV_MAX = 1.0
+_TC_ASTATS_CREST_STDEV_MAX = 0.30
+_TC_ASTATS_ZCR_STDEV_MAX = 0.02
+_TC_ASTATS_ENTROPY_STDEV_MAX = 0.05
 
 # ---------------------------------------------------------------------------
 # Audio dropout detection thresholds
@@ -1536,14 +1548,21 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                                 frame_channel_rms[ch_num] = val
 
                     if detect_timecode:
-                        # Collect r128 and astats tags for timecode detection
-                        if key.startswith('lavfi.r128') or key.startswith('lavfi.astats'):
+                        # Collect r128 and astats tags for timecode detection.
+                        # Track whichever metric families appear; if both are
+                        # present, the detector runs both and unions results.
+                        if key.startswith('lavfi.r128'):
                             tc_frame_tags[key] = val
                             if tc_metric_type == 'unknown':
-                                if key.startswith('lavfi.r128'):
-                                    tc_metric_type = 'r128'
-                                elif key.startswith('lavfi.astats'):
-                                    tc_metric_type = 'astats'
+                                tc_metric_type = 'r128'
+                            elif tc_metric_type == 'astats':
+                                tc_metric_type = 'both'
+                        elif key.startswith('lavfi.astats'):
+                            tc_frame_tags[key] = val
+                            if tc_metric_type == 'unknown':
+                                tc_metric_type = 'astats'
+                            elif tc_metric_type == 'r128':
+                                tc_metric_type = 'both'
 
                     if detect_dropout and 'Overall' not in key:
                         # Extract per-channel dropout metrics
@@ -2176,7 +2195,14 @@ def _detect_astats_channel_tc(frames, times, channel):
     """Detect TC on a single channel using rolling windows of astats data."""
     prefix = f'lavfi.astats.{channel}.'
     detections = []
-    window = _TC_ASTATS_WINDOW_FRAMES
+
+    if len(times) >= 2:
+        dt_sec = times[1] - times[0]
+    else:
+        dt_sec = 0.1
+    if dt_sec <= 0:
+        dt_sec = 0.1
+    window = max(1, int(round(_TC_ASTATS_WINDOW_SEC / dt_sec)))
 
     for i in range(0, len(frames) - window + 1, max(1, window // 2)):
         end = min(i + window, len(frames))
@@ -2208,35 +2234,50 @@ def _detect_astats_channel_tc(frames, times, channel):
 
         rms_mean = _tc_mean(rms_levels)
         rms_std = _tc_stdev(rms_levels)
-        crest_med = _tc_median(crest_factors) if crest_factors else float('nan')
-        zcr_med = _tc_median(zcr_rates) if zcr_rates else float('nan')
-        ent_med = _tc_median(entropies) if entropies else float('nan')
+        crest_mean = _tc_mean(crest_factors) if crest_factors else float('nan')
+        crest_std = _tc_stdev(crest_factors) if crest_factors else float('nan')
+        zcr_mean = _tc_mean(zcr_rates) if zcr_rates else float('nan')
+        zcr_std = _tc_stdev(zcr_rates) if zcr_rates else float('nan')
+        ent_mean = _tc_mean(entropies) if entropies else float('nan')
+        ent_std = _tc_stdev(entropies) if entropies else float('nan')
 
         reasons = []
         passes = True
 
-        if _TC_ASTATS_RMS_LEVEL_MIN <= rms_mean <= _TC_ASTATS_RMS_LEVEL_MAX and rms_std < _TC_ASTATS_RMS_STDEV_MAX:
-            reasons.append(f'RMS={rms_mean:.1f}dB(+/-{rms_std:.1f})')
+        if (_TC_ASTATS_RMS_LEVEL_MIN <= rms_mean <= _TC_ASTATS_RMS_LEVEL_MAX
+                and rms_std < _TC_ASTATS_RMS_STDEV_MAX):
+            reasons.append(f'RMS={rms_mean:.1f}dB(+/-{rms_std:.2f})')
         else:
             passes = False
 
-        if not math.isnan(crest_med) and crest_med < _TC_ASTATS_CREST_FACTOR_MAX:
-            reasons.append(f'Crest={crest_med:.1f}dB')
+        if (not math.isnan(crest_mean)
+                and _TC_ASTATS_CREST_FACTOR_MIN <= crest_mean <= _TC_ASTATS_CREST_FACTOR_MAX
+                and crest_std < _TC_ASTATS_CREST_STDEV_MAX):
+            reasons.append(f'Crest={crest_mean:.2f}(+/-{crest_std:.2f})')
         else:
             passes = False
 
-        if not math.isnan(ent_med) and ent_med < _TC_ASTATS_ENTROPY_MAX:
-            reasons.append(f'Entropy={ent_med:.3f}')
+        if (not math.isnan(zcr_mean)
+                and _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN <= zcr_mean <= _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX
+                and zcr_std < _TC_ASTATS_ZCR_STDEV_MAX):
+            reasons.append(f'ZCR={zcr_mean:.3f}(+/-{zcr_std:.3f})')
         else:
             passes = False
 
-        if not math.isnan(zcr_med) and _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN <= zcr_med <= _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX:
-            reasons.append(f'ZCR={zcr_med:.3f}')
+        if (not math.isnan(ent_mean)
+                and _TC_ASTATS_ENTROPY_MIN <= ent_mean <= _TC_ASTATS_ENTROPY_MAX
+                and ent_std < _TC_ASTATS_ENTROPY_STDEV_MAX):
+            reasons.append(f'Entropy={ent_mean:.2f}(+/-{ent_std:.2f})')
         else:
             passes = False
 
         if passes:
-            confidence = 'high' if crest_med < 1.5 and ent_med < 0.25 else 'medium'
+            # Tighter stability across all four metrics → high confidence
+            high_conf = (rms_std < 0.5
+                         and crest_std < 0.10
+                         and zcr_std < 0.005
+                         and ent_std < 0.02)
+            confidence = 'high' if high_conf else 'medium'
             detections.append(_TCDetection(
                 start_time=times[i],
                 end_time=times[min(end - 1, len(times) - 1)],
@@ -2259,6 +2300,11 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
         detections = _detect_r128_timecode(tc_frames)
     elif tc_metric_type == 'astats':
         detections = _detect_astats_timecode(tc_frames)
+    elif tc_metric_type == 'both':
+        # Run both detectors and merge — astats is per-channel, R128 is whole-mix.
+        # The criterion field on each detection records which one fired.
+        detections = _detect_r128_timecode(tc_frames) + _detect_astats_timecode(tc_frames)
+        detections.sort(key=lambda d: d.start_time)
     else:
         logger.debug("No recognized audio metrics (r128 or astats) found for timecode detection\n")
         return None
