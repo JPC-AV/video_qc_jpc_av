@@ -1065,7 +1065,10 @@ _TC_R128_MIN_WINDOWS = 6          # minimum consecutive windows to confirm TC (~
 # Criterion A: dual-channel TC (both channels carry TC)
 _TC_R128_A_M_STDEV_MAX = 2.0
 _TC_R128_A_M_MEAN_MIN = -25.0
-_TC_R128_A_LRA_MEDIAN_MAX = 5.0
+# LRA is cumulative back to file start, so it stays inflated through the first
+# 30-60s after a silence-to-TC transition. The stronger discriminators are
+# M_stdev and M_mean — LRA only needs to bound out program audio (LRA >> 10).
+_TC_R128_A_LRA_MEDIAN_MAX = 8.5
 
 # Criterion B: TC + silence (one channel TC, other near-silent)
 _TC_R128_B_LRA_HIGH_MIN = -30.0
@@ -1096,7 +1099,10 @@ _TC_ASTATS_MIN_WINDOWS = 2       # minimum consecutive windows to confirm TC
 _TC_ASTATS_RMS_LEVEL_MIN = -30.0          # excludes silence (≪ -55 dBFS)
 _TC_ASTATS_RMS_LEVEL_MAX = -10.0
 _TC_ASTATS_CREST_FACTOR_MIN = 1.55        # excludes pure sine tone (≈1.41)
-_TC_ASTATS_CREST_FACTOR_MAX = 2.20        # excludes program audio (≈3.0)
+# Mean per-channel crest of biphase mark TC clusters at ~2.0–2.22 in practice;
+# 2.25 keeps the program-audio rejection (≈3.0) while not fragmenting on
+# rounding noise at the boundary.
+_TC_ASTATS_CREST_FACTOR_MAX = 2.25
 _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN = 0.05  # excludes sub-kHz tones (≪0.05)
 _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX = 0.10  # excludes silence (≈0.45)
 _TC_ASTATS_ENTROPY_MIN = 0.60             # excludes silence (≈0.28)
@@ -2018,6 +2024,67 @@ def _tc_merge_detections(detections):
     return merged
 
 
+# Boundary refinement: window detection is quantized to the 15s step, so the
+# reported start can be off by up to one window. Once a region is confirmed,
+# walk back per-frame using a smoothed RMS gate to recover the true
+# silence-to-TC transition point.
+#
+# Refinement uses a wider RMS band than detection. The job here is only to
+# separate silence (≪ -50 dBFS) from any audible level — early-TC frames can
+# briefly dip below -30 dBFS during ramp-up, and a strict band would pull the
+# boundary forward by tens of seconds. False positives are prevented upstream
+# by the stdev gates on the detection windows.
+#
+# 1s smoothing is narrower than the silence→TC transition typically takes, so
+# the rolling median crosses the boundary cleanly. Larger windows blur the
+# transition and the boundary either lags (mean) or overshoots into silence
+# (median).
+_TC_REFINE_SMOOTH_SEC = 1.0
+_TC_REFINE_RMS_MIN = -45.0
+_TC_REFINE_RMS_MAX = -8.0
+
+
+def _tc_refine_start_time(frames, times, region_start_time, get_rms):
+    """Walk back from region_start_time to find the earliest frame whose
+    smoothed RMS_level still sits in the TC band.
+
+    get_rms(frame) returns the per-frame metric (r128.M for R128, astats RMS
+    for astats) or NaN.
+    """
+    if not frames or not times:
+        return region_start_time
+    dt = times[1] - times[0] if len(times) >= 2 and times[1] > times[0] else 0.1
+    smooth_n = max(1, int(_TC_REFINE_SMOOTH_SEC / dt))
+
+    # Find index of first frame at or after region_start_time
+    start_idx = 0
+    for j, t in enumerate(times):
+        if t >= region_start_time:
+            start_idx = j
+            break
+
+    best_idx = start_idx
+    i = start_idx
+    while i > 0:
+        i -= 1
+        end = min(i + smooth_n, len(frames))
+        vals = []
+        for j in range(i, end):
+            v = get_rms(frames[j])
+            if not math.isnan(v):
+                vals.append(v)
+        if not vals:
+            break
+        # Median, not mean — silence frames sit ≪ -50 dBFS and would drag the
+        # mean across the boundary, letting the walk overshoot into silence.
+        med = _tc_median(vals)
+        if _TC_REFINE_RMS_MIN <= med <= _TC_REFINE_RMS_MAX:
+            best_idx = i
+        else:
+            break
+    return times[best_idx]
+
+
 def _detect_r128_timecode(frames):
     """Detect audible timecode using EBU R128 measurements."""
     if not frames:
@@ -2049,7 +2116,15 @@ def _detect_r128_timecode(frames):
     detections.extend(_detect_r128_criterion_b(times, m_vals, lra_vals, lra_high_vals, i_val, window_size))
     detections.extend(_detect_r128_criterion_c(times, m_vals, s_vals, lra_high_vals, window_size))
 
-    return _tc_merge_detections(detections)
+    merged = _tc_merge_detections(detections)
+
+    # Refine each region's start time using per-frame r128.M
+    def _get_r128_m(frame):
+        return frame['tags'].get('lavfi.r128.M', float('nan'))
+    for d in merged:
+        d.start_time = _tc_refine_start_time(frames, times, d.start_time, _get_r128_m)
+
+    return merged
 
 
 def _detect_r128_criterion_a(times, m_vals, lra_vals, window_size):
@@ -2188,7 +2263,21 @@ def _detect_astats_timecode(frames):
                 d1.channel = 'both (ch1)'
                 d2.channel = 'both (ch2)'
 
-    return _tc_merge_detections(detections)
+    merged = _tc_merge_detections(detections)
+
+    # Refine each region's start time using per-channel astats RMS_level
+    for d in merged:
+        # criterion is "astats (ch{N})" — extract channel number
+        try:
+            ch = d.criterion.split('ch')[1].split(')')[0]
+        except IndexError:
+            continue
+        prefix = f'lavfi.astats.{ch}.RMS_level'
+        def _get_rms(frame, _p=prefix):
+            return frame['tags'].get(_p, float('nan'))
+        d.start_time = _tc_refine_start_time(frames, times, d.start_time, _get_rms)
+
+    return merged
 
 
 def _detect_astats_channel_tc(frames, times, channel):
