@@ -1334,7 +1334,7 @@ def make_audible_timecode_html(audible_timecode_csv):
         </p>
         <p style="margin: 0 0 10px 0; font-weight: bold;">Detection criteria:</p>
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
-            <li style="margin-bottom: 4px;"><strong>Dual-channel TC</strong> &mdash; both audio channels carry timecode (stable loudness, narrow dynamic range).</li>
+            <li style="margin-bottom: 4px;"><strong>Stable mix at TC level</strong> &mdash; mix-loudness sits steadily at LTC level with narrow dynamic range. R128 measures the channel mix, not individual channels, so this fires for both-channels-TC <em>and</em> one-channel-TC-plus-quiet-channel; check the astats rows to see which channels actually carry timecode.</li>
             <li style="margin-bottom: 4px;"><strong>TC + silence</strong> &mdash; one channel carries timecode while the other is near-silent (large gap between momentary and integrated loudness).</li>
             <li style="margin-bottom: 4px;"><strong>TC + program audio</strong> &mdash; timecode is present alongside program audio on separate channels (divergence between M and S loudness, high M variance).</li>
         </ul>

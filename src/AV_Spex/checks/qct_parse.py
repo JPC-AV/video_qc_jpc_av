@@ -1062,7 +1062,9 @@ SILENCE_THRESHOLD_DB = -60.0
 _TC_R128_WINDOW_SEC = 30          # rolling window size in seconds
 _TC_R128_MIN_WINDOWS = 6          # minimum consecutive windows to confirm TC (~3 min)
 
-# Criterion A: dual-channel TC (both channels carry TC)
+# Criterion A: stable mix at TC level. r128.M is a mix-loudness measurement,
+# so this fires for both "both channels carry TC" and "one channel TC + one
+# near-silent" — the per-channel split must come from astats.
 _TC_R128_A_M_STDEV_MAX = 2.0
 _TC_R128_A_M_MEAN_MIN = -25.0
 # LRA is cumulative back to file start, so it stays inflated through the first
@@ -2128,7 +2130,13 @@ def _detect_r128_timecode(frames):
 
 
 def _detect_r128_criterion_a(times, m_vals, lra_vals, window_size):
-    """Criterion A: detect dual-channel TC via rolling windows."""
+    """Criterion A: detect a stable mix at TC level via rolling windows.
+
+    R128 measures the channel mix, not individual channels, so this fires
+    whenever momentary loudness is steady and at LTC level — which includes
+    both-channels-TC and one-channel-TC-plus-quiet-channel scenarios. Use
+    astats results to determine which channels actually carry TC.
+    """
     detections = []
     for i in range(0, len(times) - window_size + 1, window_size // 2):
         end = min(i + window_size, len(times))
@@ -2148,8 +2156,8 @@ def _detect_r128_criterion_a(times, m_vals, lra_vals, window_size):
             detections.append(_TCDetection(
                 start_time=times[i],
                 end_time=times[min(end - 1, len(times) - 1)],
-                criterion='R128-A (dual-channel TC)',
-                channel='both',
+                criterion='R128-A (stable mix at TC level)',
+                channel='n/a (mix-based)',
                 confidence='high' if m_std < 1.0 else 'medium',
                 details=f'M_stdev={m_std:.2f}, M_mean={m_mean:.1f}, LRA_med={lra_med:.1f}'
             ))
