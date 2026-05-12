@@ -2159,7 +2159,9 @@ def _detect_r128_criterion_a(times, m_vals, lra_vals, window_size):
                 criterion='R128-A (stable mix at TC level)',
                 channel='n/a (mix-based)',
                 confidence='high' if m_std < 1.0 else 'medium',
-                details=f'M_stdev={m_std:.2f}, M_mean={m_mean:.1f}, LRA_med={lra_med:.1f}'
+                details=(f'Loudness stability: {m_std:.2f} dB; '
+                         f'Avg loudness: {m_mean:.1f} LUFS; '
+                         f'Loudness range: {lra_med:.1f} LU')
             ))
 
     return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
@@ -2197,7 +2199,10 @@ def _detect_r128_criterion_b(times, m_vals, lra_vals, lra_high_vals, i_val, wind
                 criterion='R128-B (TC + silence)',
                 channel='one channel',
                 confidence='high' if lra_h_std < 0.5 else 'medium',
-                details=f'LRA.high={lra_h_mean:.1f}(+/-{lra_h_std:.2f}), |M-I|={m_i_diff:.1f}, LRA={lra_med:.1f}'
+                details=(f'Loud-side level: {lra_h_mean:.1f} LUFS '
+                         f'(stability +/-{lra_h_std:.2f}); '
+                         f'Momentary vs integrated gap: {m_i_diff:.1f} LU; '
+                         f'Loudness range: {lra_med:.1f} LU')
             ))
 
     return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
@@ -2233,7 +2238,10 @@ def _detect_r128_criterion_c(times, m_vals, s_vals, lra_high_vals, window_size):
                 criterion='R128-C (TC + program audio)',
                 channel='one channel',
                 confidence='high' if ms_diff_med > 2.0 else 'medium',
-                details=f'|M-S|_med={ms_diff_med:.2f}, M_stdev={m_std:.1f}, LRA.high={lra_h_mean:.1f}(+/-{lra_h_std:.2f})'
+                details=(f'Momentary vs short-term gap: {ms_diff_med:.2f} LU; '
+                         f'Loudness stability: {m_std:.1f} dB; '
+                         f'Loud-side level: {lra_h_mean:.1f} LUFS '
+                         f'(stability +/-{lra_h_std:.2f})')
             ))
 
     return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
@@ -2343,28 +2351,32 @@ def _detect_astats_channel_tc(frames, times, channel):
 
         if (_TC_ASTATS_RMS_LEVEL_MIN <= rms_mean <= _TC_ASTATS_RMS_LEVEL_MAX
                 and rms_std < _TC_ASTATS_RMS_STDEV_MAX):
-            reasons.append(f'RMS={rms_mean:.1f}dB(+/-{rms_std:.2f})')
+            reasons.append(f'Signal level: {rms_mean:.1f} dBFS '
+                           f'(stability +/-{rms_std:.2f})')
         else:
             passes = False
 
         if (not math.isnan(crest_mean)
                 and _TC_ASTATS_CREST_FACTOR_MIN <= crest_mean <= _TC_ASTATS_CREST_FACTOR_MAX
                 and crest_std < _TC_ASTATS_CREST_STDEV_MAX):
-            reasons.append(f'Crest={crest_mean:.2f}(+/-{crest_std:.2f})')
+            reasons.append(f'Crest factor: {crest_mean:.2f} '
+                           f'(stability +/-{crest_std:.2f})')
         else:
             passes = False
 
         if (not math.isnan(zcr_mean)
                 and _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN <= zcr_mean <= _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX
                 and zcr_std < _TC_ASTATS_ZCR_STDEV_MAX):
-            reasons.append(f'ZCR={zcr_mean:.3f}(+/-{zcr_std:.3f})')
+            reasons.append(f'Zero-crossing rate: {zcr_mean:.3f} per frame '
+                           f'(stability +/-{zcr_std:.3f})')
         else:
             passes = False
 
         if (not math.isnan(ent_mean)
                 and _TC_ASTATS_ENTROPY_MIN <= ent_mean <= _TC_ASTATS_ENTROPY_MAX
                 and ent_std < _TC_ASTATS_ENTROPY_STDEV_MAX):
-            reasons.append(f'Entropy={ent_mean:.2f}(+/-{ent_std:.2f})')
+            reasons.append(f'Spectral entropy: {ent_mean:.2f} '
+                           f'(stability +/-{ent_std:.2f})')
         else:
             passes = False
 
