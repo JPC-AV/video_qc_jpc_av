@@ -17,6 +17,10 @@ class ProcessingWorker(QThread):
     
     def __init__(self, source_directories, signals, dry_run=False, parent=None):
         super().__init__(parent)
+        # macOS Accelerate's dgetrf_parallel (reached via np.linalg.inv from
+        # matplotlib tight_layout/savefig) overflows Qt's default ~512KB
+        # secondary-thread stack and crashes with SIGBUS.
+        self.setStackSize(16 * 1024 * 1024)
         self.source_directories = source_directories
         self.signals = signals
         self.dry_run = dry_run
