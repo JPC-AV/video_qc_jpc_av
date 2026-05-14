@@ -1474,17 +1474,26 @@ CHROMA_EVENT_GAP_FRAMES = 10
 # single-frame envelope/satmax transients (scene cuts, motion-blurred frames,
 # fades into saturated content) which empirically dominate false positives.
 CHROMA_MIN_EVENT_FRAMES = 2
+# Cap the number of thumbnails generated per video. When more events are
+# detected, the top-N by frame_count are selected.
+CHROMA_MAX_THUMBS = 10
+# Subdirectory inside report_directory where chroma-phase thumbnails are
+# saved. Kept separate from ThumbExports/ so find_qct_thumbs() does not pick
+# them up and surface them under unrelated report sections.
+CHROMA_THUMBS_DIRNAME = "ChromaPhaseThumbs"
 
 
 def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
-                             bars_end_time=None, signals=None, total_duration=None):
+                             bars_end_time=None, video_path=None,
+                             signals=None, total_duration=None):
     """
     Detect chroma phase errors - typically caused by helical-scan tracking
     failures on tape source, producing sudden shifts of the chroma signal so
     that all colour collapses toward cyan or magenta, often with horizontal
     image displacement. Walks the QCTools report once, flags individual
     frames against two rules, then merges consecutive flagged frames into
-    events.
+    events. When ``video_path`` is provided, also exports thumbnail PNGs at
+    the peak frame of the top-N events (by frame count) for the HTML report.
 
     Parameters:
         startObj (str): Path to the QCTools report file (.qctools.xml.gz).
@@ -1493,6 +1502,8 @@ def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
         bit_depth_10 (bool): True for 10-bit-scale values (0-1023), False for 8-bit.
         bars_end_time (float or None): Skip frames with timestamp < bars_end_time
             to avoid flagging SMPTE colour bars at the head of the tape.
+        video_path (str or None): Path to the source video file; when present,
+            thumbnails are generated for the top-N events by frame count.
         signals: Optional signals object for emitting progress updates.
         total_duration (float or None): Total video duration in seconds for progress.
 
@@ -1632,6 +1643,22 @@ def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
             'hue_at_peak': peak['huemed'],
         })
 
+    # Generate thumbnails for the top-N events (by frame count). Saves to
+    # report_directory/ChromaPhaseThumbs/event_NN.png, keyed by the event's
+    # 1-based index so the HTML renderer can match thumbs to event rows.
+    thumbs_written = 0
+    if video_path and event_records:
+        top_events = sorted(event_records, key=lambda e: e['frame_count'], reverse=True)[:CHROMA_MAX_THUMBS]
+        thumb_dir = os.path.join(report_directory, CHROMA_THUMBS_DIRNAME)
+        try:
+            os.makedirs(thumb_dir, exist_ok=True)
+            for e in top_events:
+                out_path = os.path.join(thumb_dir, f"event_{e['event_idx']:02d}.png")
+                if _export_chroma_thumb(video_path, e['peak_time'], out_path):
+                    thumbs_written += 1
+        except Exception as ex:
+            logger.warning(f"Chroma-phase thumbnail generation failed: {ex}")
+
     results = {
         'total_video_frames': total_frames,
         'bit_depth_10': bit_depth_10,
@@ -1639,6 +1666,7 @@ def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
         'flagged_frames': len(flagged),
         'event_count': len(event_records),
         'events': event_records,
+        'thumbnails_written': thumbs_written,
         'thresholds': {
             'envelope_low': env_low,
             'envelope_high': env_high,
@@ -1648,6 +1676,45 @@ def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
 
     _write_chroma_phase_results(report_directory, results)
     return results
+
+
+def _export_chroma_thumb(video_path, time_seconds, out_path):
+    """
+    Render a single PNG thumbnail from ``video_path`` at ``time_seconds`` to
+    ``out_path``. No signalstats overlay - we want the unmodified frame so
+    the chroma cast and image displacement are visible. Returns True on
+    success.
+    """
+    if not video_path or not os.path.isfile(video_path):
+        logger.warning(f"Chroma-phase thumbnail skipped: video file not found at {video_path}")
+        return False
+    try:
+        ts_str = dts2ts(str(time_seconds))
+    except Exception:
+        ts_str = f"{time_seconds:.3f}"
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-ss", ts_str,
+        "-i", video_path,
+        "-vframes", "1",
+        "-s", "720x486",
+        out_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            logger.warning(
+                f"ffmpeg failed for chroma-phase thumbnail at {ts_str}: "
+                f"{result.stderr.strip()[:200]}"
+            )
+            return False
+        return os.path.isfile(out_path)
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ffmpeg timed out generating chroma-phase thumbnail at {ts_str}")
+        return False
+    except Exception as e:
+        logger.warning(f"Error generating chroma-phase thumbnail at {ts_str}: {e}")
+        return False
 
 
 def _write_chroma_phase_results(report_directory, results):
@@ -3114,6 +3181,7 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         chroma_results = analyzeChromaPhaseErrors(
             startObj, pkt, report_directory, bit_depth_10,
             bars_end_time=chroma_bars_end_time,
+            video_path=video_path,
             signals=signals, total_duration=total_duration,
         )
         if chroma_results is None:

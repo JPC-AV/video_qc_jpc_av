@@ -1924,6 +1924,11 @@ def make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv):
         {rows_html}
     </table>'''
 
+    # Thumbnail gallery: chroma_phase analyzer writes PNGs into
+    # ChromaPhaseThumbs/ for the top events by frame count (max
+    # CHROMA_MAX_THUMBS = 10). Embed them inline as base64.
+    thumbs_html = _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events)
+
     html = f'''
     <a id="link_chroma_phase_methodology" href="javascript:void(0);"
        onclick="toggleContent('chroma_phase_methodology', 'What is chroma phase detection? ▼', 'What is chroma phase detection? ▲')"
@@ -1970,8 +1975,83 @@ def make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv):
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Detected Events</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{event_count}</td></tr>
     </table>
     {events_table}
+    {thumbs_html}
     '''
     return html
+
+
+def _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events):
+    """
+    Render the chroma-phase thumbnail gallery as base64-embedded <img> tags.
+    Pulls PNGs from {report_dir}/ChromaPhaseThumbs/event_NN.png where NN is
+    the event index (1-based). Returns "" when no thumbnails are present.
+
+    Args:
+        chroma_phase_summary_csv (str): Path to the summary CSV (used only to
+            derive the sibling ChromaPhaseThumbs/ directory).
+        events (list): The parsed event rows from the events CSV.
+
+    Returns:
+        str: HTML string, or "" if no thumbnails are present.
+    """
+    if not chroma_phase_summary_csv or not events:
+        return ""
+
+    report_dir = os.path.dirname(chroma_phase_summary_csv)
+    thumb_dir = os.path.join(report_dir, "ChromaPhaseThumbs")
+    if not os.path.isdir(thumb_dir):
+        return ""
+
+    # Build a quick lookup of event_idx -> event row, then iterate in
+    # event-index order so the gallery's reading order matches the table.
+    by_idx = {}
+    for r in events:
+        try:
+            idx = int(r[0])
+            by_idx[idx] = r
+        except (ValueError, IndexError):
+            continue
+
+    items_html = ""
+    found = 0
+    for idx in sorted(by_idx.keys()):
+        thumb_path = os.path.join(thumb_dir, f"event_{idx:02d}.png")
+        if not os.path.isfile(thumb_path):
+            continue
+        try:
+            with open(thumb_path, "rb") as f:
+                encoded = b64encode(f.read()).decode("ascii")
+        except Exception as e:
+            logger.warning(f"Failed to read chroma-phase thumbnail {thumb_path}: {e}")
+            continue
+        found += 1
+        row = by_idx[idx]
+        # row: event_idx, start, end, dur_s, frames, rule, peak_sat, peak_time, hue
+        start = row[1] if len(row) > 1 else ""
+        frames = row[4] if len(row) > 4 else ""
+        peak_time = row[7] if len(row) > 7 else ""
+        items_html += f'''
+        <div style="text-align: center; margin: 5px;">
+            <img src="data:image/png;base64,{encoded}"
+                 style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
+                 onclick="openImage(this.src, 'Chroma Phase Event {idx} - peak at {peak_time}')"
+                 title="Click to enlarge" />
+            <p style="font-size: 12px; margin: 4px 0 0 0;"><strong>Event {idx}</strong> &mdash; starts {start}</p>
+            <p style="font-size: 11px; margin: 1px 0 0 0; color: #777;">peak at {peak_time} &middot; {frames} frame(s)</p>
+        </div>'''
+
+    if found == 0:
+        return ""
+
+    return f'''
+    <h4 style="margin-top: 20px;">Event Thumbnails</h4>
+    <p style="font-size: 13px; margin: 0 0 8px 0; color: #555;">
+        Frame captured at each event's peak SATMAX (max {found} shown; if more than 10 events were detected,
+        the largest events by frame count are shown).
+    </p>
+    <div style="display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0;">
+        {items_html}
+    </div>'''
 
 
 def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict):
