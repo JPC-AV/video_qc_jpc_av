@@ -95,6 +95,7 @@ class ParsedArguments:
     enable_clamped_levels: Optional[str]
     enable_clams_detection: Optional[str]
     enable_audio_analysis: Optional[str]
+    enable_chroma_phase_detection: Optional[str]
     access_trim_color_bars: Optional[str]
     access_crop_borders: Optional[str]
     access_crop_to_480: Optional[str]
@@ -196,6 +197,8 @@ The scripts will confirm that the digital files conform to predetermined specifi
                            help='Enable/disable clamped video levels detection in qct-parse. Auto-enables qct_parse.run_tool.')
     qct_group.add_argument('--enable-clams-detection', choices=['on', 'off'],
                            help='Enable/disable CLAMS detection (SSIM-based SMPTE bars detector + cross-correlation tone detector). Runs in parallel with qct-parse.')
+    qct_group.add_argument('--enable-chroma-phase-detection', choices=['on', 'off'],
+                           help='Enable/disable chroma phase error detection in qct-parse (detects tape tracking artifacts where chroma collapses toward cyan/magenta). Auto-enables qct_parse.run_tool.')
 
     # Frame analysis sub-steps + tuning
     frame_group = parser.add_argument_group("Frame analysis")
@@ -294,6 +297,7 @@ The scripts will confirm that the digital files conform to predetermined specifi
         enable_clamped_levels=getattr(args, 'enable_clamped_levels', None),
         enable_clams_detection=getattr(args, 'enable_clams_detection', None),
         enable_audio_analysis=getattr(args, 'enable_audio_analysis', None),
+        enable_chroma_phase_detection=getattr(args, 'enable_chroma_phase_detection', None),
         access_trim_color_bars=getattr(args, 'access_trim_color_bars', None),
         access_crop_borders=getattr(args, 'access_crop_borders', None),
         access_crop_to_480=getattr(args, 'access_crop_to_480', None),
@@ -550,25 +554,28 @@ def run_cli_mode(args):
         config_mgr.update_config('checks', {'fixity': fixity_updates})
         config_mgr.save_config('checks', is_last_used=True)
 
-    # Tools sub-toggles: qct-parse audio analysis / clamped levels, CLAMS detection
+    # Tools sub-toggles: qct-parse audio analysis / clamped levels / chroma phase, CLAMS detection
     tools_updates = {}
     if args.enable_clamped_levels:
         tools_updates.setdefault('qct_parse', {})['detect_clamped_levels'] = (args.enable_clamped_levels == 'on')
     if args.enable_audio_analysis:
         tools_updates.setdefault('qct_parse', {})['audio_analysis'] = (args.enable_audio_analysis == 'on')
+    if args.enable_chroma_phase_detection:
+        tools_updates.setdefault('qct_parse', {})['detect_chroma_phase_errors'] = (args.enable_chroma_phase_detection == 'on')
     if args.enable_clams_detection:
         tools_updates.setdefault('clams_detection', {})['run_tool'] = (args.enable_clams_detection == 'on')
 
-    # qct-parse sub-features (audio_analysis, detect_clamped_levels) only run
-    # inside run_qctparse(), so qct_parse.run_tool must also be on. Auto-enable
-    # it when the user turns either sub-feature on.
-    if (args.enable_audio_analysis == 'on') or (args.enable_clamped_levels == 'on'):
+    # qct-parse sub-features (audio_analysis, detect_clamped_levels,
+    # detect_chroma_phase_errors) only run inside run_qctparse(), so
+    # qct_parse.run_tool must also be on. Auto-enable it when the user turns
+    # any sub-feature on.
+    if (args.enable_audio_analysis == 'on') or (args.enable_clamped_levels == 'on') or (args.enable_chroma_phase_detection == 'on'):
         current_qct_run = config_mgr.get_config('checks', ChecksConfig).tools.qct_parse.run_tool
         if not current_qct_run:
             tools_updates.setdefault('qct_parse', {})['run_tool'] = True
             logger.warning(
-                "audio_analysis / detect_clamped_levels require qct_parse.run_tool; "
-                "turning qct_parse.run_tool on."
+                "audio_analysis / detect_clamped_levels / detect_chroma_phase_errors require "
+                "qct_parse.run_tool; turning qct_parse.run_tool on."
             )
 
     if tools_updates:
