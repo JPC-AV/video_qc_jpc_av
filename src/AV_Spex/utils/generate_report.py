@@ -1974,8 +1974,8 @@ def make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv):
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Flagged Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{flagged_frames} ({flagged_pct}%)</td></tr>
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Detected Events</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{event_count}</td></tr>
     </table>
-    {events_table}
     {thumbs_html}
+    {events_table}
     '''
     return html
 
