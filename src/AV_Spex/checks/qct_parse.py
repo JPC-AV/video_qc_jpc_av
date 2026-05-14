@@ -1467,10 +1467,13 @@ CHROMA_ENVELOPE_LOW_10BIT = 100
 CHROMA_ENVELOPE_HIGH_10BIT = 900
 CHROMA_SATMAX_HIGH_10BIT = 600
 # Consecutive flagged frames within this gap (in frames) are merged into a
-# single event. ~5 frames = ~167ms at 29.97fps.
-CHROMA_EVENT_GAP_FRAMES = 5
-# Suppress reporting events shorter than this (in frames). 1 = report all.
-CHROMA_MIN_EVENT_FRAMES = 1
+# single event. ~10 frames = ~333ms at 29.97fps. A single chroma phase event
+# often produces non-contiguous flagged frames clustered within ~half a second.
+CHROMA_EVENT_GAP_FRAMES = 10
+# Suppress reporting events shorter than this (in frames). Filters isolated
+# single-frame envelope/satmax transients (scene cuts, motion-blurred frames,
+# fades into saturated content) which empirically dominate false positives.
+CHROMA_MIN_EVENT_FRAMES = 2
 
 
 def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
