@@ -123,6 +123,11 @@ class ComplexWindow(QWidget, ThemeableMixin):
         detect_clamped_levels_desc = QLabel("Detect broadcast-range level clamping from the analog-to-digital converter")
         detect_clamped_levels_desc.setIndent(20)
 
+        self.detect_chroma_phase_errors_cb = QCheckBox("Detect Chroma Phase Errors")
+        self.detect_chroma_phase_errors_cb.setStyleSheet("font-weight: bold;")
+        detect_chroma_phase_errors_desc = QLabel("Detect tape tracking artifacts where chroma collapses toward cyan or magenta")
+        detect_chroma_phase_errors_desc.setIndent(20)
+
         # Add all widgets to the qct layout
         qct_layout.addWidget(self.run_qctparse_cb)
         qct_layout.addWidget(run_qctparse_desc)
@@ -136,6 +141,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
         qct_layout.addWidget(audio_analysis_desc)
         qct_layout.addWidget(self.detect_clamped_levels_cb)
         qct_layout.addWidget(detect_clamped_levels_desc)
+        qct_layout.addWidget(self.detect_chroma_phase_errors_cb)
+        qct_layout.addWidget(detect_chroma_phase_errors_desc)
         
         self.qct_group.setLayout(qct_layout)
         main_layout.addWidget(self.qct_group)
@@ -691,6 +698,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         )
         self.audio_analysis_cb.stateChanged.connect(self.on_audio_analysis_changed)
         self.detect_clamped_levels_cb.stateChanged.connect(self.on_detect_clamped_levels_changed)
+        self.detect_chroma_phase_errors_cb.stateChanged.connect(self.on_detect_chroma_phase_errors_changed)
 
         # CLAMS detection — single Run Tool checkbox runs both bars and tone
         # detectors. Numeric tuning is JSON-only.
@@ -760,6 +768,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.thumb_export_cb.setChecked(qct.thumbExport)
         self.audio_analysis_cb.setChecked(getattr(qct, 'audio_analysis', False))
         self.detect_clamped_levels_cb.setChecked(getattr(qct, 'detect_clamped_levels', False))
+        self.detect_chroma_phase_errors_cb.setChecked(getattr(qct, 'detect_chroma_phase_errors', False))
 
         # Set initial enabled state for QCT Parse dependent checkboxes
         dependent_checkboxes = [
@@ -767,7 +776,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.evaluate_bars_cb,
             self.thumb_export_cb,
             self.audio_analysis_cb,
-            self.detect_clamped_levels_cb
+            self.detect_clamped_levels_cb,
+            self.detect_chroma_phase_errors_cb
         ]
 
         # Enable/disable dependent checkboxes based on run_tool state
@@ -900,7 +910,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.evaluate_bars_cb,
             self.thumb_export_cb,
             self.audio_analysis_cb,
-            self.detect_clamped_levels_cb
+            self.detect_clamped_levels_cb,
+            self.detect_chroma_phase_errors_cb
         ]
 
         if Qt.CheckState(state) == Qt.CheckState.Checked:
@@ -919,7 +930,8 @@ class ComplexWindow(QWidget, ThemeableMixin):
                         'evaluateBars': True,
                         'thumbExport': True,
                         'audio_analysis': True,
-                        'detect_clamped_levels': True
+                        'detect_clamped_levels': True,
+                        'detect_chroma_phase_errors': True
                     }
                 }
             }
@@ -1008,15 +1020,28 @@ class ComplexWindow(QWidget, ThemeableMixin):
         # Check overall dependencies
         self.check_qct_dependencies()
 
+    def on_detect_chroma_phase_errors_changed(self, state):
+        """Handle changes in chroma phase error detection checkbox with dependency logic"""
+        if self.is_loading:
+            return
+
+        new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+        updates = {'tools': {'qct_parse': {'detect_chroma_phase_errors': new_value}}}
+        config_mgr.update_config('checks', updates)
+
+        # Check overall dependencies
+        self.check_qct_dependencies()
+
     def check_qct_dependencies(self):
         """Check and enforce QCT Parse dependencies"""
         # If bars detection is off, then evaluate bars and thumbnail should already be disabled
         # This check is for the case where both bars detection and evaluate bars are unchecked
-        # Audio clipping and clamped levels are independent, so only auto-uncheck run_tool if nothing is active
+        # Audio clipping, clamped levels, and chroma phase are independent, so only auto-uncheck run_tool if nothing is active
         if (not self.bars_detection_cb.isChecked() and
             not self.evaluate_bars_cb.isChecked() and
             not self.audio_analysis_cb.isChecked() and
-            not self.detect_clamped_levels_cb.isChecked()):
+            not self.detect_clamped_levels_cb.isChecked() and
+            not self.detect_chroma_phase_errors_cb.isChecked()):
             # Uncheck run tool since no detection methods are active
             self.run_qctparse_cb.blockSignals(True)
             self.run_qctparse_cb.setChecked(False)
@@ -1028,6 +1053,7 @@ class ComplexWindow(QWidget, ThemeableMixin):
             self.thumb_export_cb.setEnabled(False)
             self.audio_analysis_cb.setEnabled(False)
             self.detect_clamped_levels_cb.setEnabled(False)
+            self.detect_chroma_phase_errors_cb.setEnabled(False)
 
             # Update config for run_tool change
             run_tool_updates = {
