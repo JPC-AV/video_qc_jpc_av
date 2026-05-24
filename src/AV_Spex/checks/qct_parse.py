@@ -1470,10 +1470,13 @@ CHROMA_SATMAX_HIGH_10BIT = 600
 # single event. ~10 frames = ~333ms at 29.97fps. A single chroma phase event
 # often produces non-contiguous flagged frames clustered within ~half a second.
 CHROMA_EVENT_GAP_FRAMES = 10
-# Suppress reporting events shorter than this (in frames). Filters isolated
-# single-frame envelope/satmax transients (scene cuts, motion-blurred frames,
-# fades into saturated content) which empirically dominate false positives.
+# Minimum event length (in frames). Events of length 1 are kept only when the
+# single frame fires BOTH the envelope rule AND the SATMAX rule — that combo
+# is the high-confidence chroma-flip signature. Single-frame events firing
+# only one of the two rules are filtered as transients (bright frames with
+# rogue outlier pixels, scene cuts that briefly spike SATMAX, etc.).
 CHROMA_MIN_EVENT_FRAMES = 2
+CHROMA_SINGLE_FRAME_REQUIRES_BOTH_RULES = True
 # Cap the number of thumbnails generated per video. When more events are
 # detected, the top-N by frame_count are selected.
 CHROMA_MAX_THUMBS = 10
@@ -1530,7 +1533,8 @@ def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
 
     METRIC_KEYS = ('UMIN', 'UMAX', 'VMIN', 'VMAX', 'SATMAX', 'HUEMED', 'SATAVG')
 
-    flagged = []  # list of dicts: {'frame_idx', 'time', 'rule', 'satmax', 'huemed'}
+    flagged = []  # list of dicts: {'frame_idx', 'time', 'rule', 'envelope_wide',
+                  # 'satmax_hit', 'satmax', 'huemed', 'satavg'}
     total_frames = 0
     frames_skipped_bars = 0
     progress_interval = 500
@@ -1597,6 +1601,8 @@ def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
                     'frame_idx': total_frames - 1,
                     'time': frame_time,
                     'rule': 'envelope' if envelope_wide else 'satmax',
+                    'envelope_wide': envelope_wide,
+                    'satmax_hit': satmax_hit,
                     'satmax': satmax,
                     'huemed': metrics.get('HUEMED'),
                     'satavg': metrics.get('SATAVG'),
@@ -1621,8 +1627,17 @@ def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
     if cur:
         events.append(cur)
 
-    # Filter out events shorter than the minimum
-    events = [e for e in events if len(e) >= CHROMA_MIN_EVENT_FRAMES]
+    # Filter events. An event is kept if it has >= CHROMA_MIN_EVENT_FRAMES
+    # frames, OR if it is a single high-confidence frame (envelope AND satmax
+    # both fired) when CHROMA_SINGLE_FRAME_REQUIRES_BOTH_RULES is enabled.
+    def _keep(e):
+        if len(e) >= CHROMA_MIN_EVENT_FRAMES:
+            return True
+        if CHROMA_SINGLE_FRAME_REQUIRES_BOTH_RULES and len(e) == 1:
+            f = e[0]
+            return bool(f.get('envelope_wide') and f.get('satmax_hit'))
+        return False
+    events = [e for e in events if _keep(e)]
 
     # Build per-event summary records
     event_records = []
