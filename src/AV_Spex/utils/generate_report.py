@@ -358,6 +358,8 @@ def find_report_csvs(report_directory):
     audio_dropout_csv = None
     clamped_levels_csv = None
     clamped_traces_csv = None
+    chroma_phase_summary_csv = None
+    chroma_phase_events_csv = None
     difference_csv = None
 
     if os.path.isdir(report_directory):
@@ -395,10 +397,14 @@ def find_report_csvs(report_directory):
                         clamped_traces_csv = file_path
                     elif "qct-parse_clamped_levels" in file:
                         clamped_levels_csv = file_path
+                    elif "qct-parse_chroma_phase_summary" in file:
+                        chroma_phase_summary_csv = file_path
+                    elif "qct-parse_chroma_phase_events" in file:
+                        chroma_phase_events_csv = file_path
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, chroma_phase_summary_csv, chroma_phase_events_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -1792,6 +1798,260 @@ def _make_clamped_traces_graphs(clamped_traces_csv, bit_depth):
         '</p>'
         + '\n'.join(f'<div style="margin: 10px 0;">{g}</div>' for g in graphs)
     )
+
+
+def _hue_label(hue_deg):
+    """Map a hue angle (degrees) to a short colour name for the report.
+    Based on the YUV/signalstats hue convention as displayed in QCTools."""
+    try:
+        h = float(hue_deg) % 360
+    except (TypeError, ValueError):
+        return ""
+    # 12-segment wheel, centred on canonical hue angles
+    bins = [
+        (15, "red"), (45, "orange"), (75, "yellow"),
+        (105, "yellow-green"), (135, "green"), (165, "green-cyan"),
+        (195, "cyan"), (225, "blue-cyan"), (255, "blue"),
+        (285, "blue-magenta"), (315, "magenta"), (345, "red-magenta"),
+        (360, "red"),
+    ]
+    for boundary, label in bins:
+        if h < boundary:
+            return label
+    return ""
+
+
+def make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv):
+    """
+    Generates an HTML section summarizing chroma phase error detection results.
+    Always renders when the summary CSV is present, including when no events
+    were found - so the report shows that the check was run.
+
+    Args:
+        chroma_phase_summary_csv (str): Path to the summary CSV.
+        chroma_phase_events_csv (str): Path to the events CSV (per-event rows).
+
+    Returns:
+        str: HTML string, or None if the summary CSV cannot be read.
+    """
+    if not chroma_phase_summary_csv or not os.path.isfile(chroma_phase_summary_csv):
+        return None
+
+    try:
+        with open(chroma_phase_summary_csv, 'r') as f:
+            summary_rows = list(csv.reader(f))
+    except Exception as e:
+        logger.error(f"Error reading chroma phase summary CSV: {e}")
+        return None
+
+    summary = {}
+    for r in summary_rows:
+        if len(r) >= 2:
+            summary[r[0]] = r[1]
+
+    bit_depth = summary.get("Bit Depth", "N/A")
+    total_frames = summary.get("Total Video Frames", "N/A")
+    bars_skipped = summary.get("Frames Skipped (color bars region)", "0")
+    flagged_frames = summary.get("Flagged Frames", "0")
+    flagged_pct = summary.get("Flagged %", "0")
+    event_count = summary.get("Detected Events", "0")
+    env_low = summary.get("Envelope Low (U/V min)", "")
+    env_high = summary.get("Envelope High (U/V max)", "")
+    satmax_high = summary.get("SATMAX High", "")
+
+    try:
+        event_count_int = int(event_count)
+    except ValueError:
+        event_count_int = 0
+
+    events = []
+    if chroma_phase_events_csv and os.path.isfile(chroma_phase_events_csv):
+        try:
+            with open(chroma_phase_events_csv, 'r') as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                for row in reader:
+                    if len(row) >= 9:
+                        events.append(row[:9])
+        except Exception as e:
+            logger.error(f"Error reading chroma phase events CSV: {e}")
+
+    if event_count_int > 0:
+        status_color = "#dc3545"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+        status_text = f"Chroma Phase Errors Detected: {event_count_int} event(s), {flagged_frames} flagged frame(s)"
+    else:
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+        status_text = "No Chroma Phase Errors Detected"
+
+    rows_html = ""
+    for r in events:
+        event_idx, start, end, dur, frames, rule, peak_sat, peak_time, hue = r
+        hue_name = _hue_label(hue)
+        hue_display = f"{hue}" + (f" ({hue_name})" if hue_name else "")
+        rows_html += (
+            f'<tr>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{event_idx}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{start}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{end}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{dur}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{frames}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{rule}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{peak_sat}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{peak_time}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{hue_display}</td>'
+            f'</tr>\n'
+        )
+
+    events_table = ""
+    if events:
+        events_table = f'''
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Event</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Duration (s)</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Rule</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Peak SATMAX</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Peak Time</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Hue at Peak (deg)</th>
+        </tr>
+        {rows_html}
+    </table>'''
+
+    # Thumbnail gallery: chroma_phase analyzer writes PNGs into
+    # ChromaPhaseThumbs/ for the top events by frame count (max
+    # CHROMA_MAX_THUMBS = 10). Embed them inline as base64.
+    thumbs_html = _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events)
+
+    html = f'''
+    <a id="link_chroma_phase_methodology" href="javascript:void(0);"
+       onclick="toggleContent('chroma_phase_methodology', 'What is chroma phase detection? ▼', 'What is chroma phase detection? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is chroma phase detection? ▼</a>
+    <div id="chroma_phase_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Chroma phase detection</strong> flags frames where the chroma signal has collapsed
+            toward a single hue (typically cyan or magenta), usually caused by helical-scan tracking
+            failures on tape source. The artifact is often accompanied by horizontal image displacement
+            and brief picture "swerve" at onset.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Two flagging rules:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>envelope</strong> &mdash; within a single frame, both
+                U and V span nearly the full chroma range (UMIN &lt; {env_low}, UMAX &gt; {env_high},
+                VMIN &lt; {env_low}, VMAX &gt; {env_high} for 10-bit; scaled /4 for 8-bit).
+                This is the strongest single-frame signature.</li>
+            <li style="margin-bottom: 4px;"><strong>satmax</strong> &mdash; SATMAX exceeds {satmax_high}
+                (10-bit) or its 8-bit equivalent. Catches partial events where only a portion of the
+                frame is affected.</li>
+        </ul>
+        <p style="margin: 0 0 10px 0;">
+            Consecutive flagged frames within ~10 frames are merged into a single event. Events shorter
+            than 2 flagged frames are suppressed to filter isolated transients (scene cuts, motion blur
+            into saturated content) which would otherwise be false positives.
+        </p>
+        <p style="margin: 0;">
+            Color bars at the head of the tape (when detected by qct-parse) are skipped automatically.
+            Measurements come from FFmpeg's <code>signalstats</code> filter as recorded in the QCTools
+            report. Hue values are the median hue (HUEMED) at the event's peak SATMAX frame; ~180&deg;
+            is cyan, ~315&deg; magenta.
+        </p>
+    </div>
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Bit Depth</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{bit_depth}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Video Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Frames Skipped (color bars)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{bars_skipped}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Flagged Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{flagged_frames} ({flagged_pct}%)</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Detected Events</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{event_count}</td></tr>
+    </table>
+    {thumbs_html}
+    {events_table}
+    '''
+    return html
+
+
+def _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events):
+    """
+    Render the chroma-phase thumbnail gallery as base64-embedded <img> tags.
+    Pulls PNGs from {report_dir}/ChromaPhaseThumbs/event_NN.png where NN is
+    the event index (1-based). Returns "" when no thumbnails are present.
+
+    Args:
+        chroma_phase_summary_csv (str): Path to the summary CSV (used only to
+            derive the sibling ChromaPhaseThumbs/ directory).
+        events (list): The parsed event rows from the events CSV.
+
+    Returns:
+        str: HTML string, or "" if no thumbnails are present.
+    """
+    if not chroma_phase_summary_csv or not events:
+        return ""
+
+    report_dir = os.path.dirname(chroma_phase_summary_csv)
+    thumb_dir = os.path.join(report_dir, "ChromaPhaseThumbs")
+    if not os.path.isdir(thumb_dir):
+        return ""
+
+    # Build a quick lookup of event_idx -> event row, then iterate in
+    # event-index order so the gallery's reading order matches the table.
+    by_idx = {}
+    for r in events:
+        try:
+            idx = int(r[0])
+            by_idx[idx] = r
+        except (ValueError, IndexError):
+            continue
+
+    items_html = ""
+    found = 0
+    for idx in sorted(by_idx.keys()):
+        thumb_path = os.path.join(thumb_dir, f"event_{idx:02d}.png")
+        if not os.path.isfile(thumb_path):
+            continue
+        try:
+            with open(thumb_path, "rb") as f:
+                encoded = b64encode(f.read()).decode("ascii")
+        except Exception as e:
+            logger.warning(f"Failed to read chroma-phase thumbnail {thumb_path}: {e}")
+            continue
+        found += 1
+        row = by_idx[idx]
+        # row: event_idx, start, end, dur_s, frames, rule, peak_sat, peak_time, hue
+        start = row[1] if len(row) > 1 else ""
+        frames = row[4] if len(row) > 4 else ""
+        peak_time = row[7] if len(row) > 7 else ""
+        items_html += f'''
+        <div style="text-align: center; margin: 5px;">
+            <img src="data:image/png;base64,{encoded}"
+                 style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
+                 onclick="openImage(this.src, 'Chroma Phase Event {idx} - peak at {peak_time}')"
+                 title="Click to enlarge" />
+            <p style="font-size: 12px; margin: 4px 0 0 0;"><strong>Event {idx}</strong> &mdash; starts {start}</p>
+            <p style="font-size: 11px; margin: 1px 0 0 0; color: #777;">peak at {peak_time} &middot; {frames} frame(s)</p>
+        </div>'''
+
+    if found == 0:
+        return ""
+
+    return f'''
+    <h4 style="margin-top: 20px;">Event Thumbnails</h4>
+    <p style="font-size: 13px; margin: 0 0 8px 0; color: #555;">
+        Frame captured at each event's peak SATMAX (max {found} shown; if more than 10 events were detected,
+        the largest events by frame count are shown).
+    </p>
+    <div style="display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0;">
+        {items_html}
+    </div>'''
 
 
 def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict):
@@ -4312,7 +4572,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, chroma_phase_summary_csv, chroma_phase_events_csv, difference_csv = find_report_csvs(report_directory)
 
     # CLAMS bars-detection durations CSV (filename matches the writer in
     # checks/bars_detection_clams.py); present only when the parallel detector ran.
@@ -4514,6 +4774,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
     audio_dropout_html = make_audio_dropout_html(audio_dropout_csv) if audio_dropout_csv else None
     clamped_levels_html = make_clamped_levels_html(clamped_levels_csv, clamped_traces_csv) if clamped_levels_csv else None
+    chroma_phase_html = make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv) if chroma_phase_summary_csv else None
     dropped_sample_html = generate_dropped_sample_html(frame_outputs) if frame_outputs else ""
     duplicate_frame_html = generate_duplicate_frame_html(frame_outputs) if frame_outputs else ""
     bitplane_html = generate_bitplane_html(frame_outputs) if frame_outputs else ""
@@ -4528,6 +4789,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         not audible_timecode_csv and
         not audio_dropout_csv and
         not clamped_levels_csv and
+        not chroma_phase_summary_csv and
         not existing_thumbs
     )
 
@@ -4641,6 +4903,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-colorbars-eval', 'Colorbars Threshold Evaluation'))
     if clamped_levels_html:
         toc_entries.append(('section-clamped-levels', 'Clamped Levels Detection'))
+    if chroma_phase_html:
+        toc_entries.append(('section-chroma-phase', 'Chroma Phase Detection'))
     if _has_audio_results:
         toc_entries.append(('section-audio-analysis', 'Audio Analysis Results'))
     if dropped_sample_html:
@@ -5005,6 +5269,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3 id="section-clamped-levels">Clamped Levels Detection</h3>
         {clamped_levels_html}
+        """
+
+    if chroma_phase_html:
+        html_template += f"""
+        <h3 id="section-chroma-phase">Chroma Phase Detection</h3>
+        {chroma_phase_html}
         """
 
     has_audio_results = bool(

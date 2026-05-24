@@ -1452,6 +1452,344 @@ def _write_clamped_levels_results(report_directory, results):
         logger.debug(f"No clamped levels detected (bit depth {bit_depth}). Results in {os.path.basename(csv_path)}\n")
 
 
+# Chroma phase error detection thresholds. Empirically derived from a known-
+# affected analog source (helical-scan tracking errors producing cyan/magenta
+# colour shifts with horizontal image displacement) and validated against a
+# clean source. Two-rule detector:
+#   PRIMARY  - chroma "envelope wide": within a single frame, both U and V
+#              span nearly the full chroma range (UMIN low AND UMAX high AND
+#              VMIN low AND VMAX high). This is the strongest single-frame
+#              signature of a chroma phase event.
+#   SECONDARY - SATMAX over a high threshold. Catches partial events where
+#              only a portion of the frame is in chroma phase error.
+# Thresholds below are 10-bit (0-1023). For 8-bit (0-255) they are scaled /4.
+CHROMA_ENVELOPE_LOW_10BIT = 100
+CHROMA_ENVELOPE_HIGH_10BIT = 900
+CHROMA_SATMAX_HIGH_10BIT = 600
+# Consecutive flagged frames within this gap (in frames) are merged into a
+# single event. ~10 frames = ~333ms at 29.97fps. A single chroma phase event
+# often produces non-contiguous flagged frames clustered within ~half a second.
+CHROMA_EVENT_GAP_FRAMES = 10
+# Minimum event length (in frames). Events of length 1 are kept only when the
+# single frame fires BOTH the envelope rule AND the SATMAX rule — that combo
+# is the high-confidence chroma-flip signature. Single-frame events firing
+# only one of the two rules are filtered as transients (bright frames with
+# rogue outlier pixels, scene cuts that briefly spike SATMAX, etc.).
+CHROMA_MIN_EVENT_FRAMES = 2
+CHROMA_SINGLE_FRAME_REQUIRES_BOTH_RULES = True
+# Cap the number of thumbnails generated per video. When more events are
+# detected, the top-N by frame_count are selected.
+CHROMA_MAX_THUMBS = 10
+# Subdirectory inside report_directory where chroma-phase thumbnails are
+# saved. Kept separate from ThumbExports/ so find_qct_thumbs() does not pick
+# them up and surface them under unrelated report sections.
+CHROMA_THUMBS_DIRNAME = "ChromaPhaseThumbs"
+
+
+def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
+                             bars_end_time=None, video_path=None,
+                             signals=None, total_duration=None):
+    """
+    Detect chroma phase errors - typically caused by helical-scan tracking
+    failures on tape source, producing sudden shifts of the chroma signal so
+    that all colour collapses toward cyan or magenta, often with horizontal
+    image displacement. Walks the QCTools report once, flags individual
+    frames against two rules, then merges consecutive flagged frames into
+    events. When ``video_path`` is provided, also exports thumbnail PNGs at
+    the peak frame of the top-N events (by frame count) for the HTML report.
+
+    Parameters:
+        startObj (str): Path to the QCTools report file (.qctools.xml.gz).
+        pkt (str): Timestamp attribute key (pkt_dts_time or pkt_pts_time).
+        report_directory (str): Path to {video_id}_report_csvs directory.
+        bit_depth_10 (bool): True for 10-bit-scale values (0-1023), False for 8-bit.
+        bars_end_time (float or None): Skip frames with timestamp < bars_end_time
+            to avoid flagging SMPTE colour bars at the head of the tape.
+        video_path (str or None): Path to the source video file; when present,
+            thumbnails are generated for the top-N events by frame count.
+        signals: Optional signals object for emitting progress updates.
+        total_duration (float or None): Total video duration in seconds for progress.
+
+    Returns:
+        dict or None: Results dict (also written to CSV), or None on failure.
+    """
+    etree = load_etree()
+    if etree is None:
+        return None
+
+    parser_iter = safe_gzip_iterparse(startObj, etree)
+    if parser_iter is None:
+        logger.error(f"Failed to parse {startObj} for chroma-phase analysis")
+        return None
+
+    if bit_depth_10:
+        env_low = CHROMA_ENVELOPE_LOW_10BIT
+        env_high = CHROMA_ENVELOPE_HIGH_10BIT
+        satmax_high = CHROMA_SATMAX_HIGH_10BIT
+    else:
+        env_low = CHROMA_ENVELOPE_LOW_10BIT / 4
+        env_high = CHROMA_ENVELOPE_HIGH_10BIT / 4
+        satmax_high = CHROMA_SATMAX_HIGH_10BIT / 4
+
+    METRIC_KEYS = ('UMIN', 'UMAX', 'VMIN', 'VMAX', 'SATMAX', 'HUEMED', 'SATAVG')
+
+    flagged = []  # list of dicts: {'frame_idx', 'time', 'rule', 'envelope_wide',
+                  # 'satmax_hit', 'satmax', 'huemed', 'satavg'}
+    total_frames = 0
+    frames_skipped_bars = 0
+    progress_interval = 500
+    last_pct = 64
+
+    try:
+        for event, elem in parser_iter:
+            if elem.attrib.get('media_type') != 'video':
+                elem.clear()
+                continue
+            total_frames += 1
+
+            try:
+                frame_time = float(elem.attrib.get(pkt, "0"))
+            except (TypeError, ValueError):
+                frame_time = float(total_frames)
+
+            if (signals and hasattr(signals, 'qctparse_progress') and
+                    total_duration and total_frames % progress_interval == 0):
+                pct = 64 + int((frame_time / total_duration) * 28)
+                pct = min(92, max(64, pct))
+                if pct > last_pct:
+                    signals.qctparse_progress.emit(pct)
+                    last_pct = pct
+
+            if bars_end_time is not None and frame_time < bars_end_time:
+                frames_skipped_bars += 1
+                elem.clear()
+                continue
+
+            metrics = {}
+            for t in list(elem):
+                key = t.attrib.get('key', '')
+                if not key.startswith('lavfi.signalstats.'):
+                    continue
+                metric = key.rsplit('.', 1)[-1]
+                if metric not in METRIC_KEYS:
+                    continue
+                try:
+                    metrics[metric] = float(t.attrib['value'])
+                except (ValueError, KeyError):
+                    continue
+            elem.clear()
+
+            if not metrics:
+                continue
+
+            umin = metrics.get('UMIN')
+            umax = metrics.get('UMAX')
+            vmin = metrics.get('VMIN')
+            vmax = metrics.get('VMAX')
+            satmax = metrics.get('SATMAX', 0)
+
+            envelope_wide = (
+                umin is not None and umax is not None
+                and vmin is not None and vmax is not None
+                and umin < env_low and umax > env_high
+                and vmin < env_low and vmax > env_high
+            )
+            satmax_hit = satmax > satmax_high
+
+            if envelope_wide or satmax_hit:
+                flagged.append({
+                    'frame_idx': total_frames - 1,
+                    'time': frame_time,
+                    'rule': 'envelope' if envelope_wide else 'satmax',
+                    'envelope_wide': envelope_wide,
+                    'satmax_hit': satmax_hit,
+                    'satmax': satmax,
+                    'huemed': metrics.get('HUEMED'),
+                    'satavg': metrics.get('SATAVG'),
+                })
+    except Exception as e:
+        logger.error(f"Error during chroma-phase analysis: {e}")
+        return None
+
+    if total_frames == 0:
+        logger.warning("No video frames found in QCTools report for chroma-phase analysis\n")
+        return None
+
+    # Group consecutive flagged frames into events (gap <= CHROMA_EVENT_GAP_FRAMES)
+    events = []
+    cur = []
+    for f in flagged:
+        if not cur or (f['frame_idx'] - cur[-1]['frame_idx']) <= CHROMA_EVENT_GAP_FRAMES:
+            cur.append(f)
+        else:
+            events.append(cur)
+            cur = [f]
+    if cur:
+        events.append(cur)
+
+    # Filter events. An event is kept if it has >= CHROMA_MIN_EVENT_FRAMES
+    # frames, OR if it is a single high-confidence frame (envelope AND satmax
+    # both fired) when CHROMA_SINGLE_FRAME_REQUIRES_BOTH_RULES is enabled.
+    def _keep(e):
+        if len(e) >= CHROMA_MIN_EVENT_FRAMES:
+            return True
+        if CHROMA_SINGLE_FRAME_REQUIRES_BOTH_RULES and len(e) == 1:
+            f = e[0]
+            return bool(f.get('envelope_wide') and f.get('satmax_hit'))
+        return False
+    events = [e for e in events if _keep(e)]
+
+    # Build per-event summary records
+    event_records = []
+    for idx, e in enumerate(events):
+        peak = max(e, key=lambda f: f['satmax'])
+        rules = {f['rule'] for f in e}
+        # 'envelope' is stricter than 'satmax'; report whichever rules fired
+        rule_str = '+'.join(sorted(rules))
+        event_records.append({
+            'event_idx': idx + 1,
+            'start_time': e[0]['time'],
+            'end_time': e[-1]['time'],
+            'duration_seconds': e[-1]['time'] - e[0]['time'],
+            'frame_count': len(e),
+            'rule': rule_str,
+            'peak_satmax': peak['satmax'],
+            'peak_time': peak['time'],
+            'hue_at_peak': peak['huemed'],
+        })
+
+    # Generate thumbnails for the top-N events (by frame count). Saves to
+    # report_directory/ChromaPhaseThumbs/event_NN.png, keyed by the event's
+    # 1-based index so the HTML renderer can match thumbs to event rows.
+    thumbs_written = 0
+    if video_path and event_records:
+        top_events = sorted(event_records, key=lambda e: e['frame_count'], reverse=True)[:CHROMA_MAX_THUMBS]
+        thumb_dir = os.path.join(report_directory, CHROMA_THUMBS_DIRNAME)
+        try:
+            os.makedirs(thumb_dir, exist_ok=True)
+            for e in top_events:
+                out_path = os.path.join(thumb_dir, f"event_{e['event_idx']:02d}.png")
+                if _export_chroma_thumb(video_path, e['peak_time'], out_path):
+                    thumbs_written += 1
+        except Exception as ex:
+            logger.warning(f"Chroma-phase thumbnail generation failed: {ex}")
+
+    results = {
+        'total_video_frames': total_frames,
+        'bit_depth_10': bit_depth_10,
+        'bars_skipped_frames': frames_skipped_bars,
+        'flagged_frames': len(flagged),
+        'event_count': len(event_records),
+        'events': event_records,
+        'thumbnails_written': thumbs_written,
+        'thresholds': {
+            'envelope_low': env_low,
+            'envelope_high': env_high,
+            'satmax_high': satmax_high,
+        },
+    }
+
+    _write_chroma_phase_results(report_directory, results)
+    return results
+
+
+def _export_chroma_thumb(video_path, time_seconds, out_path):
+    """
+    Render a single PNG thumbnail from ``video_path`` at ``time_seconds`` to
+    ``out_path``. No signalstats overlay - we want the unmodified frame so
+    the chroma cast and image displacement are visible. Returns True on
+    success.
+    """
+    if not video_path or not os.path.isfile(video_path):
+        logger.warning(f"Chroma-phase thumbnail skipped: video file not found at {video_path}")
+        return False
+    try:
+        ts_str = dts2ts(str(time_seconds))
+    except Exception:
+        ts_str = f"{time_seconds:.3f}"
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-ss", ts_str,
+        "-i", video_path,
+        "-vframes", "1",
+        "-s", "720x486",
+        out_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            logger.warning(
+                f"ffmpeg failed for chroma-phase thumbnail at {ts_str}: "
+                f"{result.stderr.strip()[:200]}"
+            )
+            return False
+        return os.path.isfile(out_path)
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ffmpeg timed out generating chroma-phase thumbnail at {ts_str}")
+        return False
+    except Exception as e:
+        logger.warning(f"Error generating chroma-phase thumbnail at {ts_str}: {e}")
+        return False
+
+
+def _write_chroma_phase_results(report_directory, results):
+    """Write chroma-phase detection results to two CSVs (summary + per-event)."""
+    summary_path = os.path.join(report_directory, "qct-parse_chroma_phase_summary.csv")
+    events_path = os.path.join(report_directory, "qct-parse_chroma_phase_events.csv")
+
+    total = results['total_video_frames']
+    flagged = results['flagged_frames']
+    bit_depth = 10 if results['bit_depth_10'] else 8
+    th = results['thresholds']
+
+    with open(summary_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Chroma Phase Error Detection Summary"])
+        writer.writerow(["Bit Depth", bit_depth])
+        writer.writerow(["Total Video Frames", total])
+        writer.writerow(["Frames Skipped (color bars region)", results['bars_skipped_frames']])
+        writer.writerow(["Flagged Frames", flagged])
+        writer.writerow(["Flagged %", f"{(flagged/total*100) if total else 0:.3f}"])
+        writer.writerow(["Detected Events", results['event_count']])
+        writer.writerow([])
+        writer.writerow(["Thresholds"])
+        writer.writerow(["Envelope Low (U/V min)", f"{th['envelope_low']:g}"])
+        writer.writerow(["Envelope High (U/V max)", f"{th['envelope_high']:g}"])
+        writer.writerow(["SATMAX High", f"{th['satmax_high']:g}"])
+        writer.writerow(["Event Merge Gap (frames)", CHROMA_EVENT_GAP_FRAMES])
+
+    with open(events_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "Event", "Start (HH:MM:SS.mmm)", "End (HH:MM:SS.mmm)",
+            "Duration (s)", "Frames", "Rule",
+            "Peak SATMAX", "Peak Time (HH:MM:SS.mmm)", "Hue at Peak (deg)",
+        ])
+        for r in results['events']:
+            writer.writerow([
+                r['event_idx'],
+                dts2ts(str(r['start_time'])),
+                dts2ts(str(r['end_time'])),
+                f"{r['duration_seconds']:.3f}",
+                r['frame_count'],
+                r['rule'],
+                f"{r['peak_satmax']:g}",
+                dts2ts(str(r['peak_time'])),
+                f"{r['hue_at_peak']:g}" if r['hue_at_peak'] is not None else "",
+            ])
+
+    if results['event_count']:
+        logger.warning(
+            f"Chroma phase errors detected: {results['event_count']} events "
+            f"({flagged} frames). See {os.path.basename(events_path)}\n"
+        )
+    else:
+        logger.debug(
+            f"No chroma phase errors detected (bit depth {bit_depth}). "
+            f"Results in {os.path.basename(summary_path)}\n"
+        )
+
+
 def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None):
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
@@ -2708,6 +3046,10 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     # initialize the start and end duration times variables
     durationStart = 0
     durationEnd = 99999999
+    # End of detected color bars region (in seconds). Captured below if bars
+    # detection runs; consumed by downstream features that need to skip the
+    # bars at the head of the tape (e.g. chroma-phase detection).
+    chroma_bars_end_time = None
 
     # set the path for the thumbnail export
     thumbPath = os.path.join(report_directory, "ThumbExports")
@@ -2776,6 +3118,14 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
                 barsStampString = dts2ts(durationStart)
                 printThumb(video_path, "bars_found", "color_bars_detection", startObj,thumbPath, "first_frame", barsStampString)
 
+        # Capture bars end (seconds) before durationEnd may be clobbered below,
+        # so downstream features can skip the colour-bars region.
+        try:
+            if durationEnd not in ("", None):
+                chroma_bars_end_time = float(durationEnd)
+        except (TypeError, ValueError):
+            chroma_bars_end_time = None
+
     if check_cancelled():
         return None
 
@@ -2836,6 +3186,21 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         )
         if clamped_results is None:
             logger.warning("Clamped-levels detection could not be performed\n")
+
+    if check_cancelled():
+        return None
+
+    ######## Chroma Phase Error Detection ########
+    if qct_parse.get('detect_chroma_phase_errors', False):
+        logger.debug(f"Starting chroma-phase error detection on {baseName}\n")
+        chroma_results = analyzeChromaPhaseErrors(
+            startObj, pkt, report_directory, bit_depth_10,
+            bars_end_time=chroma_bars_end_time,
+            video_path=video_path,
+            signals=signals, total_duration=total_duration,
+        )
+        if chroma_results is None:
+            logger.warning("Chroma-phase detection could not be performed\n")
 
     if check_cancelled():
         return None

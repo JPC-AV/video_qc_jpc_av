@@ -69,6 +69,7 @@
       "thumbExport": true,
       "audio_analysis": false,
       "detect_clamped_levels": false,
+      "detect_chroma_phase_errors": false,
       "tagname": ""
     },
     "clams_detection": {
