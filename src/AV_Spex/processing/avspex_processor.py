@@ -2,7 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import os
-os.environ["PATH"] = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# /opt/homebrew/bin before /usr/local/bin so Apple Silicon native binaries
+# are preferred over any leftover x86_64 ones (which would run under Rosetta
+# and stall on cross-arch sync primitives).
+os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 import time
 from art import art, text2art
 from dataclasses import asdict
