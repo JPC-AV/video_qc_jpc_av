@@ -241,14 +241,10 @@ class ProcessingManager:
             check_cancelled=self.check_cancelled, signals=self.signals
         )
         color_bars_end_time = qctools_results.get('color_bars_end_time') if qctools_results else None
-        # CLAMS bars detection results (parallel observation; qct-parse remains
-        # authoritative for color_bars_end_time used downstream).
         clams_bars_start_time = qctools_results.get('clams_bars_start_time') if qctools_results else None
         clams_bars_end_time = qctools_results.get('clams_bars_end_time') if qctools_results else None
         processing_results['clams_bars_start_time'] = clams_bars_start_time
         processing_results['clams_bars_end_time'] = clams_bars_end_time
-        # CLAMS tone detection results (parallel observation; standalone from
-        # bars detection — uses the audio track instead of the video track).
         processing_results['clams_tones'] = qctools_results.get('clams_tones', []) if qctools_results else []
 
         # Check if frame analysis is enabled
@@ -588,55 +584,26 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
             if signals:
                 signals.step_completed.emit("QCTools")
 
-    # Handle QCTools parsing (independent of whether QCTools was run)
-    if qct_parse_run_tool:
-        # Ensure we have a QCTools report to parse
-        if not results['qctools_output_path'] or not os.path.isfile(results['qctools_output_path']):
-            logger.critical(f"Unable to check qctools report. No QCTools report file found in input directory.")
-        else:
-            # Ensure report directory exists
-            if not report_directory:
-                report_directory = dir_setup.make_report_dir(source_directory, video_id)
+    # ---- CLAMS detection (runs BEFORE qct-parse so its results can guide
+    # additional qct-parse bars scans). Tone detection runs first — it's fast
+    # over the whole file and good at finding bars hidden mid-file. Bars
+    # detection always runs at the beginning and additionally at any tone-
+    # flagged regions. Cross-validation second passes run as before.
+    clams_regions = []
 
-            # Run QCTools parsing
-            logger.info(f"Running qct-parse on: {results['qctools_output_path']}")
-            if signals and hasattr(signals, 'qctparse_progress'):
-                signals.qctparse_progress.emit(0)
-            run_qctparse(video_path, results['qctools_output_path'], report_directory, check_cancelled=check_cancelled, signals=signals)
-            if signals:
-                signals.step_completed.emit("QCT Parse")
-             # After qct-parse completes, check for color bars results
-            colorbars_csv = Path(report_directory) / "qct-parse_colorbars_durations.csv"
-            if colorbars_csv.exists():
-                start_seconds, end_seconds = parse_colorbars_duration_csv(str(colorbars_csv))
-                if end_seconds:
-                    results['color_bars_end_time'] = end_seconds
-                    logger.debug(f"Color bars detected, ending at {end_seconds:.1f}s\n")
-
-    # Unified CLAMS detection step: runs the SSIM-based SMPTE bars detector and
-    # the cross-correlation tone detector together under one toggle, then
-    # cross-validates — for any tone span without an overlapping bars run, a
-    # second-pass bars scan runs over that window with relaxed thresholds, and
-    # vice versa. Both detectors run straight from the video file, independent
-    # of QCTools / qct-parse, and remain observation-only: qct-parse stays
-    # authoritative for the BRNG skip and access-file trim.
     clams_cfg = getattr(checks_config.tools, 'clams_detection', None)
     if clams_cfg and getattr(clams_cfg, 'run_tool', False):
         if check_cancelled and check_cancelled():
             return results
         if not report_directory:
             report_directory = dir_setup.make_report_dir(source_directory, video_id)
-        logger.info("CLAMS detection: starting (bars + tone)")
+        logger.info("CLAMS detection: starting (tone first, then bars)")
         if signals and hasattr(signals, 'clams_detection_progress'):
             signals.clams_detection_progress.emit(0)
 
         bars_params = clams_cfg.bars
         tone_params = clams_cfg.tone
 
-        # The detectors split a single continuous bars/tone run into multiple
-        # short fragments when SSIM or cross-correlation dips below threshold
-        # for a chunk. _merge_adjacent_spans collapses fragments separated by
-        # less than the configured gap back into one span.
         def _merge_adjacent_spans(spans, gap_seconds):
             """Merge (start, end) tuples whose gap is <= gap_seconds."""
             if not spans:
@@ -654,10 +621,49 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         bars_merge_gap = getattr(bars_params, 'merge_gap_seconds', 1.0)
         tone_merge_gap = getattr(tone_params, 'merge_gap_seconds', 5.0)
 
-        # Probe fps once so the cross-validation pass can convert
-        # seconds-based windows to frame ranges for the bars detector.
+        # Load audio once so tone passes reuse the same decoded buffer.
+        audio_samples = tone_detection_clams.load_audio_mono_16k(video_path)
+
+        # ---- Phase 1: tone detection (whole file, fast) ----
+        primary_tones = run_clams_tone_detection(
+            video_path=video_path,
+            report_directory=report_directory,
+            video_id=video_id,
+            tolerance=tone_params.tolerance,
+            min_tone_duration_ms=tone_params.min_tone_duration_ms,
+            stop_at_seconds=tone_params.stop_at_seconds,
+            samples=audio_samples,
+            check_cancelled=check_cancelled,
+            signals=signals,
+        )
+        if primary_tones:
+            before = len(primary_tones)
+            primary_tones = _merge_adjacent_spans(primary_tones, gap_seconds=tone_merge_gap)
+            if len(primary_tones) < before:
+                logger.info(
+                    f"CLAMS tone detection: merged {before} adjacent fragment(s) "
+                    f"into {len(primary_tones)} tone(s) (gap ≤ {tone_merge_gap:.1f}s)"
+                )
+        results['clams_tones'] = primary_tones
+        if primary_tones:
+            logger.info(
+                f"CLAMS tone detection: finished — {len(primary_tones)} tone(s) detected"
+            )
+        else:
+            logger.info("CLAMS tone detection: finished — no tones met the minimum duration threshold")
+
+        if check_cancelled and check_cancelled():
+            bars_detection_clams.write_durations_csv(report_directory, [])
+            tone_detection_clams.write_durations_csv(
+                report_directory,
+                [("primary", s, e) for s, e in primary_tones],
+            )
+            return results
+
+        # Probe fps once for bars detection frame calculations.
         fps = bars_detection_clams.get_video_fps(video_path)
 
+        # ---- Phase 2: bars detection at the beginning (always) ----
         primary_bars = run_clams_bars_detection(
             video_path=video_path,
             report_directory=report_directory,
@@ -690,50 +696,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         else:
             logger.info("CLAMS bars detection: finished — no color bars run met the minimum frame count")
 
-        if check_cancelled and check_cancelled():
-            bars_detection_clams.write_durations_csv(
-                report_directory,
-                [("primary", s, e) for s, e in primary_bars],
-            )
-            tone_detection_clams.write_durations_csv(report_directory, [])
-            return results
-
-        # Load audio once so the primary tone pass and any second-pass tone
-        # windows reuse the same decoded buffer.
-        audio_samples = tone_detection_clams.load_audio_mono_16k(video_path)
-
-        primary_tones = run_clams_tone_detection(
-            video_path=video_path,
-            report_directory=report_directory,
-            video_id=video_id,
-            tolerance=tone_params.tolerance,
-            min_tone_duration_ms=tone_params.min_tone_duration_ms,
-            stop_at_seconds=tone_params.stop_at_seconds,
-            samples=audio_samples,
-            check_cancelled=check_cancelled,
-            signals=signals,
-        )
-        if primary_tones:
-            before = len(primary_tones)
-            primary_tones = _merge_adjacent_spans(primary_tones, gap_seconds=tone_merge_gap)
-            if len(primary_tones) < before:
-                logger.info(
-                    f"CLAMS tone detection: merged {before} adjacent fragment(s) "
-                    f"into {len(primary_tones)} tone(s) (gap ≤ {tone_merge_gap:.1f}s)"
-                )
-        results['clams_tones'] = primary_tones
-        if primary_tones:
-            logger.info(
-                f"CLAMS tone detection: finished — {len(primary_tones)} tone(s) detected"
-            )
-        else:
-            logger.info("CLAMS tone detection: finished — no tones met the minimum duration threshold")
-
-        # Cross-validation: window-targeted second passes with relaxed thresholds.
-        # Triggers asymmetrically — each detector's hits are checked against the
-        # other's spans, and a windowed second pass fires for each non-overlapping
-        # span (with WINDOW_SLACK_SECONDS of slack on either side, since the
-        # audio tone and video bars don't always start/stop in lockstep).
+        # ---- Phase 3: cross-validation second passes ----
         WINDOW_SLACK_SECONDS = 5.0
         SECONDARY_BARS_THRESHOLD = 0.6
         SECONDARY_BARS_SAMPLE_RATIO = 5
@@ -746,11 +709,9 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         def _overlaps_any(start, end, spans, slack):
             return any(_spans_overlap(start, end, s, e, slack) for s, e in spans)
 
+        # Bars second-pass: scan tone regions not covered by primary bars
         secondary_bars = []
         if primary_tones and fps and fps > 0:
-            # Cluster uncovered primary tones into merged scan windows so that
-            # an adjacent group of tones triggers one combined SSIM scan
-            # instead of several heavily-overlapping scans.
             uncovered_tones = [
                 (s, e) for s, e in primary_tones
                 if not _overlaps_any(s, e, primary_bars, WINDOW_SLACK_SECONDS)
@@ -806,6 +767,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                     f"into {len(secondary_bars)} run(s) (gap ≤ {bars_merge_gap:.1f}s)"
                 )
 
+        # Tone second-pass: scan bars regions not covered by primary tones
         secondary_tones = []
         if primary_bars and audio_samples is not None:
             for bars_start, bars_end in primary_bars:
@@ -862,6 +824,65 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         if signals and hasattr(signals, 'step_completed'):
             signals.step_completed.emit("CLAMS Detection")
         logger.info("")  # blank line for readability
+
+        # Build clams_regions for qct-parse: all bars and tone regions found.
+        for s, e in (primary_bars + secondary_bars):
+            clams_regions.append((s, e, "bars"))
+        for s, e in (primary_tones + secondary_tones):
+            clams_regions.append((s, e, "tone"))
+        clams_regions.sort(key=lambda r: r[0])
+
+    # ---- qct-parse (runs AFTER CLAMS, receives CLAMS regions for
+    # additional windowed bars scans beyond the head area) ----
+    qctparse_head_end = None
+
+    if qct_parse_run_tool:
+        if not results['qctools_output_path'] or not os.path.isfile(results['qctools_output_path']):
+            logger.critical(f"Unable to check qctools report. No QCTools report file found in input directory.")
+        else:
+            if not report_directory:
+                report_directory = dir_setup.make_report_dir(source_directory, video_id)
+
+            logger.info(f"Running qct-parse on: {results['qctools_output_path']}")
+            if signals and hasattr(signals, 'qctparse_progress'):
+                signals.qctparse_progress.emit(0)
+            qctparse_result = run_qctparse(
+                video_path, results['qctools_output_path'], report_directory,
+                check_cancelled=check_cancelled, signals=signals,
+                clams_regions=clams_regions,
+            )
+            if signals:
+                signals.step_completed.emit("QCT Parse")
+
+            if qctparse_result:
+                qctparse_head_end = qctparse_result.get('head_bars_end')
+
+            # Fallback: read CSV if run_qctparse returned None (cancelled/error)
+            if qctparse_head_end is None:
+                colorbars_csv = Path(report_directory) / "qct-parse_colorbars_durations.csv"
+                if colorbars_csv.exists():
+                    _, end_seconds, _ = parse_colorbars_duration_csv(str(colorbars_csv))
+                    qctparse_head_end = end_seconds
+
+            if qctparse_head_end:
+                logger.debug(f"qct-parse head bars detected, ending at {qctparse_head_end:.1f}s\n")
+
+    # ---- Merge: "longest/latest wins" for head bars ----
+    HEAD_BARS_START_THRESHOLD = 10.0
+    clams_head_end = None
+    if results.get('clams_bars_start_time') is not None:
+        if results['clams_bars_start_time'] < HEAD_BARS_START_THRESHOLD:
+            clams_head_end = results['clams_bars_end_time']
+
+    head_candidates = [t for t in [qctparse_head_end, clams_head_end] if t is not None]
+    if head_candidates:
+        results['color_bars_end_time'] = max(head_candidates)
+        logger.info(
+            f"Merged head bars end time: {results['color_bars_end_time']:.1f}s "
+            f"(qct-parse={qctparse_head_end}, CLAMS={clams_head_end})"
+        )
+    else:
+        results['color_bars_end_time'] = None
 
     return results
 
@@ -1071,48 +1092,61 @@ def setup_mediaconch_policy(user_policy_path: str = None) -> str:
 def parse_colorbars_duration_csv(csv_path):
     """
     Parse the qct-parse color bars duration CSV to extract start and end times.
-    
+
+    Supports both the legacy 2-column format and the 3-column labeled format.
+
     Args:
         csv_path (str): Path to qct-parse_colorbars_durations.csv
-        
+
     Returns:
-        tuple: (start_time_seconds, end_time_seconds) or (None, None) if no bars found
+        tuple: (head_start_seconds, head_end_seconds, all_regions)
+               where all_regions is a list of (label, start_seconds, end_seconds).
+               Returns (None, None, []) if no bars found.
     """
     import csv
-    
+
     if not os.path.exists(csv_path):
-        return None, None
-    
+        return None, None, []
+
+    def timestamp_to_seconds(ts_str):
+        parts = ts_str.strip().split(':')
+        if len(parts) == 3:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = float(parts[2])
+            return hours * 3600 + minutes * 60 + seconds
+        return 0
+
     try:
         with open(csv_path, 'r') as csvfile:
             reader = csv.reader(csvfile)
             rows = list(reader)
-            
-            if len(rows) >= 2 and "color bars found" in rows[0][0]:
-                # Color bars were found - parse the timestamps
-                # Format is HH:MM:SS.ssss
-                start_str = rows[1][0]
-                end_str = rows[1][1] if len(rows[1]) > 1 else None
-                
-                # Convert timestamp string to seconds
-                def timestamp_to_seconds(ts_str):
-                    parts = ts_str.split(':')
-                    if len(parts) == 3:
-                        hours = int(parts[0])
-                        minutes = int(parts[1])
-                        seconds = float(parts[2])
-                        return hours * 3600 + minutes * 60 + seconds
-                    return 0
-                
-                start_seconds = timestamp_to_seconds(start_str)
-                end_seconds = timestamp_to_seconds(end_str) if end_str else start_seconds
-                
-                return start_seconds, end_seconds
-                
+
+            if not rows or "color bars found" not in rows[0][0]:
+                return None, None, []
+
+            all_regions = []
+            for row in rows[1:]:
+                if len(row) >= 3:
+                    label = row[0]
+                    start = timestamp_to_seconds(row[1])
+                    end = timestamp_to_seconds(row[2])
+                    all_regions.append((label, start, end))
+                elif len(row) >= 2:
+                    start = timestamp_to_seconds(row[0])
+                    end = timestamp_to_seconds(row[1])
+                    all_regions.append(("head", start, end))
+
+            head_region = next((r for r in all_regions if r[0] in ("head", "head-relaxed")), None)
+            if head_region:
+                return head_region[1], head_region[2], all_regions
+            elif all_regions:
+                return all_regions[0][1], all_regions[0][2], all_regions
+
     except Exception as e:
         logger.warning(f"Could not parse color bars duration CSV: {e}")
-        
-    return None, None
+
+    return None, None, []
 
 
 def calculate_border_regions(x, y, w, h, video_width, video_height):

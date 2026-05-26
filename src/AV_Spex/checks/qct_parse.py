@@ -247,7 +247,7 @@ def printThumb(video_path, tag, profile_name, startObj, thumbPath, tagValue, tim
 
 
 # detect bars    
-def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, bit_depth_10, signals=None, total_duration=None):
+def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, bit_depth_10, signals=None, total_duration=None, search_start_time=0.0, search_end_time=None, relaxed=False):
     """
     Detects color bars in a video by analyzing frames within a buffered window and logging the start and end times of the bars.
 
@@ -300,23 +300,28 @@ def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, 
         URANGE_min = 150
         VRANGE_min = 150
 
+    if relaxed:
+        YMAX_thresh = int(YMAX_thresh * 0.75)
+        YMIN_thresh = int(YMIN_thresh * 2)
+        YDIF_thresh = YDIF_thresh * 2.0
+        SATMAX_thresh = int(SATMAX_thresh * 0.4)
+
     barsStartString = None
     barsEndString = None
     consecutive_non_bar_frames = 0
     max_consecutive_non_bar_frames = 10  # Allow up to 10 consecutive bad frames before ending
-    
+
     # Add time limit for searching (5 minutes = 300 seconds)
     search_time_limit = 300.0
-    
+
     # Add tolerance for occasional frames that don't meet criteria
     consecutive_failures = 0
-    failure_tolerance = 15  # Allow up to 15 consecutive frames to fail before ending
+    failure_tolerance = 15 if not relaxed else 30
 
     # Confirmation window: require consecutive passing frames before confirming bars start
-    # This prevents false detection on unstable/skewed bars from analog artifacts
     bars_confirmation_count = 0
-    bars_confirmation_threshold = 30  # ~1 second at 30fps must pass before confirming bars
-    bars_candidate_start = None       # timestamp of potential bars start (beginning of passing run)
+    bars_confirmation_threshold = 30 if not relaxed else 10
+    bars_candidate_start = None
 
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
@@ -331,20 +336,30 @@ def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, 
         for event, elem in parser_iter: #iterparse the xml doc
             if elem.attrib['media_type'] == "video": #get just the video frames
                 frame_pkt_dts_time = elem.attrib[pkt] #get the timestamps for the current frame we're looking at
+                frame_time_float = float(frame_pkt_dts_time)
+
+                if frame_time_float < search_start_time:
+                    elem.clear()
+                    continue
 
                 # Emit progress during bars detection (maps into 0→5% range)
                 bars_frame_count += 1
                 if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and bars_frame_count % bars_progress_interval == 0):
-                    pct = int((float(frame_pkt_dts_time) / total_duration) * 5)
+                    pct = int((frame_time_float / total_duration) * 5)
                     pct = min(5, max(0, pct))
                     if pct > bars_last_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         bars_last_progress_pct = pct
-                
-                # Stop searching after 5 minutes if no bars found yet
-                if durationStart == "" and float(frame_pkt_dts_time) > search_time_limit:
-                    logger.debug(f"Stopped searching for color bars after {search_time_limit} seconds")
+
+                effective_search_limit = search_end_time if search_end_time is not None else search_time_limit
+                if durationStart == "" and frame_time_float > effective_search_limit:
+                    logger.debug(f"Stopped searching for color bars after reaching {effective_search_limit:.1f}s")
+                    break
+                if search_end_time is not None and durationStart != "" and frame_time_float > search_end_time:
+                    if durationEnd not in ("", None):
+                        barsEndString = dts2ts(str(durationEnd))
+                    logger.debug(f"Reached end of search window at {search_end_time:.1f}s")
                     break
                 
                 frameDict = {}  #start an empty dict for the new frame
@@ -864,22 +879,30 @@ def print_timestamps(qctools_timestamp_output, summarized_timestamps, descriptor
                 writer.writerow([f"{start.strftime('%H:%M:%S.%f')[:-3]}, {end.strftime('%H:%M:%S.%f')[:-3]}"])
 
 
-def print_bars_durations(qctools_check_output, barsStartString, barsEndString):
+def print_bars_durations(qctools_check_output, barsStartString=None, barsEndString=None, regions=None):
     """
     Writes color bar duration information to a CSV file.
 
-    If both `barsStartString` and `barsEndString` are provided, it writes a header indicating color bars were found
-    and then writes the start and end timestamps on separate rows.
-    If either timestamp is missing, it writes a message indicating no color bars were found.
+    When *regions* is provided (a list of (label, start_ts, end_ts) tuples),
+    the 3-column labeled format is written — one row per detected region.
+    When *regions* is None, falls back to the legacy 2-column single-row format.
 
     Args:
         qctools_check_output (str): Path to the output CSV file.
-        barsStartString (str or None): Start timestamp of the color bars.
-        barsEndString (str or None): End timestamp of the color bars.
+        barsStartString (str or None): Start timestamp (legacy mode).
+        barsEndString (str or None): End timestamp (legacy mode).
+        regions (list or None): List of (label, start_ts_string, end_ts_string).
     """
     with open(qctools_check_output, 'w') as csvfile:
         writer = csv.writer(csvfile)
-        if barsStartString and barsEndString:
+        if regions is not None:
+            if regions:
+                writer.writerow(["qct-parse color bars found:"])
+                for label, start_str, end_str in regions:
+                    writer.writerow([label, start_str, end_str])
+            else:
+                writer.writerow(["qct-parse found no color bars"])
+        elif barsStartString and barsEndString:
             writer.writerow(["qct-parse color bars found:"])
             writer.writerow([barsStartString, barsEndString])
         else:
@@ -2985,7 +3008,7 @@ def _detect_and_write_dropout_results(dropout_candidates, report_directory, tota
     return results
 
 
-def run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=None, signals=None):
+def run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=None, signals=None, clams_regions=None):
     """
     Executes the qct-parse analysis on a given video file, exporting relevant data and thumbnails based on specified thresholds and profiles.
 
@@ -2995,7 +3018,12 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         report_directory (str): Path to {video_id}_report_csvs directory.
         check_cancelled (callable): Optional function to check if processing was cancelled.
         signals: Optional signals object for emitting progress updates.
+        clams_regions (list or None): List of (start_seconds, end_seconds, label)
+            tuples from CLAMS detection. qct-parse runs additional detectBars()
+            passes on regions beyond the head scan window.
 
+    Returns:
+        dict: {'head_bars_start', 'head_bars_end', 'all_bars_regions'} or None if cancelled.
     """
     
     checks_config = config_mgr.get_config('checks', ChecksConfig)
@@ -3087,13 +3115,15 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         return None
 
     ######## Iterate Through the XML for Bars detection ########
+    all_bars_regions = []
+
     if qct_parse['barsDetection']:
         durationStart = ""                            # if bar detection is turned on then we have to calculate this
         durationEnd = ""                            # if bar detection is turned on then we have to calculate this
         logger.debug(f"Starting Bars Detection on {baseName}\n")
         qctools_colorbars_duration_output = os.path.join(report_directory, "qct-parse_colorbars_durations.csv")
         durationStart, durationEnd, barsStartString, barsEndString = detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_depth_10,signals=signals,total_duration=total_duration)
-        
+
         # Handle case where bars start was found but no end transition was detected
         # This happens when the entire video is color bars
         if barsStartString and not barsEndString:
@@ -3101,24 +3131,118 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             # Reset framesList for validation
             framesList.clear()
             is_entire_video_bars, video_end_time = validateEntireVideoAsBars(startObj, pkt, durationStart, framesList, buffSize, bit_depth_10)
-            
+
             if is_entire_video_bars and video_end_time is not None:
                 durationEnd = video_end_time
                 barsEndString = dts2ts(str(video_end_time))
                 logger.info(f"Entire video confirmed as color bars - setting end duration to {barsEndString}\n")
             else:
                 logger.warning("Could not confirm entire video as color bars\n")
-        
-        if durationStart == "" and durationEnd == "":
-            logger.error("No color bars detected\n")
-            print_bars_durations(qctools_colorbars_duration_output, barsStartString, barsEndString)
+
         if barsStartString and barsEndString:
-            print_bars_durations(qctools_colorbars_duration_output, barsStartString, barsEndString)
+            head_start_sec = float(durationStart) if durationStart not in ("", None) else None
+            head_end_sec = float(durationEnd) if durationEnd not in ("", None) else None
+            all_bars_regions.append(("head", head_start_sec, head_end_sec))
             if qct_parse['thumbExport']:
                 barsStampString = dts2ts(durationStart)
                 printThumb(video_path, "bars_found", "color_bars_detection", startObj,thumbPath, "first_frame", barsStampString)
+        elif durationStart == "" and durationEnd == "":
+            logger.error("No color bars detected\n")
 
-        # Capture bars end (seconds) before durationEnd may be clobbered below,
+        HEAD_SCAN_WINDOW = 300.0
+
+        # If qct-parse missed head bars but CLAMS found them, retry with
+        # relaxed thresholds on the CLAMS-identified window.
+        head_bars_found = any(r[0] == "head" for r in all_bars_regions)
+        if not head_bars_found and clams_regions:
+            head_clams_bars = [
+                (s, e) for s, e, label in clams_regions
+                if s < HEAD_SCAN_WINDOW and label == "bars"
+            ]
+            if head_clams_bars:
+                clams_start = min(s for s, _ in head_clams_bars)
+                clams_end = max(e for _, e in head_clams_bars)
+                logger.info(
+                    f"qct-parse head bars retry: CLAMS found bars at "
+                    f"{clams_start:.1f}s–{clams_end:.1f}s but qct-parse "
+                    f"did not — re-running with relaxed thresholds"
+                )
+                framesList.clear()
+                r_start, r_end, r_start_str, r_end_str = detectBars(
+                    startObj, pkt, "", "", framesList, buffSize, bit_depth_10,
+                    search_start_time=max(0.0, clams_start - 5.0),
+                    search_end_time=clams_end + 5.0,
+                    relaxed=True,
+                )
+                if r_start_str and r_end_str:
+                    r_start_sec = float(r_start) if r_start not in ("", None) else None
+                    r_end_sec = float(r_end) if r_end not in ("", None) else None
+                    all_bars_regions.append(("head-relaxed", r_start_sec, r_end_sec))
+                    durationStart = r_start
+                    durationEnd = r_end
+                    barsStartString = r_start_str
+                    barsEndString = r_end_str
+                    chroma_bars_end_time = r_end_sec
+                    logger.info(f"qct-parse relaxed retry found bars: {r_start_str} – {r_end_str}")
+                    if qct_parse['thumbExport']:
+                        barsStampString = dts2ts(r_start)
+                        printThumb(video_path, "bars_found", "color_bars_detection", startObj, thumbPath, "first_frame", barsStampString)
+                else:
+                    logger.info("qct-parse relaxed retry: still no bars confirmed")
+
+        # CLAMS-guided windowed scans for regions not already covered by
+        # the detected head bars. Skip regions that overlap with the head
+        # bars region (not the entire 5-minute search window — the head
+        # scan stops after finding the first bars, so later regions within
+        # 5 minutes may still need scanning).
+        head_region_found = next(
+            (r for r in all_bars_regions if r[0] in ("head", "head-relaxed")), None
+        )
+        if clams_regions:
+            for region_start, region_end, region_label in clams_regions:
+                if head_region_found:
+                    _, head_s, head_e = head_region_found
+                    if (head_s is not None and head_e is not None and
+                            region_start >= head_s - 5.0 and region_end <= head_e + 5.0):
+                        continue
+                if check_cancelled and check_cancelled():
+                    break
+                logger.info(
+                    f"qct-parse windowed bars scan: {region_start:.1f}s–{region_end:.1f}s "
+                    f"(triggered by CLAMS {region_label})"
+                )
+                framesList.clear()
+                w_start, w_end, w_start_str, w_end_str = detectBars(
+                    startObj, pkt, "", "", framesList, buffSize, bit_depth_10,
+                    search_start_time=region_start,
+                    search_end_time=region_end,
+                )
+                if w_start_str and w_end_str:
+                    w_start_sec = float(w_start) if w_start not in ("", None) else None
+                    w_end_sec = float(w_end) if w_end not in ("", None) else None
+                    all_bars_regions.append((f"clams-guided-{region_label}", w_start_sec, w_end_sec))
+                    logger.info(f"qct-parse windowed scan found bars: {w_start_str} – {w_end_str}")
+                    if qct_parse['thumbExport']:
+                        thumbStamp = dts2ts(str(w_start))
+                        printThumb(video_path, "bars_found", f"clams_guided_{region_label}", startObj, thumbPath, "first_frame", thumbStamp)
+                else:
+                    logger.debug(
+                        f"qct-parse windowed scan: no bars confirmed in "
+                        f"{region_start:.1f}s–{region_end:.1f}s"
+                    )
+
+        # Write CSV with all detected regions
+        if all_bars_regions:
+            csv_regions = [
+                (label, dts2ts(str(start)), dts2ts(str(end)))
+                for label, start, end in all_bars_regions
+                if start is not None and end is not None
+            ]
+            print_bars_durations(qctools_colorbars_duration_output, regions=csv_regions)
+        else:
+            print_bars_durations(qctools_colorbars_duration_output, regions=[])
+
+        # Capture head bars end (seconds) before durationEnd may be clobbered below,
         # so downstream features can skip the colour-bars region.
         try:
             if durationEnd not in ("", None):
@@ -3170,6 +3294,31 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             qctools_bars_eval_check_output = os.path.join(report_directory, "qct-parse_colorbars_eval_summary.csv")
             printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_bars_eval_check_output)
             logger.debug(f"qct-parse bars evaluation complete. qct-parse summary written to {qctools_bars_eval_check_output}\n")
+
+        # Evaluate windowed (non-head) bars regions: produce a SMPTE
+        # comparison CSV and first-frame thumbnail for each.
+        windowed_regions = [r for r in all_bars_regions if r[0] != "head" and r[0] != "head-relaxed"]
+        for idx, (region_label, region_start, region_end) in enumerate(windowed_regions):
+            if check_cancelled and check_cancelled():
+                break
+            if region_start is None or region_end is None:
+                continue
+            logger.info(
+                f"Evaluating windowed bars region {idx + 1}: "
+                f"{region_label} ({region_start:.1f}s–{region_end:.1f}s)"
+            )
+            framesList.clear()
+            windowed_maxBarsDict = evalBars(startObj, pkt, region_start, region_end, framesList, buffSize)
+            if windowed_maxBarsDict is not None:
+                smpte_color_bars = asdict(spex_config.qct_parse_values.smpte_color_bars)
+                windowed_values_csv = os.path.join(
+                    report_directory,
+                    f"qct-parse_colorbars_values_{region_label}.csv",
+                )
+                print_color_bar_values(baseName, smpte_color_bars, windowed_maxBarsDict, windowed_values_csv)
+                logger.info(f"Windowed bars values written to {os.path.basename(windowed_values_csv)}")
+            else:
+                logger.warning(f"Could not evaluate bars for region {region_label}")
 
     if check_cancelled():
         return None
@@ -3237,7 +3386,12 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     if signals and hasattr(signals, 'qctparse_progress'):
         signals.qctparse_progress.emit(100)
 
-    return
+    head_region = next((r for r in all_bars_regions if r[0] in ("head", "head-relaxed")), None)
+    return {
+        'head_bars_start': head_region[1] if head_region else None,
+        'head_bars_end': head_region[2] if head_region else None,
+        'all_bars_regions': all_bars_regions,
+    }
 
 
 if __name__ == "__main__":

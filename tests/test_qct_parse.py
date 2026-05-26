@@ -523,6 +523,25 @@ def test_print_bars_durations_missing_strings(tmp_path):
     assert _read_csv_rows(out) == [["qct-parse found no color bars"]]
 
 
+def test_print_bars_durations_with_regions(tmp_path):
+    out = tmp_path / "bars_dur.csv"
+    regions = [
+        ("head", "00:00:00.000", "00:01:30.000"),
+        ("clams-guided-tone", "00:15:00.000", "00:15:45.000"),
+    ]
+    qp.print_bars_durations(str(out), regions=regions)
+    rows = _read_csv_rows(out)
+    assert rows[0] == ["qct-parse color bars found:"]
+    assert rows[1] == ["head", "00:00:00.000", "00:01:30.000"]
+    assert rows[2] == ["clams-guided-tone", "00:15:00.000", "00:15:45.000"]
+
+
+def test_print_bars_durations_empty_regions(tmp_path):
+    out = tmp_path / "bars_dur.csv"
+    qp.print_bars_durations(str(out), regions=[])
+    assert _read_csv_rows(out) == [["qct-parse found no color bars"]]
+
+
 # ---- save_failures_to_csv -----------------------------------------------
 
 def test_save_failures_to_csv_writes_one_row_per_failure(tmp_path):

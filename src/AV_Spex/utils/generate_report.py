@@ -345,6 +345,7 @@ def find_report_csvs(report_directory):
     qctools_bars_eval_check_output = None
     qctools_bars_eval_timestamps = None
     colorbars_values_output = None
+    windowed_colorbars_values = []
     qctools_content_check_outputs = []
     qctools_profile_check_output = None
     qctools_profile_timestamps = None
@@ -372,7 +373,10 @@ def find_report_csvs(report_directory):
                     elif "qct-parse_colorbars_eval_summary" in file:
                         qctools_bars_eval_check_output = file_path
                     elif "qct-parse_colorbars_values" in file:
-                        colorbars_values_output = file_path
+                        if file == "qct-parse_colorbars_values.csv":
+                            colorbars_values_output = file_path
+                        else:
+                            windowed_colorbars_values.append(file_path)
                     elif "qct-parse_contentFilter" in file:
                         qctools_content_check_outputs.append(file_path)
                     elif "qct-parse_profile_summary" in file:
@@ -404,7 +408,7 @@ def find_report_csvs(report_directory):
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, chroma_phase_summary_csv, chroma_phase_events_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, windowed_colorbars_values, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, chroma_phase_summary_csv, chroma_phase_events_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -2258,15 +2262,21 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
         s = seconds - (h * 3600) - (m * 60)
         return f"{h:02d}:{m:02d}:{s:06.3f}"
 
-    # Agreement: qct-parse run (single) vs CLAMS primary (single).
-    qct_primary = qct_runs[0] if qct_runs else None
+    # Separate qct-parse head from windowed (CLAMS-guided) rows.
+    qct_head = next((r for r in qct_runs if r[0] in ("head", "head-relaxed")), None)
+    # Legacy 2-column rows come through with label "primary"
+    if qct_head is None:
+        qct_head = next((r for r in qct_runs if r[0] == "primary"), None)
+    qct_windowed = [r for r in qct_runs if r is not qct_head]
+
     clams_primary = next((r for r in clams_runs if r[0] == "primary"), None)
     clams_secondary = [r for r in clams_runs if r[0] != "primary"]
 
+    # Agreement: qct-parse head vs CLAMS primary head bars.
     agreement_label = "—"
     agreement_color = "#666"
     if qct_run and clams_run:
-        qct_end = qct_primary[2] if qct_primary else None
+        qct_end = qct_head[2] if qct_head else None
         clams_end = clams_primary[2] if clams_primary else None
         if qct_end is not None and clams_end is not None:
             delta = abs(qct_end - clams_end)
@@ -2287,11 +2297,13 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
     # Build one row per detection. Source/pass go in the first two cells.
     body_rows = []
     if qct_run:
-        if qct_primary:
-            _, qs, qe = qct_primary
-            body_rows.append(("qct-parse (authoritative)", "—", "Yes", fmt(qs), fmt(qe), False))
+        if qct_head:
+            _, qs, qe = qct_head
+            body_rows.append(("qct-parse", "head", "Yes", fmt(qs), fmt(qe), False))
         else:
-            body_rows.append(("qct-parse (authoritative)", "—", "No", "—", "—", False))
+            body_rows.append(("qct-parse", "head", "No", "—", "—", False))
+        for label, ws, we in qct_windowed:
+            body_rows.append(("qct-parse", label, "Yes", fmt(ws), fmt(we), True))
     if clams_run:
         if clams_primary:
             _, cs, ce = clams_primary
@@ -2316,14 +2328,17 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
     rows_html = "".join(render_row(*r) for r in body_rows)
 
     note_lines = [
-        "qct-parse drives downstream behavior (BRNG-skip, access-file trim). "
-        "The CLAMS detector runs in parallel for comparison only.",
+        "The authoritative head bars end time uses the latest end time across "
+        "both detectors. Mid-file bars (highlighted) are report-only and do "
+        "not affect downstream processing (BRNG-skip, access-file trim).",
     ]
-    if clams_secondary:
+    has_secondary = clams_secondary or qct_windowed
+    if has_secondary:
         note_lines.append(
-            "Second-pass rows (highlighted) are targeted scans triggered by tone "
-            "detections that fell outside the primary bars window, run with "
-            "relaxed thresholds (SSIM ≥ 0.6, sample ratio 5)."
+            "Highlighted rows are targeted scans: CLAMS second-pass rows are "
+            "triggered by tone detections that fell outside the primary bars "
+            "window; qct-parse windowed rows are CLAMS-guided scans of "
+            "regions beyond the first 5 minutes."
         )
     note = "".join(
         f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
@@ -4572,7 +4587,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, chroma_phase_summary_csv, chroma_phase_events_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, windowed_colorbars_values, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, chroma_phase_summary_csv, chroma_phase_events_csv, difference_csv = find_report_csvs(report_directory)
 
     # CLAMS bars-detection durations CSV (filename matches the writer in
     # checks/bars_detection_clams.py); present only when the parallel detector ran.
@@ -4741,6 +4756,17 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     else:
         colorbars_html = None
 
+    # Render bar graphs for windowed (mid-file) bars regions
+    windowed_colorbars_html_list = []
+    for wv_path in sorted(windowed_colorbars_values):
+        try:
+            wv_html = make_color_bars_graphs(video_id, qctools_colorbars_duration_output, wv_path, thumbs_dict)
+            if wv_html:
+                region_name = os.path.basename(wv_path).replace("qct-parse_colorbars_values_", "").replace(".csv", "")
+                windowed_colorbars_html_list.append((region_name, wv_html))
+        except Exception as e:
+            logger.error(f"Error rendering windowed bars graph for {wv_path}: {e}")
+
     if qctools_profile_check_output and failureInfoSummary_profile:
         profile_summary_html = make_profile_piecharts(qctools_profile_check_output, thumbs_dict, failureInfoSummary_profile, video_id, failure_csv_path=profile_fails_csv_path, check_cancelled=check_cancelled)
     else:
@@ -4897,6 +4923,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-qct-parse-notice', 'QCT-Parse Analysis'))
     if colorbars_html:
         toc_entries.append(('section-colorbars', 'Color Bars Detection'))
+    for region_name, _ in windowed_colorbars_html_list:
+        toc_entries.append((f'section-colorbars-{region_name}', f'Color Bars — {region_name}'))
     if bars_comparison_html or tone_detection_html:
         toc_entries.append(('section-clams-detection', 'CLAMS Detection'))
     if colorbars_eval_html:
@@ -5166,6 +5194,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3 id="section-colorbars">{colorbars_header}</h3>
         {colorbars_html}
+        """
+
+    for region_name, wv_html in windowed_colorbars_html_list:
+        html_template += f"""
+        <h3 id="section-colorbars-{region_name}">SMPTE Colorbars vs {video_id} — {region_name}</h3>
+        {wv_html}
         """
 
     if bars_comparison_html or tone_detection_html:

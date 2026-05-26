@@ -282,13 +282,13 @@ def test_find_qct_thumbs_sorts_by_timestamp_when_tag_names_unknown(tmp_path):
 
 def test_find_report_csvs_empty_directory_returns_all_none(tmp_path):
     out = gr.find_report_csvs(str(tmp_path))
-    # 18-tuple, all None except qctools_content_check_outputs which is []
+    # 19-tuple: all None except 2 list fields (content_check_outputs, windowed_colorbars_values)
     assert isinstance(out, tuple)
-    assert len(out) == 18
+    assert len(out) == 19
     none_count = sum(1 for x in out if x is None)
     list_count = sum(1 for x in out if x == [])
     assert none_count == 17
-    assert list_count == 1
+    assert list_count == 2
 
 
 def test_find_report_csvs_picks_up_known_filenames(tmp_path):
@@ -315,11 +315,11 @@ def test_find_report_csvs_picks_up_known_filenames(tmp_path):
         (tmp_path / name).write_text("")
 
     out = gr.find_report_csvs(str(tmp_path))
-    # Unpack the 18-tuple in the order the function returns it
+    # Unpack the 19-tuple in the order the function returns it
     (
         colorbars_duration_output, bars_eval_check_output, colorbars_values_output,
-        content_check_outputs, profile_check_output, profile_fails_csv,
-        tags_check_output, tag_fails_csv, colorbars_eval_fails_csv,
+        windowed_colorbars_values, content_check_outputs, profile_check_output,
+        profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv,
         audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv,
         audio_dropout_csv, clamped_levels_csv, clamped_traces_csv,
         chroma_phase_summary_csv, chroma_phase_events_csv, difference_csv,
@@ -348,7 +348,7 @@ def test_find_report_csvs_collects_content_filter_csvs_into_list(tmp_path):
     (tmp_path / "qct-parse_contentFilter_b.csv").write_text("")
 
     out = gr.find_report_csvs(str(tmp_path))
-    content_check_outputs = out[3]
+    content_check_outputs = out[4]
     assert len(content_check_outputs) == 2
     names = sorted(os.path.basename(p) for p in content_check_outputs)
     assert names == ["qct-parse_contentFilter_a.csv", "qct-parse_contentFilter_b.csv"]
@@ -519,6 +519,21 @@ def test_parse_bars_durations_skips_malformed_rows(tmp_path):
     ])
     runs = gr._parse_bars_durations_csv(str(csv_path))
     assert runs == [("primary", 0.0, 1.0)]
+
+
+def test_parse_bars_durations_qct_parse_three_column_labeled(tmp_path):
+    """New qct-parse 3-column format with head + CLAMS-guided regions."""
+    csv_path = tmp_path / "bars.csv"
+    _write_csv(csv_path, [
+        ["qct-parse color bars found:"],
+        ["head", "00:00:00.000", "00:01:30.000"],
+        ["clams-guided-tone", "00:15:00.000", "00:15:45.000"],
+    ])
+    runs = gr._parse_bars_durations_csv(str(csv_path))
+    assert runs == [
+        ("head", 0.0, 90.0),
+        ("clams-guided-tone", 900.0, 945.0),
+    ]
 
 
 # ===========================================================================
