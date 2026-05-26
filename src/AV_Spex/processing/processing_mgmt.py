@@ -871,22 +871,35 @@ def run_qctools_command(command, input_path, output_type, output_path, check_can
         return None
     
     env = os.environ.copy()
-    env['PATH'] = '/usr/local/bin:' + env.get('PATH', '')
+    # Prefer Apple Silicon Homebrew (/opt/homebrew/bin) over Intel
+    # (/usr/local/bin). Without this, a leftover x86_64 qcli at
+    # /usr/local/bin/qcli runs under Rosetta and stalls on cross-arch
+    # mutex/semaphore translation (~0.2% CPU, S+) while the arm64
+    # /opt/homebrew/bin/qcli runs at 100%+ CPU natively.
+    env['PATH'] = '/opt/homebrew/bin:/usr/local/bin:' + env.get('PATH', '')
     full_command = f"{command} \"{input_path}\" {output_type} \"{output_path}\""
     logger.debug(f'Running command: {full_command}\n')
-    
-    # Use subprocess.Popen with stdout and stderr capture
+
+    # qcli writes its progress bar with carriage returns ("\r"), not newlines.
+    # Read in 4KB chunks (not readline, not byte-at-a-time) and split on both
+    # \r and \n. readline() would block forever waiting for a \n that never
+    # comes; byte-at-a-time is too slow to drain the pipe during bursts, which
+    # causes qcli's write() to block and stalls its analysis thread.
+    # Do NOT pass stdin=subprocess.DEVNULL — qcli (ffmpeg-based) treats
+    # immediate EOF on stdin as a quit signal and exits early.
     process = subprocess.Popen(
-        full_command, 
-        shell=True, 
+        full_command,
+        shell=True,
         env=env,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,  # Redirect stderr to stdout to catch all output
-        text=True,
-        bufsize=1,  # Line buffered
-        universal_newlines=True
+        stderr=subprocess.STDOUT,
+        bufsize=0,
     )
-    
+
+    READ_CHUNK = 4096
+    LINE_SEPARATORS = (ord('\r'), ord('\n'))
+    buf = bytearray()
+
     try:
         while True:
             if check_cancelled():
@@ -896,38 +909,41 @@ def run_qctools_command(command, input_path, output_type, output_path, check_can
                 except subprocess.TimeoutExpired:
                     process.kill()
                 return None
-            
-            # Read output line by line
-            output = process.stdout.readline()
-            
-            if output == '' and process.poll() is not None:
-                # Process has finished and no more output
-                break
-                
-            if output:
-                # Log the output for debugging
-                #logger.debug(f"QCTools output: {output.strip()}")
-                
-                # Extract percentage from output
-                # Common patterns: "50%", "Progress: 50%", "50.5%", etc.
-                percentage = extract_percentage(output.strip(), signals=signals)
-                
-                if percentage is not None and signals:
-                    # Emit the progress signal
-                    safe_percent = min(100, max(0, int(percentage)))
-                    #logger.debug(f"About to emit QCTools progress: {safe_percent}%")  # Add this debug line
-                    signals.qctools_progress.emit(safe_percent)
-    
+
+            chunk = process.stdout.read(READ_CHUNK)
+            if not chunk:
+                if process.poll() is not None:
+                    break
+                continue
+
+            for byte in chunk:
+                if byte in LINE_SEPARATORS:
+                    if buf:
+                        line = buf.decode('utf-8', errors='replace').strip()
+                        buf.clear()
+                        if line:
+                            percentage = extract_percentage(line, signals=signals)
+                            if percentage is not None and signals:
+                                signals.qctools_progress.emit(min(100, max(0, int(percentage))))
+                else:
+                    buf.append(byte)
+
     except Exception as e:
         logger.error(f"Error reading QCTools output: {str(e)}")
-    
-    # Wait for process to complete and get return code
+
+    # Flush any trailing bytes that didn't end with \r or \n
+    if buf:
+        line = buf.decode('utf-8', errors='replace').strip()
+        if line:
+            percentage = extract_percentage(line, signals=signals)
+            if percentage is not None and signals:
+                signals.qctools_progress.emit(min(100, max(0, int(percentage))))
+
     return_code = process.wait()
-    
-    # Emit 100% completion if signals available
+
     if signals:
         signals.qctools_progress.emit(100)
-    
+
     return return_code
 
 def extract_percentage(output_line, signals=None):

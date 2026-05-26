@@ -11,9 +11,11 @@ def run_command(command, input_path, output_type, output_path):
     Run a shell command with 4 variables: command name, path to the input file, output type (often '>'), path to the output file
     '''
 
-    # Get the current PATH environment variable
+    # Get the current PATH environment variable.
+    # /opt/homebrew/bin first so Apple Silicon native binaries win over any
+    # leftover x86_64 ones in /usr/local/bin (which would run under Rosetta).
     env = os.environ.copy()
-    env['PATH'] = '/usr/local/bin:' + env.get('PATH', '')
+    env['PATH'] = '/opt/homebrew/bin:/usr/local/bin:' + env.get('PATH', '')
 
     full_command = f"{command} \"{input_path}\" {output_type} \"{output_path}\""
 

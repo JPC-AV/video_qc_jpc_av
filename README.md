@@ -49,10 +49,8 @@ The following command line tools must be installed separately. The macOS package
 
 Install with Homebrew:
 ```bash
-brew install exiftool ffmpeg mediaconch mediainfo mkvtoolnix
+brew install exiftool ffmpeg mediaconch mediainfo mkvtoolnix qcli
 ```
-
-QCTools must be installed separately from [MediaArea](https://mediaarea.net/QCTools).
 
 The AV Spex GUI checks for all required dependencies at startup:
 
