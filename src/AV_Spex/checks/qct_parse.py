@@ -3190,45 +3190,73 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
                 else:
                     logger.info("qct-parse relaxed retry: still no bars confirmed")
 
-        # CLAMS-guided windowed scans for regions not already covered by
-        # the detected head bars. Skip regions that overlap with the head
-        # bars region (not the entire 5-minute search window — the head
-        # scan stops after finding the first bars, so later regions within
-        # 5 minutes may still need scanning).
+        # CLAMS-guided windowed scans. Merge overlapping CLAMS regions
+        # first so that bars + tone detections covering the same mid-file
+        # bars produce one scan, not two. Skip regions that overlap with
+        # the already-detected head bars.
         head_region_found = next(
             (r for r in all_bars_regions if r[0] in ("head", "head-relaxed")), None
         )
         if clams_regions:
+            filtered = []
             for region_start, region_end, region_label in clams_regions:
                 if head_region_found:
                     _, head_s, head_e = head_region_found
                     if (head_s is not None and head_e is not None and
                             region_start >= head_s - 5.0 and region_end <= head_e + 5.0):
                         continue
+                filtered.append((region_start, region_end))
+
+            # Merge overlapping/adjacent filtered regions
+            merged_windows = []
+            if filtered:
+                sorted_f = sorted(filtered, key=lambda t: t[0])
+                merged_windows = [sorted_f[0]]
+                for s, e in sorted_f[1:]:
+                    prev_s, prev_e = merged_windows[-1]
+                    if s <= prev_e + 5.0:
+                        merged_windows[-1] = (prev_s, max(prev_e, e))
+                    else:
+                        merged_windows.append((s, e))
+
+            for window_idx, (window_start, window_end) in enumerate(merged_windows):
                 if check_cancelled and check_cancelled():
                     break
+                region_label = f"additional-{window_idx + 1}"
                 logger.info(
-                    f"qct-parse windowed bars scan: {region_start:.1f}s–{region_end:.1f}s "
-                    f"(triggered by CLAMS {region_label})"
+                    f"qct-parse windowed bars scan: {window_start:.1f}s–{window_end:.1f}s "
+                    f"({region_label})"
                 )
                 framesList.clear()
                 w_start, w_end, w_start_str, w_end_str = detectBars(
                     startObj, pkt, "", "", framesList, buffSize, bit_depth_10,
-                    search_start_time=region_start,
-                    search_end_time=region_end,
+                    search_start_time=window_start,
+                    search_end_time=window_end,
                 )
+                if not (w_start_str and w_end_str):
+                    logger.info(
+                        f"qct-parse windowed scan: no bars at normal thresholds in "
+                        f"{window_start:.1f}s–{window_end:.1f}s — retrying relaxed"
+                    )
+                    framesList.clear()
+                    w_start, w_end, w_start_str, w_end_str = detectBars(
+                        startObj, pkt, "", "", framesList, buffSize, bit_depth_10,
+                        search_start_time=window_start,
+                        search_end_time=window_end,
+                        relaxed=True,
+                    )
                 if w_start_str and w_end_str:
                     w_start_sec = float(w_start) if w_start not in ("", None) else None
                     w_end_sec = float(w_end) if w_end not in ("", None) else None
-                    all_bars_regions.append((f"clams-guided-{region_label}", w_start_sec, w_end_sec))
+                    all_bars_regions.append((region_label, w_start_sec, w_end_sec))
                     logger.info(f"qct-parse windowed scan found bars: {w_start_str} – {w_end_str}")
                     if qct_parse['thumbExport']:
                         thumbStamp = dts2ts(str(w_start))
-                        printThumb(video_path, "bars_found", f"clams_guided_{region_label}", startObj, thumbPath, "first_frame", thumbStamp)
+                        printThumb(video_path, "bars_found", f"additional_bars_{window_idx + 1}", startObj, thumbPath, "first_frame", thumbStamp)
                 else:
                     logger.debug(
                         f"qct-parse windowed scan: no bars confirmed in "
-                        f"{region_start:.1f}s–{region_end:.1f}s"
+                        f"{window_start:.1f}s–{window_end:.1f}s (even with relaxed thresholds)"
                     )
 
         # Write CSV with all detected regions

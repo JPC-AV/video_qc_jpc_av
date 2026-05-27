@@ -2058,33 +2058,43 @@ def _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events):
     </div>'''
 
 
-def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict):
+def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict, duration_override=None, bars_label=None, thumb_profile_filter=None):
     """
     Creates HTML visualizations for color bars analysis, including bar charts comparing
     SMPTE color bars with the video's color bars values.
 
     Args:
         video_id (str): The identifier for the video being analyzed.
-        qctools_colorbars_duration_output (str): Path to CSV file containing color bars duration data.
+        qctools_colorbars_duration_output (str or None): Path to CSV file containing color bars duration data.
         colorbars_values_output (str): Path to CSV file containing color bars values data.
         sorted_thumbs_dict (dict): Dictionary containing thumbnail information with keys as descriptions
-                                 and values as tuples of (path, profile_name, timestamp). 
+                                 and values as tuples of (path, profile_name, timestamp).
                                  Output find_qct_thumbs().
+        duration_override (str or None): When set, use this string as the duration annotation
+                                         instead of reading the duration CSV.
+        bars_label (str or None): Label for the detected bars trace in the chart
+                                  (default: '{video_id} Colorbars').
+        thumb_profile_filter (str or None): When set, only match thumbnails whose
+                                            profile_name contains this substring.
 
     Returns:
         str or None: HTML string containing the visualization if successful, None if there are errors.
     """
-    if not qctools_colorbars_duration_output or not colorbars_values_output:
-        logger.warning("Missing required colorbar files - duration or values file is None")
+    if not colorbars_values_output:
+        logger.warning("Missing required colorbar values file")
         return None
-        
-    try:
-        if not os.path.isfile(qctools_colorbars_duration_output):
-            logger.critical(f"Cannot open color bars duration csv file: {qctools_colorbars_duration_output}")
+
+    if not duration_override:
+        if not qctools_colorbars_duration_output:
+            logger.warning("Missing required colorbar files - duration or values file is None")
             return None
-    except (TypeError, AttributeError) as e:
-        logger.critical(f"Invalid path for color bars duration file: {e}")
-        return None
+        try:
+            if not os.path.isfile(qctools_colorbars_duration_output):
+                logger.critical(f"Cannot open color bars duration csv file: {qctools_colorbars_duration_output}")
+                return None
+        except (TypeError, AttributeError) as e:
+            logger.critical(f"Invalid path for color bars duration file: {e}")
+            return None
         
     try:
         if not os.path.isfile(colorbars_values_output):
@@ -2100,20 +2110,21 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
         logger.critical(f"Error importing required libraries for graphs: {e}")
         return None
     
+    if not bars_label:
+        bars_label = f'{video_id} Colorbars'
+
     try:
         with open(colorbars_values_output, 'r') as file:
             csv_reader = csv.DictReader(file)
-            # Convert CSV data to lists for plotly
             colorbar_csv_data = {
                 'QCTools Fields': [],
                 'SMPTE Colorbars': [],
-                f'{video_id} Colorbars': []
+                'detected': []
             }
             for row in csv_reader:
                 colorbar_csv_data['QCTools Fields'].append(row['QCTools Fields'])
-                # Convert string values to float
                 colorbar_csv_data['SMPTE Colorbars'].append(float(row['SMPTE Colorbars']))
-                colorbar_csv_data[f'{video_id} Colorbars'].append(float(row[f'{video_id} Colorbars']))
+                colorbar_csv_data['detected'].append(float(row[f'{video_id} Colorbars']))
     except Exception as e:
         logger.critical(f"Error reading colorbars CSV file: {e}")
         return None
@@ -2121,66 +2132,91 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
      # Initialize duration_text with default value
     duration_text = "Colorbars duration: Not available"
 
+    if duration_override:
+        duration_text = "Colorbars duration: " + duration_override
+    else:
+        try:
+            with open(qctools_colorbars_duration_output, 'r') as file:
+                duration_lines = file.readlines()
+
+                if len(duration_lines) <= 1:
+                    logger.critical(f"The csv file {qctools_colorbars_duration_output} does not match the expected format")
+                    return None
+
+                duration_text = duration_lines[1].strip()
+                duration_text = duration_text.replace(',', ' - ')
+                duration_text = "Colorbars duration: " + duration_text
+        except Exception as e:
+            logger.critical(f"Error processing duration file: {e}")
+            return None
+
     try:
-        with open(qctools_colorbars_duration_output, 'r') as file:
-            duration_lines = file.readlines()
-            
-            if len(duration_lines) <= 1:  # Check if file is empty or doesn't have enough lines
-                logger.critical(f"The csv file {qctools_colorbars_duration_output} does not match the expected format")
-                return None  # Return None if duration file is empty or malformed
-            
-            duration_text = duration_lines[1].strip()
-            duration_text = duration_text.replace(',', ' - ')
-            duration_text = "Colorbars duration: " + duration_text
-            
-            # Create the bar chart for the colorbars values
-            colorbars_fig = go.Figure(data=[
-                go.Bar(name='SMPTE Colorbars', 
-                    x=colorbar_csv_data['QCTools Fields'], 
-                    y=colorbar_csv_data['SMPTE Colorbars'], 
-                    marker=dict(color='#378d6a')),
-                go.Bar(name=f'{video_id} Colorbars', 
-                    x=colorbar_csv_data['QCTools Fields'], 
-                    y=colorbar_csv_data[f'{video_id} Colorbars'], 
-                    marker=dict(color='#bf971b'))
-            ])
-            colorbars_fig.update_layout(barmode='group')
-            
-            # custom config values for png export
-            config = {
-                'toImageButtonOptions': {
-                    'format': 'png',
-                    'filename': f'{video_id}_colorbars_comparison',
-                    'height': 500,
-                    'width': 800,
-                    'scale': 1
-                }
-            }
-            colorbars_barchart_html = colorbars_fig.to_html(full_html=False, include_plotlyjs='cdn', config=config)
+        colorbars_fig = go.Figure(data=[
+            go.Bar(name='SMPTE Colorbars',
+                x=colorbar_csv_data['QCTools Fields'],
+                y=colorbar_csv_data['SMPTE Colorbars'],
+                marker=dict(color='#378d6a')),
+            go.Bar(name=bars_label,
+                x=colorbar_csv_data['QCTools Fields'],
+                y=colorbar_csv_data['detected'],
+                marker=dict(color='#bf971b'))
+        ])
+        colorbars_fig.update_layout(
+            barmode='group',
+            width=450,
+            height=350,
+            margin=dict(l=50, r=20, t=30, b=50),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='left',
+                x=0,
+            ),
+        )
+
+        config = {
+            'toImageButtonOptions': {
+                'format': 'png',
+                'filename': f'{video_id}_colorbars_comparison',
+                'height': 500,
+                'width': 800,
+                'scale': 1
+            },
+            'responsive': False,
+        }
+        colorbars_barchart_html = colorbars_fig.to_html(full_html=False, include_plotlyjs='cdn', config=config)
     except Exception as e:
-        logger.critical(f"Error processing duration file: {e}")
-        return None 
+        logger.critical(f"Error creating colorbars chart: {e}")
+        return None
 
     # Add annotations for the thumbnail
     thumbnail_html = ''
     for thumb_name, (thumb_path, profile_name, timestamp) in sorted_thumbs_dict.items():
-        if "bars_found.first_frame" in thumb_path:
-            thumb_name_with_breaks = thumb_name.replace("\n", "<br>")
-            thumbnail_html = f'''
-                <img src="{thumb_path}" alt="{thumb_name}" style="width:200px; height:auto;">
-                <p>{thumb_name_with_breaks}</p>
-            '''
-            break
+        if "bars_found.first_frame" not in thumb_path:
+            continue
+        if thumb_profile_filter and thumb_profile_filter not in thumb_path:
+            continue
+        if not thumb_profile_filter and "additional_bars" in thumb_path:
+            continue
+        thumb_name_with_breaks = thumb_name.replace("\n", "<br>")
+        thumbnail_html = f'''
+            <img src="{thumb_path}" alt="{thumb_name}" style="width:200px; height:auto;">
+            <p>{thumb_name_with_breaks}</p>
+        '''
+        break
 
     # Create the complete HTML with the duration text and the thumbnail/barchart side-by-side
     colorbars_html = f'''
-    <div style="display: flex; align-items: center; justify-content: center; background-color: #f5e9e3; padding: 10px;">
-        <div>
-            {thumbnail_html}
-            <p>{duration_text}</p>
-        </div>
-        <div style="margin-left: 20px;">  
-            {colorbars_barchart_html}
+    <div style="background-color: #f5e9e3; padding: 20px 30px; border-radius: 6px;">
+        <div style="display: flex; align-items: center; justify-content: center;">
+            <div style="flex-shrink: 0;">
+                {thumbnail_html}
+                <p>{duration_text}</p>
+            </div>
+            <div style="margin-left: 20px; min-width: 0; flex: 1;">
+                {colorbars_barchart_html}
+            </div>
         </div>
     </div>
     '''
@@ -4756,13 +4792,32 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     else:
         colorbars_html = None
 
-    # Render bar graphs for windowed (mid-file) bars regions
+    # Render bar graphs for windowed (mid-file) bars regions.
+    # Build a lookup of region label → duration string from the qct-parse
+    # bars durations CSV so each graph shows the correct timecodes.
+    qct_duration_runs = _parse_bars_durations_csv(qctools_colorbars_duration_output)
+    windowed_duration_lookup = {}
+    for label, start_s, end_s in qct_duration_runs:
+        def _fmt(seconds):
+            h = int(seconds // 3600)
+            m = int((seconds % 3600) // 60)
+            s = seconds - (h * 3600) - (m * 60)
+            return f"{h:02d}:{m:02d}:{s:06.3f}"
+        windowed_duration_lookup[label] = f"{_fmt(start_s)} - {_fmt(end_s)}"
+
     windowed_colorbars_html_list = []
     for wv_path in sorted(windowed_colorbars_values):
         try:
-            wv_html = make_color_bars_graphs(video_id, qctools_colorbars_duration_output, wv_path, thumbs_dict)
+            region_name = os.path.basename(wv_path).replace("qct-parse_colorbars_values_", "").replace(".csv", "")
+            dur_str = windowed_duration_lookup.get(region_name)
+            idx_str = region_name.replace("additional-", "")
+            wv_html = make_color_bars_graphs(
+                video_id, qctools_colorbars_duration_output, wv_path, thumbs_dict,
+                duration_override=dur_str,
+                bars_label=f'{video_id} Additional Bars',
+                thumb_profile_filter=f'additional_bars_{idx_str}',
+            )
             if wv_html:
-                region_name = os.path.basename(wv_path).replace("qct-parse_colorbars_values_", "").replace(".csv", "")
                 windowed_colorbars_html_list.append((region_name, wv_html))
         except Exception as e:
             logger.error(f"Error rendering windowed bars graph for {wv_path}: {e}")
@@ -4924,7 +4979,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if colorbars_html:
         toc_entries.append(('section-colorbars', 'Color Bars Detection'))
     for region_name, _ in windowed_colorbars_html_list:
-        toc_entries.append((f'section-colorbars-{region_name}', f'Color Bars — {region_name}'))
+        toc_entries.append((f'section-colorbars-{region_name}', 'Additional Color Bars'))
     if bars_comparison_html or tone_detection_html:
         toc_entries.append(('section-clams-detection', 'CLAMS Detection'))
     if colorbars_eval_html:
@@ -5186,21 +5241,25 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         </div>
         """
 
-    if colorbars_html:
-        if smpte_fallback:
-            colorbars_header = "Color Bars Detection"
-        else:
-            colorbars_header = f"SMPTE Colorbars vs {video_id} Colorbars"
-        html_template += f"""
-        <h3 id="section-colorbars">{colorbars_header}</h3>
-        {colorbars_html}
-        """
-
-    for region_name, wv_html in windowed_colorbars_html_list:
-        html_template += f"""
-        <h3 id="section-colorbars-{region_name}">SMPTE Colorbars vs {video_id} — {region_name}</h3>
-        {wv_html}
-        """
+    if colorbars_html or windowed_colorbars_html_list:
+        html_template += '<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start;">'
+        if colorbars_html:
+            if smpte_fallback:
+                colorbars_header = "Color Bars Detection"
+            else:
+                colorbars_header = f"SMPTE Colorbars vs {video_id} Colorbars"
+            html_template += f"""
+            <div id="section-colorbars" style="flex: 1 1 0; min-width: 0; overflow: hidden;">
+                <h3>{colorbars_header}</h3>
+                {colorbars_html}
+            </div>"""
+        for region_name, wv_html in windowed_colorbars_html_list:
+            html_template += f"""
+            <div id="section-colorbars-{region_name}" style="flex: 1 1 0; min-width: 0; overflow: hidden;">
+                <h3>SMPTE Colorbars vs Additional {video_id} Colorbars</h3>
+                {wv_html}
+            </div>"""
+        html_template += '</div>'
 
     if bars_comparison_html or tone_detection_html:
         html_template += '<h3 id="section-clams-detection">CLAMS Detection</h3>'
