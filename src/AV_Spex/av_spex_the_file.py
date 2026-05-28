@@ -14,7 +14,7 @@ from .processing.avspex_processor import AVSpexProcessor
 from .utils import dir_setup
 from .utils import config_edit
 from .utils.log_setup import logger
-from .utils.config_setup import SpexConfig, FilenameConfig
+from .utils.config_setup import SpexConfig, FilenameConfig, ChecksConfig
 from .utils import exiftool_import, mediainfo_import, ffprobe_import
 from .utils.config_manager import ConfigManager
 from .utils.config_io import ConfigIO
@@ -86,12 +86,22 @@ class ParsedArguments:
     enable_border_detection: Optional[str]
     enable_brng_analysis: Optional[str]
     enable_signalstats: Optional[str]
+    enable_dropped_sample_detection: Optional[str]
     enable_duplicate_frame_detection: Optional[str]
     frame_borders: Optional[str]
     frame_border_pixels: Optional[int]
     frame_no_colorbar_skip: bool
     frame_brng_duration: Optional[int]
     enable_clamped_levels: Optional[str]
+    enable_clams_detection: Optional[str]
+    enable_audio_analysis: Optional[str]
+    enable_chroma_phase_detection: Optional[str]
+    access_trim_color_bars: Optional[str]
+    access_crop_borders: Optional[str]
+    access_crop_to_480: Optional[str]
+    qctools_ext: Optional[str]
+    checksum_algorithm: Optional[str]
+    stream_hash_algorithm: Optional[str]
     exiftool_profile: Optional[str]
     mediainfo_profile: Optional[str]
     ffprobe_profile: Optional[str]
@@ -122,113 +132,114 @@ The scripts will confirm that the digital files conform to predetermined specifi
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
+    # Top-level: input + run mode
     parser.add_argument('--version', action='version', version=f'%(prog)s {version_string}')
     parser.add_argument("paths", nargs='*', help="Path to the input -f: video file(s) or -d: directory(ies)")
-    parser.add_argument("-dr","--dryrun", action="store_true", 
-                        help="Flag to run av-spex w/out outputs or checks. Use to change config profiles w/out processing video.")
-    parser.add_argument("--profile", choices=list(PROFILE_MAPPING.keys()), 
-                        help="Select processing profile or turn checks off")
-    parser.add_argument("--on", 
-                        action='append', 
-                         metavar="{tool_name.run_tool, tool_name.check_tool}",
-                         help="Turns on specific tool run_ or check_ option (format: tool.check_tool or tool.run_tool, e.g. mediainfo.run_tool)")
-    parser.add_argument("--off", 
-                        action='append', 
-                         metavar="{tool_name.run_tool, tool_name.check_tool}",
-                         help="Turns off specific tool run_ or check_ option (format: tool.check_tool or tool.run_tool, e.g. mediainfo.run_tool)")
-    parser.add_argument("-sn","--signalflow",
-                        help="Select signal flow profile by name (e.g. 'JPC_AV_SVHS Signal Flow'). Use -pp signalflow to list available profiles.")
-    parser.add_argument("-fn","--filename",
-                        help="Select filename profile by name (e.g. 'JPC Filename Profile'). Use -pp to list available profiles.")
-    parser.add_argument("-pp", "--printprofile", type=str, nargs='?', const='all', default=None,
-                        help="Show config profile(s) and optional subsection. For current settings: 'config[,subsection]'. Examples: 'all', 'spex', 'checks', 'checks,tools', 'spex,filename_values'. For custom profiles: 'exiftool', 'mediainfo', 'ffprobe', 'signalflow'")
-    parser.add_argument("-d","--directory", action="store_true", 
+    parser.add_argument("-d","--directory", action="store_true",
                         help="Flag to indicate input is a directory")
-    parser.add_argument("-f","--file", action="store_true", 
+    parser.add_argument("-f","--file", action="store_true",
                         help="Flag to indicate input is a video file")
-    parser.add_argument('--gui', action='store_true', 
+    parser.add_argument('--gui', action='store_true',
                         help='Force launch in GUI mode')
-    parser.add_argument("--use-default-config", action="store_true",
-                       help="Reset to default config by removing any saved configurations")
-    
-    # Config export/import arguments
-    parser.add_argument('--export-config', 
-                    choices=['all', 'spex', 'checks'],
-                    help='Export current config(s) to JSON')
-    parser.add_argument('--export-file',
-                    help='Specify export filename (default: auto-generated)')
-    parser.add_argument('--import-config',
-                    help='Import configs from JSON file')
-    parser.add_argument("--mediaconch-policy",
-                    help="Path to custom MediaConch policy XML file")
-    parser.add_argument("--exiftool-profile",
-                    help="Apply an exiftool expected-values profile by name. Use -pp exiftool to list available exiftool profiles.")
-    parser.add_argument("--mediainfo-profile",
-                    help="Apply a MediaInfo expected-values profile by name. Use -pp mediainfo to list available mediainfo profiles.")
-    parser.add_argument("--ffprobe-profile",
-                    help="Apply an FFprobe expected-values profile by name. Use -pp ffprobe to list available ffprobe profiles.")
-    parser.add_argument("--exiftool-from-file",
-                    metavar="FILE",
-                    help="Create a custom exiftool profile from a file (JSON or text exiftool output). Saves as a new profile and applies it.")
-    parser.add_argument("--mediainfo-from-file",
-                    metavar="FILE",
-                    help="Create a custom MediaInfo profile from a JSON file (mediainfo --Output=JSON output). Saves as a new profile and applies it.")
-    parser.add_argument("--ffprobe-from-file",
-                    metavar="FILE",
-                    help="Create a custom FFprobe profile from a JSON file (ffprobe -print_format json output). Saves as a new profile and applies it.")
+    parser.add_argument("-dr","--dryrun", action="store_true",
+                        help="Flag to run av-spex w/out outputs or checks. Use to change config profiles w/out processing video.")
 
-    # args for frame analysis
-    # Enable/disable individual sub-steps
-    parser.add_argument(
-        '--enable-bitplane-check',
-        choices=['on', 'off'],
-        help='Enable/disable bitplane check (9th/10th bit verification) in frame analysis'
-    )
-    parser.add_argument(
-        '--enable-border-detection',
-        choices=['on', 'off'],
-        help='Enable/disable border detection in frame analysis'
-    )
-    parser.add_argument(
-        '--enable-brng-analysis',
-        choices=['on', 'off'],
-        help='Enable/disable BRNG analysis in frame analysis'
-    )
-    parser.add_argument(
-        '--enable-signalstats',
-        choices=['on', 'off'],
-        help='Enable/disable signalstats in frame analysis'
-    )
-    parser.add_argument(
-        '--enable-duplicate-frame-detection',
-        choices=['on', 'off'],
-        help='Enable/disable duplicate frame detection in frame analysis'
-    )
-    parser.add_argument(
-        '--frame-borders',
-        choices=['simple', 'sophisticated'],
-        help='Border detection mode for frame analysis (simple or sophisticated)'
-    )
-    parser.add_argument(
-        '--frame-border-pixels',
-        type=int,
-        help='Number of pixels to crop from each edge in simple border mode'
-    )
-    parser.add_argument(
-        '--frame-no-colorbar-skip',
-        action='store_true',
-        help='Disable automatic skipping of color bars detected by qct-parse'
-    )
-    parser.add_argument(
-        '--frame-brng-duration',
-        type=int,
-        help='Maximum duration in seconds for BRNG analysis'
-    )
-    parser.add_argument(
-        '--enable-clamped-levels',
-        choices=['on', 'off'],
-        help='Enable/disable clamped video levels detection in qct-parse'
-    )
+    # Config profiles
+    profiles_group = parser.add_argument_group("Config profiles")
+    profiles_group.add_argument("--profile", choices=list(PROFILE_MAPPING.keys()),
+                                help="Select processing profile or turn checks off")
+    profiles_group.add_argument("-sn","--signalflow",
+                                help="Select signal flow profile by name (e.g. 'JPC_AV_SVHS Signal Flow'). Use -pp signalflow to list available profiles.")
+    profiles_group.add_argument("-fn","--filename",
+                                help="Select filename profile by name (e.g. 'JPC Filename Profile'). Use -pp to list available profiles.")
+    profiles_group.add_argument("-pp", "--printprofile", type=str, nargs='?', const='all', default=None,
+                                help="Show config profile(s) and optional subsection. For current settings: 'config[,subsection]'. Examples: 'all', 'spex', 'checks', 'checks,outputs', 'checks,fixity', 'checks,tools', 'spex,filename_values'. For custom profiles: 'exiftool', 'mediainfo', 'ffprobe', 'signalflow'")
+    profiles_group.add_argument("--exiftool-profile",
+                                help="Apply an exiftool expected-values profile by name. Use -pp exiftool to list available exiftool profiles.")
+    profiles_group.add_argument("--mediainfo-profile",
+                                help="Apply a MediaInfo expected-values profile by name. Use -pp mediainfo to list available mediainfo profiles.")
+    profiles_group.add_argument("--ffprobe-profile",
+                                help="Apply an FFprobe expected-values profile by name. Use -pp ffprobe to list available ffprobe profiles.")
+    profiles_group.add_argument("--exiftool-from-file", metavar="FILE",
+                                help="Create a custom exiftool profile from a file (JSON or text exiftool output). Saves as a new profile and applies it.")
+    profiles_group.add_argument("--mediainfo-from-file", metavar="FILE",
+                                help="Create a custom MediaInfo profile from a JSON file (mediainfo --Output=JSON output). Saves as a new profile and applies it.")
+    profiles_group.add_argument("--ffprobe-from-file", metavar="FILE",
+                                help="Create a custom FFprobe profile from a JSON file (ffprobe -print_format json output). Saves as a new profile and applies it.")
+
+    # Config import/export
+    config_io_group = parser.add_argument_group("Config import/export")
+    config_io_group.add_argument('--export-config', choices=['all', 'spex', 'checks'],
+                                 help='Export current config(s) to JSON')
+    config_io_group.add_argument('--export-file',
+                                 help='Specify export filename (default: auto-generated)')
+    config_io_group.add_argument('--import-config',
+                                 help='Import configs from JSON file')
+    config_io_group.add_argument("--use-default-config", action="store_true",
+                                 help="Reset to default config by removing any saved configurations")
+
+    # Tool toggles
+    tools_group = parser.add_argument_group("Tool toggles")
+    tools_group.add_argument("--on", action='append',
+                             metavar="{tool_name.run_tool, tool_name.check_tool}",
+                             help="Turns on specific tool run_ or check_ option (format: tool.check_tool or tool.run_tool, e.g. mediainfo.run_tool)")
+    tools_group.add_argument("--off", action='append',
+                             metavar="{tool_name.run_tool, tool_name.check_tool}",
+                             help="Turns off specific tool run_ or check_ option (format: tool.check_tool or tool.run_tool, e.g. mediainfo.run_tool)")
+    tools_group.add_argument("--mediaconch-policy",
+                             help="Path to custom MediaConch policy XML file")
+
+    # qct-parse / CLAMS feature toggles
+    qct_group = parser.add_argument_group("qct-parse / CLAMS")
+    qct_group.add_argument('--enable-audio-analysis', choices=['on', 'off'],
+                           help='Enable/disable qct-parse audio analysis (clipping, channel imbalance, audible timecode, audio dropout). Auto-enables qct_parse.run_tool.')
+    qct_group.add_argument('--enable-clamped-levels', choices=['on', 'off'],
+                           help='Enable/disable clamped video levels detection in qct-parse. Auto-enables qct_parse.run_tool.')
+    qct_group.add_argument('--enable-clams-detection', choices=['on', 'off'],
+                           help='Enable/disable CLAMS detection (SSIM-based SMPTE bars detector + cross-correlation tone detector). Runs in parallel with qct-parse.')
+    qct_group.add_argument('--enable-chroma-phase-detection', choices=['on', 'off'],
+                           help='Enable/disable chroma phase error detection in qct-parse (detects tape tracking artifacts where chroma collapses toward cyan/magenta). Auto-enables qct_parse.run_tool.')
+
+    # Frame analysis sub-steps + tuning
+    frame_group = parser.add_argument_group("Frame analysis")
+    frame_group.add_argument('--enable-bitplane-check', choices=['on', 'off'],
+                             help='Enable/disable bitplane check (9th/10th bit verification) in frame analysis')
+    frame_group.add_argument('--enable-border-detection', choices=['on', 'off'],
+                             help='Enable/disable border detection in frame analysis')
+    frame_group.add_argument('--enable-brng-analysis', choices=['on', 'off'],
+                             help='Enable/disable BRNG analysis in frame analysis')
+    frame_group.add_argument('--enable-signalstats', choices=['on', 'off'],
+                             help='Enable/disable signalstats in frame analysis')
+    frame_group.add_argument('--enable-dropped-sample-detection', choices=['on', 'off'],
+                             help='Enable/disable dropped sample detection in frame analysis')
+    frame_group.add_argument('--enable-duplicate-frame-detection', choices=['on', 'off'],
+                             help='Enable/disable duplicate frame detection in frame analysis')
+    frame_group.add_argument('--frame-borders', choices=['simple', 'sophisticated'],
+                             help='Border detection mode for frame analysis (simple or sophisticated)')
+    frame_group.add_argument('--frame-border-pixels', type=int,
+                             help='Number of pixels to crop from each edge in simple border mode')
+    frame_group.add_argument('--frame-no-colorbar-skip', action='store_true',
+                             help='Disable automatic skipping of color bars detected by qct-parse')
+    frame_group.add_argument('--frame-brng-duration', type=int,
+                             help='Maximum duration in seconds for BRNG analysis')
+
+    # Output settings (access file sub-options + qctools extension)
+    output_group = parser.add_argument_group("Output settings")
+    output_group.add_argument('--access-trim-color-bars', choices=['on', 'off'],
+                              help='If qct-parse detects color bars at the head of the tape, skip them in the access file')
+    output_group.add_argument('--access-crop-borders', choices=['on', 'off'],
+                              help='If sophisticated border detection finds an active picture area, crop to it in the access file (requires --access-crop-to-480 on)')
+    output_group.add_argument('--access-crop-to-480', choices=['on', 'off'],
+                              help='Trim NTSC sources to 720x480 in the access file; off keeps the native 720x486 height')
+    output_group.add_argument('--qctools-ext', choices=['qctools.xml.gz', 'qctools.mkv'],
+                              help='Extension for QCTools output files')
+
+    # Fixity
+    fixity_group = parser.add_argument_group("Fixity")
+    fixity_group.add_argument('--checksum-algorithm', choices=['md5', 'sha256'],
+                              help='Hash algorithm for whole-file (output/validate) fixity')
+    fixity_group.add_argument('--stream-hash-algorithm', choices=['md5', 'sha256'],
+                              help='Hash algorithm for embedded stream fixity')
 
     args = parser.parse_args()
 
@@ -277,12 +288,22 @@ The scripts will confirm that the digital files conform to predetermined specifi
         enable_border_detection=getattr(args, 'enable_border_detection', None),
         enable_brng_analysis=getattr(args, 'enable_brng_analysis', None),
         enable_signalstats=getattr(args, 'enable_signalstats', None),
+        enable_dropped_sample_detection=getattr(args, 'enable_dropped_sample_detection', None),
         enable_duplicate_frame_detection=getattr(args, 'enable_duplicate_frame_detection', None),
         frame_borders=getattr(args, 'frame_borders', None),
         frame_border_pixels=getattr(args, 'frame_border_pixels', None),
         frame_no_colorbar_skip=getattr(args, 'frame_no_colorbar_skip', False),
         frame_brng_duration=getattr(args, 'frame_brng_duration', None),
         enable_clamped_levels=getattr(args, 'enable_clamped_levels', None),
+        enable_clams_detection=getattr(args, 'enable_clams_detection', None),
+        enable_audio_analysis=getattr(args, 'enable_audio_analysis', None),
+        enable_chroma_phase_detection=getattr(args, 'enable_chroma_phase_detection', None),
+        access_trim_color_bars=getattr(args, 'access_trim_color_bars', None),
+        access_crop_borders=getattr(args, 'access_crop_borders', None),
+        access_crop_to_480=getattr(args, 'access_crop_to_480', None),
+        qctools_ext=getattr(args, 'qctools_ext', None),
+        checksum_algorithm=getattr(args, 'checksum_algorithm', None),
+        stream_hash_algorithm=getattr(args, 'stream_hash_algorithm', None),
         exiftool_profile=args.exiftool_profile,
         mediainfo_profile=args.mediainfo_profile,
         ffprobe_profile=args.ffprobe_profile,
@@ -467,6 +488,9 @@ def run_cli_mode(args):
     if args.enable_signalstats:
         frame_updates['outputs']['frame_analysis']['enable_signalstats'] = (args.enable_signalstats == 'on')
 
+    if args.enable_dropped_sample_detection:
+        frame_updates['outputs']['frame_analysis']['enable_dropped_sample_detection'] = (args.enable_dropped_sample_detection == 'on')
+
     if args.enable_duplicate_frame_detection:
         frame_updates['outputs']['frame_analysis']['enable_duplicate_frame_detection'] = (args.enable_duplicate_frame_detection == 'on')
 
@@ -488,10 +512,74 @@ def run_cli_mode(args):
         config_mgr.update_config('checks', frame_updates)
         config_mgr.save_config('checks', is_last_used=True)
 
+    # Outputs config: access file sub-options + qctools extension
+    outputs_updates = {}
+    if args.access_trim_color_bars:
+        outputs_updates['access_file_trim_color_bars'] = (args.access_trim_color_bars == 'on')
+    if args.access_crop_borders:
+        outputs_updates['access_file_crop_borders'] = (args.access_crop_borders == 'on')
+    if args.access_crop_to_480:
+        outputs_updates['access_file_crop_to_480'] = (args.access_crop_to_480 == 'on')
+    if args.qctools_ext:
+        outputs_updates['qctools_ext'] = args.qctools_ext
+
+    if outputs_updates:
+        # access_file_crop_borders requires access_file_crop_to_480 — the access
+        # file pipeline only scales to the active picture area when crop_to_480
+        # is on. Mirrors the GUI gating in gui_checks_window.on_access_crop_to_480_changed.
+        current_outputs = config_mgr.get_config('checks', ChecksConfig).outputs
+        final_crop_to_480 = outputs_updates.get(
+            'access_file_crop_to_480', current_outputs.access_file_crop_to_480
+        )
+        final_crop_borders = outputs_updates.get(
+            'access_file_crop_borders', current_outputs.access_file_crop_borders
+        )
+        if not final_crop_to_480 and final_crop_borders:
+            outputs_updates['access_file_crop_borders'] = False
+            logger.warning(
+                "access_file_crop_borders requires access_file_crop_to_480; "
+                "forcing --access-crop-borders off."
+            )
+
+        config_mgr.update_config('checks', {'outputs': outputs_updates})
+        config_mgr.save_config('checks', is_last_used=True)
+
+    # Fixity hash algorithms
+    fixity_updates = {}
+    if args.checksum_algorithm:
+        fixity_updates['checksum_algorithm'] = args.checksum_algorithm
+    if args.stream_hash_algorithm:
+        fixity_updates['stream_hash_algorithm'] = args.stream_hash_algorithm
+    if fixity_updates:
+        config_mgr.update_config('checks', {'fixity': fixity_updates})
+        config_mgr.save_config('checks', is_last_used=True)
+
+    # Tools sub-toggles: qct-parse audio analysis / clamped levels / chroma phase, CLAMS detection
+    tools_updates = {}
     if args.enable_clamped_levels:
-        config_mgr.update_config('checks', {
-            'tools': {'qct_parse': {'detect_clamped_levels': (args.enable_clamped_levels == 'on')}}
-        })
+        tools_updates.setdefault('qct_parse', {})['detect_clamped_levels'] = (args.enable_clamped_levels == 'on')
+    if args.enable_audio_analysis:
+        tools_updates.setdefault('qct_parse', {})['audio_analysis'] = (args.enable_audio_analysis == 'on')
+    if args.enable_chroma_phase_detection:
+        tools_updates.setdefault('qct_parse', {})['detect_chroma_phase_errors'] = (args.enable_chroma_phase_detection == 'on')
+    if args.enable_clams_detection:
+        tools_updates.setdefault('clams_detection', {})['run_tool'] = (args.enable_clams_detection == 'on')
+
+    # qct-parse sub-features (audio_analysis, detect_clamped_levels,
+    # detect_chroma_phase_errors) only run inside run_qctparse(), so
+    # qct_parse.run_tool must also be on. Auto-enable it when the user turns
+    # any sub-feature on.
+    if (args.enable_audio_analysis == 'on') or (args.enable_clamped_levels == 'on') or (args.enable_chroma_phase_detection == 'on'):
+        current_qct_run = config_mgr.get_config('checks', ChecksConfig).tools.qct_parse.run_tool
+        if not current_qct_run:
+            tools_updates.setdefault('qct_parse', {})['run_tool'] = True
+            logger.warning(
+                "audio_analysis / detect_clamped_levels / detect_chroma_phase_errors require "
+                "qct_parse.run_tool; turning qct_parse.run_tool on."
+            )
+
+    if tools_updates:
+        config_mgr.update_config('checks', {'tools': tools_updates})
         config_mgr.save_config('checks', is_last_used=True)
 
     if args.dry_run_only:

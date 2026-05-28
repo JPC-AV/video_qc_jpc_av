@@ -247,7 +247,7 @@ def printThumb(video_path, tag, profile_name, startObj, thumbPath, tagValue, tim
 
 
 # detect bars    
-def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, bit_depth_10, signals=None, total_duration=None):
+def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, bit_depth_10, signals=None, total_duration=None, search_start_time=0.0, search_end_time=None, relaxed=False):
     """
     Detects color bars in a video by analyzing frames within a buffered window and logging the start and end times of the bars.
 
@@ -300,23 +300,28 @@ def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, 
         URANGE_min = 150
         VRANGE_min = 150
 
+    if relaxed:
+        YMAX_thresh = int(YMAX_thresh * 0.75)
+        YMIN_thresh = int(YMIN_thresh * 2)
+        YDIF_thresh = YDIF_thresh * 2.0
+        SATMAX_thresh = int(SATMAX_thresh * 0.4)
+
     barsStartString = None
     barsEndString = None
     consecutive_non_bar_frames = 0
     max_consecutive_non_bar_frames = 10  # Allow up to 10 consecutive bad frames before ending
-    
+
     # Add time limit for searching (5 minutes = 300 seconds)
     search_time_limit = 300.0
-    
+
     # Add tolerance for occasional frames that don't meet criteria
     consecutive_failures = 0
-    failure_tolerance = 15  # Allow up to 15 consecutive frames to fail before ending
+    failure_tolerance = 15 if not relaxed else 30
 
     # Confirmation window: require consecutive passing frames before confirming bars start
-    # This prevents false detection on unstable/skewed bars from analog artifacts
     bars_confirmation_count = 0
-    bars_confirmation_threshold = 30  # ~1 second at 30fps must pass before confirming bars
-    bars_candidate_start = None       # timestamp of potential bars start (beginning of passing run)
+    bars_confirmation_threshold = 30 if not relaxed else 10
+    bars_candidate_start = None
 
     # Use the safe parser with encoding fallback
     parser_iter = safe_gzip_iterparse(startObj, etree)
@@ -331,20 +336,30 @@ def detectBars(startObj, pkt, durationStart, durationEnd, framesList, buffSize, 
         for event, elem in parser_iter: #iterparse the xml doc
             if elem.attrib['media_type'] == "video": #get just the video frames
                 frame_pkt_dts_time = elem.attrib[pkt] #get the timestamps for the current frame we're looking at
+                frame_time_float = float(frame_pkt_dts_time)
+
+                if frame_time_float < search_start_time:
+                    elem.clear()
+                    continue
 
                 # Emit progress during bars detection (maps into 0→5% range)
                 bars_frame_count += 1
                 if (signals and hasattr(signals, 'qctparse_progress') and
                     total_duration and bars_frame_count % bars_progress_interval == 0):
-                    pct = int((float(frame_pkt_dts_time) / total_duration) * 5)
+                    pct = int((frame_time_float / total_duration) * 5)
                     pct = min(5, max(0, pct))
                     if pct > bars_last_progress_pct:
                         signals.qctparse_progress.emit(pct)
                         bars_last_progress_pct = pct
-                
-                # Stop searching after 5 minutes if no bars found yet
-                if durationStart == "" and float(frame_pkt_dts_time) > search_time_limit:
-                    logger.debug(f"Stopped searching for color bars after {search_time_limit} seconds")
+
+                effective_search_limit = search_end_time if search_end_time is not None else search_time_limit
+                if durationStart == "" and frame_time_float > effective_search_limit:
+                    logger.debug(f"Stopped searching for color bars after reaching {effective_search_limit:.1f}s")
+                    break
+                if search_end_time is not None and durationStart != "" and frame_time_float > search_end_time:
+                    if durationEnd not in ("", None):
+                        barsEndString = dts2ts(str(durationEnd))
+                    logger.debug(f"Reached end of search window at {search_end_time:.1f}s")
                     break
                 
                 frameDict = {}  #start an empty dict for the new frame
@@ -864,22 +879,30 @@ def print_timestamps(qctools_timestamp_output, summarized_timestamps, descriptor
                 writer.writerow([f"{start.strftime('%H:%M:%S.%f')[:-3]}, {end.strftime('%H:%M:%S.%f')[:-3]}"])
 
 
-def print_bars_durations(qctools_check_output, barsStartString, barsEndString):
+def print_bars_durations(qctools_check_output, barsStartString=None, barsEndString=None, regions=None):
     """
     Writes color bar duration information to a CSV file.
 
-    If both `barsStartString` and `barsEndString` are provided, it writes a header indicating color bars were found
-    and then writes the start and end timestamps on separate rows.
-    If either timestamp is missing, it writes a message indicating no color bars were found.
+    When *regions* is provided (a list of (label, start_ts, end_ts) tuples),
+    the 3-column labeled format is written — one row per detected region.
+    When *regions* is None, falls back to the legacy 2-column single-row format.
 
     Args:
         qctools_check_output (str): Path to the output CSV file.
-        barsStartString (str or None): Start timestamp of the color bars.
-        barsEndString (str or None): End timestamp of the color bars.
+        barsStartString (str or None): Start timestamp (legacy mode).
+        barsEndString (str or None): End timestamp (legacy mode).
+        regions (list or None): List of (label, start_ts_string, end_ts_string).
     """
     with open(qctools_check_output, 'w') as csvfile:
         writer = csv.writer(csvfile)
-        if barsStartString and barsEndString:
+        if regions is not None:
+            if regions:
+                writer.writerow(["qct-parse color bars found:"])
+                for label, start_str, end_str in regions:
+                    writer.writerow([label, start_str, end_str])
+            else:
+                writer.writerow(["qct-parse found no color bars"])
+        elif barsStartString and barsEndString:
             writer.writerow(["qct-parse color bars found:"])
             writer.writerow([barsStartString, barsEndString])
         else:
@@ -1062,10 +1085,15 @@ SILENCE_THRESHOLD_DB = -60.0
 _TC_R128_WINDOW_SEC = 30          # rolling window size in seconds
 _TC_R128_MIN_WINDOWS = 6          # minimum consecutive windows to confirm TC (~3 min)
 
-# Criterion A: dual-channel TC (both channels carry TC)
+# Criterion A: stable mix at TC level. r128.M is a mix-loudness measurement,
+# so this fires for both "both channels carry TC" and "one channel TC + one
+# near-silent" — the per-channel split must come from astats.
 _TC_R128_A_M_STDEV_MAX = 2.0
 _TC_R128_A_M_MEAN_MIN = -25.0
-_TC_R128_A_LRA_MEDIAN_MAX = 5.0
+# LRA is cumulative back to file start, so it stays inflated through the first
+# 30-60s after a silence-to-TC transition. The stronger discriminators are
+# M_stdev and M_mean — LRA only needs to bound out program audio (LRA >> 10).
+_TC_R128_A_LRA_MEDIAN_MAX = 8.5
 
 # Criterion B: TC + silence (one channel TC, other near-silent)
 _TC_R128_B_LRA_HIGH_MIN = -30.0
@@ -1084,18 +1112,33 @@ _TC_R128_C_LRA_HIGH_UPPER = -24.0
 _TC_R128_C_M_MIN = -60.0
 
 # astats thresholds (per-channel detection)
-_TC_ASTATS_WINDOW_FRAMES = 7     # ~7 frames at ~4.6s each ~ 30s window
+# Calibrated against three audible-TC samples (164811/246492/389332) and two
+# non-TC negatives: a silence pad (JPC_AV_00011 1:06–3:08) and a 1 kHz bars+tone
+# leader (JPC_AV_01663 0–45 s). Each gate independently rejects at least one
+# non-TC regime — TC is "stable mid-level biphase mark", so means and *stdevs*
+# both matter.
+_TC_ASTATS_WINDOW_SEC = 30.0     # rolling window size in seconds (matches R128)
 _TC_ASTATS_MIN_WINDOWS = 2       # minimum consecutive windows to confirm TC
 
-# Per-channel TC indicators in astats
-_TC_ASTATS_RMS_LEVEL_MIN = -30.0
-_TC_ASTATS_RMS_LEVEL_MAX = -5.0
-_TC_ASTATS_RMS_STDEV_MAX = 3.0
-_TC_ASTATS_CREST_FACTOR_MAX = 2.0
-_TC_ASTATS_DYNAMIC_RANGE_MAX = 20.0
-_TC_ASTATS_ZERO_CROSSINGS_RATE_MIN = 0.06
-_TC_ASTATS_ZERO_CROSSINGS_RATE_MAX = 0.15
-_TC_ASTATS_ENTROPY_MAX = 0.35
+# Per-channel TC indicators in astats — mean bands
+_TC_ASTATS_RMS_LEVEL_MIN = -30.0          # excludes silence (≪ -55 dBFS)
+_TC_ASTATS_RMS_LEVEL_MAX = -10.0
+_TC_ASTATS_CREST_FACTOR_MIN = 1.55        # excludes pure sine tone (≈1.41)
+# Mean per-channel crest of biphase mark TC clusters at ~2.0–2.22 in practice;
+# 2.25 keeps the program-audio rejection (≈3.0) while not fragmenting on
+# rounding noise at the boundary.
+_TC_ASTATS_CREST_FACTOR_MAX = 2.25
+_TC_ASTATS_ZERO_CROSSINGS_RATE_MIN = 0.05  # excludes sub-kHz tones (≪0.05)
+_TC_ASTATS_ZERO_CROSSINGS_RATE_MAX = 0.10  # excludes silence (≈0.45)
+_TC_ASTATS_ENTROPY_MIN = 0.60             # excludes silence (≈0.28)
+_TC_ASTATS_ENTROPY_MAX = 0.80
+
+# Per-channel TC indicators in astats — stability gates (TC sits rock-stable;
+# program audio swings every metric)
+_TC_ASTATS_RMS_STDEV_MAX = 1.0
+_TC_ASTATS_CREST_STDEV_MAX = 0.30
+_TC_ASTATS_ZCR_STDEV_MAX = 0.02
+_TC_ASTATS_ENTROPY_STDEV_MAX = 0.05
 
 # ---------------------------------------------------------------------------
 # Audio dropout detection thresholds
@@ -1159,8 +1202,16 @@ CLAMP_LIMITS_8BIT = {
     'UV': {'floor': 16,  'ceiling': 240},
 }
 
-# A clamp is flagged when at least this many frames hit the limit exactly
-# AND at least this percentage of total frames hit it, with zero excursions past.
+# Tolerance window (in code values) inside the legal range from each broadcast
+# limit. Frames whose extreme lands in this window count as evidence of
+# clamping. 8-bit requires an exact hit; 10-bit allows ±2 codes (≈ the same
+# IRE precision as 8-bit) to absorb dithering and ADC calibration drift near
+# the wall.
+CLAMP_TOLERANCE_8BIT = 0
+CLAMP_TOLERANCE_10BIT = 2
+
+# A clamp is flagged when at least this many frames sit at or near the limit
+# AND at least this percentage of total frames do, with zero excursions past.
 CLAMP_MIN_HIT_FRAMES = 10
 CLAMP_MIN_HIT_PCT = 1.0
 
@@ -1169,8 +1220,8 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
     """
     Detect clamped video levels — an ADC artifact where signal excursions are
     truncated at the broadcast (legal) range limits. Flags a clamp when, for a
-    given channel/direction, frames pile up exactly at the limit and zero
-    frames go past it.
+    given channel/direction, frames pile up at (or within a bit-depth-scaled
+    tolerance of) the broadcast limit and zero frames go past it.
 
     Parameters:
         startObj (str): Path to the QCTools report file (.qctools.xml.gz).
@@ -1193,6 +1244,7 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
         return None
 
     limits = CLAMP_LIMITS_10BIT if bit_depth_10 else CLAMP_LIMITS_8BIT
+    tolerance = CLAMP_TOLERANCE_10BIT if bit_depth_10 else CLAMP_TOLERANCE_8BIT
 
     stats = {
         ch: {
@@ -1205,6 +1257,11 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
         for ch in ('Y', 'U', 'V')
     }
 
+    # Per-frame trace data, kept for graphing any channel/direction that ends
+    # up flagged as clamped. Six parallel value arrays keyed by metric.
+    trace_times = []
+    trace_values = {m: [] for m in ('YMIN', 'YMAX', 'UMIN', 'UMAX', 'VMIN', 'VMAX')}
+
     total_frames = 0
     progress_interval = 500
     last_pct = 36
@@ -1214,17 +1271,21 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
             if elem.attrib.get('media_type') == 'video':
                 total_frames += 1
 
+                try:
+                    frame_time = float(elem.attrib.get(pkt, "0"))
+                except (TypeError, ValueError):
+                    frame_time = float(total_frames)
+                trace_times.append(frame_time)
+
                 if (signals and hasattr(signals, 'qctparse_progress') and
                         total_duration and total_frames % progress_interval == 0):
-                    try:
-                        frame_time = float(elem.attrib.get(pkt, "0"))
-                        pct = 36 + int((frame_time / total_duration) * 28)
-                        pct = min(64, max(36, pct))
-                        if pct > last_pct:
-                            signals.qctparse_progress.emit(pct)
-                            last_pct = pct
-                    except ValueError:
-                        pass
+                    pct = 36 + int((frame_time / total_duration) * 28)
+                    pct = min(64, max(36, pct))
+                    if pct > last_pct:
+                        signals.qctparse_progress.emit(pct)
+                        last_pct = pct
+
+                frame_metrics = {m: None for m in trace_values}
 
                 for t in list(elem):
                     key = t.attrib.get('key', '')
@@ -1238,21 +1299,25 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
                     except (ValueError, KeyError):
                         continue
 
+                    frame_metrics[metric] = val
                     s = stats[metric[0]]
                     if metric.endswith('MIN'):
                         if s['min'] is None or val < s['min']:
                             s['min'] = val
                         if val < s['floor']:
                             s['below_floor'] += 1
-                        elif val == s['floor']:
+                        elif val <= s['floor'] + tolerance:
                             s['hit_floor'] += 1
                     else:
                         if s['max'] is None or val > s['max']:
                             s['max'] = val
                         if val > s['ceiling']:
                             s['above_ceiling'] += 1
-                        elif val == s['ceiling']:
+                        elif val >= s['ceiling'] - tolerance:
                             s['hit_ceiling'] += 1
+
+                for m, v in frame_metrics.items():
+                    trace_values[m].append(v)
 
             elem.clear()
     except Exception as e:
@@ -1278,7 +1343,7 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
 
             if beyond > 0:
                 verdict = 'Not Clamped'
-            elif sufficient_hits and extreme is not None and extreme == limit:
+            elif sufficient_hits:
                 verdict = 'Clamped'
                 any_clamp = True
             else:
@@ -1298,12 +1363,77 @@ def analyzeClampedLevels(startObj, pkt, report_directory, bit_depth_10, signals=
     results = {
         'total_video_frames': total_frames,
         'bit_depth_10': bit_depth_10,
+        'tolerance': tolerance,
         'findings': findings,
         'any_clamp_detected': any_clamp,
     }
 
     _write_clamped_levels_results(report_directory, results)
+    if any_clamp:
+        _write_clamped_levels_traces(
+            report_directory, findings, trace_times, trace_values
+        )
     return results
+
+
+CLAMP_TRACE_TARGET_POINTS = 5000
+
+
+def _downsample_trace(times, values, target_points, mode):
+    """
+    Bucket a per-frame trace down to ~target_points by selecting the per-bucket
+    extreme. mode='max' keeps the bucket maximum (for ceiling traces),
+    mode='min' keeps the bucket minimum (for floor traces). Preserves brief
+    wall-hit events that mean-based downsampling would smooth away.
+    """
+    n = len(values)
+    if n == 0:
+        return [], []
+    pairs = [(t, v) for t, v in zip(times, values) if v is not None]
+    if not pairs:
+        return [], []
+    if len(pairs) <= target_points:
+        return [p[0] for p in pairs], [p[1] for p in pairs]
+    bucket_size = max(1, math.ceil(len(pairs) / target_points))
+    out_times, out_values = [], []
+    select = max if mode == 'max' else min
+    for i in range(0, len(pairs), bucket_size):
+        chunk = pairs[i:i + bucket_size]
+        t_pick, v_pick = select(chunk, key=lambda p: p[1])
+        out_times.append(t_pick)
+        out_values.append(v_pick)
+    return out_times, out_values
+
+
+def _write_clamped_levels_traces(report_directory, findings, trace_times, trace_values):
+    """
+    Write downsampled per-frame traces for each channel/direction flagged as
+    Clamped. One CSV with all traces in long format so the report can plot
+    each one as its own graph.
+    """
+    csv_path = os.path.join(report_directory, "qct-parse_clamped_traces.csv")
+    rows_to_write = []
+    for r in findings:
+        if r['verdict'] != 'Clamped':
+            continue
+        metric = f"{r['channel']}{'MIN' if r['direction'] == 'floor' else 'MAX'}"
+        mode = 'min' if r['direction'] == 'floor' else 'max'
+        times, values = _downsample_trace(
+            trace_times, trace_values[metric], CLAMP_TRACE_TARGET_POINTS, mode
+        )
+        for t, v in zip(times, values):
+            rows_to_write.append([
+                r['channel'], r['direction'], r['limit'], f"{t:.4f}", f"{v:g}"
+            ])
+
+    if not rows_to_write:
+        return
+
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["channel", "direction", "limit", "time_seconds", "value"])
+        writer.writerows(rows_to_write)
+    logger.debug(f"Clamped-levels trace data written to {os.path.basename(csv_path)}\n")
 
 
 def _write_clamped_levels_results(report_directory, results):
@@ -1311,12 +1441,14 @@ def _write_clamped_levels_results(report_directory, results):
     csv_path = os.path.join(report_directory, "qct-parse_clamped_levels.csv")
     total_frames = results['total_video_frames']
     bit_depth = 10 if results['bit_depth_10'] else 8
+    tolerance = results.get('tolerance', 0)
 
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["Clamped Levels Detection Results"])
         writer.writerow(["Bit Depth", bit_depth])
         writer.writerow(["Total Video Frames", total_frames])
+        writer.writerow(["Tolerance Window (codes)", tolerance])
         writer.writerow(["Min Hit Frames (absolute)", CLAMP_MIN_HIT_FRAMES])
         writer.writerow(["Min Hit Frames (%)", f"{CLAMP_MIN_HIT_PCT:.2f}"])
         writer.writerow(["Any Clamp Detected", "Yes" if results['any_clamp_detected'] else "No"])
@@ -1324,7 +1456,7 @@ def _write_clamped_levels_results(report_directory, results):
 
         writer.writerow([
             "Channel", "Direction", "Limit", "Global Extreme",
-            "Frames at Limit", "Hit %", "Frames Beyond Limit", "Verdict"
+            "Frames at/near Limit", "Hit %", "Frames Beyond Limit", "Verdict"
         ])
         for r in results['findings']:
             extreme_str = f"{r['global_extreme']:g}" if r['global_extreme'] is not None else "N/A"
@@ -1341,6 +1473,344 @@ def _write_clamped_levels_results(report_directory, results):
         logger.warning(f"Clamped levels detected: {clamped_summary}. See {os.path.basename(csv_path)}\n")
     else:
         logger.debug(f"No clamped levels detected (bit depth {bit_depth}). Results in {os.path.basename(csv_path)}\n")
+
+
+# Chroma phase error detection thresholds. Empirically derived from a known-
+# affected analog source (helical-scan tracking errors producing cyan/magenta
+# colour shifts with horizontal image displacement) and validated against a
+# clean source. Two-rule detector:
+#   PRIMARY  - chroma "envelope wide": within a single frame, both U and V
+#              span nearly the full chroma range (UMIN low AND UMAX high AND
+#              VMIN low AND VMAX high). This is the strongest single-frame
+#              signature of a chroma phase event.
+#   SECONDARY - SATMAX over a high threshold. Catches partial events where
+#              only a portion of the frame is in chroma phase error.
+# Thresholds below are 10-bit (0-1023). For 8-bit (0-255) they are scaled /4.
+CHROMA_ENVELOPE_LOW_10BIT = 100
+CHROMA_ENVELOPE_HIGH_10BIT = 900
+CHROMA_SATMAX_HIGH_10BIT = 600
+# Consecutive flagged frames within this gap (in frames) are merged into a
+# single event. ~10 frames = ~333ms at 29.97fps. A single chroma phase event
+# often produces non-contiguous flagged frames clustered within ~half a second.
+CHROMA_EVENT_GAP_FRAMES = 10
+# Minimum event length (in frames). Events of length 1 are kept only when the
+# single frame fires BOTH the envelope rule AND the SATMAX rule — that combo
+# is the high-confidence chroma-flip signature. Single-frame events firing
+# only one of the two rules are filtered as transients (bright frames with
+# rogue outlier pixels, scene cuts that briefly spike SATMAX, etc.).
+CHROMA_MIN_EVENT_FRAMES = 2
+CHROMA_SINGLE_FRAME_REQUIRES_BOTH_RULES = True
+# Cap the number of thumbnails generated per video. When more events are
+# detected, the top-N by frame_count are selected.
+CHROMA_MAX_THUMBS = 10
+# Subdirectory inside report_directory where chroma-phase thumbnails are
+# saved. Kept separate from ThumbExports/ so find_qct_thumbs() does not pick
+# them up and surface them under unrelated report sections.
+CHROMA_THUMBS_DIRNAME = "ChromaPhaseThumbs"
+
+
+def analyzeChromaPhaseErrors(startObj, pkt, report_directory, bit_depth_10,
+                             bars_end_time=None, video_path=None,
+                             signals=None, total_duration=None):
+    """
+    Detect chroma phase errors - typically caused by helical-scan tracking
+    failures on tape source, producing sudden shifts of the chroma signal so
+    that all colour collapses toward cyan or magenta, often with horizontal
+    image displacement. Walks the QCTools report once, flags individual
+    frames against two rules, then merges consecutive flagged frames into
+    events. When ``video_path`` is provided, also exports thumbnail PNGs at
+    the peak frame of the top-N events (by frame count) for the HTML report.
+
+    Parameters:
+        startObj (str): Path to the QCTools report file (.qctools.xml.gz).
+        pkt (str): Timestamp attribute key (pkt_dts_time or pkt_pts_time).
+        report_directory (str): Path to {video_id}_report_csvs directory.
+        bit_depth_10 (bool): True for 10-bit-scale values (0-1023), False for 8-bit.
+        bars_end_time (float or None): Skip frames with timestamp < bars_end_time
+            to avoid flagging SMPTE colour bars at the head of the tape.
+        video_path (str or None): Path to the source video file; when present,
+            thumbnails are generated for the top-N events by frame count.
+        signals: Optional signals object for emitting progress updates.
+        total_duration (float or None): Total video duration in seconds for progress.
+
+    Returns:
+        dict or None: Results dict (also written to CSV), or None on failure.
+    """
+    etree = load_etree()
+    if etree is None:
+        return None
+
+    parser_iter = safe_gzip_iterparse(startObj, etree)
+    if parser_iter is None:
+        logger.error(f"Failed to parse {startObj} for chroma-phase analysis")
+        return None
+
+    if bit_depth_10:
+        env_low = CHROMA_ENVELOPE_LOW_10BIT
+        env_high = CHROMA_ENVELOPE_HIGH_10BIT
+        satmax_high = CHROMA_SATMAX_HIGH_10BIT
+    else:
+        env_low = CHROMA_ENVELOPE_LOW_10BIT / 4
+        env_high = CHROMA_ENVELOPE_HIGH_10BIT / 4
+        satmax_high = CHROMA_SATMAX_HIGH_10BIT / 4
+
+    METRIC_KEYS = ('UMIN', 'UMAX', 'VMIN', 'VMAX', 'SATMAX', 'HUEMED', 'SATAVG')
+
+    flagged = []  # list of dicts: {'frame_idx', 'time', 'rule', 'envelope_wide',
+                  # 'satmax_hit', 'satmax', 'huemed', 'satavg'}
+    total_frames = 0
+    frames_skipped_bars = 0
+    progress_interval = 500
+    last_pct = 64
+
+    try:
+        for event, elem in parser_iter:
+            if elem.attrib.get('media_type') != 'video':
+                elem.clear()
+                continue
+            total_frames += 1
+
+            try:
+                frame_time = float(elem.attrib.get(pkt, "0"))
+            except (TypeError, ValueError):
+                frame_time = float(total_frames)
+
+            if (signals and hasattr(signals, 'qctparse_progress') and
+                    total_duration and total_frames % progress_interval == 0):
+                pct = 64 + int((frame_time / total_duration) * 28)
+                pct = min(92, max(64, pct))
+                if pct > last_pct:
+                    signals.qctparse_progress.emit(pct)
+                    last_pct = pct
+
+            if bars_end_time is not None and frame_time < bars_end_time:
+                frames_skipped_bars += 1
+                elem.clear()
+                continue
+
+            metrics = {}
+            for t in list(elem):
+                key = t.attrib.get('key', '')
+                if not key.startswith('lavfi.signalstats.'):
+                    continue
+                metric = key.rsplit('.', 1)[-1]
+                if metric not in METRIC_KEYS:
+                    continue
+                try:
+                    metrics[metric] = float(t.attrib['value'])
+                except (ValueError, KeyError):
+                    continue
+            elem.clear()
+
+            if not metrics:
+                continue
+
+            umin = metrics.get('UMIN')
+            umax = metrics.get('UMAX')
+            vmin = metrics.get('VMIN')
+            vmax = metrics.get('VMAX')
+            satmax = metrics.get('SATMAX', 0)
+
+            envelope_wide = (
+                umin is not None and umax is not None
+                and vmin is not None and vmax is not None
+                and umin < env_low and umax > env_high
+                and vmin < env_low and vmax > env_high
+            )
+            satmax_hit = satmax > satmax_high
+
+            if envelope_wide or satmax_hit:
+                flagged.append({
+                    'frame_idx': total_frames - 1,
+                    'time': frame_time,
+                    'rule': 'envelope' if envelope_wide else 'satmax',
+                    'envelope_wide': envelope_wide,
+                    'satmax_hit': satmax_hit,
+                    'satmax': satmax,
+                    'huemed': metrics.get('HUEMED'),
+                    'satavg': metrics.get('SATAVG'),
+                })
+    except Exception as e:
+        logger.error(f"Error during chroma-phase analysis: {e}")
+        return None
+
+    if total_frames == 0:
+        logger.warning("No video frames found in QCTools report for chroma-phase analysis\n")
+        return None
+
+    # Group consecutive flagged frames into events (gap <= CHROMA_EVENT_GAP_FRAMES)
+    events = []
+    cur = []
+    for f in flagged:
+        if not cur or (f['frame_idx'] - cur[-1]['frame_idx']) <= CHROMA_EVENT_GAP_FRAMES:
+            cur.append(f)
+        else:
+            events.append(cur)
+            cur = [f]
+    if cur:
+        events.append(cur)
+
+    # Filter events. An event is kept if it has >= CHROMA_MIN_EVENT_FRAMES
+    # frames, OR if it is a single high-confidence frame (envelope AND satmax
+    # both fired) when CHROMA_SINGLE_FRAME_REQUIRES_BOTH_RULES is enabled.
+    def _keep(e):
+        if len(e) >= CHROMA_MIN_EVENT_FRAMES:
+            return True
+        if CHROMA_SINGLE_FRAME_REQUIRES_BOTH_RULES and len(e) == 1:
+            f = e[0]
+            return bool(f.get('envelope_wide') and f.get('satmax_hit'))
+        return False
+    events = [e for e in events if _keep(e)]
+
+    # Build per-event summary records
+    event_records = []
+    for idx, e in enumerate(events):
+        peak = max(e, key=lambda f: f['satmax'])
+        rules = {f['rule'] for f in e}
+        # 'envelope' is stricter than 'satmax'; report whichever rules fired
+        rule_str = '+'.join(sorted(rules))
+        event_records.append({
+            'event_idx': idx + 1,
+            'start_time': e[0]['time'],
+            'end_time': e[-1]['time'],
+            'duration_seconds': e[-1]['time'] - e[0]['time'],
+            'frame_count': len(e),
+            'rule': rule_str,
+            'peak_satmax': peak['satmax'],
+            'peak_time': peak['time'],
+            'hue_at_peak': peak['huemed'],
+        })
+
+    # Generate thumbnails for the top-N events (by frame count). Saves to
+    # report_directory/ChromaPhaseThumbs/event_NN.png, keyed by the event's
+    # 1-based index so the HTML renderer can match thumbs to event rows.
+    thumbs_written = 0
+    if video_path and event_records:
+        top_events = sorted(event_records, key=lambda e: e['frame_count'], reverse=True)[:CHROMA_MAX_THUMBS]
+        thumb_dir = os.path.join(report_directory, CHROMA_THUMBS_DIRNAME)
+        try:
+            os.makedirs(thumb_dir, exist_ok=True)
+            for e in top_events:
+                out_path = os.path.join(thumb_dir, f"event_{e['event_idx']:02d}.png")
+                if _export_chroma_thumb(video_path, e['peak_time'], out_path):
+                    thumbs_written += 1
+        except Exception as ex:
+            logger.warning(f"Chroma-phase thumbnail generation failed: {ex}")
+
+    results = {
+        'total_video_frames': total_frames,
+        'bit_depth_10': bit_depth_10,
+        'bars_skipped_frames': frames_skipped_bars,
+        'flagged_frames': len(flagged),
+        'event_count': len(event_records),
+        'events': event_records,
+        'thumbnails_written': thumbs_written,
+        'thresholds': {
+            'envelope_low': env_low,
+            'envelope_high': env_high,
+            'satmax_high': satmax_high,
+        },
+    }
+
+    _write_chroma_phase_results(report_directory, results)
+    return results
+
+
+def _export_chroma_thumb(video_path, time_seconds, out_path):
+    """
+    Render a single PNG thumbnail from ``video_path`` at ``time_seconds`` to
+    ``out_path``. No signalstats overlay - we want the unmodified frame so
+    the chroma cast and image displacement are visible. Returns True on
+    success.
+    """
+    if not video_path or not os.path.isfile(video_path):
+        logger.warning(f"Chroma-phase thumbnail skipped: video file not found at {video_path}")
+        return False
+    try:
+        ts_str = dts2ts(str(time_seconds))
+    except Exception:
+        ts_str = f"{time_seconds:.3f}"
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-ss", ts_str,
+        "-i", video_path,
+        "-vframes", "1",
+        "-s", "720x486",
+        out_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            logger.warning(
+                f"ffmpeg failed for chroma-phase thumbnail at {ts_str}: "
+                f"{result.stderr.strip()[:200]}"
+            )
+            return False
+        return os.path.isfile(out_path)
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ffmpeg timed out generating chroma-phase thumbnail at {ts_str}")
+        return False
+    except Exception as e:
+        logger.warning(f"Error generating chroma-phase thumbnail at {ts_str}: {e}")
+        return False
+
+
+def _write_chroma_phase_results(report_directory, results):
+    """Write chroma-phase detection results to two CSVs (summary + per-event)."""
+    summary_path = os.path.join(report_directory, "qct-parse_chroma_phase_summary.csv")
+    events_path = os.path.join(report_directory, "qct-parse_chroma_phase_events.csv")
+
+    total = results['total_video_frames']
+    flagged = results['flagged_frames']
+    bit_depth = 10 if results['bit_depth_10'] else 8
+    th = results['thresholds']
+
+    with open(summary_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Chroma Phase Error Detection Summary"])
+        writer.writerow(["Bit Depth", bit_depth])
+        writer.writerow(["Total Video Frames", total])
+        writer.writerow(["Frames Skipped (color bars region)", results['bars_skipped_frames']])
+        writer.writerow(["Flagged Frames", flagged])
+        writer.writerow(["Flagged %", f"{(flagged/total*100) if total else 0:.3f}"])
+        writer.writerow(["Detected Events", results['event_count']])
+        writer.writerow([])
+        writer.writerow(["Thresholds"])
+        writer.writerow(["Envelope Low (U/V min)", f"{th['envelope_low']:g}"])
+        writer.writerow(["Envelope High (U/V max)", f"{th['envelope_high']:g}"])
+        writer.writerow(["SATMAX High", f"{th['satmax_high']:g}"])
+        writer.writerow(["Event Merge Gap (frames)", CHROMA_EVENT_GAP_FRAMES])
+
+    with open(events_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "Event", "Start (HH:MM:SS.mmm)", "End (HH:MM:SS.mmm)",
+            "Duration (s)", "Frames", "Rule",
+            "Peak SATMAX", "Peak Time (HH:MM:SS.mmm)", "Hue at Peak (deg)",
+        ])
+        for r in results['events']:
+            writer.writerow([
+                r['event_idx'],
+                dts2ts(str(r['start_time'])),
+                dts2ts(str(r['end_time'])),
+                f"{r['duration_seconds']:.3f}",
+                r['frame_count'],
+                r['rule'],
+                f"{r['peak_satmax']:g}",
+                dts2ts(str(r['peak_time'])),
+                f"{r['hue_at_peak']:g}" if r['hue_at_peak'] is not None else "",
+            ])
+
+    if results['event_count']:
+        logger.warning(
+            f"Chroma phase errors detected: {results['event_count']} events "
+            f"({flagged} frames). See {os.path.basename(events_path)}\n"
+        )
+    else:
+        logger.debug(
+            f"No chroma phase errors detected (bit depth {bit_depth}). "
+            f"Results in {os.path.basename(summary_path)}\n"
+        )
 
 
 def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None):
@@ -1447,14 +1917,21 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
                                 frame_channel_rms[ch_num] = val
 
                     if detect_timecode:
-                        # Collect r128 and astats tags for timecode detection
-                        if key.startswith('lavfi.r128') or key.startswith('lavfi.astats'):
+                        # Collect r128 and astats tags for timecode detection.
+                        # Track whichever metric families appear; if both are
+                        # present, the detector runs both and unions results.
+                        if key.startswith('lavfi.r128'):
                             tc_frame_tags[key] = val
                             if tc_metric_type == 'unknown':
-                                if key.startswith('lavfi.r128'):
-                                    tc_metric_type = 'r128'
-                                elif key.startswith('lavfi.astats'):
-                                    tc_metric_type = 'astats'
+                                tc_metric_type = 'r128'
+                            elif tc_metric_type == 'astats':
+                                tc_metric_type = 'both'
+                        elif key.startswith('lavfi.astats'):
+                            tc_frame_tags[key] = val
+                            if tc_metric_type == 'unknown':
+                                tc_metric_type = 'astats'
+                            elif tc_metric_type == 'r128':
+                                tc_metric_type = 'both'
 
                     if detect_dropout and 'Overall' not in key:
                         # Extract per-channel dropout metrics
@@ -1910,6 +2387,67 @@ def _tc_merge_detections(detections):
     return merged
 
 
+# Boundary refinement: window detection is quantized to the 15s step, so the
+# reported start can be off by up to one window. Once a region is confirmed,
+# walk back per-frame using a smoothed RMS gate to recover the true
+# silence-to-TC transition point.
+#
+# Refinement uses a wider RMS band than detection. The job here is only to
+# separate silence (≪ -50 dBFS) from any audible level — early-TC frames can
+# briefly dip below -30 dBFS during ramp-up, and a strict band would pull the
+# boundary forward by tens of seconds. False positives are prevented upstream
+# by the stdev gates on the detection windows.
+#
+# 1s smoothing is narrower than the silence→TC transition typically takes, so
+# the rolling median crosses the boundary cleanly. Larger windows blur the
+# transition and the boundary either lags (mean) or overshoots into silence
+# (median).
+_TC_REFINE_SMOOTH_SEC = 1.0
+_TC_REFINE_RMS_MIN = -45.0
+_TC_REFINE_RMS_MAX = -8.0
+
+
+def _tc_refine_start_time(frames, times, region_start_time, get_rms):
+    """Walk back from region_start_time to find the earliest frame whose
+    smoothed RMS_level still sits in the TC band.
+
+    get_rms(frame) returns the per-frame metric (r128.M for R128, astats RMS
+    for astats) or NaN.
+    """
+    if not frames or not times:
+        return region_start_time
+    dt = times[1] - times[0] if len(times) >= 2 and times[1] > times[0] else 0.1
+    smooth_n = max(1, int(_TC_REFINE_SMOOTH_SEC / dt))
+
+    # Find index of first frame at or after region_start_time
+    start_idx = 0
+    for j, t in enumerate(times):
+        if t >= region_start_time:
+            start_idx = j
+            break
+
+    best_idx = start_idx
+    i = start_idx
+    while i > 0:
+        i -= 1
+        end = min(i + smooth_n, len(frames))
+        vals = []
+        for j in range(i, end):
+            v = get_rms(frames[j])
+            if not math.isnan(v):
+                vals.append(v)
+        if not vals:
+            break
+        # Median, not mean — silence frames sit ≪ -50 dBFS and would drag the
+        # mean across the boundary, letting the walk overshoot into silence.
+        med = _tc_median(vals)
+        if _TC_REFINE_RMS_MIN <= med <= _TC_REFINE_RMS_MAX:
+            best_idx = i
+        else:
+            break
+    return times[best_idx]
+
+
 def _detect_r128_timecode(frames):
     """Detect audible timecode using EBU R128 measurements."""
     if not frames:
@@ -1941,11 +2479,25 @@ def _detect_r128_timecode(frames):
     detections.extend(_detect_r128_criterion_b(times, m_vals, lra_vals, lra_high_vals, i_val, window_size))
     detections.extend(_detect_r128_criterion_c(times, m_vals, s_vals, lra_high_vals, window_size))
 
-    return _tc_merge_detections(detections)
+    merged = _tc_merge_detections(detections)
+
+    # Refine each region's start time using per-frame r128.M
+    def _get_r128_m(frame):
+        return frame['tags'].get('lavfi.r128.M', float('nan'))
+    for d in merged:
+        d.start_time = _tc_refine_start_time(frames, times, d.start_time, _get_r128_m)
+
+    return merged
 
 
 def _detect_r128_criterion_a(times, m_vals, lra_vals, window_size):
-    """Criterion A: detect dual-channel TC via rolling windows."""
+    """Criterion A: detect a stable mix at TC level via rolling windows.
+
+    R128 measures the channel mix, not individual channels, so this fires
+    whenever momentary loudness is steady and at LTC level — which includes
+    both-channels-TC and one-channel-TC-plus-quiet-channel scenarios. Use
+    astats results to determine which channels actually carry TC.
+    """
     detections = []
     for i in range(0, len(times) - window_size + 1, window_size // 2):
         end = min(i + window_size, len(times))
@@ -1965,10 +2517,12 @@ def _detect_r128_criterion_a(times, m_vals, lra_vals, window_size):
             detections.append(_TCDetection(
                 start_time=times[i],
                 end_time=times[min(end - 1, len(times) - 1)],
-                criterion='R128-A (dual-channel TC)',
-                channel='both',
+                criterion='R128-A (stable mix at TC level)',
+                channel='n/a (mix-based)',
                 confidence='high' if m_std < 1.0 else 'medium',
-                details=f'M_stdev={m_std:.2f}, M_mean={m_mean:.1f}, LRA_med={lra_med:.1f}'
+                details=(f'Loudness stability: {m_std:.2f} dB; '
+                         f'Avg loudness: {m_mean:.1f} LUFS; '
+                         f'Loudness range: {lra_med:.1f} LU')
             ))
 
     return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
@@ -2006,7 +2560,10 @@ def _detect_r128_criterion_b(times, m_vals, lra_vals, lra_high_vals, i_val, wind
                 criterion='R128-B (TC + silence)',
                 channel='one channel',
                 confidence='high' if lra_h_std < 0.5 else 'medium',
-                details=f'LRA.high={lra_h_mean:.1f}(+/-{lra_h_std:.2f}), |M-I|={m_i_diff:.1f}, LRA={lra_med:.1f}'
+                details=(f'Loud-side level: {lra_h_mean:.1f} LUFS '
+                         f'(stability +/-{lra_h_std:.2f}); '
+                         f'Momentary vs integrated gap: {m_i_diff:.1f} LU; '
+                         f'Loudness range: {lra_med:.1f} LU')
             ))
 
     return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
@@ -2042,7 +2599,10 @@ def _detect_r128_criterion_c(times, m_vals, s_vals, lra_high_vals, window_size):
                 criterion='R128-C (TC + program audio)',
                 channel='one channel',
                 confidence='high' if ms_diff_med > 2.0 else 'medium',
-                details=f'|M-S|_med={ms_diff_med:.2f}, M_stdev={m_std:.1f}, LRA.high={lra_h_mean:.1f}(+/-{lra_h_std:.2f})'
+                details=(f'Momentary vs short-term gap: {ms_diff_med:.2f} LU; '
+                         f'Loudness stability: {m_std:.1f} dB; '
+                         f'Loud-side level: {lra_h_mean:.1f} LUFS '
+                         f'(stability +/-{lra_h_std:.2f})')
             ))
 
     return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
@@ -2080,14 +2640,35 @@ def _detect_astats_timecode(frames):
                 d1.channel = 'both (ch1)'
                 d2.channel = 'both (ch2)'
 
-    return _tc_merge_detections(detections)
+    merged = _tc_merge_detections(detections)
+
+    # Refine each region's start time using per-channel astats RMS_level
+    for d in merged:
+        # criterion is "astats (ch{N})" — extract channel number
+        try:
+            ch = d.criterion.split('ch')[1].split(')')[0]
+        except IndexError:
+            continue
+        prefix = f'lavfi.astats.{ch}.RMS_level'
+        def _get_rms(frame, _p=prefix):
+            return frame['tags'].get(_p, float('nan'))
+        d.start_time = _tc_refine_start_time(frames, times, d.start_time, _get_rms)
+
+    return merged
 
 
 def _detect_astats_channel_tc(frames, times, channel):
     """Detect TC on a single channel using rolling windows of astats data."""
     prefix = f'lavfi.astats.{channel}.'
     detections = []
-    window = _TC_ASTATS_WINDOW_FRAMES
+
+    if len(times) >= 2:
+        dt_sec = times[1] - times[0]
+    else:
+        dt_sec = 0.1
+    if dt_sec <= 0:
+        dt_sec = 0.1
+    window = max(1, int(round(_TC_ASTATS_WINDOW_SEC / dt_sec)))
 
     for i in range(0, len(frames) - window + 1, max(1, window // 2)):
         end = min(i + window, len(frames))
@@ -2119,35 +2700,54 @@ def _detect_astats_channel_tc(frames, times, channel):
 
         rms_mean = _tc_mean(rms_levels)
         rms_std = _tc_stdev(rms_levels)
-        crest_med = _tc_median(crest_factors) if crest_factors else float('nan')
-        zcr_med = _tc_median(zcr_rates) if zcr_rates else float('nan')
-        ent_med = _tc_median(entropies) if entropies else float('nan')
+        crest_mean = _tc_mean(crest_factors) if crest_factors else float('nan')
+        crest_std = _tc_stdev(crest_factors) if crest_factors else float('nan')
+        zcr_mean = _tc_mean(zcr_rates) if zcr_rates else float('nan')
+        zcr_std = _tc_stdev(zcr_rates) if zcr_rates else float('nan')
+        ent_mean = _tc_mean(entropies) if entropies else float('nan')
+        ent_std = _tc_stdev(entropies) if entropies else float('nan')
 
         reasons = []
         passes = True
 
-        if _TC_ASTATS_RMS_LEVEL_MIN <= rms_mean <= _TC_ASTATS_RMS_LEVEL_MAX and rms_std < _TC_ASTATS_RMS_STDEV_MAX:
-            reasons.append(f'RMS={rms_mean:.1f}dB(+/-{rms_std:.1f})')
+        if (_TC_ASTATS_RMS_LEVEL_MIN <= rms_mean <= _TC_ASTATS_RMS_LEVEL_MAX
+                and rms_std < _TC_ASTATS_RMS_STDEV_MAX):
+            reasons.append(f'Signal level: {rms_mean:.1f} dBFS '
+                           f'(stability +/-{rms_std:.2f})')
         else:
             passes = False
 
-        if not math.isnan(crest_med) and crest_med < _TC_ASTATS_CREST_FACTOR_MAX:
-            reasons.append(f'Crest={crest_med:.1f}dB')
+        if (not math.isnan(crest_mean)
+                and _TC_ASTATS_CREST_FACTOR_MIN <= crest_mean <= _TC_ASTATS_CREST_FACTOR_MAX
+                and crest_std < _TC_ASTATS_CREST_STDEV_MAX):
+            reasons.append(f'Crest factor: {crest_mean:.2f} '
+                           f'(stability +/-{crest_std:.2f})')
         else:
             passes = False
 
-        if not math.isnan(ent_med) and ent_med < _TC_ASTATS_ENTROPY_MAX:
-            reasons.append(f'Entropy={ent_med:.3f}')
+        if (not math.isnan(zcr_mean)
+                and _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN <= zcr_mean <= _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX
+                and zcr_std < _TC_ASTATS_ZCR_STDEV_MAX):
+            reasons.append(f'Zero-crossing rate: {zcr_mean:.3f} per frame '
+                           f'(stability +/-{zcr_std:.3f})')
         else:
             passes = False
 
-        if not math.isnan(zcr_med) and _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN <= zcr_med <= _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX:
-            reasons.append(f'ZCR={zcr_med:.3f}')
+        if (not math.isnan(ent_mean)
+                and _TC_ASTATS_ENTROPY_MIN <= ent_mean <= _TC_ASTATS_ENTROPY_MAX
+                and ent_std < _TC_ASTATS_ENTROPY_STDEV_MAX):
+            reasons.append(f'Spectral entropy: {ent_mean:.2f} '
+                           f'(stability +/-{ent_std:.2f})')
         else:
             passes = False
 
         if passes:
-            confidence = 'high' if crest_med < 1.5 and ent_med < 0.25 else 'medium'
+            # Tighter stability across all four metrics → high confidence
+            high_conf = (rms_std < 0.5
+                         and crest_std < 0.10
+                         and zcr_std < 0.005
+                         and ent_std < 0.02)
+            confidence = 'high' if high_conf else 'medium'
             detections.append(_TCDetection(
                 start_time=times[i],
                 end_time=times[min(end - 1, len(times) - 1)],
@@ -2170,6 +2770,11 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
         detections = _detect_r128_timecode(tc_frames)
     elif tc_metric_type == 'astats':
         detections = _detect_astats_timecode(tc_frames)
+    elif tc_metric_type == 'both':
+        # Run both detectors and merge — astats is per-channel, R128 is whole-mix.
+        # The criterion field on each detection records which one fired.
+        detections = _detect_r128_timecode(tc_frames) + _detect_astats_timecode(tc_frames)
+        detections.sort(key=lambda d: d.start_time)
     else:
         logger.debug("No recognized audio metrics (r128 or astats) found for timecode detection\n")
         return None
@@ -2403,7 +3008,7 @@ def _detect_and_write_dropout_results(dropout_candidates, report_directory, tota
     return results
 
 
-def run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=None, signals=None):
+def run_qctparse(video_path, qctools_output_path, report_directory, check_cancelled=None, signals=None, clams_regions=None):
     """
     Executes the qct-parse analysis on a given video file, exporting relevant data and thumbnails based on specified thresholds and profiles.
 
@@ -2413,7 +3018,12 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         report_directory (str): Path to {video_id}_report_csvs directory.
         check_cancelled (callable): Optional function to check if processing was cancelled.
         signals: Optional signals object for emitting progress updates.
+        clams_regions (list or None): List of (start_seconds, end_seconds, label)
+            tuples from CLAMS detection. qct-parse runs additional detectBars()
+            passes on regions beyond the head scan window.
 
+    Returns:
+        dict: {'head_bars_start', 'head_bars_end', 'all_bars_regions'} or None if cancelled.
     """
     
     checks_config = config_mgr.get_config('checks', ChecksConfig)
@@ -2464,6 +3074,10 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     # initialize the start and end duration times variables
     durationStart = 0
     durationEnd = 99999999
+    # End of detected color bars region (in seconds). Captured below if bars
+    # detection runs; consumed by downstream features that need to skip the
+    # bars at the head of the tape (e.g. chroma-phase detection).
+    chroma_bars_end_time = None
 
     # set the path for the thumbnail export
     thumbPath = os.path.join(report_directory, "ThumbExports")
@@ -2501,13 +3115,15 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         return None
 
     ######## Iterate Through the XML for Bars detection ########
+    all_bars_regions = []
+
     if qct_parse['barsDetection']:
         durationStart = ""                            # if bar detection is turned on then we have to calculate this
         durationEnd = ""                            # if bar detection is turned on then we have to calculate this
         logger.debug(f"Starting Bars Detection on {baseName}\n")
         qctools_colorbars_duration_output = os.path.join(report_directory, "qct-parse_colorbars_durations.csv")
         durationStart, durationEnd, barsStartString, barsEndString = detectBars(startObj,pkt,durationStart,durationEnd,framesList,buffSize,bit_depth_10,signals=signals,total_duration=total_duration)
-        
+
         # Handle case where bars start was found but no end transition was detected
         # This happens when the entire video is color bars
         if barsStartString and not barsEndString:
@@ -2515,22 +3131,152 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             # Reset framesList for validation
             framesList.clear()
             is_entire_video_bars, video_end_time = validateEntireVideoAsBars(startObj, pkt, durationStart, framesList, buffSize, bit_depth_10)
-            
+
             if is_entire_video_bars and video_end_time is not None:
                 durationEnd = video_end_time
                 barsEndString = dts2ts(str(video_end_time))
                 logger.info(f"Entire video confirmed as color bars - setting end duration to {barsEndString}\n")
             else:
                 logger.warning("Could not confirm entire video as color bars\n")
-        
-        if durationStart == "" and durationEnd == "":
-            logger.error("No color bars detected\n")
-            print_bars_durations(qctools_colorbars_duration_output, barsStartString, barsEndString)
+
         if barsStartString and barsEndString:
-            print_bars_durations(qctools_colorbars_duration_output, barsStartString, barsEndString)
+            head_start_sec = float(durationStart) if durationStart not in ("", None) else None
+            head_end_sec = float(durationEnd) if durationEnd not in ("", None) else None
+            all_bars_regions.append(("head", head_start_sec, head_end_sec))
             if qct_parse['thumbExport']:
                 barsStampString = dts2ts(durationStart)
                 printThumb(video_path, "bars_found", "color_bars_detection", startObj,thumbPath, "first_frame", barsStampString)
+        elif durationStart == "" and durationEnd == "":
+            logger.error("No color bars detected\n")
+
+        HEAD_SCAN_WINDOW = 300.0
+
+        # If qct-parse missed head bars but CLAMS found them, retry with
+        # relaxed thresholds on the CLAMS-identified window.
+        head_bars_found = any(r[0] == "head" for r in all_bars_regions)
+        if not head_bars_found and clams_regions:
+            head_clams_bars = [
+                (s, e) for s, e, label in clams_regions
+                if s < HEAD_SCAN_WINDOW and label == "bars"
+            ]
+            if head_clams_bars:
+                clams_start = min(s for s, _ in head_clams_bars)
+                clams_end = max(e for _, e in head_clams_bars)
+                logger.info(
+                    f"qct-parse head bars retry: CLAMS found bars at "
+                    f"{clams_start:.1f}s–{clams_end:.1f}s but qct-parse "
+                    f"did not — re-running with relaxed thresholds"
+                )
+                framesList.clear()
+                r_start, r_end, r_start_str, r_end_str = detectBars(
+                    startObj, pkt, "", "", framesList, buffSize, bit_depth_10,
+                    search_start_time=max(0.0, clams_start - 5.0),
+                    search_end_time=clams_end + 5.0,
+                    relaxed=True,
+                )
+                if r_start_str and r_end_str:
+                    r_start_sec = float(r_start) if r_start not in ("", None) else None
+                    r_end_sec = float(r_end) if r_end not in ("", None) else None
+                    all_bars_regions.append(("head-relaxed", r_start_sec, r_end_sec))
+                    durationStart = r_start
+                    durationEnd = r_end
+                    barsStartString = r_start_str
+                    barsEndString = r_end_str
+                    chroma_bars_end_time = r_end_sec
+                    logger.info(f"qct-parse relaxed retry found bars: {r_start_str} – {r_end_str}")
+                    if qct_parse['thumbExport']:
+                        barsStampString = dts2ts(r_start)
+                        printThumb(video_path, "bars_found", "color_bars_detection", startObj, thumbPath, "first_frame", barsStampString)
+                else:
+                    logger.info("qct-parse relaxed retry: still no bars confirmed")
+
+        # CLAMS-guided windowed scans. Merge overlapping CLAMS regions
+        # first so that bars + tone detections covering the same mid-file
+        # bars produce one scan, not two. Skip regions that overlap with
+        # the already-detected head bars.
+        head_region_found = next(
+            (r for r in all_bars_regions if r[0] in ("head", "head-relaxed")), None
+        )
+        if clams_regions:
+            filtered = []
+            for region_start, region_end, region_label in clams_regions:
+                if head_region_found:
+                    _, head_s, head_e = head_region_found
+                    if (head_s is not None and head_e is not None and
+                            region_start >= head_s - 5.0 and region_end <= head_e + 5.0):
+                        continue
+                filtered.append((region_start, region_end))
+
+            # Merge overlapping/adjacent filtered regions
+            merged_windows = []
+            if filtered:
+                sorted_f = sorted(filtered, key=lambda t: t[0])
+                merged_windows = [sorted_f[0]]
+                for s, e in sorted_f[1:]:
+                    prev_s, prev_e = merged_windows[-1]
+                    if s <= prev_e + 5.0:
+                        merged_windows[-1] = (prev_s, max(prev_e, e))
+                    else:
+                        merged_windows.append((s, e))
+
+            for window_idx, (window_start, window_end) in enumerate(merged_windows):
+                if check_cancelled and check_cancelled():
+                    break
+                region_label = f"additional-{window_idx + 1}"
+                logger.info(
+                    f"qct-parse windowed bars scan: {window_start:.1f}s–{window_end:.1f}s "
+                    f"({region_label})"
+                )
+                framesList.clear()
+                w_start, w_end, w_start_str, w_end_str = detectBars(
+                    startObj, pkt, "", "", framesList, buffSize, bit_depth_10,
+                    search_start_time=window_start,
+                    search_end_time=window_end,
+                )
+                if not (w_start_str and w_end_str):
+                    logger.info(
+                        f"qct-parse windowed scan: no bars at normal thresholds in "
+                        f"{window_start:.1f}s–{window_end:.1f}s — retrying relaxed"
+                    )
+                    framesList.clear()
+                    w_start, w_end, w_start_str, w_end_str = detectBars(
+                        startObj, pkt, "", "", framesList, buffSize, bit_depth_10,
+                        search_start_time=window_start,
+                        search_end_time=window_end,
+                        relaxed=True,
+                    )
+                if w_start_str and w_end_str:
+                    w_start_sec = float(w_start) if w_start not in ("", None) else None
+                    w_end_sec = float(w_end) if w_end not in ("", None) else None
+                    all_bars_regions.append((region_label, w_start_sec, w_end_sec))
+                    logger.info(f"qct-parse windowed scan found bars: {w_start_str} – {w_end_str}")
+                    if qct_parse['thumbExport']:
+                        thumbStamp = dts2ts(str(w_start))
+                        printThumb(video_path, "bars_found", f"additional_bars_{window_idx + 1}", startObj, thumbPath, "first_frame", thumbStamp)
+                else:
+                    logger.debug(
+                        f"qct-parse windowed scan: no bars confirmed in "
+                        f"{window_start:.1f}s–{window_end:.1f}s (even with relaxed thresholds)"
+                    )
+
+        # Write CSV with all detected regions
+        if all_bars_regions:
+            csv_regions = [
+                (label, dts2ts(str(start)), dts2ts(str(end)))
+                for label, start, end in all_bars_regions
+                if start is not None and end is not None
+            ]
+            print_bars_durations(qctools_colorbars_duration_output, regions=csv_regions)
+        else:
+            print_bars_durations(qctools_colorbars_duration_output, regions=[])
+
+        # Capture head bars end (seconds) before durationEnd may be clobbered below,
+        # so downstream features can skip the colour-bars region.
+        try:
+            if durationEnd not in ("", None):
+                chroma_bars_end_time = float(durationEnd)
+        except (TypeError, ValueError):
+            chroma_bars_end_time = None
 
     if check_cancelled():
         return None
@@ -2577,6 +3323,31 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             printresults(profile, kbeyond, frameCount, overallFrameFail, qctools_bars_eval_check_output)
             logger.debug(f"qct-parse bars evaluation complete. qct-parse summary written to {qctools_bars_eval_check_output}\n")
 
+        # Evaluate windowed (non-head) bars regions: produce a SMPTE
+        # comparison CSV and first-frame thumbnail for each.
+        windowed_regions = [r for r in all_bars_regions if r[0] != "head" and r[0] != "head-relaxed"]
+        for idx, (region_label, region_start, region_end) in enumerate(windowed_regions):
+            if check_cancelled and check_cancelled():
+                break
+            if region_start is None or region_end is None:
+                continue
+            logger.info(
+                f"Evaluating windowed bars region {idx + 1}: "
+                f"{region_label} ({region_start:.1f}s–{region_end:.1f}s)"
+            )
+            framesList.clear()
+            windowed_maxBarsDict = evalBars(startObj, pkt, region_start, region_end, framesList, buffSize)
+            if windowed_maxBarsDict is not None:
+                smpte_color_bars = asdict(spex_config.qct_parse_values.smpte_color_bars)
+                windowed_values_csv = os.path.join(
+                    report_directory,
+                    f"qct-parse_colorbars_values_{region_label}.csv",
+                )
+                print_color_bar_values(baseName, smpte_color_bars, windowed_maxBarsDict, windowed_values_csv)
+                logger.info(f"Windowed bars values written to {os.path.basename(windowed_values_csv)}")
+            else:
+                logger.warning(f"Could not evaluate bars for region {region_label}")
+
     if check_cancelled():
         return None
 
@@ -2592,6 +3363,21 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         )
         if clamped_results is None:
             logger.warning("Clamped-levels detection could not be performed\n")
+
+    if check_cancelled():
+        return None
+
+    ######## Chroma Phase Error Detection ########
+    if qct_parse.get('detect_chroma_phase_errors', False):
+        logger.debug(f"Starting chroma-phase error detection on {baseName}\n")
+        chroma_results = analyzeChromaPhaseErrors(
+            startObj, pkt, report_directory, bit_depth_10,
+            bars_end_time=chroma_bars_end_time,
+            video_path=video_path,
+            signals=signals, total_duration=total_duration,
+        )
+        if chroma_results is None:
+            logger.warning("Chroma-phase detection could not be performed\n")
 
     if check_cancelled():
         return None
@@ -2628,7 +3414,12 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     if signals and hasattr(signals, 'qctparse_progress'):
         signals.qctparse_progress.emit(100)
 
-    return
+    head_region = next((r for r in all_bars_regions if r[0] in ("head", "head-relaxed")), None)
+    return {
+        'head_bars_start': head_region[1] if head_region else None,
+        'head_bars_end': head_region[2] if head_region else None,
+        'all_bars_regions': all_bars_regions,
+    }
 
 
 if __name__ == "__main__":

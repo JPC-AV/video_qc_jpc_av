@@ -209,32 +209,37 @@ The `ChecksWindow` class provides an interface for displaying and editing the `C
 ### Core Methods:
 - `setup_ui()`: Initializes the Checks interface
   - Creates the main layout structure
-  - Calls section-specific setup methods in sequence (outputs section, fixity section, tools section)
+  - Calls section-specific setup methods in sequence (validation section, outputs section, fixity section, tools section)
   - Connects all UI signals to their handlers
-- `setup_outputs_section(main_layout)`
-- `setup_fixity_section(main_layout)`
-- `setup_tools_section(main_layout)`
+- `setup_validation_section(main_layout)` — top of the tab; exposes `checks_config.validate_filename`
+- `setup_outputs_section(main_layout)` — access file (with sub-options for trim/crop), HTML report, qctools extension
+- `setup_fixity_section(main_layout)` — fixity options plus checksum/stream-hash algorithm dropdowns
+- `setup_tools_section(main_layout)` — `check_tool`/`run_tool` checkboxes for the standard metadata tools and MediaConch policy chooser
 
 Each section utilizes the ThemeManager to maintain consistent styling, using Qt GroupBoxes and the ThemeManager's `style_groupbox()` function (more in the [Theme Manager section](#theme-manager-documentation)). Signal connections trigger updates through handler methods that work with the `ConfigManager` to persist changes to `ChecksConfig`.
 
 As described in the [ConfigManager documentation](https://github.com/JPC-AV/JPC_AV_videoQC/blob/main/developer_docs/config-manager-documentation.md), the updates to the `ChecksConfig` from the `ChecksWindow` primarily make use of the `ConfigManager`'s `update_config()` function, such as in the `on_checkbox_changed` function:
 
 ```python
- def on_checkbox_changed(self, state, path):
-        """Handle changes in yes/no checkboxes"""
-        new_value = 'yes' if Qt.CheckState(state) == Qt.CheckState.Checked else 'no'
-        
-        if path[0] == "tools" and len(path) > 2:
-            tool_name = path[1]
-            field = path[2]
-            updates = {'tools': {tool_name: {field: new_value}}}
-        else:
-            section = path[0]
-            field = path[1]
-            updates = {section: {field: new_value}}
-            
-        self.config_mgr.update_config('checks', updates)
+def on_checkbox_changed(self, state, path):
+    """Handle changes in boolean checkboxes."""
+    if self.is_loading:
+        return  # Skip writes while populating widgets
+
+    new_value = Qt.CheckState(state) == Qt.CheckState.Checked
+
+    if path[0] == "tools" and len(path) > 2:
+        tool_name, field = path[1], path[2]
+        updates = {'tools': {tool_name: {field: new_value}}}
+    elif len(path) == 3:  # nested e.g. ['outputs', 'frame_analysis', 'enable_brng_analysis']
+        updates = {path[0]: {path[1]: {path[2]: new_value}}}
+    else:
+        updates = {path[0]: {path[1]: new_value}}
+
+    config_mgr.update_config('checks', updates)
 ```
+
+> **Note**: Boolean fields are now native Python `bool` (not `"yes"`/`"no"` strings). The `is_loading` guard prevents spurious config writes while widgets are being populated by `load_config_values()`.
 
 ## Complex Tab
 
@@ -251,7 +256,7 @@ self.main_window.complex_tab.setup_complex_tab()
 
 ### ComplexWindow Sections
 
-The `ComplexWindow.setup_ui()` method builds the window in four sections:
+`ComplexWindow.setup_ui()` builds the window in this order:
 
 #### 1. QCTools
 
@@ -264,39 +269,61 @@ Controls the `checks_config.tools.qctools` settings:
 
 Controls the `checks_config.tools.qct_parse` settings. Dependency logic is enforced in the UI:
 
-- **Run Tool** checkbox — when checked, automatically enables and checks all sub-options; when unchecked, greys them out
-- **Detect Color Bars** checkbox — when unchecked, automatically unchecks and disables Evaluate Color Bars and Thumbnail Export
-- **Evaluate Color Bars** checkbox — compares detected bars against expected values
-- **Thumbnail Export** checkbox — exports thumbnails of failed frames; only enabled when at least one of bars detection or evaluate bars is active
+- **Run Tool** — when checked, automatically enables and checks all sub-options; when unchecked, greys them out
+- **Detect Color Bars** (`barsDetection`) — when unchecked, automatically unchecks and disables Evaluate Color Bars and Thumbnail Export
+- **Evaluate Color Bars** (`evaluateBars`) — compares detected bars against expected values
+- **Thumbnail Export** (`thumbExport`) — exports thumbnails of failed frames; enabled when at least one of bars detection or evaluate bars is active
+- **Perform Audio Analysis** (`audio_analysis`) — detects audio clipping, channel imbalance, audible timecode, and audio dropout
+- **Detect Clamped Levels** (`detect_clamped_levels`) — detects broadcast-range level clamping from the analog-to-digital converter
 
-#### 3. Frame Analysis Periods
+#### 3. CLAMS Detection
 
-Shared settings for signalstats and BRNG analysis (stored in `checks_config.outputs.frame_analysis`):
+Controls the `checks_config.tools.clams_detection` settings (single section, runs both detectors):
 
-- **Number of Periods** — how many time windows to sample across the video
-- **Period Duration (s)** — length of each analysis window in seconds
+- **Run Tool** — runs the CLAMS SSIM-based SMPTE bars detector and the cross-correlation tone detector together. The bars detector runs in parallel with qct-parse for side-by-side comparison; the tone detector identifies spans of monotonic audio (e.g. SMPTE bars-and-tones).
+- Numeric tuning of the bars/tone parameters is **JSON-only** — only the `Run Tool` toggle is exposed in the UI. qct-parse remains authoritative for downstream BRNG-skip and access-file trim.
 
-#### 4. Border Detection Settings
+#### 4. Frame Analysis sections
 
-Controls `checks_config.outputs.frame_analysis` border detection fields:
+`setup_frame_analysis_sections()` renders these sub-sections in order, each with its own enable checkbox under `checks_config.outputs.frame_analysis`:
 
-- **Enable Border Detection** checkbox
-- **Detection Mode** dropdown — `simple` (fixed pixel crop) or `sophisticated` (edge detection)
-  - *Simple mode*: **Border Pixels** field (default: 25px)
-  - *Sophisticated mode*: Detection Parameters sub-group (Brightness Threshold, Edge Sample Width, Sample Frames, Padding), plus **Auto-retry** checkbox and **Max Retries** field
-- Signalstats is disabled in the UI if border detection is turned off
+##### 4a. Bitplane Check
 
-#### 5. Signalstats Settings
+- **Enable Bitplane Check** (`enable_bitplane_check`) — verifies that the 9th and 10th bits of 10-bit video contain data (some TBC/framesync devices truncate them, producing effectively 8-bit video).
 
-- **Enable Signalstats Analysis** checkbox — runs FFmpeg `signalstats` filter; requires border detection to be enabled (enforced by UI)
+##### 4b. Frame Analysis Periods
 
-#### 6. BRNG Analysis Settings
+Shared settings for signalstats and BRNG analysis:
 
-Controls `checks_config.outputs.frame_analysis` BRNG fields:
+- **Number of Periods** (`analysis_period_count`) — how many time windows to sample across the video
+- **Period Duration (s)** (`analysis_period_duration`) — length of each analysis window in seconds
 
-- **Enable BRNG Analysis** checkbox
-- **Duration Limit (s)** — maximum duration to analyze for out-of-range values
-- **Skip Color Bars** checkbox — excludes color bar sections from BRNG analysis
+##### 4c. Border Detection
+
+- **Enable Border Detection** (`enable_border_detection`)
+- **Detection Mode** (`border_detection_mode`) dropdown — `simple` (fixed pixel crop) or `sophisticated` (edge detection)
+  - *Simple mode*: **Border Pixels** field (`simple_border_pixels`, default 25)
+  - *Sophisticated mode*: Detection Parameters sub-group (`sophisticated_threshold`, `sophisticated_edge_sample_width`, `sophisticated_sample_frames`, `sophisticated_padding`), plus **Auto-retry** checkbox (`auto_retry_borders`) and **Max Retries** field (`max_border_retries`)
+- Signalstats is disabled in the UI if border detection is turned off.
+
+##### 4d. Signalstats
+
+- **Enable Signalstats Analysis** (`enable_signalstats`) — runs the FFmpeg `signalstats` filter. Requires border detection to be enabled (enforced by the UI).
+
+##### 4e. BRNG Analysis
+
+- **Enable BRNG Analysis** (`enable_brng_analysis`)
+- **Duration Limit (s)** (`brng_duration_limit`) — maximum duration to analyze for out-of-range values
+- **Skip Color Bars** (`brng_skip_color_bars`) — excludes color bar sections detected by qct-parse from BRNG analysis
+
+##### 4f. Dropped Sample Detection
+
+- **Enable Dropped Sample Detection** (`enable_dropped_sample_detection`)
+
+##### 4g. Duplicate Frame Detection
+
+- **Enable Duplicate Frame Detection** (`enable_duplicate_frame_detection`)
+- **Min Run Length** (`duplicate_min_run_length`) — minimum consecutive duplicate-frame run to flag
 
 ### Config Update Pattern
 
@@ -463,18 +490,21 @@ class ProcessingSignals(QObject):
     tool_completed = pyqtSignal(str)          # Tool processing completed
     step_completed = pyqtSignal(str)          # Processing step completed
     step_failed = pyqtSignal(str)             # Processing step failed
+    step_reset = pyqtSignal(str)              # Reset a step back to pending (e.g. before re-running)
 
     fixity_progress = pyqtSignal(str)         # Fixity status updates
     mediaconch_progress = pyqtSignal(str)     # MediaConch status updates
     metadata_progress = pyqtSignal(str)       # Metadata status updates
     output_progress = pyqtSignal(str)         # Output creation status updates
 
-    stream_hash_progress = pyqtSignal(int)    # Stream hash progress percentage
-    md5_progress = pyqtSignal(int)            # MD5 calculation progress percentage
-    access_file_progress = pyqtSignal(int)    # Access file creation progress percentage
-    qctools_progress = pyqtSignal(int)        # QCTools XML creation progress percentage
-    qctparse_progress = pyqtSignal(int)       # qct-parse analysis progress percentage
-    frame_analysis_progress = pyqtSignal(int) # Frame analysis progress percentage
+    stream_hash_progress = pyqtSignal(int)       # Stream hash progress percentage
+    md5_progress = pyqtSignal(int)               # MD5 calculation progress percentage
+    access_file_progress = pyqtSignal(int)       # Access file creation progress percentage
+    qctools_progress = pyqtSignal(int)           # QCTools XML creation progress percentage
+    qctparse_progress = pyqtSignal(int)          # qct-parse analysis progress percentage
+    clams_detection_progress = pyqtSignal(int)   # CLAMS bars + tone detector progress percentage
+    frame_analysis_progress = pyqtSignal(int)    # Frame analysis progress percentage
+    report_progress = pyqtSignal(int)            # HTML report generation progress percentage
 
     clear_status = pyqtSignal()               # Clear status message
 ```

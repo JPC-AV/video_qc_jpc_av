@@ -345,6 +345,7 @@ def find_report_csvs(report_directory):
     qctools_bars_eval_check_output = None
     qctools_bars_eval_timestamps = None
     colorbars_values_output = None
+    windowed_colorbars_values = []
     qctools_content_check_outputs = []
     qctools_profile_check_output = None
     qctools_profile_timestamps = None
@@ -357,6 +358,9 @@ def find_report_csvs(report_directory):
     audible_timecode_csv = None
     audio_dropout_csv = None
     clamped_levels_csv = None
+    clamped_traces_csv = None
+    chroma_phase_summary_csv = None
+    chroma_phase_events_csv = None
     difference_csv = None
 
     if os.path.isdir(report_directory):
@@ -369,7 +373,10 @@ def find_report_csvs(report_directory):
                     elif "qct-parse_colorbars_eval_summary" in file:
                         qctools_bars_eval_check_output = file_path
                     elif "qct-parse_colorbars_values" in file:
-                        colorbars_values_output = file_path
+                        if file == "qct-parse_colorbars_values.csv":
+                            colorbars_values_output = file_path
+                        else:
+                            windowed_colorbars_values.append(file_path)
                     elif "qct-parse_contentFilter" in file:
                         qctools_content_check_outputs.append(file_path)
                     elif "qct-parse_profile_summary" in file:
@@ -390,12 +397,18 @@ def find_report_csvs(report_directory):
                         audible_timecode_csv = file_path
                     elif "qct-parse_audio_dropout" in file:
                         audio_dropout_csv = file_path
+                    elif "qct-parse_clamped_traces" in file:
+                        clamped_traces_csv = file_path
                     elif "qct-parse_clamped_levels" in file:
                         clamped_levels_csv = file_path
+                    elif "qct-parse_chroma_phase_summary" in file:
+                        chroma_phase_summary_csv = file_path
+                    elif "qct-parse_chroma_phase_events" in file:
+                        chroma_phase_events_csv = file_path
                 elif "metadata_difference" in file:
                     difference_csv = file_path
 
-    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, difference_csv
+    return qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, windowed_colorbars_values, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, chroma_phase_summary_csv, chroma_phase_events_csv, difference_csv
 
 
 def read_xml_file(xml_file_path):
@@ -1331,10 +1344,29 @@ def make_audible_timecode_html(audible_timecode_csv):
         </p>
         <p style="margin: 0 0 10px 0; font-weight: bold;">Detection criteria:</p>
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
-            <li style="margin-bottom: 4px;"><strong>Dual-channel TC</strong> &mdash; both audio channels carry timecode (stable loudness, narrow dynamic range).</li>
+            <li style="margin-bottom: 4px;"><strong>Stable mix at TC level</strong> &mdash; mix-loudness sits steadily at LTC level with narrow dynamic range. R128 measures the channel mix, not individual channels, so this fires for both-channels-TC <em>and</em> one-channel-TC-plus-quiet-channel; check the astats rows to see which channels actually carry timecode.</li>
             <li style="margin-bottom: 4px;"><strong>TC + silence</strong> &mdash; one channel carries timecode while the other is near-silent (large gap between momentary and integrated loudness).</li>
             <li style="margin-bottom: 4px;"><strong>TC + program audio</strong> &mdash; timecode is present alongside program audio on separate channels (divergence between M and S loudness, high M variance).</li>
         </ul>
+        <p style="margin: 10px 0 6px 0; font-weight: bold;">Reading the <em>Details</em> column:</p>
+        <p style="margin: 0 0 6px 0;">
+            Each detection lists the measurements that landed in the expected ranges for LTC.
+            "Stability +/- X" is the standard deviation across the rolling window &mdash; lower means
+            the value held steady, which is itself a signature of timecode.
+        </p>
+        <table style="border-collapse: collapse; margin: 6px 0 10px 0; font-size: 12px;">
+            <tr><th style="padding: 4px 8px; border: 1px solid #ddd; background-color: #efe9e0; text-align: left;">Metric</th><th style="padding: 4px 8px; border: 1px solid #ddd; background-color: #efe9e0; text-align: left;">What it measures</th><th style="padding: 4px 8px; border: 1px solid #ddd; background-color: #efe9e0; text-align: left;">TC vs non-TC ranges</th></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Loudness stability</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">Window-to-window variation in EBU R128 momentary loudness (M).</td><td style="padding: 4px 8px; border: 1px solid #ddd;">LTC: &lt; 2 dB (often &lt; 0.5). Program audio: many dB. Silence: very low but at -70+ LUFS.</td></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Avg loudness</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">Mean R128 momentary loudness across the window, in LUFS.</td><td style="padding: 4px 8px; border: 1px solid #ddd;">LTC: roughly -16 to -22 LUFS on broadcast tapes. Silence: &lt; -60 LUFS.</td></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Loudness range</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">EBU R128 LRA &mdash; spread of loudness across the signal so far, in LU.</td><td style="padding: 4px 8px; border: 1px solid #ddd;">LTC: low (&lt; ~8). Music/dialogue: 10-25+. LRA is cumulative from file start, so it stays inflated for ~30-60 s after a silence-to-TC transition.</td></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Momentary vs integrated gap</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">|M - I|: how far the current loudness sits above the program-integrated loudness. Big gap means one channel is much louder than the other.</td><td style="padding: 4px 8px; border: 1px solid #ddd;">TC + silence: &gt; 20 LU. Both channels active: small.</td></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Momentary vs short-term gap</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">|M - S|: divergence between momentary and short-term loudness. Marks the channel asymmetry of TC sharing a mix with program audio.</td><td style="padding: 4px 8px; border: 1px solid #ddd;">TC + program audio: &gt; 1.5 LU, often &gt; 2.</td></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Loud-side level</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">R128 LRA.high: the top of the loudness distribution. Used to pin down the TC level when the other channel drags the mix down.</td><td style="padding: 4px 8px; border: 1px solid #ddd;">LTC: -10 to -30 LUFS, stable +/- &lt; 1.</td></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Signal level</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">Per-channel RMS in dBFS, from ffmpeg <code>astats</code>.</td><td style="padding: 4px 8px; border: 1px solid #ddd;">LTC: -10 to -30 dBFS. Silence: &lt; -55. Loud program: &gt; -10.</td></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Crest factor</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">Ratio of peak to RMS. Square-wave-like signals have a low crest factor; sparse signals have a high one.</td><td style="padding: 4px 8px; border: 1px solid #ddd;">LTC biphase: ~1.6-2.2. 1 kHz sine tone: ~1.4. Speech/music: ~3+.</td></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Zero-crossing rate</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">Fraction of samples per frame where the waveform crosses zero. A proxy for dominant frequency.</td><td style="padding: 4px 8px; border: 1px solid #ddd;">LTC carrier: ~0.05-0.10. Sub-kHz tone: much lower. Silence/noise: erratic, often &gt; 0.4.</td></tr>
+            <tr><td style="padding: 4px 8px; border: 1px solid #ddd;"><strong>Spectral entropy</strong></td><td style="padding: 4px 8px; border: 1px solid #ddd;">How spread-out the frame's frequency content is.</td><td style="padding: 4px 8px; border: 1px solid #ddd;">LTC: ~0.6-0.8 (broadband biphase). Pure tone: ~0.3. Silence: ~0.3.</td></tr>
+        </table>
         <p style="margin: 0;">
             Detections must persist across multiple consecutive windows to be reported, reducing
             false positives from transient audio events.
@@ -1517,14 +1549,16 @@ def make_audio_dropout_html(audio_dropout_csv):
     return html
 
 
-def make_clamped_levels_html(clamped_levels_csv):
+def make_clamped_levels_html(clamped_levels_csv, clamped_traces_csv=None):
     """
     Generates an HTML section summarizing clamped-levels detection results.
     Always renders when the CSV is present, including when no clamping was
     found — so the report shows that the check was run.
 
     Args:
-        clamped_levels_csv (str): Path to the clamped-levels CSV file.
+        clamped_levels_csv (str): Path to the clamped-levels summary CSV.
+        clamped_traces_csv (str): Optional path to per-frame trace CSV; when
+            present, one plotly graph is rendered per clamped channel/direction.
 
     Returns:
         str: HTML string, or None if the file cannot be read.
@@ -1539,15 +1573,16 @@ def make_clamped_levels_html(clamped_levels_csv):
         logger.error(f"Error reading clamped levels CSV: {e}")
         return None
 
-    if len(rows) < 8:
+    if len(rows) < 9:
         return None
 
     bit_depth = rows[1][1] if len(rows[1]) > 1 else "N/A"
     total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
-    any_clamp = rows[5][1] if len(rows[5]) > 1 else "N/A"
+    tolerance = rows[3][1] if len(rows[3]) > 1 else "0"
+    any_clamp = rows[6][1] if len(rows[6]) > 1 else "N/A"
 
-    # Findings table starts at row 7 (header) then rows 8+
-    findings = [r for r in rows[8:] if len(r) >= 8]
+    # Findings table starts at row 8 (header) then rows 9+
+    findings = [r for r in rows[9:] if len(r) >= 8]
 
     if any_clamp == "Yes":
         status_color = "#dc3545"
@@ -1584,6 +1619,8 @@ def make_clamped_levels_html(clamped_levels_csv):
             f'</tr>\n'
         )
 
+    graphs_html = _make_clamped_traces_graphs(clamped_traces_csv, bit_depth)
+
     html = f'''
     <a id="link_clamp_methodology" href="javascript:void(0);"
        onclick="toggleContent('clamp_methodology', 'What is clamped-levels detection? ▼', 'What is clamped-levels detection? ▲')"
@@ -1594,13 +1631,14 @@ def make_clamped_levels_html(clamped_levels_csv):
         <p style="margin: 0 0 10px 0;">
             <strong>Clamped-levels detection</strong> flags analog-to-digital converters that truncate
             the video signal at the broadcast (legal) range limits. A clamped channel will pile up at
-            the limit value and never exceed it, whereas an unclamped source will show excursions past
-            the legal range caused by sync pulses, noise, or peak whites/superblacks.
+            (or just inside) the limit value and never exceed it, whereas an unclamped source will show
+            excursions past the legal range caused by sync pulses, noise, or peak whites/superblacks.
         </p>
         <p style="margin: 0 0 10px 0; font-weight: bold;">Verdicts:</p>
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
-            <li style="margin-bottom: 4px;"><strong>Clamped</strong> &mdash; frames hit the limit exactly
-                with zero excursions past it; indicates the ADC is truncating the signal.</li>
+            <li style="margin-bottom: 4px;"><strong>Clamped</strong> &mdash; enough frames sit at or near
+                the broadcast limit (within the bit-depth tolerance) with zero excursions past it;
+                indicates the ADC is truncating the signal.</li>
             <li style="margin-bottom: 4px;"><strong>Not Clamped</strong> &mdash; one or more frames went
                 past the limit; the signal is free to exceed broadcast range.</li>
             <li style="margin-bottom: 4px;"><strong>Inconclusive</strong> &mdash; the signal never reached
@@ -1608,7 +1646,8 @@ def make_clamped_levels_html(clamped_levels_csv):
         </ul>
         <p style="margin: 0;">
             Limits are derived from SMPTE broadcast-range values (bit-depth aware): 10-bit Y 64&ndash;940,
-            U/V 64&ndash;960; 8-bit Y 16&ndash;235, U/V 16&ndash;240. Measurements come from FFmpeg's
+            U/V 64&ndash;960; 8-bit Y 16&ndash;235, U/V 16&ndash;240. The tolerance window scales with
+            bit depth (8-bit: exact match required; 10-bit: &plusmn;2 codes). Measurements come from FFmpeg's
             <code>signalstats</code> filter as recorded in the QCTools report.
         </p>
     </div>
@@ -1618,6 +1657,7 @@ def make_clamped_levels_html(clamped_levels_csv):
     <table style="border-collapse: collapse; margin: 10px 0;">
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Bit Depth</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{bit_depth}</td></tr>
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Video Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Tolerance Window (codes)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{tolerance}</td></tr>
     </table>
     <table style="border-collapse: collapse; margin: 10px 0;">
         <tr>
@@ -1625,44 +1665,436 @@ def make_clamped_levels_html(clamped_levels_csv):
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Direction</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Limit</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Global Extreme</th>
-            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames at Limit</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames at/near Limit</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Hit %</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames Beyond Limit</th>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Verdict</th>
         </tr>
         {rows_html}
     </table>
+    {graphs_html}
     '''
     return html
 
 
-def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict):
+def _make_clamped_traces_graphs(clamped_traces_csv, bit_depth):
+    """
+    Render one plotly graph per clamped channel/direction from the trace CSV.
+    Each graph shows the per-frame extreme value over time with a dashed line
+    at the broadcast limit and shaded tolerance window. Returns "" when no
+    trace CSV is present (no clamps, or feature disabled).
+    """
+    if not clamped_traces_csv or not os.path.isfile(clamped_traces_csv):
+        return ""
+
+    try:
+        import plotly.graph_objs as go
+    except ImportError as e:
+        logger.warning(f"plotly unavailable; skipping clamped-levels graphs: {e}")
+        return ""
+
+    try:
+        with open(clamped_traces_csv, 'r') as f:
+            reader = csv.DictReader(f)
+            traces = {}
+            for row in reader:
+                key = (row['channel'], row['direction'])
+                if key not in traces:
+                    traces[key] = {'limit': float(row['limit']), 'time': [], 'value': []}
+                try:
+                    traces[key]['time'].append(float(row['time_seconds']))
+                    traces[key]['value'].append(float(row['value']))
+                except ValueError:
+                    continue
+    except Exception as e:
+        logger.error(f"Error reading clamped traces CSV: {e}")
+        return ""
+
+    if not traces:
+        return ""
+
+    try:
+        bit_depth_int = int(bit_depth)
+    except (TypeError, ValueError):
+        bit_depth_int = 8
+    code_max = 1023 if bit_depth_int == 10 else 255
+    tolerance = 2 if bit_depth_int == 10 else 0
+
+    graphs = []
+    for (channel, direction), t in traces.items():
+        limit = t['limit']
+        metric_name = f"{channel}{'MIN' if direction == 'floor' else 'MAX'}"
+        title = f"{metric_name} over time — broadcast {direction} = {limit:g} ({bit_depth_int}-bit)"
+
+        if direction == 'floor':
+            shaded_y0, shaded_y1 = 0, limit
+            tol_y0, tol_y1 = limit, min(limit + tolerance, code_max)
+            extreme_value = min(t['value']) if t['value'] else limit
+            y_lo = max(0, min(extreme_value, limit) - 8)
+            y_hi = min(code_max, limit + max(20, tolerance + 10))
+        else:
+            shaded_y0, shaded_y1 = limit, code_max
+            tol_y0, tol_y1 = max(0, limit - tolerance), limit
+            extreme_value = max(t['value']) if t['value'] else limit
+            y_hi = min(code_max, max(extreme_value, limit) + 8)
+            y_lo = max(0, limit - max(20, tolerance + 10))
+
+        x_min = t['time'][0] if t['time'] else 0
+        x_max = t['time'][-1] if t['time'] else 1
+
+        fig = go.Figure()
+
+        fig.add_shape(
+            type='rect', xref='x', yref='y',
+            x0=x_min, x1=x_max, y0=shaded_y0, y1=shaded_y1,
+            fillcolor='rgba(220, 53, 69, 0.08)', line=dict(width=0), layer='below'
+        )
+        if tolerance > 0:
+            fig.add_shape(
+                type='rect', xref='x', yref='y',
+                x0=x_min, x1=x_max, y0=tol_y0, y1=tol_y1,
+                fillcolor='rgba(255, 193, 7, 0.18)', line=dict(width=0), layer='below'
+            )
+
+        fig.add_trace(go.Scattergl(
+            x=t['time'], y=t['value'], mode='lines',
+            name=metric_name, line=dict(color='#378d6a', width=1),
+            hovertemplate='%{x:.2f}s<br>' + metric_name + '=%{y}<extra></extra>',
+        ))
+
+        fig.add_hline(
+            y=limit, line=dict(color='#dc3545', width=2, dash='dash'),
+            annotation_text=f"Broadcast {direction}: {limit:g}",
+            annotation_position='top right',
+            annotation_font=dict(color='#dc3545', size=11),
+        )
+
+        fig.update_layout(
+            title=dict(text=title, font=dict(size=14)),
+            xaxis_title='Time (seconds)',
+            yaxis_title=f'{metric_name} (code value)',
+            yaxis=dict(range=[y_lo, y_hi]),
+            margin=dict(l=60, r=20, t=50, b=50),
+            height=320,
+            showlegend=False,
+            plot_bgcolor='#fafafa',
+        )
+
+        config = {
+            'toImageButtonOptions': {
+                'format': 'png',
+                'filename': f'clamped_{channel}_{direction}',
+                'height': 400, 'width': 900, 'scale': 1,
+            }
+        }
+        graphs.append(fig.to_html(full_html=False, include_plotlyjs='cdn', config=config))
+
+    if not graphs:
+        return ""
+
+    return (
+        '<h4 style="margin-top: 20px;">Clamped Channel Traces</h4>'
+        '<p style="font-size: 13px; color: #555; margin: 0 0 10px 0;">'
+        'Per-frame extreme over time for each channel/direction flagged as clamped. '
+        'The dashed red line marks the broadcast limit; the shaded red region is past the limit '
+        '(no excursions = a wall). Long files are downsampled to ~5,000 points per trace; '
+        'each point is the per-bucket extreme so brief wall-hit events are preserved.'
+        '</p>'
+        + '\n'.join(f'<div style="margin: 10px 0;">{g}</div>' for g in graphs)
+    )
+
+
+def _hue_label(hue_deg):
+    """Map a hue angle (degrees) to a short colour name for the report.
+    Based on the YUV/signalstats hue convention as displayed in QCTools."""
+    try:
+        h = float(hue_deg) % 360
+    except (TypeError, ValueError):
+        return ""
+    # 12-segment wheel, centred on canonical hue angles
+    bins = [
+        (15, "red"), (45, "orange"), (75, "yellow"),
+        (105, "yellow-green"), (135, "green"), (165, "green-cyan"),
+        (195, "cyan"), (225, "blue-cyan"), (255, "blue"),
+        (285, "blue-magenta"), (315, "magenta"), (345, "red-magenta"),
+        (360, "red"),
+    ]
+    for boundary, label in bins:
+        if h < boundary:
+            return label
+    return ""
+
+
+def make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv):
+    """
+    Generates an HTML section summarizing chroma phase error detection results.
+    Always renders when the summary CSV is present, including when no events
+    were found - so the report shows that the check was run.
+
+    Args:
+        chroma_phase_summary_csv (str): Path to the summary CSV.
+        chroma_phase_events_csv (str): Path to the events CSV (per-event rows).
+
+    Returns:
+        str: HTML string, or None if the summary CSV cannot be read.
+    """
+    if not chroma_phase_summary_csv or not os.path.isfile(chroma_phase_summary_csv):
+        return None
+
+    try:
+        with open(chroma_phase_summary_csv, 'r') as f:
+            summary_rows = list(csv.reader(f))
+    except Exception as e:
+        logger.error(f"Error reading chroma phase summary CSV: {e}")
+        return None
+
+    summary = {}
+    for r in summary_rows:
+        if len(r) >= 2:
+            summary[r[0]] = r[1]
+
+    bit_depth = summary.get("Bit Depth", "N/A")
+    total_frames = summary.get("Total Video Frames", "N/A")
+    bars_skipped = summary.get("Frames Skipped (color bars region)", "0")
+    flagged_frames = summary.get("Flagged Frames", "0")
+    flagged_pct = summary.get("Flagged %", "0")
+    event_count = summary.get("Detected Events", "0")
+    env_low = summary.get("Envelope Low (U/V min)", "")
+    env_high = summary.get("Envelope High (U/V max)", "")
+    satmax_high = summary.get("SATMAX High", "")
+
+    try:
+        event_count_int = int(event_count)
+    except ValueError:
+        event_count_int = 0
+
+    events = []
+    if chroma_phase_events_csv and os.path.isfile(chroma_phase_events_csv):
+        try:
+            with open(chroma_phase_events_csv, 'r') as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                for row in reader:
+                    if len(row) >= 9:
+                        events.append(row[:9])
+        except Exception as e:
+            logger.error(f"Error reading chroma phase events CSV: {e}")
+
+    if event_count_int > 0:
+        status_color = "#dc3545"
+        status_bg = "#f8d7da"
+        status_border = "#f5c6cb"
+        status_text = f"Chroma Phase Errors Detected: {event_count_int} event(s), {flagged_frames} flagged frame(s)"
+    else:
+        status_color = "#155724"
+        status_bg = "#d4edda"
+        status_border = "#c3e6cb"
+        status_text = "No Chroma Phase Errors Detected"
+
+    rows_html = ""
+    for r in events:
+        event_idx, start, end, dur, frames, rule, peak_sat, peak_time, hue = r
+        hue_name = _hue_label(hue)
+        hue_display = f"{hue}" + (f" ({hue_name})" if hue_name else "")
+        rows_html += (
+            f'<tr>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{event_idx}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{start}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{end}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{dur}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{frames}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{rule}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{peak_sat}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{peak_time}</td>'
+            f'<td style="padding: 4px 12px; border: 1px solid #ddd;">{hue_display}</td>'
+            f'</tr>\n'
+        )
+
+    events_table = ""
+    if events:
+        events_table = f'''
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Event</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Duration (s)</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Frames</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Rule</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Peak SATMAX</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Peak Time</th>
+            <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Hue at Peak (deg)</th>
+        </tr>
+        {rows_html}
+    </table>'''
+
+    # Thumbnail gallery: chroma_phase analyzer writes PNGs into
+    # ChromaPhaseThumbs/ for the top events by frame count (max
+    # CHROMA_MAX_THUMBS = 10). Embed them inline as base64.
+    thumbs_html = _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events)
+
+    html = f'''
+    <a id="link_chroma_phase_methodology" href="javascript:void(0);"
+       onclick="toggleContent('chroma_phase_methodology', 'What is chroma phase detection? ▼', 'What is chroma phase detection? ▲')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is chroma phase detection? ▼</a>
+    <div id="chroma_phase_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>Chroma phase detection</strong> flags frames where the chroma signal has collapsed
+            toward a single hue (typically cyan or magenta), usually caused by helical-scan tracking
+            failures on tape source. The artifact is often accompanied by horizontal image displacement
+            and brief picture "swerve" at onset.
+        </p>
+        <p style="margin: 0 0 10px 0; font-weight: bold;">Two flagging rules:</p>
+        <ul style="margin: 4px 0 10px 20px; padding: 0;">
+            <li style="margin-bottom: 4px;"><strong>envelope</strong> &mdash; within a single frame, both
+                U and V span nearly the full chroma range (UMIN &lt; {env_low}, UMAX &gt; {env_high},
+                VMIN &lt; {env_low}, VMAX &gt; {env_high} for 10-bit; scaled /4 for 8-bit).
+                This is the strongest single-frame signature.</li>
+            <li style="margin-bottom: 4px;"><strong>satmax</strong> &mdash; SATMAX exceeds {satmax_high}
+                (10-bit) or its 8-bit equivalent. Catches partial events where only a portion of the
+                frame is affected.</li>
+        </ul>
+        <p style="margin: 0 0 10px 0;">
+            Consecutive flagged frames within ~10 frames are merged into a single event. Events shorter
+            than 2 flagged frames are suppressed to filter isolated transients (scene cuts, motion blur
+            into saturated content) which would otherwise be false positives.
+        </p>
+        <p style="margin: 0;">
+            Color bars at the head of the tape (when detected by qct-parse) are skipped automatically.
+            Measurements come from FFmpeg's <code>signalstats</code> filter as recorded in the QCTools
+            report. Hue values are the median hue (HUEMED) at the event's peak SATMAX frame; ~180&deg;
+            is cyan, ~315&deg; magenta.
+        </p>
+    </div>
+    <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
+        <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
+    </div>
+    <table style="border-collapse: collapse; margin: 10px 0;">
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Bit Depth</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{bit_depth}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Video Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Frames Skipped (color bars)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{bars_skipped}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Flagged Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{flagged_frames} ({flagged_pct}%)</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Detected Events</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{event_count}</td></tr>
+    </table>
+    {thumbs_html}
+    {events_table}
+    '''
+    return html
+
+
+def _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events):
+    """
+    Render the chroma-phase thumbnail gallery as base64-embedded <img> tags.
+    Pulls PNGs from {report_dir}/ChromaPhaseThumbs/event_NN.png where NN is
+    the event index (1-based). Returns "" when no thumbnails are present.
+
+    Args:
+        chroma_phase_summary_csv (str): Path to the summary CSV (used only to
+            derive the sibling ChromaPhaseThumbs/ directory).
+        events (list): The parsed event rows from the events CSV.
+
+    Returns:
+        str: HTML string, or "" if no thumbnails are present.
+    """
+    if not chroma_phase_summary_csv or not events:
+        return ""
+
+    report_dir = os.path.dirname(chroma_phase_summary_csv)
+    thumb_dir = os.path.join(report_dir, "ChromaPhaseThumbs")
+    if not os.path.isdir(thumb_dir):
+        return ""
+
+    # Build a quick lookup of event_idx -> event row, then iterate in
+    # event-index order so the gallery's reading order matches the table.
+    by_idx = {}
+    for r in events:
+        try:
+            idx = int(r[0])
+            by_idx[idx] = r
+        except (ValueError, IndexError):
+            continue
+
+    items_html = ""
+    found = 0
+    for idx in sorted(by_idx.keys()):
+        thumb_path = os.path.join(thumb_dir, f"event_{idx:02d}.png")
+        if not os.path.isfile(thumb_path):
+            continue
+        try:
+            with open(thumb_path, "rb") as f:
+                encoded = b64encode(f.read()).decode("ascii")
+        except Exception as e:
+            logger.warning(f"Failed to read chroma-phase thumbnail {thumb_path}: {e}")
+            continue
+        found += 1
+        row = by_idx[idx]
+        # row: event_idx, start, end, dur_s, frames, rule, peak_sat, peak_time, hue
+        start = row[1] if len(row) > 1 else ""
+        frames = row[4] if len(row) > 4 else ""
+        peak_time = row[7] if len(row) > 7 else ""
+        items_html += f'''
+        <div style="text-align: center; margin: 5px;">
+            <img src="data:image/png;base64,{encoded}"
+                 style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
+                 onclick="openImage(this.src, 'Chroma Phase Event {idx} - peak at {peak_time}')"
+                 title="Click to enlarge" />
+            <p style="font-size: 12px; margin: 4px 0 0 0;"><strong>Event {idx}</strong> &mdash; starts {start}</p>
+            <p style="font-size: 11px; margin: 1px 0 0 0; color: #777;">peak at {peak_time} &middot; {frames} frame(s)</p>
+        </div>'''
+
+    if found == 0:
+        return ""
+
+    return f'''
+    <h4 style="margin-top: 20px;">Event Thumbnails</h4>
+    <p style="font-size: 13px; margin: 0 0 8px 0; color: #555;">
+        Frame captured at each event's peak SATMAX (max {found} shown; if more than 10 events were detected,
+        the largest events by frame count are shown).
+    </p>
+    <div style="display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0;">
+        {items_html}
+    </div>'''
+
+
+def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbars_values_output, sorted_thumbs_dict, duration_override=None, bars_label=None, thumb_profile_filter=None):
     """
     Creates HTML visualizations for color bars analysis, including bar charts comparing
     SMPTE color bars with the video's color bars values.
 
     Args:
         video_id (str): The identifier for the video being analyzed.
-        qctools_colorbars_duration_output (str): Path to CSV file containing color bars duration data.
+        qctools_colorbars_duration_output (str or None): Path to CSV file containing color bars duration data.
         colorbars_values_output (str): Path to CSV file containing color bars values data.
         sorted_thumbs_dict (dict): Dictionary containing thumbnail information with keys as descriptions
-                                 and values as tuples of (path, profile_name, timestamp). 
+                                 and values as tuples of (path, profile_name, timestamp).
                                  Output find_qct_thumbs().
+        duration_override (str or None): When set, use this string as the duration annotation
+                                         instead of reading the duration CSV.
+        bars_label (str or None): Label for the detected bars trace in the chart
+                                  (default: '{video_id} Colorbars').
+        thumb_profile_filter (str or None): When set, only match thumbnails whose
+                                            profile_name contains this substring.
 
     Returns:
         str or None: HTML string containing the visualization if successful, None if there are errors.
     """
-    if not qctools_colorbars_duration_output or not colorbars_values_output:
-        logger.warning("Missing required colorbar files - duration or values file is None")
+    if not colorbars_values_output:
+        logger.warning("Missing required colorbar values file")
         return None
-        
-    try:
-        if not os.path.isfile(qctools_colorbars_duration_output):
-            logger.critical(f"Cannot open color bars duration csv file: {qctools_colorbars_duration_output}")
+
+    if not duration_override:
+        if not qctools_colorbars_duration_output:
+            logger.warning("Missing required colorbar files - duration or values file is None")
             return None
-    except (TypeError, AttributeError) as e:
-        logger.critical(f"Invalid path for color bars duration file: {e}")
-        return None
+        try:
+            if not os.path.isfile(qctools_colorbars_duration_output):
+                logger.critical(f"Cannot open color bars duration csv file: {qctools_colorbars_duration_output}")
+                return None
+        except (TypeError, AttributeError) as e:
+            logger.critical(f"Invalid path for color bars duration file: {e}")
+            return None
         
     try:
         if not os.path.isfile(colorbars_values_output):
@@ -1678,20 +2110,21 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
         logger.critical(f"Error importing required libraries for graphs: {e}")
         return None
     
+    if not bars_label:
+        bars_label = f'{video_id} Colorbars'
+
     try:
         with open(colorbars_values_output, 'r') as file:
             csv_reader = csv.DictReader(file)
-            # Convert CSV data to lists for plotly
             colorbar_csv_data = {
                 'QCTools Fields': [],
                 'SMPTE Colorbars': [],
-                f'{video_id} Colorbars': []
+                'detected': []
             }
             for row in csv_reader:
                 colorbar_csv_data['QCTools Fields'].append(row['QCTools Fields'])
-                # Convert string values to float
                 colorbar_csv_data['SMPTE Colorbars'].append(float(row['SMPTE Colorbars']))
-                colorbar_csv_data[f'{video_id} Colorbars'].append(float(row[f'{video_id} Colorbars']))
+                colorbar_csv_data['detected'].append(float(row[f'{video_id} Colorbars']))
     except Exception as e:
         logger.critical(f"Error reading colorbars CSV file: {e}")
         return None
@@ -1699,66 +2132,91 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
      # Initialize duration_text with default value
     duration_text = "Colorbars duration: Not available"
 
+    if duration_override:
+        duration_text = "Colorbars duration: " + duration_override
+    else:
+        try:
+            with open(qctools_colorbars_duration_output, 'r') as file:
+                duration_lines = file.readlines()
+
+                if len(duration_lines) <= 1:
+                    logger.critical(f"The csv file {qctools_colorbars_duration_output} does not match the expected format")
+                    return None
+
+                duration_text = duration_lines[1].strip()
+                duration_text = duration_text.replace(',', ' - ')
+                duration_text = "Colorbars duration: " + duration_text
+        except Exception as e:
+            logger.critical(f"Error processing duration file: {e}")
+            return None
+
     try:
-        with open(qctools_colorbars_duration_output, 'r') as file:
-            duration_lines = file.readlines()
-            
-            if len(duration_lines) <= 1:  # Check if file is empty or doesn't have enough lines
-                logger.critical(f"The csv file {qctools_colorbars_duration_output} does not match the expected format")
-                return None  # Return None if duration file is empty or malformed
-            
-            duration_text = duration_lines[1].strip()
-            duration_text = duration_text.replace(',', ' - ')
-            duration_text = "Colorbars duration: " + duration_text
-            
-            # Create the bar chart for the colorbars values
-            colorbars_fig = go.Figure(data=[
-                go.Bar(name='SMPTE Colorbars', 
-                    x=colorbar_csv_data['QCTools Fields'], 
-                    y=colorbar_csv_data['SMPTE Colorbars'], 
-                    marker=dict(color='#378d6a')),
-                go.Bar(name=f'{video_id} Colorbars', 
-                    x=colorbar_csv_data['QCTools Fields'], 
-                    y=colorbar_csv_data[f'{video_id} Colorbars'], 
-                    marker=dict(color='#bf971b'))
-            ])
-            colorbars_fig.update_layout(barmode='group')
-            
-            # custom config values for png export
-            config = {
-                'toImageButtonOptions': {
-                    'format': 'png',
-                    'filename': f'{video_id}_colorbars_comparison',
-                    'height': 500,
-                    'width': 800,
-                    'scale': 1
-                }
-            }
-            colorbars_barchart_html = colorbars_fig.to_html(full_html=False, include_plotlyjs='cdn', config=config)
+        colorbars_fig = go.Figure(data=[
+            go.Bar(name='SMPTE Colorbars',
+                x=colorbar_csv_data['QCTools Fields'],
+                y=colorbar_csv_data['SMPTE Colorbars'],
+                marker=dict(color='#378d6a')),
+            go.Bar(name=bars_label,
+                x=colorbar_csv_data['QCTools Fields'],
+                y=colorbar_csv_data['detected'],
+                marker=dict(color='#bf971b'))
+        ])
+        colorbars_fig.update_layout(
+            barmode='group',
+            width=450,
+            height=350,
+            margin=dict(l=50, r=20, t=30, b=50),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='left',
+                x=0,
+            ),
+        )
+
+        config = {
+            'toImageButtonOptions': {
+                'format': 'png',
+                'filename': f'{video_id}_colorbars_comparison',
+                'height': 500,
+                'width': 800,
+                'scale': 1
+            },
+            'responsive': False,
+        }
+        colorbars_barchart_html = colorbars_fig.to_html(full_html=False, include_plotlyjs='cdn', config=config)
     except Exception as e:
-        logger.critical(f"Error processing duration file: {e}")
-        return None 
+        logger.critical(f"Error creating colorbars chart: {e}")
+        return None
 
     # Add annotations for the thumbnail
     thumbnail_html = ''
     for thumb_name, (thumb_path, profile_name, timestamp) in sorted_thumbs_dict.items():
-        if "bars_found.first_frame" in thumb_path:
-            thumb_name_with_breaks = thumb_name.replace("\n", "<br>")
-            thumbnail_html = f'''
-                <img src="{thumb_path}" alt="{thumb_name}" style="width:200px; height:auto;">
-                <p>{thumb_name_with_breaks}</p>
-            '''
-            break
+        if "bars_found.first_frame" not in thumb_path:
+            continue
+        if thumb_profile_filter and thumb_profile_filter not in thumb_path:
+            continue
+        if not thumb_profile_filter and "additional_bars" in thumb_path:
+            continue
+        thumb_name_with_breaks = thumb_name.replace("\n", "<br>")
+        thumbnail_html = f'''
+            <img src="{thumb_path}" alt="{thumb_name}" style="width:200px; height:auto;">
+            <p>{thumb_name_with_breaks}</p>
+        '''
+        break
 
     # Create the complete HTML with the duration text and the thumbnail/barchart side-by-side
     colorbars_html = f'''
-    <div style="display: flex; align-items: center; justify-content: center; background-color: #f5e9e3; padding: 10px;">
-        <div>
-            {thumbnail_html}
-            <p>{duration_text}</p>
-        </div>
-        <div style="margin-left: 20px;">  
-            {colorbars_barchart_html}
+    <div style="background-color: #f5e9e3; padding: 20px 30px; border-radius: 6px;">
+        <div style="display: flex; align-items: center; justify-content: center;">
+            <div style="flex-shrink: 0;">
+                {thumbnail_html}
+                <p>{duration_text}</p>
+            </div>
+            <div style="margin-left: 20px; min-width: 0; flex: 1;">
+                {colorbars_barchart_html}
+            </div>
         </div>
     </div>
     '''
@@ -1840,15 +2298,21 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
         s = seconds - (h * 3600) - (m * 60)
         return f"{h:02d}:{m:02d}:{s:06.3f}"
 
-    # Agreement: qct-parse run (single) vs CLAMS primary (single).
-    qct_primary = qct_runs[0] if qct_runs else None
+    # Separate qct-parse head from windowed (CLAMS-guided) rows.
+    qct_head = next((r for r in qct_runs if r[0] in ("head", "head-relaxed")), None)
+    # Legacy 2-column rows come through with label "primary"
+    if qct_head is None:
+        qct_head = next((r for r in qct_runs if r[0] == "primary"), None)
+    qct_windowed = [r for r in qct_runs if r is not qct_head]
+
     clams_primary = next((r for r in clams_runs if r[0] == "primary"), None)
     clams_secondary = [r for r in clams_runs if r[0] != "primary"]
 
+    # Agreement: qct-parse head vs CLAMS primary head bars.
     agreement_label = "—"
     agreement_color = "#666"
     if qct_run and clams_run:
-        qct_end = qct_primary[2] if qct_primary else None
+        qct_end = qct_head[2] if qct_head else None
         clams_end = clams_primary[2] if clams_primary else None
         if qct_end is not None and clams_end is not None:
             delta = abs(qct_end - clams_end)
@@ -1869,11 +2333,13 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
     # Build one row per detection. Source/pass go in the first two cells.
     body_rows = []
     if qct_run:
-        if qct_primary:
-            _, qs, qe = qct_primary
-            body_rows.append(("qct-parse (authoritative)", "—", "Yes", fmt(qs), fmt(qe), False))
+        if qct_head:
+            _, qs, qe = qct_head
+            body_rows.append(("qct-parse", "head", "Yes", fmt(qs), fmt(qe), False))
         else:
-            body_rows.append(("qct-parse (authoritative)", "—", "No", "—", "—", False))
+            body_rows.append(("qct-parse", "head", "No", "—", "—", False))
+        for label, ws, we in qct_windowed:
+            body_rows.append(("qct-parse", label, "Yes", fmt(ws), fmt(we), True))
     if clams_run:
         if clams_primary:
             _, cs, ce = clams_primary
@@ -1898,14 +2364,17 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
     rows_html = "".join(render_row(*r) for r in body_rows)
 
     note_lines = [
-        "qct-parse drives downstream behavior (BRNG-skip, access-file trim). "
-        "The CLAMS detector runs in parallel for comparison only.",
+        "The authoritative head bars end time uses the latest end time across "
+        "both detectors. Mid-file bars (highlighted) are report-only and do "
+        "not affect downstream processing (BRNG-skip, access-file trim).",
     ]
-    if clams_secondary:
+    has_secondary = clams_secondary or qct_windowed
+    if has_secondary:
         note_lines.append(
-            "Second-pass rows (highlighted) are targeted scans triggered by tone "
-            "detections that fell outside the primary bars window, run with "
-            "relaxed thresholds (SSIM ≥ 0.6, sample ratio 5)."
+            "Highlighted rows are targeted scans: CLAMS second-pass rows are "
+            "triggered by tone detections that fell outside the primary bars "
+            "window; qct-parse windowed rows are CLAMS-guided scans of "
+            "regions beyond the first 5 minutes."
         )
     note = "".join(
         f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
@@ -4154,7 +4623,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if signals:
         signals.report_progress.emit(0)
 
-    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, difference_csv = find_report_csvs(report_directory)
+    qctools_colorbars_duration_output, qctools_bars_eval_check_output, colorbars_values_output, windowed_colorbars_values, qctools_content_check_outputs, qctools_profile_check_output, profile_fails_csv, tags_check_output, tag_fails_csv, colorbars_eval_fails_csv, audio_clipping_csv, channel_imbalance_csv, audible_timecode_csv, audio_dropout_csv, clamped_levels_csv, clamped_traces_csv, chroma_phase_summary_csv, chroma_phase_events_csv, difference_csv = find_report_csvs(report_directory)
 
     # CLAMS bars-detection durations CSV (filename matches the writer in
     # checks/bars_detection_clams.py); present only when the parallel detector ran.
@@ -4323,6 +4792,36 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     else:
         colorbars_html = None
 
+    # Render bar graphs for windowed (mid-file) bars regions.
+    # Build a lookup of region label → duration string from the qct-parse
+    # bars durations CSV so each graph shows the correct timecodes.
+    qct_duration_runs = _parse_bars_durations_csv(qctools_colorbars_duration_output)
+    windowed_duration_lookup = {}
+    for label, start_s, end_s in qct_duration_runs:
+        def _fmt(seconds):
+            h = int(seconds // 3600)
+            m = int((seconds % 3600) // 60)
+            s = seconds - (h * 3600) - (m * 60)
+            return f"{h:02d}:{m:02d}:{s:06.3f}"
+        windowed_duration_lookup[label] = f"{_fmt(start_s)} - {_fmt(end_s)}"
+
+    windowed_colorbars_html_list = []
+    for wv_path in sorted(windowed_colorbars_values):
+        try:
+            region_name = os.path.basename(wv_path).replace("qct-parse_colorbars_values_", "").replace(".csv", "")
+            dur_str = windowed_duration_lookup.get(region_name)
+            idx_str = region_name.replace("additional-", "")
+            wv_html = make_color_bars_graphs(
+                video_id, qctools_colorbars_duration_output, wv_path, thumbs_dict,
+                duration_override=dur_str,
+                bars_label=f'{video_id} Additional Bars',
+                thumb_profile_filter=f'additional_bars_{idx_str}',
+            )
+            if wv_html:
+                windowed_colorbars_html_list.append((region_name, wv_html))
+        except Exception as e:
+            logger.error(f"Error rendering windowed bars graph for {wv_path}: {e}")
+
     if qctools_profile_check_output and failureInfoSummary_profile:
         profile_summary_html = make_profile_piecharts(qctools_profile_check_output, thumbs_dict, failureInfoSummary_profile, video_id, failure_csv_path=profile_fails_csv_path, check_cancelled=check_cancelled)
     else:
@@ -4355,7 +4854,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
     audible_timecode_html = make_audible_timecode_html(audible_timecode_csv) if audible_timecode_csv else None
     audio_dropout_html = make_audio_dropout_html(audio_dropout_csv) if audio_dropout_csv else None
-    clamped_levels_html = make_clamped_levels_html(clamped_levels_csv) if clamped_levels_csv else None
+    clamped_levels_html = make_clamped_levels_html(clamped_levels_csv, clamped_traces_csv) if clamped_levels_csv else None
+    chroma_phase_html = make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv) if chroma_phase_summary_csv else None
     dropped_sample_html = generate_dropped_sample_html(frame_outputs) if frame_outputs else ""
     duplicate_frame_html = generate_duplicate_frame_html(frame_outputs) if frame_outputs else ""
     bitplane_html = generate_bitplane_html(frame_outputs) if frame_outputs else ""
@@ -4370,6 +4870,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         not audible_timecode_csv and
         not audio_dropout_csv and
         not clamped_levels_csv and
+        not chroma_phase_summary_csv and
         not existing_thumbs
     )
 
@@ -4477,12 +4978,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-qct-parse-notice', 'QCT-Parse Analysis'))
     if colorbars_html:
         toc_entries.append(('section-colorbars', 'Color Bars Detection'))
+    for region_name, _ in windowed_colorbars_html_list:
+        toc_entries.append((f'section-colorbars-{region_name}', 'Additional Color Bars'))
     if bars_comparison_html or tone_detection_html:
         toc_entries.append(('section-clams-detection', 'CLAMS Detection'))
     if colorbars_eval_html:
         toc_entries.append(('section-colorbars-eval', 'Colorbars Threshold Evaluation'))
     if clamped_levels_html:
         toc_entries.append(('section-clamped-levels', 'Clamped Levels Detection'))
+    if chroma_phase_html:
+        toc_entries.append(('section-chroma-phase', 'Chroma Phase Detection'))
     if _has_audio_results:
         toc_entries.append(('section-audio-analysis', 'Audio Analysis Results'))
     if dropped_sample_html:
@@ -4736,15 +5241,25 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         </div>
         """
 
-    if colorbars_html:
-        if smpte_fallback:
-            colorbars_header = "Color Bars Detection"
-        else:
-            colorbars_header = f"SMPTE Colorbars vs {video_id} Colorbars"
-        html_template += f"""
-        <h3 id="section-colorbars">{colorbars_header}</h3>
-        {colorbars_html}
-        """
+    if colorbars_html or windowed_colorbars_html_list:
+        html_template += '<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start;">'
+        if colorbars_html:
+            if smpte_fallback:
+                colorbars_header = "Color Bars Detection"
+            else:
+                colorbars_header = f"SMPTE Colorbars vs {video_id} Colorbars"
+            html_template += f"""
+            <div id="section-colorbars" style="flex: 1 1 0; min-width: 0; overflow: hidden;">
+                <h3>{colorbars_header}</h3>
+                {colorbars_html}
+            </div>"""
+        for region_name, wv_html in windowed_colorbars_html_list:
+            html_template += f"""
+            <div id="section-colorbars-{region_name}" style="flex: 1 1 0; min-width: 0; overflow: hidden;">
+                <h3>SMPTE Colorbars vs Additional {video_id} Colorbars</h3>
+                {wv_html}
+            </div>"""
+        html_template += '</div>'
 
     if bars_comparison_html or tone_detection_html:
         html_template += '<h3 id="section-clams-detection">CLAMS Detection</h3>'
@@ -4847,6 +5362,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         html_template += f"""
         <h3 id="section-clamped-levels">Clamped Levels Detection</h3>
         {clamped_levels_html}
+        """
+
+    if chroma_phase_html:
+        html_template += f"""
+        <h3 id="section-chroma-phase">Chroma Phase Detection</h3>
+        {chroma_phase_html}
         """
 
     has_audio_results = bool(
