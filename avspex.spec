@@ -96,8 +96,18 @@ a = Analysis(['av_spex_launcher.py'],
     excludes=[
         # Qt modules not needed
         'PyQt6.QtDBus', 'PyQt6.QtPdf', 'PyQt6.QtSvg', 'PyQt6.QtNetwork',
-        # Plotly sub-packages not needed
-        'plotly.matplotlylib', 'plotly.figure_factory',
+        'PyQt6.QtWebEngineCore', 'PyQt6.QtWebEngineWidgets', 'PyQt6.QtWebChannel',
+        'PyQt6.QtQml', 'PyQt6.QtQuick', 'PyQt6.QtQuickWidgets',
+        'PyQt6.QtMultimedia', 'PyQt6.QtMultimediaWidgets',
+        'PyQt6.QtPositioning', 'PyQt6.QtBluetooth', 'PyQt6.QtNfc',
+        'PyQt6.QtTest', 'PyQt6.QtSensors', 'PyQt6.QtSerialPort',
+        # Plotly sub-packages not needed (report uses include_plotlyjs='cdn')
+        'plotly.matplotlylib', 'plotly.figure_factory', 'plotly.offline',
+        # scikit-image removed; exclude it and its transitive tail so a stray
+        # import can't silently pull tens of MB back into the bundle
+        'skimage', 'scikit_image', 'networkx', 'tifffile', 'imageio', 'pywt',
+        # Test suites bundled inside heavy packages
+        'matplotlib.tests', 'numpy.tests', 'scipy.tests', 'PIL.ImageQt',
         # Test/dev frameworks
         'tkinter',
         'test',
