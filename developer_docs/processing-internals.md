@@ -1,0 +1,67 @@
+# AV Spex — Processing Internals
+
+Deep reference for the analysis subsystems. CLAUDE.md carries a one-paragraph summary of each; the full detail lives here. Read this when working **inside** frame analysis, qct-parse, or CLAMS detection.
+
+---
+
+## Frame Analysis (`checks/frame_analysis.py`)
+
+Unified module controlled by `FrameAnalysisConfig`. Three optional sub-steps, each independently togglable:
+
+- **Border detection**: Detects active video area and head-switching artifacts. Modes: `simple` (fixed pixel crop, default 25px) or `sophisticated` (edge detection). Supports auto-retry with refinement iterations.
+- **BRNG analysis**: Detects out-of-range luma/chroma values using multi-method voting; generates diagnostic thumbnails and an HTML report with magenta highlights.
+- **Signalstats**: FFmpeg `signalstats` filter analysis over selected time periods (default: 3 periods of 60s each).
+
+Color bars end time (from qct-parse) is passed to frame analysis so non-program content is skipped. Results feed into the HTML report.
+
+Frame analysis image/JSON outputs (`_enhanced_frame_analysis.json`, `_border_detection.jpg`, `brng_thumbnails/`) are written to **`{video_id}_qc_metadata/`**, not `report_csvs/` — `analyze_frame_quality(output_dir=destination_directory)` and `destination_directory` is the qc_metadata dir (see `dir_setup.py`). Some frame-analysis CSV sidecars and HTML fragments do go to `report_csvs/`.
+
+---
+
+## qct-parse Subsystem (`checks/qct_parse.py`)
+
+`qct_parse.py` is the largest single module in the codebase (~3000 lines). It is **not** just a "tool check" — it is its own subsystem that walks the QCTools sidecar (`.qctools.xml.gz` / `.qctools.mkv`) once and runs several optional analyses against it. All sub-features are controlled by flags on `QCTParseToolConfig`. Entry point: `run_qctparse(video_path, qctools_output_path, report_directory, …)`. The module derives from the open-source [qct-parse](https://github.com/FutureDays/qct-parse) project; substantial pieces have been rewritten or added on top.
+
+Sub-features (each independently togglable):
+
+- **Color bars detection** (`barsDetection`): `detectBars()` walks the report looking for SMPTE color bars at the head, writes start/end timestamps to `qct-parse_colorbars_durations.csv`. The end time is downstream-consumed by frame analysis and access-file generation so bars are skipped.
+- **Color bars evaluation** (`evaluateBars`): `evalBars()` reads parsed bar values out of the QCTools report and compares them to expected SMPTE color values (`maxBarsDict`); mismatches are written to `qct-parse_colorbars_values.csv`.
+- **Threshold-based tag checks** (`analyzeIt()`): for each profile tag in `SpexConfig.qct_parse_values`, count frames where the value exceeds/under-runs the threshold. Mismatches are summarized in `qct-parse_failures.csv` and `qct-parse_summary.csv`.
+- **Thumbnail export** (`thumbExport`): `printThumb()` writes a JPEG snapshot when a threshold is crossed (rate-limited via `thumbDelay`/`thumbExportDelay`). Saved under `ThumbExports/` in the report directory; `find_qct_thumbs()` in the report generator surfaces them.
+- **Audio analysis** (`audio_analysis`): `analyzeAudio()` runs four independent detectors over a single pass of the QCTools tags. Each writes its own CSV/summary and HTML report subsection:
+    - **Clipping** — flags frames where `Peak_level ≥ AUDIO_CLIPPING_THRESHOLD_DB` (default −0.5 dBFS).
+    - **Channel imbalance** — compares per-channel `RMS_level` and flags sustained level differences across channels.
+    - **Audible timecode (LTC)** — detects LTC bleed-through. Uses **two layers**: R128 mix-loudness gates (`r128.M`, `r128.M_mean`, `r128.M_stdev`, `r128.LRA`) for "stable mix at TC level", plus per-channel `astats` gates (`Crest_factor`, `Zero_crossings_rate`, `RMS_level`, `Entropy`) for the per-channel split. Thresholds are calibrated against three known-TC samples and two non-TC negatives; constants live at the top of the audio section in `qct_parse.py:1057–1119`.
+    - **Audio dropout** — flags sudden RMS drops indicative of tape dropout. Uses a **rolling median baseline** of RMS / max-RMS-diff / zero-crossings-rate, then flags single-frame deviations against thresholds (`DROPOUT_RMS_DROP_THRESHOLD_DB`, `DROPOUT_DIFF_DROP_FACTOR`, `DROPOUT_ZCR_SPIKE_FACTOR`). Candidates are merged into events.
+- **Clamped-levels detection** (`detect_clamped_levels`): finds runs of frames whose luma is clamped to broadcast range (16–235 in 8-bit / 64–940 in 10-bit). Outputs a graph and summary if hits are found.
+- **Chroma phase error detection** (`detect_chroma_phase_errors`): `analyzeChromaPhaseErrors()` detects sudden cyan/magenta colour shifts typical of helical-scan tracking failures on tape sources. Two-rule detector per frame:
+    1. **Envelope-wide (primary):** within a single frame, both U and V span nearly the full chroma range (`UMIN < CHROMA_ENVELOPE_LOW` AND `UMAX > CHROMA_ENVELOPE_HIGH` AND same for V).
+    2. **SATMAX high (secondary):** catches partial-frame events where only part of the frame is in error.
+  Thresholds are defined for 10-bit (0–1023) and scaled /4 for 8-bit. Consecutive flagged frames within `CHROMA_EVENT_GAP_FRAMES` are merged into a single event; events shorter than `CHROMA_MIN_EVENT_FRAMES` are suppressed as false-positive transients. Up to `CHROMA_MAX_THUMBS` event thumbnails are written to `ChromaPhaseThumbs/` (kept separate from `ThumbExports/` so the generic thumb finder doesn't pick them up). Sidecar CSVs: `qct-parse_chroma_phase_summary.csv`, `qct-parse_chroma_phase_events.csv`. GUI checkbox lives on the Complex tab; CLI flag is `--enable-chroma-phase-detection`.
+
+### qct-parse gotchas
+
+- **`detectBars()` threshold rationale**: `YMAX_thresh` / `YMIN_thresh` / `YDIF_thresh` detect luma characteristics of SMPTE bars. `SATMAX_thresh` is the key discriminator — it distinguishes real color bars (high saturation) from static or near-black frames that happen to meet the luma criteria. `bars_confirmation_threshold` (30 frames ≈ 1s at 30fps) prevents false starts from analog artifacts. The `relaxed=True` flag halves confirmation, lowers SATMAX by 60%, and doubles YDIF tolerance — use it for CLAMS-guided retries where bars existence is already probable.
+- **`make_color_bars_graphs()` implicit contract**: depends on three inputs that must describe the same bars region: the duration CSV (for the timestamp annotation), the values CSV (for the bar chart data), and the thumbnails dict (for the first-frame image). Passing mismatched inputs (e.g., head-bars duration CSV with a windowed-bars values CSV) silently produces wrong output. Use `duration_override`, `bars_label`, and `thumb_profile_filter` parameters to control which data each graph shows.
+- **`print_color_bar_values()` CSV column naming**: the detected-bars column header is `{video_id} Colorbars` (hardcoded in `qct_parse.py`). Code that reads this CSV (e.g., `make_color_bars_graphs`) must use this exact pattern to look up the column.
+
+---
+
+## CLAMS Detection (`checks/bars_detection_clams.py`, `checks/tone_detection_clams.py`)
+
+Sits parallel to the qct-parse color-bars/tone analysis but is independent (separate `clams_detection: ClamsDetectionConfig` field; toggled via `--enable-clams-detection`). Two scripts:
+
+- **`bars_detection_clams.py`**: SSIM-based color bars detection against a bundled reference fingerprint. Tunables in `ClamsBarsParams`: `threshold` (SSIM), `sample_ratio`, `stop_at_frame`, `min_frame_count`, `stop_after_one`, `merge_gap_seconds`. Output: `clams_bars_durations.csv`. **SSIM is computed by a local `structural_similarity()` (scipy.ndimage-based) at the top of this module — NOT scikit-image. It is a verified bit-identical reimplementation of skimage's default 2D path; do not re-add the `scikit-image` dependency.**
+- **`tone_detection_clams.py`**: cross-correlation tone detection over the audio waveform (loaded mono @ 16 kHz). Tunables in `ClamsToneParams`: `tolerance`, `min_tone_duration_ms`, `stop_at_seconds`, `merge_gap_seconds`. Output: `clams_tone_durations.csv`.
+
+The numeric tuning fields above are **CLI-unsettable** — `update_tool_setting()` only accepts `clams_detection.run_tool`. Tune them in the JSON config or via the GUI.
+
+### Combined bars/tone detection pipeline ordering
+
+CLAMS detection runs before qct-parse in `process_qctools_output()`. CLAMS tone detection runs first (whole file, fast), then CLAMS bars detection (beginning + tone-flagged regions), then cross-validation second passes. The combined CLAMS regions are passed to `run_qctparse()` via the `clams_regions` parameter. qct-parse runs its own head bars detection, then windowed scans on CLAMS regions not covered by the head bars. If a windowed scan fails at normal thresholds, it retries with `relaxed=True`. The authoritative `color_bars_end_time` for downstream uses "longest/latest wins" across both detectors for head bars only; mid-file bars are report-only.
+
+---
+
+## QCTools Report Discovery
+
+`find_qctools_report()` in `processing_mgmt.py` searches both `{video_id}_qc_metadata/` and `{video_id}_vrecord_metadata/` before generating a new report. If an existing report is found, it is used and the run-tool step is skipped.
