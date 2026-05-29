@@ -101,8 +101,11 @@ a = Analysis(['av_spex_launcher.py'],
         'PyQt6.QtMultimedia', 'PyQt6.QtMultimediaWidgets',
         'PyQt6.QtPositioning', 'PyQt6.QtBluetooth', 'PyQt6.QtNfc',
         'PyQt6.QtTest', 'PyQt6.QtSensors', 'PyQt6.QtSerialPort',
-        # Plotly sub-packages not needed (report uses include_plotlyjs='cdn')
-        'plotly.matplotlylib', 'plotly.figure_factory', 'plotly.offline',
+        # Plotly sub-packages not needed. NOTE: do NOT exclude 'plotly.offline' —
+        # graph_objs.Figure.__init__ imports it at runtime even with
+        # include_plotlyjs='cdn'. The bundled plotly.min.js data file IS unused
+        # under CDN mode and is pruned from the TOC below instead.
+        'plotly.matplotlylib', 'plotly.figure_factory',
         # scikit-image removed; exclude it and its transitive tail so a stray
         # import can't silently pull tens of MB back into the bundle
         'skimage', 'scikit_image', 'networkx', 'tifffile', 'imageio', 'pywt',
