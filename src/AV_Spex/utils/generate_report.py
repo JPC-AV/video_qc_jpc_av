@@ -2224,8 +2224,14 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
         if not thumb_profile_filter and "additional_bars" in thumb_path:
             continue
         thumb_name_with_breaks = thumb_name.replace("\n", "<br>")
+        # Embed as a base64 JPEG data URI (rather than a raw local file path) so
+        # the thumbnail still renders when the report is opened off the machine
+        # that generated it.
+        thumb_data_uri = image_file_to_jpeg_data_uri(thumb_path)
+        if not thumb_data_uri:
+            continue
         thumbnail_html = f'''
-            <img src="{thumb_path}" alt="{thumb_name}" style="width:200px; height:auto;">
+            <img src="{thumb_data_uri}" alt="{thumb_name}" style="width:200px; height:auto;">
             <p>{thumb_name_with_breaks}</p>
         '''
         break
