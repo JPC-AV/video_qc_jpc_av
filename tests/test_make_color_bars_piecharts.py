@@ -55,13 +55,15 @@ def sample_colorbars_thumbs_dict(tmp_path):
     thumb_dir.mkdir()
     
     # Create dummy image files for colorbars failures
+    import cv2
+    import numpy as np
     thumbs = {}
     for field in ['SATMAX', 'VMAX']:  # Example failing fields
         test_image = thumb_dir / f"JPC_AV_05000.color_bars_evaluation.{field}.value.timestamp.png"
-        # Create a minimal valid PNG file
-        with open(test_image, 'wb') as f:
-            f.write(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x00\x00\x02\x00\x01\xe5\x27\xde\xfc\x00\x00\x00\x00IEND\xaeB`\x82')
-        
+        # Write a small but real, decodable PNG so the report's image embed
+        # (which re-encodes thumbnails to JPEG) exercises its real code path.
+        cv2.imwrite(str(test_image), np.zeros((16, 16, 3), dtype=np.uint8))
+
         thumbs[f'Failed frame \n\n{field}:704\n\n0:00:00:11:8120'] = (
             str(test_image),
             field,

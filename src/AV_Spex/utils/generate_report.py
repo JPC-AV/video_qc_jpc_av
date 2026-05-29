@@ -106,6 +106,32 @@ def image_to_data_uri(image_path, mime_type='image/png'):
         return ""
 
 
+def image_file_to_jpeg_data_uri(image_path, quality=85):
+    """Read a local image file, re-encode it as JPEG, and return it as a
+    base64 data URI for embedding in the report.
+
+    Photographic thumbnails (video frames) are often written to disk as
+    lossless PNG, which inflates the self-contained HTML report. Re-encoding
+    to JPEG here keeps the on-disk sidecars lossless while shrinking the
+    embedded copy dramatically. Falls back to embedding the original bytes
+    if decoding/encoding fails. Mirrors the spectrogram embed below."""
+    try:
+        import cv2
+        img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("cv2 could not decode image")
+        ok, jpeg_bytes = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            raise ValueError("cv2.imencode failed")
+        encoded = b64encode(jpeg_bytes.tobytes()).decode('ascii')
+        return f"data:image/jpeg;base64,{encoded}"
+    except Exception as e:
+        logger.warning(f"Could not re-encode image at {image_path} as JPEG, embedding original: {e}")
+        ext = os.path.splitext(str(image_path))[1].lower()
+        mime = 'image/png' if ext == '.png' else 'image/jpeg'
+        return image_to_data_uri(image_path, mime_type=mime)
+
+
 def parse_timestamp(timestamp_str):
     if not timestamp_str:
         return (9999, 99, 99, 99, 9999)  # Return a placeholder tuple for non-timestamp entries
@@ -2022,11 +2048,9 @@ def _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events):
         thumb_path = os.path.join(thumb_dir, f"event_{idx:02d}.png")
         if not os.path.isfile(thumb_path):
             continue
-        try:
-            with open(thumb_path, "rb") as f:
-                encoded = b64encode(f.read()).decode("ascii")
-        except Exception as e:
-            logger.warning(f"Failed to read chroma-phase thumbnail {thumb_path}: {e}")
+        data_uri = image_file_to_jpeg_data_uri(thumb_path)
+        if not data_uri:
+            logger.warning(f"Failed to read chroma-phase thumbnail {thumb_path}")
             continue
         found += 1
         row = by_idx[idx]
@@ -2036,7 +2060,7 @@ def _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events):
         peak_time = row[7] if len(row) > 7 else ""
         items_html += f'''
         <div style="text-align: center; margin: 5px;">
-            <img src="data:image/png;base64,{encoded}"
+            <img src="{data_uri}"
                  style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
                  onclick="openImage(this.src, 'Chroma Phase Event {idx} - peak at {peak_time}')"
                  title="Click to enlarge" />
@@ -2661,12 +2685,11 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                             
                             if lookup_key in thumb_lookup:
                                 thumb_path, thumb_name = thumb_lookup[lookup_key]
-                                with open(thumb_path, "rb") as image_file:
-                                    encoded_string = b64encode(image_file.read()).decode()
+                                thumb_data_uri = image_file_to_jpeg_data_uri(thumb_path)
                                 # Create caption for the new window
                                 caption = f"{tag} at {timestamp} - Value: {info['tagValue']}, Threshold: {info['over']}"
                                 # Make thumbnail clickable with JavaScript
-                                thumb_html = f'''<img src="data:image/jpeg;base64,{encoded_string}"
+                                thumb_html = f'''<img src="{thumb_data_uri}"
                                                 onclick="openImage(this.src, '{caption}')"
                                                 style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px; cursor: pointer; border: 1px solid #ccc;"
                                                 title="Click to enlarge" />'''
