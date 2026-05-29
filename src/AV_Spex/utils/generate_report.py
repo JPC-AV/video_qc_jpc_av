@@ -1939,6 +1939,8 @@ def make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv):
     events_table = ""
     if events:
         events_table = f'''
+    <a href="javascript:void(0);" onclick="toggleContent('chroma_phase_events', 'Show chroma phase events ({len(events)}) ▼', 'Hide chroma phase events ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show chroma phase events ({len(events)}) ▼</a>
+    <div id="chroma_phase_events" style="display: none;">
     <table style="border-collapse: collapse; margin: 10px 0;">
         <tr>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Event</th>
@@ -1952,7 +1954,8 @@ def make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv):
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Hue at Peak (deg)</th>
         </tr>
         {rows_html}
-    </table>'''
+    </table>
+    </div>'''
 
     # Thumbnail gallery: chroma_phase analyzer writes PNGs into
     # ChromaPhaseThumbs/ for the top events by frame count (max
