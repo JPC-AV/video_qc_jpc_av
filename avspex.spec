@@ -116,6 +116,31 @@ a = Analysis(['av_spex_launcher.py'],
     noarchive=False,
 )
 
+# --- Post-analysis pruning ---------------------------------------------------
+# Drop binaries/data files that nothing we ship actually uses. These are data
+# files and transitively-pulled Qt frameworks, so `excludes` (module-level)
+# can't reach them — they must be filtered out of the TOC here.
+#
+# Qt removals were verified with `otool -L` against a real build: none of the
+# kept binaries (QtCore/QtGui/QtWidgets, libqcocoa, the PyQt6 bindings) link
+# these. NOTE: QtGui *does* link QtDBus, so QtDBus is intentionally NOT pruned.
+_prune_substrings = (
+    'QtPdf',                              # PDF module — unused (~7 MB)
+    'QtNetwork',                          # only used by QtPdf + the TUIO plugin (~1.6 MB)
+    'qtuiotouchplugin',                   # TUIO multitouch input — unused
+    'plotly/package_data/plotly.min.js',  # report uses include_plotlyjs='cdn'; never read (~3.5 MB)
+    'mpl-data/sample_data',              # matplotlib example datasets — unused
+    'mpl-data/fonts/afm',                # Adobe Font Metrics — only the PS backend uses these
+    'mpl-data/fonts/pdfcorefonts',       # PDF-core fonts — only the PDF backend uses these
+)
+
+def _keep(entry):
+    dest = entry[0].replace(os.sep, '/')
+    return not any(s in dest for s in _prune_substrings)
+
+a.binaries = [b for b in a.binaries if _keep(b)]
+a.datas = [d for d in a.datas if _keep(d)]
+
 pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
