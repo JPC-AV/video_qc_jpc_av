@@ -2303,6 +2303,34 @@ def _parse_bars_durations_csv(csv_path):
     return runs
 
 
+_BARS_TONE_PASS_LABELS = {
+    "head": "Head bars",
+    "head-relaxed": "Head bars (relaxed)",
+    "primary": "Primary scan",
+    "second-pass": "Targeted re-scan",
+    "windowed": "Mid-file scan",
+}
+
+
+def _humanize_pass_label(label):
+    """Map an internal bars/tone pass label to a human-readable phrase."""
+    if label in _BARS_TONE_PASS_LABELS:
+        return _BARS_TONE_PASS_LABELS[label]
+    return str(label).replace("-", " ").replace("_", " ").capitalize()
+
+
+def _short_ts(seconds):
+    """Format seconds as a compact M:SS for prose summaries (e.g. 0:30)."""
+    if seconds is None:
+        return "—"
+    m = int(seconds // 60)
+    s = int(round(seconds % 60))
+    if s == 60:
+        m += 1
+        s = 0
+    return f"{m}:{s:02d}"
+
+
 def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_tolerance_s=1.0):
     """
     Render a unified table comparing qct-parse and CLAMS SSIM bars detections.
@@ -2350,51 +2378,79 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
         if qct_end is not None and clams_end is not None:
             delta = abs(qct_end - clams_end)
             if delta <= agreement_tolerance_s:
-                agreement_label = f"Agree (Δ end = {delta:.2f}s)"
+                agreement_label = f"Agree — end times within {delta:.2f}s"
                 agreement_color = "#0a5f1c"
             else:
-                agreement_label = f"Disagree (Δ end = {delta:.2f}s)"
+                agreement_label = f"Disagree — end times differ by {delta:.2f}s"
                 agreement_color = "#a02020"
         elif qct_end is None and clams_end is None:
-            agreement_label = "Both reported no bars"
+            agreement_label = "Agree — both found no bars"
             agreement_color = "#0a5f1c"
         else:
             which = "qct-parse" if qct_end is not None else "CLAMS"
-            agreement_label = f"Disagree (only {which} detected bars)"
+            agreement_label = f"Disagree — only {which} found bars"
             agreement_color = "#a02020"
 
     # Build one row per detection. Source/pass go in the first two cells.
+    # Each row carries raw seconds so the renderer can compute duration.
     body_rows = []
     if qct_run:
         if qct_head:
             _, qs, qe = qct_head
-            body_rows.append(("qct-parse", "head", "Yes", fmt(qs), fmt(qe), False))
+            body_rows.append(("qct-parse", qct_head[0], True, qs, qe, False))
         else:
-            body_rows.append(("qct-parse", "head", "No", "—", "—", False))
+            body_rows.append(("qct-parse", "head", False, None, None, False))
         for label, ws, we in qct_windowed:
-            body_rows.append(("qct-parse", label, "Yes", fmt(ws), fmt(we), True))
+            body_rows.append(("qct-parse", label, True, ws, we, True))
     if clams_run:
         if clams_primary:
             _, cs, ce = clams_primary
-            body_rows.append(("CLAMS SSIM", "primary", "Yes", fmt(cs), fmt(ce), False))
+            body_rows.append(("CLAMS SSIM", "primary", True, cs, ce, False))
         else:
-            body_rows.append(("CLAMS SSIM", "primary", "No", "—", "—", False))
+            body_rows.append(("CLAMS SSIM", "primary", False, None, None, False))
         for _, ss, se in clams_secondary:
-            body_rows.append(("CLAMS SSIM", "second-pass", "Yes", fmt(ss), fmt(se), True))
+            body_rows.append(("CLAMS SSIM", "second-pass", True, ss, se, True))
 
-    def render_row(source, pass_label, found, start_ts, end_ts, is_secondary):
-        bg = ' style="background-color: #fff3cd;"' if is_secondary else ""
+    cell = "padding: 6px 12px; border: 1px solid #e0d0c0;"
+
+    def render_row(source, pass_label, found, start_sec, end_sec, is_secondary):
+        bg = "background-color: #fff3cd;" if is_secondary else ""
+        if found:
+            detected = '<span style="color: #0a5f1c; font-weight: bold;">✓ Detected</span>'
+            dur = f"{end_sec - start_sec:.1f}s" if (start_sec is not None and end_sec is not None) else "—"
+        else:
+            detected = '<span style="color: #999;">Not detected</span>'
+            dur = "—"
         return (
-            f'<tr{bg}>'
-            f'<td style="padding: 6px 12px;">{source}</td>'
-            f'<td style="padding: 6px 12px;">{pass_label}</td>'
-            f'<td style="padding: 6px 12px;">{found}</td>'
-            f'<td style="padding: 6px 12px;">{start_ts}</td>'
-            f'<td style="padding: 6px 12px;">{end_ts}</td>'
+            f'<tr style="{bg}">'
+            f'<td style="{cell}">{source}</td>'
+            f'<td style="{cell}">{_humanize_pass_label(pass_label)}</td>'
+            f'<td style="{cell}">{detected}</td>'
+            f'<td style="{cell} font-family: monospace;">{fmt(start_sec)}</td>'
+            f'<td style="{cell} font-family: monospace;">{fmt(end_sec)}</td>'
+            f'<td style="{cell} text-align: right;">{dur}</td>'
             f'</tr>'
         )
 
     rows_html = "".join(render_row(*r) for r in body_rows)
+
+    # Plain-language summary line above the grid.
+    head_candidates = [r for r in (qct_head, clams_primary) if r]
+    head_starts = [r[1] for r in head_candidates if r[1] is not None]
+    head_ends = [r[2] for r in head_candidates if r[2] is not None]
+    if head_starts and head_ends:
+        hs, he = min(head_starts), max(head_ends)
+        summary_text = (f"Color bars detected at the start of the file, "
+                        f"{_short_ts(hs)}–{_short_ts(he)} ({he - hs:.1f}s).")
+    else:
+        summary_text = "No color bars detected at the start of the file."
+    mid_count = len(qct_windowed) + len(clams_secondary)
+    if mid_count:
+        summary_text += f" {mid_count} additional mid-file detection(s) shown below (report-only)."
+    summary_html = (
+        f'<p style="margin: 10px 0; padding: 10px 14px; background-color: #f5e9e3; '
+        f'border-radius: 4px; color: #4d2b12;">{summary_text}</p>'
+    )
 
     note_lines = [
         "The authoritative head bars end time uses the latest end time across "
@@ -2404,35 +2460,52 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
     has_secondary = clams_secondary or qct_windowed
     if has_secondary:
         note_lines.append(
-            "Highlighted rows are targeted scans: CLAMS second-pass rows are "
-            "triggered by tone detections that fell outside the primary bars "
-            "window; qct-parse windowed rows are CLAMS-guided scans of "
-            "regions beyond the first 5 minutes."
+            "Targeted re-scans are triggered when one detector finds a span the "
+            "other missed: CLAMS rows fire from tone detections outside the primary "
+            "bars window; qct-parse rows are CLAMS-guided scans beyond the first 5 minutes."
         )
     note = "".join(
         f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
         for line in note_lines
     )
 
+    legend = ""
+    if has_secondary:
+        legend = (
+            '<p style="font-size: 13px; color: #4d2b12; margin: 8px 0 0 0;">'
+            '<span style="display: inline-block; width: 12px; height: 12px; '
+            'background-color: #fff3cd; border: 1px solid #e0d0c0; vertical-align: middle; '
+            'margin-right: 6px;"></span>'
+            '= targeted re-scan (report-only)</p>'
+        )
+
+    agreement_html = ""
+    if qct_run and clams_run:
+        agreement_html = f'''
+    <p style="margin: 12px 0 0 0;">
+        <span style="font-weight: bold;">Agreement:</span>
+        <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; color: #fff; background-color: {agreement_color}; font-size: 13px;">{agreement_label}</span>
+    </p>'''
+
     html = f"""
+    {summary_html}
     <table style="border-collapse: collapse; margin-top: 10px;">
         <thead>
             <tr style="background-color: #f5e9e3;">
-                <th style="text-align: left; padding: 6px 12px;">Source</th>
-                <th style="text-align: left; padding: 6px 12px;">Pass</th>
-                <th style="text-align: left; padding: 6px 12px;">Bars detected</th>
-                <th style="text-align: left; padding: 6px 12px;">Start</th>
-                <th style="text-align: left; padding: 6px 12px;">End</th>
+                <th style="text-align: left; {cell}">Source</th>
+                <th style="text-align: left; {cell}">Pass</th>
+                <th style="text-align: left; {cell}">Bars detected</th>
+                <th style="text-align: left; {cell}">Start</th>
+                <th style="text-align: left; {cell}">End</th>
+                <th style="text-align: left; {cell}">Duration</th>
             </tr>
         </thead>
         <tbody>
             {rows_html}
         </tbody>
     </table>
-    <p style="margin: 12px 0 0 0;">
-        <span style="font-weight: bold;">Agreement:</span>
-        <span style="color: {agreement_color};">{agreement_label}</span>
-    </p>
+    {agreement_html}
+    {legend}
     {note}
     """
     return html
@@ -2514,19 +2587,39 @@ def make_tone_detection_html(tone_csv_path):
 
     has_secondary = any(p != "primary" for p, _, _ in tones)
 
+    cell = "padding: 6px 12px; border: 1px solid #e0d0c0;"
+
     def render_row(i, pass_label, s, e):
-        bg = ' style="background-color: #fff3cd;"' if pass_label != "primary" else ""
+        bg = "background-color: #fff3cd;" if pass_label != "primary" else ""
         return (
-            f'<tr{bg}>'
-            f'<td style="padding: 6px 12px;">{i + 1}</td>'
-            f'<td style="padding: 6px 12px;">{pass_label}</td>'
-            f'<td style="padding: 6px 12px;">{fmt(s)}</td>'
-            f'<td style="padding: 6px 12px;">{fmt(e)}</td>'
-            f'<td style="padding: 6px 12px;">{(e - s):.2f}s</td>'
+            f'<tr style="{bg}">'
+            f'<td style="{cell} text-align: right;">{i + 1}</td>'
+            f'<td style="{cell}">{_humanize_pass_label(pass_label)}</td>'
+            f'<td style="{cell} font-family: monospace;">{fmt(s)}</td>'
+            f'<td style="{cell} font-family: monospace;">{fmt(e)}</td>'
+            f'<td style="{cell} text-align: right;">{(e - s):.1f}s</td>'
             f'</tr>'
         )
 
     rows = "".join(render_row(i, p, s, e) for i, (p, s, e) in enumerate(tones))
+
+    # Plain-language summary line above the grid.
+    primary_tones = [t for t in tones if t[0] == "primary"]
+    secondary_count = len(tones) - len(primary_tones)
+    if len(primary_tones) == 1:
+        p0 = primary_tones[0]
+        summary_text = (f"Reference tone detected, {_short_ts(p0[1])}–{_short_ts(p0[2])} "
+                        f"({p0[2] - p0[1]:.1f}s).")
+    elif primary_tones:
+        summary_text = f"{len(primary_tones)} reference tone spans detected."
+    else:
+        summary_text = f"{len(tones)} tone span(s) detected."
+    if secondary_count:
+        summary_text += f" {secondary_count} targeted re-scan detection(s) shown below."
+    summary_html = (
+        f'<p style="margin: 10px 0; padding: 10px 14px; background-color: #f5e9e3; '
+        f'border-radius: 4px; color: #4d2b12;">{summary_text}</p>'
+    )
 
     note_lines = [
         "Adapted from the CLAMS tonedetection app: cross-correlation of "
@@ -2534,30 +2627,41 @@ def make_tone_detection_html(tone_csv_path):
     ]
     if has_secondary:
         note_lines.append(
-            "Second-pass rows (highlighted) are targeted scans triggered by bars "
-            "detections that fell outside the primary tone window, run with "
-            "relaxed thresholds (tolerance 0.7, min duration 500 ms)."
+            "Targeted re-scans are triggered by bars detections that fell outside the "
+            "primary tone window, run with relaxed thresholds (tolerance 0.7, min duration 500 ms)."
         )
     note = "".join(
         f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
         for line in note_lines
     )
 
+    legend = ""
+    if has_secondary:
+        legend = (
+            '<p style="font-size: 13px; color: #4d2b12; margin: 8px 0 0 0;">'
+            '<span style="display: inline-block; width: 12px; height: 12px; '
+            'background-color: #fff3cd; border: 1px solid #e0d0c0; vertical-align: middle; '
+            'margin-right: 6px;"></span>'
+            '= targeted re-scan (report-only)</p>'
+        )
+
     return f"""
+    {summary_html}
     <table style="border-collapse: collapse; margin-top: 10px;">
         <thead>
             <tr style="background-color: #f5e9e3;">
-                <th style="text-align: left; padding: 6px 12px;">#</th>
-                <th style="text-align: left; padding: 6px 12px;">Pass</th>
-                <th style="text-align: left; padding: 6px 12px;">Start</th>
-                <th style="text-align: left; padding: 6px 12px;">End</th>
-                <th style="text-align: left; padding: 6px 12px;">Duration</th>
+                <th style="text-align: left; {cell}">#</th>
+                <th style="text-align: left; {cell}">Pass</th>
+                <th style="text-align: left; {cell}">Start</th>
+                <th style="text-align: left; {cell}">End</th>
+                <th style="text-align: left; {cell}">Duration</th>
             </tr>
         </thead>
         <tbody>
             {rows}
         </tbody>
     </table>
+    {legend}
     {note}
     """
 
