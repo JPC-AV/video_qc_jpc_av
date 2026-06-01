@@ -1308,6 +1308,31 @@ def make_channel_imbalance_html(channel_imbalance_csv):
     return html
 
 
+def _tc_channel_summary(detection_rows):
+    """
+    Derive a human-readable 'which channel carries the timecode' label from the
+    detection rows. astats rows carry a channel tag ('ch1', 'ch2', 'both (ch1)');
+    mix-based R128 rows leave it blank. Returns 'Both channels', 'Channel N',
+    or 'Not channel-specific (mix-based)' when only R128 rows fired.
+    """
+    chans = set()
+    for r in detection_rows:
+        ch = (r[3] if len(r) > 3 else "").strip().lower()
+        if not ch:
+            continue
+        if "both" in ch:
+            chans.add("both")
+        else:
+            num = ch.replace("ch", "").strip()
+            chans.add(num if num.isdigit() else ch)
+    if "both" in chans or len(chans) > 1:
+        return "Both channels"
+    if len(chans) == 1:
+        only = next(iter(chans))
+        return f"Channel {only}" if only.isdigit() else only
+    return "Not channel-specific (mix-based)"
+
+
 def make_audible_timecode_html(audible_timecode_csv):
     """
     Generates an HTML section summarizing audible timecode detection results.
@@ -1334,10 +1359,11 @@ def make_audible_timecode_html(audible_timecode_csv):
 
     # Parse summary rows
     metric_type = rows[1][1] if len(rows[1]) > 1 else "N/A"
-    total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
     duration = rows[3][1] if len(rows[3]) > 1 else "N/A"
     tc_detected = rows[4][1] if len(rows[4]) > 1 else "No"
-    num_regions = rows[5][1] if len(rows[5]) > 1 else "0"
+
+    detection_rows = [r for r in rows[8:] if len(r) >= 5]
+    tc_channel = _tc_channel_summary(detection_rows) if detection_rows else "—"
 
     if tc_detected == "Yes":
         status_color = "#dc3545"
@@ -1402,16 +1428,54 @@ def make_audible_timecode_html(audible_timecode_csv):
         <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
     </div>
     <table style="border-collapse: collapse; margin: 10px 0;">
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Metric Type</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{metric_type}</td></tr>
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Timecode Channel(s)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{tc_channel}</td></tr>
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Duration</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{duration}</td></tr>
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Regions Detected</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{num_regions}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Metric Type</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{metric_type}</td></tr>
     </table>
     '''
 
     # Add detection regions table if there are any
-    detection_rows = [r for r in rows[8:] if len(r) >= 5]
     if detection_rows:
+        def parse_ts(ts):
+            # Handles both M:SS.s and H:MM:SS.s from _tc_format_time().
+            try:
+                sec = 0.0
+                for part in ts.split(":"):
+                    sec = sec * 60 + float(part)
+                return sec
+            except (ValueError, AttributeError):
+                return None
+
+        def conf_badge(conf):
+            c = (conf or "").strip().lower()
+            color = {"high": "#0a5f1c", "medium": "#b8860b"}.get(c, "#666")
+            label = c.capitalize() if c else "—"
+            return (
+                f'<span style="display: inline-block; padding: 2px 10px; border-radius: 10px; '
+                f'color: #fff; background-color: {color}; font-size: 12px;">{label}</span>'
+            )
+
+        # Plain-language summary: region count, overall span, highest confidence.
+        starts = [parse_ts(r[0]) for r in detection_rows]
+        ends = [parse_ts(r[1]) for r in detection_rows]
+        valid_starts = [s for s in starts if s is not None]
+        valid_ends = [e for e in ends if e is not None]
+        conf_rank = {"high": 3, "medium": 2, "low": 1}
+        confidences = [(r[4] or "").strip().lower() for r in detection_rows]
+        top = max(confidences, key=lambda c: conf_rank.get(c, 0)) if confidences else ""
+        top_conf = top.capitalize() if top else "N/A"
+        if valid_starts and valid_ends:
+            span = f"{_short_ts(min(valid_starts))}–{_short_ts(max(valid_ends))}"
+            summary_text = (f"Audible timecode detected in {len(detection_rows)} region(s), "
+                            f"{span}; highest confidence: {top_conf}.")
+        else:
+            summary_text = (f"Audible timecode detected in {len(detection_rows)} region(s); "
+                            f"highest confidence: {top_conf}.")
+        html += (
+            f'<p style="margin: 10px 0; padding: 10px 14px; background-color: #f5e9e3; '
+            f'border-radius: 4px; color: #4d2b12;">{summary_text}</p>'
+        )
+
         html += f'''
         <a href="javascript:void(0);" onclick="toggleContent('timecode_regions', 'Show detected regions ({len(detection_rows)}) ▼', 'Hide detected regions ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show detected regions ({len(detection_rows)}) ▼</a>
         <div id="timecode_regions" style="display: none;">
@@ -1419,6 +1483,7 @@ def make_audible_timecode_html(audible_timecode_csv):
             <tr>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start Time</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End Time</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Duration</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Criterion</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Confidence</th>
@@ -1427,12 +1492,16 @@ def make_audible_timecode_html(audible_timecode_csv):
         '''
         for row in detection_rows:
             details = row[5] if len(row) > 5 else ""
+            s = parse_ts(row[0])
+            e = parse_ts(row[1])
+            dur = f"{e - s:.1f}s" if (s is not None and e is not None) else "—"
             html += f'''<tr>
-                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[0]}</td>
-                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[1]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{row[0]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{row[1]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{dur}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[2]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[3]}</td>
-                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[4]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{conf_badge(row[4])}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{details}</td>
             </tr>\n'''
         html += '</table></div>\n'
@@ -2320,14 +2389,14 @@ def _humanize_pass_label(label):
 
 
 def _short_ts(seconds):
-    """Format seconds as a compact M:SS for prose summaries (e.g. 0:30)."""
+    """Format seconds compactly for prose summaries: M:SS, or H:MM:SS past an hour."""
     if seconds is None:
         return "—"
-    m = int(seconds // 60)
-    s = int(round(seconds % 60))
-    if s == 60:
-        m += 1
-        s = 0
+    total = int(round(seconds))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
 
 
