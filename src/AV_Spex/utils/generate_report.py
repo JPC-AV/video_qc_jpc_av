@@ -1311,25 +1311,24 @@ def make_channel_imbalance_html(channel_imbalance_csv):
 def _tc_channel_summary(detection_rows):
     """
     Derive a human-readable 'which channel carries the timecode' label from the
-    detection rows. astats rows carry a channel tag ('ch1', 'ch2', 'both (ch1)');
-    mix-based R128 rows leave it blank. Returns 'Both channels', 'Channel N',
-    or 'Not channel-specific (mix-based)' when only R128 rows fired.
+    detection rows. Only the per-channel astats rows identify a specific channel
+    ('ch1', 'ch2', 'both (ch1)'); the mix-based R128 rows carry non-channel
+    descriptors ('n/a (mix-based)', 'one channel') and must be ignored here.
+    Returns 'Both channels', 'Channel N', or 'Not channel-specific (mix-based)'
+    when only R128 rows fired.
     """
     chans = set()
+    saw_both = False
     for r in detection_rows:
         ch = (r[3] if len(r) > 3 else "").strip().lower()
-        if not ch:
-            continue
         if "both" in ch:
-            chans.add("both")
-        else:
-            num = ch.replace("ch", "").strip()
-            chans.add(num if num.isdigit() else ch)
-    if "both" in chans or len(chans) > 1:
+            saw_both = True
+        for num in re.findall(r'ch(\d+)', ch):
+            chans.add(num)
+    if saw_both or len(chans) > 1:
         return "Both channels"
     if len(chans) == 1:
-        only = next(iter(chans))
-        return f"Channel {only}" if only.isdigit() else only
+        return f"Channel {next(iter(chans))}"
     return "Not channel-specific (mix-based)"
 
 
@@ -1359,6 +1358,11 @@ def make_audible_timecode_html(audible_timecode_csv):
 
     # Parse summary rows
     metric_type = rows[1][1] if len(rows[1]) > 1 else "N/A"
+    metric_type = {
+        "both": "both R128 and astats",
+        "r128": "R128",
+        "astats": "astats",
+    }.get(metric_type.strip().lower(), metric_type)
     duration = rows[3][1] if len(rows[3]) > 1 else "N/A"
     tc_detected = rows[4][1] if len(rows[4]) > 1 else "No"
 
