@@ -1,5 +1,7 @@
 # AV Spex GUI Developer Documentation
 
+> **See also:** [`../CLAUDE.md`](../CLAUDE.md) for the project map · [`config-manager-documentation.md`](config-manager-documentation.md) for the config system the GUI drives · [`cli-documentation.md`](cli-documentation.md) for the processing pipeline the worker thread runs.
+
 ## Overview
 
 This document describes the code that defines the GUI mode of the AV Spex application.

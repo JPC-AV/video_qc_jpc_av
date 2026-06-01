@@ -1,5 +1,7 @@
 # AV Spex CLI Developer Documentation
 
+> **See also:** [`../CLAUDE.md`](../CLAUDE.md) for the project map · [`config-manager-documentation.md`](config-manager-documentation.md) for config internals · [`processing-internals.md`](processing-internals.md) for the frame-analysis / qct-parse / CLAMS algorithms.
+
 ## Overview
 
 The AV Spex CLI application's control flow primarily follows a 'for loop' which processes input directories according to settings stored in the Checks config and Spex config:   

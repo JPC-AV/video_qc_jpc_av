@@ -106,6 +106,32 @@ def image_to_data_uri(image_path, mime_type='image/png'):
         return ""
 
 
+def image_file_to_jpeg_data_uri(image_path, quality=85):
+    """Read a local image file, re-encode it as JPEG, and return it as a
+    base64 data URI for embedding in the report.
+
+    Photographic thumbnails (video frames) are often written to disk as
+    lossless PNG, which inflates the self-contained HTML report. Re-encoding
+    to JPEG here keeps the on-disk sidecars lossless while shrinking the
+    embedded copy dramatically. Falls back to embedding the original bytes
+    if decoding/encoding fails. Mirrors the spectrogram embed below."""
+    try:
+        import cv2
+        img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("cv2 could not decode image")
+        ok, jpeg_bytes = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            raise ValueError("cv2.imencode failed")
+        encoded = b64encode(jpeg_bytes.tobytes()).decode('ascii')
+        return f"data:image/jpeg;base64,{encoded}"
+    except Exception as e:
+        logger.warning(f"Could not re-encode image at {image_path} as JPEG, embedding original: {e}")
+        ext = os.path.splitext(str(image_path))[1].lower()
+        mime = 'image/png' if ext == '.png' else 'image/jpeg'
+        return image_to_data_uri(image_path, mime_type=mime)
+
+
 def parse_timestamp(timestamp_str):
     if not timestamp_str:
         return (9999, 99, 99, 99, 9999)  # Return a placeholder tuple for non-timestamp entries
@@ -1282,6 +1308,30 @@ def make_channel_imbalance_html(channel_imbalance_csv):
     return html
 
 
+def _tc_channel_summary(detection_rows):
+    """
+    Derive a human-readable 'which channel carries the timecode' label from the
+    detection rows. Only the per-channel astats rows identify a specific channel
+    ('ch1', 'ch2', 'both (ch1)'); the mix-based R128 rows carry non-channel
+    descriptors ('n/a (mix-based)', 'one channel') and must be ignored here.
+    Returns 'Both channels', 'Channel N', or 'Not channel-specific (mix-based)'
+    when only R128 rows fired.
+    """
+    chans = set()
+    saw_both = False
+    for r in detection_rows:
+        ch = (r[3] if len(r) > 3 else "").strip().lower()
+        if "both" in ch:
+            saw_both = True
+        for num in re.findall(r'ch(\d+)', ch):
+            chans.add(num)
+    if saw_both or len(chans) > 1:
+        return "Both channels"
+    if len(chans) == 1:
+        return f"Channel {next(iter(chans))}"
+    return "Not channel-specific (mix-based)"
+
+
 def make_audible_timecode_html(audible_timecode_csv):
     """
     Generates an HTML section summarizing audible timecode detection results.
@@ -1308,10 +1358,16 @@ def make_audible_timecode_html(audible_timecode_csv):
 
     # Parse summary rows
     metric_type = rows[1][1] if len(rows[1]) > 1 else "N/A"
-    total_frames = rows[2][1] if len(rows[2]) > 1 else "N/A"
+    metric_type = {
+        "both": "both R128 and astats",
+        "r128": "R128",
+        "astats": "astats",
+    }.get(metric_type.strip().lower(), metric_type)
     duration = rows[3][1] if len(rows[3]) > 1 else "N/A"
     tc_detected = rows[4][1] if len(rows[4]) > 1 else "No"
-    num_regions = rows[5][1] if len(rows[5]) > 1 else "0"
+
+    detection_rows = [r for r in rows[8:] if len(r) >= 5]
+    tc_channel = _tc_channel_summary(detection_rows) if detection_rows else "—"
 
     if tc_detected == "Yes":
         status_color = "#dc3545"
@@ -1376,16 +1432,54 @@ def make_audible_timecode_html(audible_timecode_csv):
         <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
     </div>
     <table style="border-collapse: collapse; margin: 10px 0;">
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Metric Type</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{metric_type}</td></tr>
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Total Audio Frames</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{total_frames}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Timecode Channel(s)</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{tc_channel}</td></tr>
         <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Duration</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{duration}</td></tr>
-        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Regions Detected</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{num_regions}</td></tr>
+        <tr><td style="padding: 4px 12px; border: 1px solid #ddd;"><strong>Metric Type</strong></td><td style="padding: 4px 12px; border: 1px solid #ddd;">{metric_type}</td></tr>
     </table>
     '''
 
     # Add detection regions table if there are any
-    detection_rows = [r for r in rows[8:] if len(r) >= 5]
     if detection_rows:
+        def parse_ts(ts):
+            # Handles both M:SS.s and H:MM:SS.s from _tc_format_time().
+            try:
+                sec = 0.0
+                for part in ts.split(":"):
+                    sec = sec * 60 + float(part)
+                return sec
+            except (ValueError, AttributeError):
+                return None
+
+        def conf_badge(conf):
+            c = (conf or "").strip().lower()
+            color = {"high": "#0a5f1c", "medium": "#b8860b"}.get(c, "#666")
+            label = c.capitalize() if c else "—"
+            return (
+                f'<span style="display: inline-block; padding: 2px 10px; border-radius: 10px; '
+                f'color: #fff; background-color: {color}; font-size: 12px;">{label}</span>'
+            )
+
+        # Plain-language summary: region count, overall span, highest confidence.
+        starts = [parse_ts(r[0]) for r in detection_rows]
+        ends = [parse_ts(r[1]) for r in detection_rows]
+        valid_starts = [s for s in starts if s is not None]
+        valid_ends = [e for e in ends if e is not None]
+        conf_rank = {"high": 3, "medium": 2, "low": 1}
+        confidences = [(r[4] or "").strip().lower() for r in detection_rows]
+        top = max(confidences, key=lambda c: conf_rank.get(c, 0)) if confidences else ""
+        top_conf = top.capitalize() if top else "N/A"
+        if valid_starts and valid_ends:
+            span = f"{_short_ts(min(valid_starts))}–{_short_ts(max(valid_ends))}"
+            summary_text = (f"Audible timecode detected in {len(detection_rows)} region(s), "
+                            f"{span}; highest confidence: {top_conf}.")
+        else:
+            summary_text = (f"Audible timecode detected in {len(detection_rows)} region(s); "
+                            f"highest confidence: {top_conf}.")
+        html += (
+            f'<p style="margin: 10px 0; padding: 10px 14px; background-color: #f5e9e3; '
+            f'border-radius: 4px; color: #4d2b12;">{summary_text}</p>'
+        )
+
         html += f'''
         <a href="javascript:void(0);" onclick="toggleContent('timecode_regions', 'Show detected regions ({len(detection_rows)}) ▼', 'Hide detected regions ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show detected regions ({len(detection_rows)}) ▼</a>
         <div id="timecode_regions" style="display: none;">
@@ -1393,6 +1487,7 @@ def make_audible_timecode_html(audible_timecode_csv):
             <tr>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start Time</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End Time</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Duration</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Criterion</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Confidence</th>
@@ -1401,12 +1496,16 @@ def make_audible_timecode_html(audible_timecode_csv):
         '''
         for row in detection_rows:
             details = row[5] if len(row) > 5 else ""
+            s = parse_ts(row[0])
+            e = parse_ts(row[1])
+            dur = f"{e - s:.1f}s" if (s is not None and e is not None) else "—"
             html += f'''<tr>
-                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[0]}</td>
-                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[1]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{row[0]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{row[1]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{dur}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[2]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[3]}</td>
-                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[4]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{conf_badge(row[4])}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{details}</td>
             </tr>\n'''
         html += '</table></div>\n'
@@ -1913,6 +2012,8 @@ def make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv):
     events_table = ""
     if events:
         events_table = f'''
+    <a href="javascript:void(0);" onclick="toggleContent('chroma_phase_events', 'Show chroma phase events ({len(events)}) ▼', 'Hide chroma phase events ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show chroma phase events ({len(events)}) ▼</a>
+    <div id="chroma_phase_events" style="display: none;">
     <table style="border-collapse: collapse; margin: 10px 0;">
         <tr>
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Event</th>
@@ -1926,7 +2027,8 @@ def make_chroma_phase_html(chroma_phase_summary_csv, chroma_phase_events_csv):
             <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Hue at Peak (deg)</th>
         </tr>
         {rows_html}
-    </table>'''
+    </table>
+    </div>'''
 
     # Thumbnail gallery: chroma_phase analyzer writes PNGs into
     # ChromaPhaseThumbs/ for the top events by frame count (max
@@ -2022,11 +2124,9 @@ def _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events):
         thumb_path = os.path.join(thumb_dir, f"event_{idx:02d}.png")
         if not os.path.isfile(thumb_path):
             continue
-        try:
-            with open(thumb_path, "rb") as f:
-                encoded = b64encode(f.read()).decode("ascii")
-        except Exception as e:
-            logger.warning(f"Failed to read chroma-phase thumbnail {thumb_path}: {e}")
+        data_uri = image_file_to_jpeg_data_uri(thumb_path)
+        if not data_uri:
+            logger.warning(f"Failed to read chroma-phase thumbnail {thumb_path}")
             continue
         found += 1
         row = by_idx[idx]
@@ -2036,7 +2136,7 @@ def _make_chroma_phase_thumbs_html(chroma_phase_summary_csv, events):
         peak_time = row[7] if len(row) > 7 else ""
         items_html += f'''
         <div style="text-align: center; margin: 5px;">
-            <img src="data:image/png;base64,{encoded}"
+            <img src="{data_uri}"
                  style="width: 300px; height: auto; border: 1px solid #4d2b12; cursor: pointer;"
                  onclick="openImage(this.src, 'Chroma Phase Event {idx} - peak at {peak_time}')"
                  title="Click to enlarge" />
@@ -2200,8 +2300,14 @@ def make_color_bars_graphs(video_id, qctools_colorbars_duration_output, colorbar
         if not thumb_profile_filter and "additional_bars" in thumb_path:
             continue
         thumb_name_with_breaks = thumb_name.replace("\n", "<br>")
+        # Embed as a base64 JPEG data URI (rather than a raw local file path) so
+        # the thumbnail still renders when the report is opened off the machine
+        # that generated it.
+        thumb_data_uri = image_file_to_jpeg_data_uri(thumb_path)
+        if not thumb_data_uri:
+            continue
         thumbnail_html = f'''
-            <img src="{thumb_path}" alt="{thumb_name}" style="width:200px; height:auto;">
+            <img src="{thumb_data_uri}" alt="{thumb_name}" style="width:200px; height:auto;">
             <p>{thumb_name_with_breaks}</p>
         '''
         break
@@ -2270,6 +2376,34 @@ def _parse_bars_durations_csv(csv_path):
     return runs
 
 
+_BARS_TONE_PASS_LABELS = {
+    "head": "Head bars",
+    "head-relaxed": "Head bars (relaxed)",
+    "primary": "Primary scan",
+    "second-pass": "Targeted re-scan",
+    "windowed": "Mid-file scan",
+}
+
+
+def _humanize_pass_label(label):
+    """Map an internal bars/tone pass label to a human-readable phrase."""
+    if label in _BARS_TONE_PASS_LABELS:
+        return _BARS_TONE_PASS_LABELS[label]
+    return str(label).replace("-", " ").replace("_", " ").capitalize()
+
+
+def _short_ts(seconds):
+    """Format seconds compactly for prose summaries: M:SS, or H:MM:SS past an hour."""
+    if seconds is None:
+        return "—"
+    total = int(round(seconds))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
 def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_tolerance_s=1.0):
     """
     Render a unified table comparing qct-parse and CLAMS SSIM bars detections.
@@ -2317,51 +2451,79 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
         if qct_end is not None and clams_end is not None:
             delta = abs(qct_end - clams_end)
             if delta <= agreement_tolerance_s:
-                agreement_label = f"Agree (Δ end = {delta:.2f}s)"
+                agreement_label = f"Agree — end times within {delta:.2f}s"
                 agreement_color = "#0a5f1c"
             else:
-                agreement_label = f"Disagree (Δ end = {delta:.2f}s)"
+                agreement_label = f"Disagree — end times differ by {delta:.2f}s"
                 agreement_color = "#a02020"
         elif qct_end is None and clams_end is None:
-            agreement_label = "Both reported no bars"
+            agreement_label = "Agree — both found no bars"
             agreement_color = "#0a5f1c"
         else:
             which = "qct-parse" if qct_end is not None else "CLAMS"
-            agreement_label = f"Disagree (only {which} detected bars)"
+            agreement_label = f"Disagree — only {which} found bars"
             agreement_color = "#a02020"
 
     # Build one row per detection. Source/pass go in the first two cells.
+    # Each row carries raw seconds so the renderer can compute duration.
     body_rows = []
     if qct_run:
         if qct_head:
             _, qs, qe = qct_head
-            body_rows.append(("qct-parse", "head", "Yes", fmt(qs), fmt(qe), False))
+            body_rows.append(("qct-parse", qct_head[0], True, qs, qe, False))
         else:
-            body_rows.append(("qct-parse", "head", "No", "—", "—", False))
+            body_rows.append(("qct-parse", "head", False, None, None, False))
         for label, ws, we in qct_windowed:
-            body_rows.append(("qct-parse", label, "Yes", fmt(ws), fmt(we), True))
+            body_rows.append(("qct-parse", label, True, ws, we, True))
     if clams_run:
         if clams_primary:
             _, cs, ce = clams_primary
-            body_rows.append(("CLAMS SSIM", "primary", "Yes", fmt(cs), fmt(ce), False))
+            body_rows.append(("CLAMS SSIM", "primary", True, cs, ce, False))
         else:
-            body_rows.append(("CLAMS SSIM", "primary", "No", "—", "—", False))
+            body_rows.append(("CLAMS SSIM", "primary", False, None, None, False))
         for _, ss, se in clams_secondary:
-            body_rows.append(("CLAMS SSIM", "second-pass", "Yes", fmt(ss), fmt(se), True))
+            body_rows.append(("CLAMS SSIM", "second-pass", True, ss, se, True))
 
-    def render_row(source, pass_label, found, start_ts, end_ts, is_secondary):
-        bg = ' style="background-color: #fff3cd;"' if is_secondary else ""
+    cell = "padding: 6px 12px; border: 1px solid #e0d0c0;"
+
+    def render_row(source, pass_label, found, start_sec, end_sec, is_secondary):
+        bg = "background-color: #fff3cd;" if is_secondary else ""
+        if found:
+            detected = '<span style="color: #0a5f1c; font-weight: bold;">✓ Detected</span>'
+            dur = f"{end_sec - start_sec:.1f}s" if (start_sec is not None and end_sec is not None) else "—"
+        else:
+            detected = '<span style="color: #999;">Not detected</span>'
+            dur = "—"
         return (
-            f'<tr{bg}>'
-            f'<td style="padding: 6px 12px;">{source}</td>'
-            f'<td style="padding: 6px 12px;">{pass_label}</td>'
-            f'<td style="padding: 6px 12px;">{found}</td>'
-            f'<td style="padding: 6px 12px;">{start_ts}</td>'
-            f'<td style="padding: 6px 12px;">{end_ts}</td>'
+            f'<tr style="{bg}">'
+            f'<td style="{cell}">{source}</td>'
+            f'<td style="{cell}">{_humanize_pass_label(pass_label)}</td>'
+            f'<td style="{cell}">{detected}</td>'
+            f'<td style="{cell} font-family: monospace;">{fmt(start_sec)}</td>'
+            f'<td style="{cell} font-family: monospace;">{fmt(end_sec)}</td>'
+            f'<td style="{cell} text-align: right;">{dur}</td>'
             f'</tr>'
         )
 
     rows_html = "".join(render_row(*r) for r in body_rows)
+
+    # Plain-language summary line above the grid.
+    head_candidates = [r for r in (qct_head, clams_primary) if r]
+    head_starts = [r[1] for r in head_candidates if r[1] is not None]
+    head_ends = [r[2] for r in head_candidates if r[2] is not None]
+    if head_starts and head_ends:
+        hs, he = min(head_starts), max(head_ends)
+        summary_text = (f"Color bars detected at the start of the file, "
+                        f"{_short_ts(hs)}–{_short_ts(he)} ({he - hs:.1f}s).")
+    else:
+        summary_text = "No color bars detected at the start of the file."
+    mid_count = len(qct_windowed) + len(clams_secondary)
+    if mid_count:
+        summary_text += f" {mid_count} additional mid-file detection(s) shown below (report-only)."
+    summary_html = (
+        f'<p style="margin: 10px 0; padding: 10px 14px; background-color: #f5e9e3; '
+        f'border-radius: 4px; color: #4d2b12;">{summary_text}</p>'
+    )
 
     note_lines = [
         "The authoritative head bars end time uses the latest end time across "
@@ -2371,35 +2533,52 @@ def make_bars_detection_comparison_html(qct_csv_path, clams_csv_path, agreement_
     has_secondary = clams_secondary or qct_windowed
     if has_secondary:
         note_lines.append(
-            "Highlighted rows are targeted scans: CLAMS second-pass rows are "
-            "triggered by tone detections that fell outside the primary bars "
-            "window; qct-parse windowed rows are CLAMS-guided scans of "
-            "regions beyond the first 5 minutes."
+            "Targeted re-scans are triggered when one detector finds a span the "
+            "other missed: CLAMS rows fire from tone detections outside the primary "
+            "bars window; qct-parse rows are CLAMS-guided scans beyond the first 5 minutes."
         )
     note = "".join(
         f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
         for line in note_lines
     )
 
+    legend = ""
+    if has_secondary:
+        legend = (
+            '<p style="font-size: 13px; color: #4d2b12; margin: 8px 0 0 0;">'
+            '<span style="display: inline-block; width: 12px; height: 12px; '
+            'background-color: #fff3cd; border: 1px solid #e0d0c0; vertical-align: middle; '
+            'margin-right: 6px;"></span>'
+            '= targeted re-scan (report-only)</p>'
+        )
+
+    agreement_html = ""
+    if qct_run and clams_run:
+        agreement_html = f'''
+    <p style="margin: 12px 0 0 0;">
+        <span style="font-weight: bold;">Agreement:</span>
+        <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; color: #fff; background-color: {agreement_color}; font-size: 13px;">{agreement_label}</span>
+    </p>'''
+
     html = f"""
+    {summary_html}
     <table style="border-collapse: collapse; margin-top: 10px;">
         <thead>
             <tr style="background-color: #f5e9e3;">
-                <th style="text-align: left; padding: 6px 12px;">Source</th>
-                <th style="text-align: left; padding: 6px 12px;">Pass</th>
-                <th style="text-align: left; padding: 6px 12px;">Bars detected</th>
-                <th style="text-align: left; padding: 6px 12px;">Start</th>
-                <th style="text-align: left; padding: 6px 12px;">End</th>
+                <th style="text-align: left; {cell}">Source</th>
+                <th style="text-align: left; {cell}">Pass</th>
+                <th style="text-align: left; {cell}">Bars detected</th>
+                <th style="text-align: left; {cell}">Start</th>
+                <th style="text-align: left; {cell}">End</th>
+                <th style="text-align: left; {cell}">Duration</th>
             </tr>
         </thead>
         <tbody>
             {rows_html}
         </tbody>
     </table>
-    <p style="margin: 12px 0 0 0;">
-        <span style="font-weight: bold;">Agreement:</span>
-        <span style="color: {agreement_color};">{agreement_label}</span>
-    </p>
+    {agreement_html}
+    {legend}
     {note}
     """
     return html
@@ -2481,19 +2660,39 @@ def make_tone_detection_html(tone_csv_path):
 
     has_secondary = any(p != "primary" for p, _, _ in tones)
 
+    cell = "padding: 6px 12px; border: 1px solid #e0d0c0;"
+
     def render_row(i, pass_label, s, e):
-        bg = ' style="background-color: #fff3cd;"' if pass_label != "primary" else ""
+        bg = "background-color: #fff3cd;" if pass_label != "primary" else ""
         return (
-            f'<tr{bg}>'
-            f'<td style="padding: 6px 12px;">{i + 1}</td>'
-            f'<td style="padding: 6px 12px;">{pass_label}</td>'
-            f'<td style="padding: 6px 12px;">{fmt(s)}</td>'
-            f'<td style="padding: 6px 12px;">{fmt(e)}</td>'
-            f'<td style="padding: 6px 12px;">{(e - s):.2f}s</td>'
+            f'<tr style="{bg}">'
+            f'<td style="{cell} text-align: right;">{i + 1}</td>'
+            f'<td style="{cell}">{_humanize_pass_label(pass_label)}</td>'
+            f'<td style="{cell} font-family: monospace;">{fmt(s)}</td>'
+            f'<td style="{cell} font-family: monospace;">{fmt(e)}</td>'
+            f'<td style="{cell} text-align: right;">{(e - s):.1f}s</td>'
             f'</tr>'
         )
 
     rows = "".join(render_row(i, p, s, e) for i, (p, s, e) in enumerate(tones))
+
+    # Plain-language summary line above the grid.
+    primary_tones = [t for t in tones if t[0] == "primary"]
+    secondary_count = len(tones) - len(primary_tones)
+    if len(primary_tones) == 1:
+        p0 = primary_tones[0]
+        summary_text = (f"Reference tone detected, {_short_ts(p0[1])}–{_short_ts(p0[2])} "
+                        f"({p0[2] - p0[1]:.1f}s).")
+    elif primary_tones:
+        summary_text = f"{len(primary_tones)} reference tone spans detected."
+    else:
+        summary_text = f"{len(tones)} tone span(s) detected."
+    if secondary_count:
+        summary_text += f" {secondary_count} targeted re-scan detection(s) shown below."
+    summary_html = (
+        f'<p style="margin: 10px 0; padding: 10px 14px; background-color: #f5e9e3; '
+        f'border-radius: 4px; color: #4d2b12;">{summary_text}</p>'
+    )
 
     note_lines = [
         "Adapted from the CLAMS tonedetection app: cross-correlation of "
@@ -2501,30 +2700,41 @@ def make_tone_detection_html(tone_csv_path):
     ]
     if has_secondary:
         note_lines.append(
-            "Second-pass rows (highlighted) are targeted scans triggered by bars "
-            "detections that fell outside the primary tone window, run with "
-            "relaxed thresholds (tolerance 0.7, min duration 500 ms)."
+            "Targeted re-scans are triggered by bars detections that fell outside the "
+            "primary tone window, run with relaxed thresholds (tolerance 0.7, min duration 500 ms)."
         )
     note = "".join(
         f'<p style="font-size: 13px; color: #4d2b12; margin: 10px 0 0 0;">{line}</p>'
         for line in note_lines
     )
 
+    legend = ""
+    if has_secondary:
+        legend = (
+            '<p style="font-size: 13px; color: #4d2b12; margin: 8px 0 0 0;">'
+            '<span style="display: inline-block; width: 12px; height: 12px; '
+            'background-color: #fff3cd; border: 1px solid #e0d0c0; vertical-align: middle; '
+            'margin-right: 6px;"></span>'
+            '= targeted re-scan (report-only)</p>'
+        )
+
     return f"""
+    {summary_html}
     <table style="border-collapse: collapse; margin-top: 10px;">
         <thead>
             <tr style="background-color: #f5e9e3;">
-                <th style="text-align: left; padding: 6px 12px;">#</th>
-                <th style="text-align: left; padding: 6px 12px;">Pass</th>
-                <th style="text-align: left; padding: 6px 12px;">Start</th>
-                <th style="text-align: left; padding: 6px 12px;">End</th>
-                <th style="text-align: left; padding: 6px 12px;">Duration</th>
+                <th style="text-align: left; {cell}">#</th>
+                <th style="text-align: left; {cell}">Pass</th>
+                <th style="text-align: left; {cell}">Start</th>
+                <th style="text-align: left; {cell}">End</th>
+                <th style="text-align: left; {cell}">Duration</th>
             </tr>
         </thead>
         <tbody>
             {rows}
         </tbody>
     </table>
+    {legend}
     {note}
     """
 
@@ -2661,12 +2871,11 @@ def make_profile_piecharts(qctools_profile_check_output, sorted_thumbs_dict, fai
                             
                             if lookup_key in thumb_lookup:
                                 thumb_path, thumb_name = thumb_lookup[lookup_key]
-                                with open(thumb_path, "rb") as image_file:
-                                    encoded_string = b64encode(image_file.read()).decode()
+                                thumb_data_uri = image_file_to_jpeg_data_uri(thumb_path)
                                 # Create caption for the new window
                                 caption = f"{tag} at {timestamp} - Value: {info['tagValue']}, Threshold: {info['over']}"
                                 # Make thumbnail clickable with JavaScript
-                                thumb_html = f'''<img src="data:image/jpeg;base64,{encoded_string}"
+                                thumb_html = f'''<img src="{thumb_data_uri}"
                                                 onclick="openImage(this.src, '{caption}')"
                                                 style="width: 100px; height: auto; vertical-align: middle; margin-left: 10px; cursor: pointer; border: 1px solid #ccc;"
                                                 title="Click to enlarge" />'''
