@@ -641,14 +641,14 @@ def _write_audible_tc_csv(path):
         ["Regions Detected", "2"],
         [],
         ["Start Time", "End Time", "Duration", "Channel", "Confidence", "Detection Methods"],
-        ["0:26.5", "47:03.7", "46:37.2", "Channel 1", "high", "R128 + astats (ch1)"],
-        ["49:55.4", "59:08.5", "9:13.1", "Channel 1", "high", "R128 + astats (ch1)"],
+        ["00:00:26:15", "00:47:03:21", "46:37.2", "Channel 1", "high", "R128 + astats (ch1)"],
+        ["00:49:55:12", "00:59:08:15", "9:13.1", "Channel 1", "high", "R128 + astats (ch1)"],
         [],
         ["Per-Method Detections", "5"],
         [],
         ["Start Time", "End Time", "Criterion", "Channel", "Confidence", "Details"],
-        ["0:26.5", "47:03.7", "R128-A (stable mix at TC level)", "n/a (mix-based)", "high", "secret-detail-A"],
-        ["49:55.5", "51:20.4", "astats (ch1)", "ch1", "high", "secret-detail-B"],
+        ["00:00:26:15", "00:47:03:21", "R128-A (stable mix at TC level)", "n/a (mix-based)", "high", "secret-detail-A"],
+        ["00:49:55:12", "00:51:20:11", "astats (ch1)", "ch1", "high", "secret-detail-B"],
     ]
     with open(path, "w", newline="") as f:
         csv.writer(f).writerows(rows)
@@ -664,6 +664,8 @@ def test_make_audible_timecode_html_shows_consensus_regions(tmp_path):
     assert "R128 + astats (ch1)" in html
     assert "Channel 1" in html
     assert "Detection Methods" in html
+    # Positions are shown as the NDF timecodes from the CSV, span first→last.
+    assert "00:00:26:15" in html and "00:59:08:15" in html
 
 
 def test_make_audible_timecode_html_hides_per_method_details(tmp_path):

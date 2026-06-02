@@ -241,6 +241,24 @@ def test_tc_format_time(seconds, expected):
     assert qp._tc_format_time(seconds) == expected
 
 
+def test_tc_format_timecode_ndf_matches_nle():
+    """Real-elapsed seconds format as NDF timecode at 29.97: frame index =
+    round(seconds*fps), relabelled base-30. At 36:32.3 real this is 00:36:30:xx,
+    ~2s lower than the elapsed minutes/seconds (the NDF drift the NLE shows)."""
+    fps = 30000 / 1001
+    assert qp._tc_format_timecode(0.0, fps) == "00:00:00:00"
+    # 2192.36 s ≈ DVR-reported 00:36:30:05 for 21458342
+    assert qp._tc_format_timecode(2192.36, fps) == "00:36:30:05"
+    # frame boundary: 100 frames at 29.97 → 00:00:03:10
+    assert qp._tc_format_timecode(100 / fps, fps) == "00:00:03:10"
+
+
+def test_tc_format_timecode_defaults_to_ntsc():
+    """A missing/zero fps falls back to NTSC 29.97 rather than erroring."""
+    assert qp._tc_format_timecode(0.0, None) == "00:00:00:00"
+    assert qp._tc_format_timecode(0.0, 0) == "00:00:00:00"
+
+
 # ---- _tc_filter_by_consecutive ------------------------------------------
 
 def _make_tc(start, end, criterion="A"):
@@ -398,6 +416,87 @@ def test_tc_build_consensus_both_channels_label():
     assert len(regions) == 1
     assert regions[0].channel == "Both channels"
     assert regions[0].method_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Per-frame astats gap refinement
+# ---------------------------------------------------------------------------
+
+def _astats_frame(t, ch="1", tc=True):
+    """Synthetic audio frame: in-band LTC fingerprint when tc=True, otherwise a
+    silent/disturbed (non-TC) frame."""
+    if tc:
+        vals = {"RMS_level": -21.0, "Crest_factor": 1.7,
+                "Zero_crossings_rate": 0.07, "Entropy": 0.68}
+    else:
+        vals = {"RMS_level": -70.0, "Crest_factor": 5.0,
+                "Zero_crossings_rate": 0.30, "Entropy": 0.30}
+    return {"time": t, "tags": {f"lavfi.astats.{ch}.{k}": v for k, v in vals.items()}}
+
+
+def _astats_frames(segments, fps=10, ch="1"):
+    """Build a frame list from (duration_sec, is_tc) segments at the given fps."""
+    frames = []
+    t = 0.0
+    step = 1.0 / fps
+    for dur, tc in segments:
+        for _ in range(int(round(dur * fps))):
+            frames.append(_astats_frame(round(t, 3), ch=ch, tc=tc))
+            t += step
+    return frames
+
+
+def test_tc_frame_in_band_accepts_tc_rejects_others():
+    assert qp._tc_frame_in_band(_astats_frame(0, tc=True)["tags"], "1")
+    assert not qp._tc_frame_in_band(_astats_frame(0, tc=False)["tags"], "1")
+    # missing metrics → not TC
+    assert not qp._tc_frame_in_band({}, "1")
+
+
+def test_tc_find_tc_subregions_splits_on_sustained_gap():
+    """A sustained non-TC run (>= _TC_GAP_MIN_SEC) splits the span in two."""
+    frames = _astats_frames([(20, True), (5, False), (20, True)])
+    subs = qp._tc_find_tc_subregions(frames, "1", 0.0, frames[-1]["time"])
+    assert len(subs) == 2
+    assert subs[0][0] == 0.0 and abs(subs[0][1] - 19.9) < 0.2
+    assert abs(subs[1][0] - 25.0) < 0.2
+
+
+def test_tc_find_tc_subregions_ignores_brief_blip():
+    """A non-TC blip shorter than _TC_GAP_MIN_SEC is not a gap — one region."""
+    blip = qp._TC_GAP_MIN_SEC / 2.0
+    frames = _astats_frames([(20, True), (blip, False), (20, True)])
+    subs = qp._tc_find_tc_subregions(frames, "1", 0.0, frames[-1]["time"])
+    assert len(subs) == 1
+
+
+def test_tc_refine_astats_gaps_reclaims_tc_across_spurious_window_gap():
+    """Two windowed regions split by a spurious gap, but with TC frames spanning
+    the gap, merge back into one region (the 21458342 over-drop case)."""
+    frames = _astats_frames([(100, True)])   # TC is continuous the whole time
+    windowed = [
+        qp._TCDetection(start_time=0, end_time=40,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+        qp._TCDetection(start_time=60, end_time=100,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+    ]
+    refined = qp._tc_refine_astats_gaps(frames, windowed)
+    assert len(refined) == 1
+    assert refined[0].start_time == 0.0
+    assert refined[0].end_time >= 99.0
+
+
+def test_tc_refine_astats_gaps_splits_on_real_gap():
+    """A genuine sustained gap inside a windowed region splits it in two."""
+    frames = _astats_frames([(40, True), (10, False), (40, True)])
+    windowed = [
+        qp._TCDetection(start_time=0, end_time=90,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+    ]
+    refined = qp._tc_refine_astats_gaps(frames, windowed)
+    assert len(refined) == 2
+    assert abs(refined[0].end_time - 39.9) < 0.3
+    assert abs(refined[1].start_time - 50.0) < 0.3
 
 
 # ===========================================================================

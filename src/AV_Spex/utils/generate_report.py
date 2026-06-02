@@ -1439,6 +1439,12 @@ def make_audible_timecode_html(audible_timecode_csv):
             the mix-based R128 meter smooths over); R128 corroborates. The <em>Detection Methods</em>
             column lists which methods agreed on each region.
         </p>
+        <p style="margin: 10px 0 0 0;">
+            Region <strong>start and end positions are shown as non-drop-frame timecode</strong>
+            (<code>HH:MM:SS:FF</code>) at the video frame rate, so they match what an NLE displays;
+            the <em>Duration</em> column is elapsed time. (NDF timecode runs ~0.1% behind wall-clock
+            time, so it reads a couple of seconds lower than elapsed seconds late in a long file.)
+        </p>
     </div>
     <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
         <p style="margin: 0; color: {status_color};"><strong>{status_text}</strong></p>
@@ -1454,16 +1460,6 @@ def make_audible_timecode_html(audible_timecode_csv):
     # regions agreed on across detection methods — the per-method detections
     # they were built from are kept in the CSV but intentionally not shown.
     if consensus_rows:
-        def parse_ts(ts):
-            # Handles both M:SS.s and H:MM:SS.s from _tc_format_time().
-            try:
-                sec = 0.0
-                for part in ts.split(":"):
-                    sec = sec * 60 + float(part)
-                return sec
-            except (ValueError, AttributeError):
-                return None
-
         def conf_badge(conf):
             c = (conf or "").strip().lower()
             color = {"high": "#0a5f1c", "medium": "#b8860b"}.get(c, "#666")
@@ -1474,21 +1470,15 @@ def make_audible_timecode_html(audible_timecode_csv):
             )
 
         # Plain-language summary: region count, overall span, highest confidence.
-        starts = [parse_ts(r[0]) for r in consensus_rows]
-        ends = [parse_ts(r[1]) for r in consensus_rows]
-        valid_starts = [s for s in starts if s is not None]
-        valid_ends = [e for e in ends if e is not None]
+        # Rows are sorted by start, so the span runs from the first start to the
+        # last end — shown verbatim as the NDF timecodes from the CSV.
         conf_rank = {"high": 3, "medium": 2, "low": 1}
         confidences = [(r[4] or "").strip().lower() for r in consensus_rows]
         top = max(confidences, key=lambda c: conf_rank.get(c, 0)) if confidences else ""
         top_conf = top.capitalize() if top else "N/A"
-        if valid_starts and valid_ends:
-            span = f"{_short_ts(min(valid_starts))}–{_short_ts(max(valid_ends))}"
-            summary_text = (f"Audible timecode detected in {len(consensus_rows)} region(s), "
-                            f"{span}; highest confidence: {top_conf}.")
-        else:
-            summary_text = (f"Audible timecode detected in {len(consensus_rows)} region(s); "
-                            f"highest confidence: {top_conf}.")
+        span = f"{consensus_rows[0][0]}–{consensus_rows[-1][1]}"
+        summary_text = (f"Audible timecode detected in {len(consensus_rows)} region(s), "
+                        f"{span}; highest confidence: {top_conf}.")
         html += (
             f'<p style="margin: 10px 0; padding: 10px 14px; background-color: #f5e9e3; '
             f'border-radius: 4px; color: #4d2b12;">{summary_text}</p>'

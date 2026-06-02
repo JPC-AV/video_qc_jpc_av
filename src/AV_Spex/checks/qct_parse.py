@@ -1140,6 +1140,20 @@ _TC_ASTATS_CREST_STDEV_MAX = 0.30
 _TC_ASTATS_ZCR_STDEV_MAX = 0.02
 _TC_ASTATS_ENTROPY_STDEV_MAX = 0.05
 
+# Per-frame gap refinement (astats). The 30s windowed stability gate above is
+# easily poisoned: a brief silence or carrier dropout inside a window spikes the
+# window's stdev and rejects the whole 30s, so a ~3s real gap gets reported as a
+# ~100s hole and tens of seconds of valid TC on either side are discarded. After
+# the windowed pass has identified TC territory, we re-scan it per frame to
+# recover precise boundaries: a frame counts as TC only if all four astats
+# metrics sit in their LTC bands (reusing the band constants above), and a gap
+# is a sustained run of non-TC frames.
+_TC_GAP_REFINE_SMOOTH_FRAMES = 3   # majority vote over +/- this many frames
+_TC_GAP_MERGE_SEC = 1.0            # merge non-TC runs split by a shorter TC flicker
+_TC_GAP_MIN_SEC = 2.0              # minimum sustained non-TC run to count as a real gap
+_TC_GAP_BRIDGE_SEC = 120.0         # bridge windowed regions up to this gap, then re-split
+_TC_GAP_REFINE_MARGIN_SEC = 15.0   # extend each bridged span by this much before re-scanning
+
 # ---------------------------------------------------------------------------
 # Audio dropout detection thresholds
 # ---------------------------------------------------------------------------
@@ -1813,7 +1827,7 @@ def _write_chroma_phase_results(report_directory, results):
         )
 
 
-def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None):
+def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None, fps=None):
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
     audio clipping (Peak_level >= threshold), channel imbalance (comparing
@@ -1830,6 +1844,8 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
         detect_dropout (bool): Whether to run audio dropout detection.
         signals: Optional signals object for emitting progress updates.
         total_duration (float or None): Total video duration in seconds for progress reporting.
+        fps (float or None): Video frame rate, used to format audible-timecode region
+            positions as NDF timecode matching an NLE. Defaults to NTSC 29.97 when None.
 
     Returns:
         tuple: (clipping_results, imbalance_results, timecode_results, dropout_results)
@@ -2080,7 +2096,7 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     timecode_results = None
     if detect_timecode:
         timecode_results = _detect_and_write_timecode_results(
-            tc_frames, tc_metric_type, report_directory
+            tc_frames, tc_metric_type, report_directory, fps=fps
         )
 
     # Run dropout detection
@@ -2310,13 +2326,41 @@ def _tc_stdev(values):
 
 
 def _tc_format_time(seconds):
-    """Format seconds as HH:MM:SS.s"""
+    """Format a duration in seconds as HH:MM:SS.s (an elapsed length, not a
+    timecode position)."""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = seconds % 60
     if h > 0:
         return f'{h:d}:{m:02d}:{s:04.1f}'
     return f'{m:d}:{s:04.1f}'
+
+
+_NTSC_FPS = 30000 / 1001  # 29.97
+
+
+def _tc_format_timecode(seconds, fps=None):
+    """Format a real-elapsed-seconds position as a non-drop-frame timecode
+    HH:MM:SS:FF at the given frame rate.
+
+    QCTools timestamps are real wall-clock seconds; an NLE displays the file's
+    NDF timecode, which labels every frame at the nominal integer rate (30 for
+    29.97). Because 29.97 fps NDF counts 30 labels per ~1.001 real seconds, the
+    timecode drifts ~0.1% behind wall time (~3.6 s/hour) — so converting the
+    real-time position to a frame index and re-labelling it base-nominal makes
+    the reported position match what the NLE shows. Assumes the stream's start
+    timecode is 00:00:00:00 (true for the NTSC vrecord captures this targets).
+    """
+    if not fps or fps <= 0:
+        fps = _NTSC_FPS
+    nominal = max(1, int(round(fps)))
+    frame = int(round(seconds * fps))
+    ff = frame % nominal
+    total_s = frame // nominal
+    s = total_s % 60
+    m = (total_s // 60) % 60
+    h = total_s // 3600
+    return f'{h:02d}:{m:02d}:{s:02d}:{ff:02d}'
 
 
 def _tc_filter_by_consecutive(detections, min_consecutive):
@@ -2775,19 +2819,128 @@ def _detect_astats_timecode(frames):
 
     merged = _tc_merge_detections(detections)
 
-    # Refine each region's start time using per-channel astats RMS_level
-    for d in merged:
-        # criterion is "astats (ch{N})" — extract channel number
-        try:
-            ch = d.criterion.split('ch')[1].split(')')[0]
-        except IndexError:
-            continue
-        prefix = f'lavfi.astats.{ch}.RMS_level'
-        def _get_rms(frame, _p=prefix):
-            return frame['tags'].get(_p, float('nan'))
-        d.start_time = _tc_refine_start_time(frames, times, d.start_time, _get_rms)
+    # Re-derive boundaries per frame: reclaim TC the coarse 30s window dropped
+    # around brief interruptions and split each region on sustained per-frame
+    # gaps, pinning boundaries to the frame.
+    return _tc_refine_astats_gaps(frames, merged)
 
-    return merged
+
+def _tc_frame_in_band(tags, channel):
+    """Per-frame LTC fingerprint test for one channel: True only when all four
+    astats metrics sit in their TC bands (the same bands the windowed detector
+    uses for its means)."""
+    p = f'lavfi.astats.{channel}.'
+    rms = tags.get(p + 'RMS_level', float('nan'))
+    cf = tags.get(p + 'Crest_factor', float('nan'))
+    zcr = tags.get(p + 'Zero_crossings_rate', float('nan'))
+    ent = tags.get(p + 'Entropy', float('nan'))
+    if any(math.isnan(v) for v in (rms, cf, zcr, ent)):
+        return False
+    return (_TC_ASTATS_RMS_LEVEL_MIN <= rms <= _TC_ASTATS_RMS_LEVEL_MAX
+            and _TC_ASTATS_CREST_FACTOR_MIN <= cf <= _TC_ASTATS_CREST_FACTOR_MAX
+            and _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN <= zcr <= _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX
+            and _TC_ASTATS_ENTROPY_MIN <= ent <= _TC_ASTATS_ENTROPY_MAX)
+
+
+def _tc_find_tc_subregions(frames, channel, span_start, span_end):
+    """Within [span_start, span_end], classify each frame by the per-frame TC
+    fingerprint, find sustained non-TC gaps, and return the TC sub-regions
+    (start, end) between them — each trimmed to its first/last TC frame."""
+    seg = [f for f in frames if span_start <= f['time'] <= span_end]
+    if not seg:
+        return []
+
+    raw = [_tc_frame_in_band(f['tags'], channel) for f in seg]
+    n = len(seg)
+    k = _TC_GAP_REFINE_SMOOTH_FRAMES
+    smoothed = []
+    for i in range(n):
+        window = raw[max(0, i - k):min(n, i + k + 1)]
+        smoothed.append(sum(window) > len(window) / 2)
+
+    # contiguous non-TC runs
+    gaps = []
+    i = 0
+    while i < n:
+        if not smoothed[i]:
+            j = i
+            while j < n and not smoothed[j]:
+                j += 1
+            gaps.append([seg[i]['time'], seg[j - 1]['time']])
+            i = j
+        else:
+            i += 1
+
+    # merge runs split only by a brief TC flicker, then keep the sustained ones
+    merged = []
+    for g in gaps:
+        if merged and g[0] - merged[-1][1] < _TC_GAP_MERGE_SEC:
+            merged[-1][1] = g[1]
+        else:
+            merged.append(g)
+    real_gaps = [g for g in merged if (g[1] - g[0]) >= _TC_GAP_MIN_SEC]
+
+    # TC sub-regions = span minus real gaps; trim each to its actual TC frames
+    bounds = [span_start] + [t for g in real_gaps for t in g] + [span_end]
+    subs = []
+    for a, b in zip(bounds[0::2], bounds[1::2]):
+        tc_times = [f['time'] for f in seg
+                    if a <= f['time'] <= b and _tc_frame_in_band(f['tags'], channel)]
+        if tc_times and (tc_times[-1] - tc_times[0]) >= _TC_GAP_MIN_SEC:
+            subs.append((tc_times[0], tc_times[-1]))
+    return subs
+
+
+def _tc_refine_astats_gaps(frames, regions):
+    """Re-derive astats region boundaries from per-frame data. Bridges regions
+    separated by a spurious windowed gap, then splits each bridged span on
+    sustained per-frame TC gaps. This recovers TC the coarse 30s stability gate
+    discarded around a brief interruption and pins gap boundaries to the frame.
+    Operates per channel (criterion 'astats (chN)'); non-astats regions pass
+    through untouched."""
+    if not frames or not regions:
+        return regions
+
+    file_start = frames[0]['time']
+    file_end = frames[-1]['time']
+
+    by_crit = defaultdict(list)
+    for d in regions:
+        by_crit[d.criterion].append(d)
+
+    refined = []
+    for crit, dets in by_crit.items():
+        try:
+            channel = crit.split('ch')[1].split(')')[0]
+        except IndexError:
+            refined.extend(dets)
+            continue
+
+        dets.sort(key=lambda d: d.start_time)
+        groups = [[dets[0]]]
+        for d in dets[1:]:
+            if d.start_time - max(g.end_time for g in groups[-1]) <= _TC_GAP_BRIDGE_SEC:
+                groups[-1].append(d)
+            else:
+                groups.append([d])
+
+        for g in groups:
+            best_conf = max(
+                (d.confidence for d in g),
+                key=lambda c: _TC_CONF_RANK.get((c or '').lower(), 0),
+            )
+            channel_label = g[0].channel
+            details = g[0].details
+            span_start = max(file_start, min(d.start_time for d in g) - _TC_GAP_REFINE_MARGIN_SEC)
+            span_end = min(file_end, max(d.end_time for d in g) + _TC_GAP_REFINE_MARGIN_SEC)
+            for rs, re in _tc_find_tc_subregions(frames, channel, span_start, span_end):
+                refined.append(_TCDetection(
+                    start_time=rs, end_time=re, criterion=crit,
+                    channel=channel_label, confidence=best_conf, details=details,
+                ))
+
+    refined.sort(key=lambda d: d.start_time)
+    return refined
 
 
 def _detect_astats_channel_tc(frames, times, channel):
@@ -2893,8 +3046,12 @@ def _detect_astats_channel_tc(frames, times, channel):
     return _tc_filter_by_consecutive(detections, _TC_ASTATS_MIN_WINDOWS)
 
 
-def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directory):
-    """Run audible timecode detection and write results to CSV."""
+def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directory, fps=None):
+    """Run audible timecode detection and write results to CSV.
+
+    Region start/end positions are written as NDF timecode (HH:MM:SS:FF) at
+    `fps` so they line up with an NLE; durations stay as elapsed M:SS.s.
+    """
     if not tc_frames:
         logger.debug("No audio frame data available for audible timecode detection\n")
         return None
@@ -2966,8 +3123,8 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
             writer.writerow(["Start Time", "End Time", "Duration", "Channel", "Confidence", "Detection Methods"])
             for r in consensus:
                 writer.writerow([
-                    _tc_format_time(r.start_time),
-                    _tc_format_time(r.end_time),
+                    _tc_format_timecode(r.start_time, fps),
+                    _tc_format_timecode(r.end_time, fps),
                     _tc_format_time(r.end_time - r.start_time),
                     r.channel,
                     r.confidence,
@@ -2981,8 +3138,8 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
             writer.writerow(["Start Time", "End Time", "Criterion", "Channel", "Confidence", "Details"])
             for d in detections:
                 writer.writerow([
-                    _tc_format_time(d.start_time),
-                    _tc_format_time(d.end_time),
+                    _tc_format_timecode(d.start_time, fps),
+                    _tc_format_timecode(d.end_time, fps),
                     d.criterion,
                     d.channel,
                     d.confidence,
@@ -2992,7 +3149,7 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
     # Log summary
     if tc_detected:
         regions = "; ".join(
-            f"{_tc_format_time(r.start_time)}-{_tc_format_time(r.end_time)} "
+            f"{_tc_format_timecode(r.start_time, fps)}-{_tc_format_timecode(r.end_time, fps)} "
             f"[{r.confidence}] {r.methods}"
             for r in consensus
         )
@@ -3023,6 +3180,36 @@ def _get_video_duration(video_path):
         result = subprocess.run(command, capture_output=True, text=True, timeout=10)
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
+def _get_video_frame_rate(video_path):
+    """Get the video frame rate as a float (e.g. 29.97 for NTSC) using ffprobe.
+
+    Returns:
+        float or None: Frames per second, or None if unavailable.
+    """
+    try:
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=r_frame_rate',
+            '-of', 'csv=p=0',
+            video_path
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        out = result.stdout.strip()
+        if result.returncode == 0 and out:
+            if '/' in out:
+                num, den = out.split('/')
+                den = float(den)
+                if den:
+                    return float(num) / den
+            else:
+                return float(out)
     except Exception:
         pass
     return None
@@ -3210,6 +3397,9 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     # Estimate total video frames for progress reporting
     total_duration = _get_video_duration(video_path)
+    # Frame rate is used to report audible-timecode positions as NDF timecode
+    # matching the NLE.
+    video_fps = _get_video_frame_rate(video_path)
 
     ###### Initialize variables ######
     startObj = qctools_output_path
@@ -3564,7 +3754,7 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             detect_imbalance=True,
             detect_timecode=True,
             detect_dropout=True,
-            signals=signals, total_duration=total_duration
+            signals=signals, total_duration=total_duration, fps=video_fps
         )
         if clipping_results is None:
             logger.warning("Audio clipping detection could not be performed\n")
