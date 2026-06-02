@@ -318,6 +318,88 @@ def test_tc_merge_detections_promotes_high_confidence():
     assert merged[0].confidence == "high"
 
 
+# ---------------------------------------------------------------------------
+# Cross-method consensus
+# ---------------------------------------------------------------------------
+
+def test_tc_build_consensus_empty_returns_empty():
+    assert qp._tc_build_consensus([]) == []
+
+
+def test_tc_build_consensus_astats_boundaries_authoritative():
+    """An overlapping R128 region only corroborates — the consensus region
+    takes astats' boundaries, not R128's wider span."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="R128-A (stable mix at TC level)",
+                        channel="n/a (mix-based)", confidence="high"),
+        qp._TCDetection(start_time=5, end_time=90,
+                        criterion="astats (ch1)", channel="ch1", confidence="medium"),
+    ]
+    regions = qp._tc_build_consensus(dets)
+    assert len(regions) == 1
+    r = regions[0]
+    assert r.start_time == 5 and r.end_time == 90   # astats boundaries, not 0–100
+    assert r.channel == "Channel 1"
+    assert r.confidence == "high"                   # highest contributor wins
+    assert r.method_count == 2
+    assert r.methods == "R128 + astats (ch1)"
+
+
+def test_tc_build_consensus_r128_does_not_bridge_astats_gap():
+    """R128's continuous coverage must NOT bridge a gap astats left between two
+    same-channel regions — astats is authoritative, so the gap stays a
+    boundary (the 21458279 51:20–51:55 case)."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=600,
+                        criterion="R128-A (stable mix at TC level)",
+                        channel="n/a (mix-based)", confidence="high"),
+        qp._TCDetection(start_time=0, end_time=180,
+                        criterion="astats (ch1)", channel="ch1", confidence="medium"),
+        qp._TCDetection(start_time=200, end_time=600,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+    ]
+    regions = qp._tc_build_consensus(dets)
+    assert len(regions) == 2
+    assert regions[0].start_time == 0 and regions[0].end_time == 180
+    assert regions[1].start_time == 200 and regions[1].end_time == 600
+    # Both still credit R128 as corroborating.
+    assert all(r.methods == "R128 + astats (ch1)" for r in regions)
+
+
+def test_tc_build_consensus_r128_only_span_stands_alone():
+    """An R128 detection that overlaps no astats region becomes its own
+    region, labelled as mix-based."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+        qp._TCDetection(start_time=300, end_time=400,
+                        criterion="R128-C (TC + program audio)",
+                        channel="one channel", confidence="medium"),
+    ]
+    regions = qp._tc_build_consensus(dets)
+    assert len(regions) == 2
+    r128_region = regions[1]
+    assert r128_region.start_time == 300 and r128_region.end_time == 400
+    assert r128_region.methods == "R128"
+    assert r128_region.channel == "Not channel-specific (mix-based)"
+
+
+def test_tc_build_consensus_both_channels_label():
+    """Overlapping ch1 + ch2 astats detections union into one 'Both channels'
+    region."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="astats (ch1)", channel="both (ch1)", confidence="high"),
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="astats (ch2)", channel="both (ch2)", confidence="high"),
+    ]
+    regions = qp._tc_build_consensus(dets)
+    assert len(regions) == 1
+    assert regions[0].channel == "Both channels"
+    assert regions[0].method_count == 2
+
+
 # ===========================================================================
 # Section 3 — imbalance + duration helpers
 # ===========================================================================

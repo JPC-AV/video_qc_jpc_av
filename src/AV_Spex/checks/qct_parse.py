@@ -2387,6 +2387,139 @@ def _tc_merge_detections(detections):
     return merged
 
 
+# Cross-method consensus. The per-method detectors (R128 criteria A/B/C and
+# per-channel astats) each emit their own regions, and the same stretch of
+# audible timecode typically lights up several of them at once — so the raw
+# detection list is full of overlapping near-duplicates that differ only by
+# which method fired. The consensus collapses them into one row per region.
+#
+# astats is privileged for segmentation. It measures each channel
+# independently, so it resolves the true region boundaries — including spots
+# where the TC carrier briefly stutters or one channel drops out. R128
+# measures only the channel *mix*, so a single loud channel keeps its meter
+# pinned and it smooths over gaps astats correctly reports. So astats region
+# boundaries are taken as authoritative; R128 is demoted to corroboration: it
+# adds "R128" to a region's method list where it overlaps, and only
+# contributes a standalone region where astats detected nothing at all (e.g.
+# TC sharing one channel with program audio, which the per-channel gate can
+# miss).
+_TC_CONF_RANK = {'high': 3, 'medium': 2, 'low': 1}
+
+
+@dataclass
+class _TCConsensusRegion:
+    """A consensus region built by merging overlapping per-method detections."""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    channel: str = ""
+    confidence: str = ""
+    methods: str = ""
+    method_count: int = 0
+
+
+def _tc_base_method(criterion):
+    """Collapse a per-method criterion to its detector family for corroboration
+    counting: every 'R128-*' criterion is the R128 detector; 'astats (chN)'
+    stays per-channel so a both-channels region still reads as two methods."""
+    c = (criterion or "").strip()
+    if c.lower().startswith('r128'):
+        return 'R128'
+    if c.lower().startswith('astats'):
+        return c
+    return c or 'unknown'
+
+
+def _tc_consensus_channel(dets):
+    """Human-readable 'which channel carries TC' label for a consensus region,
+    derived from the per-channel astats detections that contributed (R128 rows
+    are mix-based and name no channel). Same vocabulary as the report's
+    top-level channel summary."""
+    chans = set()
+    saw_both = False
+    for d in dets:
+        ch = (d.channel or "").strip().lower()
+        if "both" in ch:
+            saw_both = True
+        for num in re.findall(r'ch(\d+)', ch):
+            chans.add(num)
+    if saw_both or len(chans) > 1:
+        return "Both channels"
+    if len(chans) == 1:
+        return f"Channel {next(iter(chans))}"
+    return "Not channel-specific (mix-based)"
+
+
+def _tc_overlaps(a_start, a_end, b_start, b_end):
+    """True if spans [a_start, a_end] and [b_start, b_end] overlap or touch."""
+    return a_start <= b_end and b_start <= a_end
+
+
+def _tc_build_consensus(detections):
+    """Build consensus regions from the per-method detections, privileging
+    astats for segmentation. The incoming astats detections are already
+    per-channel-merged, so their boundaries are the authoritative region
+    boundaries — overlapping channel-1/channel-2 spans are unioned into one
+    region, but a gap astats left between two same-channel spans is preserved.
+    R128 detections never create or extend a boundary; they only add the "R128"
+    method label where they overlap an astats region, and stand alone only on
+    spans astats never detected. Returns _TCConsensusRegion list sorted by start
+    time."""
+    if not detections:
+        return []
+
+    astats = [d for d in detections if _tc_base_method(d.criterion) != 'R128']
+    r128 = [d for d in detections if _tc_base_method(d.criterion) == 'R128']
+
+    # Group astats detections that overlap (across channels) into regions.
+    # Same-channel detections arrive pre-merged and non-overlapping, so a gap
+    # the detector deliberately left survives here as a region boundary.
+    regions = []
+    for d in sorted(astats, key=lambda d: d.start_time):
+        if regions and d.start_time <= regions[-1]['end']:
+            regions[-1]['end'] = max(regions[-1]['end'], d.end_time)
+            regions[-1]['dets'].append(d)
+        else:
+            regions.append({'start': d.start_time, 'end': d.end_time, 'dets': [d]})
+
+    # R128-only spans: an R128 detection that overlaps no astats region becomes
+    # its own region (TC astats couldn't isolate per-channel).
+    for d in sorted(r128, key=lambda d: d.start_time):
+        if not any(_tc_overlaps(d.start_time, d.end_time, r['start'], r['end'])
+                   for r in regions):
+            regions.append({'start': d.start_time, 'end': d.end_time, 'dets': [d]})
+
+    regions.sort(key=lambda r: r['start'])
+
+    out = []
+    for r in regions:
+        overlapping_r128 = [
+            d for d in r128 if _tc_overlaps(d.start_time, d.end_time, r['start'], r['end'])
+        ]
+        astats_methods = sorted({
+            _tc_base_method(d.criterion) for d in r['dets']
+            if _tc_base_method(d.criterion) != 'R128'
+        })
+        has_r128 = overlapping_r128 or any(
+            _tc_base_method(d.criterion) == 'R128' for d in r['dets']
+        )
+        methods = (['R128'] if has_r128 else []) + astats_methods or ['R128']
+
+        confs = [d.confidence for d in r['dets']] + [d.confidence for d in overlapping_r128]
+        best_conf = max(
+            confs, key=lambda c: _TC_CONF_RANK.get((c or '').lower(), 0)
+        ) if confs else ''
+
+        out.append(_TCConsensusRegion(
+            start_time=r['start'],
+            end_time=r['end'],
+            channel=_tc_consensus_channel(r['dets']),
+            confidence=best_conf,
+            methods=" + ".join(methods),
+            method_count=len(methods),
+        ))
+    return out
+
+
 # Boundary refinement: window detection is quantized to the 15s step, so the
 # reported start can be off by up to one window. Once a region is confirmed,
 # walk back per-frame using a smoothed RMS gate to recover the true
@@ -2782,11 +2915,26 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
     tc_detected = len(detections) > 0
     duration = tc_frames[-1]['time'] if tc_frames else 0
 
+    # Collapse the overlapping per-method detections into consensus regions —
+    # this is what the report shows and what "Regions Detected" now counts.
+    consensus = _tc_build_consensus(detections)
+
     results = {
         'timecode_detected': tc_detected,
         'metric_type': tc_metric_type,
         'total_audio_frames': len(tc_frames),
         'duration': duration,
+        'consensus_regions': [
+            {
+                'start_time': r.start_time,
+                'end_time': r.end_time,
+                'channel': r.channel,
+                'confidence': r.confidence,
+                'methods': r.methods,
+                'method_count': r.method_count,
+            }
+            for r in consensus
+        ],
         'detections': [
             {
                 'start_time': d.start_time,
@@ -2800,7 +2948,9 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
         ],
     }
 
-    # Write CSV
+    # Write CSV. The consensus regions are the primary table (the report reads
+    # these); the raw per-method detections follow in a separate section as a
+    # forensic record and are not shown in the report.
     tc_csv = os.path.join(report_directory, "qct-parse_audible_timecode.csv")
     with open(tc_csv, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -2809,10 +2959,25 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
         writer.writerow(["Total Audio Frames", len(tc_frames)])
         writer.writerow(["Duration", _tc_format_time(duration)])
         writer.writerow(["Audible Timecode Detected", "Yes" if tc_detected else "No"])
-        writer.writerow(["Regions Detected", len(detections)])
+        writer.writerow(["Regions Detected", len(consensus)])
         writer.writerow([])
 
+        if consensus:
+            writer.writerow(["Start Time", "End Time", "Duration", "Channel", "Confidence", "Detection Methods"])
+            for r in consensus:
+                writer.writerow([
+                    _tc_format_time(r.start_time),
+                    _tc_format_time(r.end_time),
+                    _tc_format_time(r.end_time - r.start_time),
+                    r.channel,
+                    r.confidence,
+                    r.methods,
+                ])
+            writer.writerow([])
+
         if detections:
+            writer.writerow(["Per-Method Detections", len(detections)])
+            writer.writerow([])
             writer.writerow(["Start Time", "End Time", "Criterion", "Channel", "Confidence", "Details"])
             for d in detections:
                 writer.writerow([
@@ -2827,10 +2992,14 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
     # Log summary
     if tc_detected:
         regions = "; ".join(
-            f"{_tc_format_time(d.start_time)}-{_tc_format_time(d.end_time)} [{d.confidence}] {d.criterion}"
-            for d in detections
+            f"{_tc_format_time(r.start_time)}-{_tc_format_time(r.end_time)} "
+            f"[{r.confidence}] {r.methods}"
+            for r in consensus
         )
-        logger.warning(f"Audible timecode detected: {len(detections)} region(s) — {regions}\n")
+        logger.warning(
+            f"Audible timecode detected: {len(consensus)} consensus region(s) "
+            f"from {len(detections)} per-method detection(s) — {regions}\n"
+        )
     else:
         logger.debug("No audible timecode detected\n")
 

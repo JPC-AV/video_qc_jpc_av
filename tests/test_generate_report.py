@@ -622,3 +622,56 @@ def test_extract_frame_at_propagates_subprocess_error(monkeypatch):
     )
     with pytest.raises(subprocess.CalledProcessError):
         gr._extract_frame_at("/v.mkv", 0.0, "/out.jpg", 80)
+
+
+# ---------------------------------------------------------------------------
+# Audible timecode report: consensus regions shown, per-method details hidden
+# ---------------------------------------------------------------------------
+
+def _write_audible_tc_csv(path):
+    """Write a consensus-format audible-timecode CSV like qct_parse now emits:
+    a consensus regions table (last column 'Detection Methods') followed by a
+    'Per-Method Detections' forensic section."""
+    rows = [
+        ["Audible Timecode Detection Results"],
+        ["Metric Type", "both"],
+        ["Total Audio Frames", "35593"],
+        ["Duration", "59:19.2"],
+        ["Audible Timecode Detected", "Yes"],
+        ["Regions Detected", "2"],
+        [],
+        ["Start Time", "End Time", "Duration", "Channel", "Confidence", "Detection Methods"],
+        ["0:26.5", "47:03.7", "46:37.2", "Channel 1", "high", "R128 + astats (ch1)"],
+        ["49:55.4", "59:08.5", "9:13.1", "Channel 1", "high", "R128 + astats (ch1)"],
+        [],
+        ["Per-Method Detections", "5"],
+        [],
+        ["Start Time", "End Time", "Criterion", "Channel", "Confidence", "Details"],
+        ["0:26.5", "47:03.7", "R128-A (stable mix at TC level)", "n/a (mix-based)", "high", "secret-detail-A"],
+        ["49:55.5", "51:20.4", "astats (ch1)", "ch1", "high", "secret-detail-B"],
+    ]
+    with open(path, "w", newline="") as f:
+        csv.writer(f).writerows(rows)
+
+
+def test_make_audible_timecode_html_shows_consensus_regions(tmp_path):
+    csv_path = tmp_path / "qct-parse_audible_timecode.csv"
+    _write_audible_tc_csv(str(csv_path))
+    html = gr.make_audible_timecode_html(str(csv_path))
+    assert html is not None
+    # Consensus regions are rendered with their span, channel, and methods.
+    assert "Audible timecode detected in 2 region(s)" in html
+    assert "R128 + astats (ch1)" in html
+    assert "Channel 1" in html
+    assert "Detection Methods" in html
+
+
+def test_make_audible_timecode_html_hides_per_method_details(tmp_path):
+    csv_path = tmp_path / "qct-parse_audible_timecode.csv"
+    _write_audible_tc_csv(str(csv_path))
+    html = gr.make_audible_timecode_html(str(csv_path))
+    # The per-method forensic rows (criteria + details) must not leak into the
+    # report — only the consensus table is shown.
+    assert "secret-detail-A" not in html
+    assert "secret-detail-B" not in html
+    assert "stable mix at TC level" not in html
