@@ -1499,7 +1499,7 @@ def make_audible_timecode_html(audible_timecode_csv):
             html += f'''<tr>
                 <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{row[0]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{row[1]}</td>
-                <td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{row[2]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace; text-align: right;">{row[2]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[3]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{conf_badge(row[4])}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[5]}</td>
