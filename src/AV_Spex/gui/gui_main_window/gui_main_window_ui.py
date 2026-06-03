@@ -130,6 +130,9 @@ class MainWindowUI:
         
         self.all_off_action = self.builtin_profiles_menu.addAction("All Off Profile")
         self.all_off_action.triggered.connect(lambda: self.apply_builtin_profile('allOff'))
+
+        self.vendor_action = self.builtin_profiles_menu.addAction("Vendor Profile")
+        self.vendor_action.triggered.connect(lambda: self.apply_builtin_profile('vendor'))
         
         # Separator
         self.profiles_menu.addSeparator()
@@ -154,6 +157,8 @@ class MainWindowUI:
                 config_edit.apply_profile(config_edit.profile_step2)
             elif profile_name == 'allOff':
                 config_edit.apply_profile(config_edit.profile_allOff)
+            elif profile_name == 'vendor':
+                config_edit.apply_profile(config_edit.profile_vendor)
             
             # Update the checks tab dropdown
             if hasattr(self.main_window, 'checks_tab'):
