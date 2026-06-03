@@ -1827,7 +1827,7 @@ def _write_chroma_phase_results(report_directory, results):
         )
 
 
-def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None, fps=None):
+def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None, fps=None, tc_start_frames=0, tc_drop_frame=False):
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
     audio clipping (Peak_level >= threshold), channel imbalance (comparing
@@ -1845,7 +1845,11 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
         signals: Optional signals object for emitting progress updates.
         total_duration (float or None): Total video duration in seconds for progress reporting.
         fps (float or None): Video frame rate, used to format audible-timecode region
-            positions as NDF timecode matching an NLE. Defaults to NTSC 29.97 when None.
+            positions as timecode matching an NLE. Defaults to NTSC 29.97 when None.
+        tc_start_frames (int): Stream start-timecode offset in frames (from the file's
+            TIMECODE tag), added to every reported position.
+        tc_drop_frame (bool): Whether the stream timecode is drop-frame, so positions
+            are formatted as DF (HH:MM:SS;FF) rather than NDF.
 
     Returns:
         tuple: (clipping_results, imbalance_results, timecode_results, dropout_results)
@@ -2096,7 +2100,8 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     timecode_results = None
     if detect_timecode:
         timecode_results = _detect_and_write_timecode_results(
-            tc_frames, tc_metric_type, report_directory, fps=fps
+            tc_frames, tc_metric_type, report_directory, fps=fps,
+            tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame
         )
 
     # Run dropout detection
@@ -2339,28 +2344,84 @@ def _tc_format_time(seconds):
 _NTSC_FPS = 30000 / 1001  # 29.97
 
 
-def _tc_format_timecode(seconds, fps=None):
-    """Format a real-elapsed-seconds position as a non-drop-frame timecode
-    HH:MM:SS:FF at the given frame rate.
+def _tc_drop_count(nominal):
+    """Frames dropped per minute for drop-frame timecode at this nominal rate
+    (2 at 30 fps, 4 at 60 fps)."""
+    return nominal // 15
+
+
+def _tc_df_to_frames(h, m, s, f, nominal):
+    """Drop-frame timecode fields → absolute frame index."""
+    drop = _tc_drop_count(nominal)
+    total_minutes = 60 * h + m
+    base = (((h * 60 + m) * 60 + s) * nominal) + f
+    return base - drop * (total_minutes - total_minutes // 10)
+
+
+def _tc_frames_to_df(frame, nominal):
+    """Absolute frame index → drop-frame timecode fields (h, m, s, f)."""
+    drop = _tc_drop_count(nominal)
+    frames_per_10min = nominal * 600 - drop * 9
+    frames_per_min = nominal * 60 - drop
+    d, mod = divmod(frame, frames_per_10min)
+    if mod > drop:
+        frame += drop * 9 * d + drop * ((mod - drop) // frames_per_min)
+    else:
+        frame += drop * 9 * d
+    f = frame % nominal
+    s = (frame // nominal) % 60
+    m = (frame // (nominal * 60)) % 60
+    h = (frame // (nominal * 3600)) % 24
+    return h, m, s, f
+
+
+def _tc_parse_start_timecode(tc_string, nominal):
+    """Parse an ffprobe TIMECODE tag ('HH:MM:SS:FF' NDF / 'HH:MM:SS;FF' DF) into
+    (start_frame_offset, drop_frame). Returns (0, False) on anything unparseable."""
+    if not tc_string:
+        return 0, False
+    tc = tc_string.strip()
+    drop = ';' in tc          # SMPTE uses ';' before the frames field for DF
+    parts = re.split(r'[:;]', tc)
+    if len(parts) != 4:
+        return 0, False
+    try:
+        h, m, s, f = (int(p) for p in parts)
+    except ValueError:
+        return 0, False
+    if drop:
+        return _tc_df_to_frames(h, m, s, f, nominal), True
+    return (((h * 60 + m) * 60 + s) * nominal) + f, False
+
+
+def _tc_format_timecode(seconds, fps=None, start_frames=0, drop_frame=False):
+    """Format a real-elapsed-seconds position as a timecode HH:MM:SS:FF (NDF) or
+    HH:MM:SS;FF (DF) at the given frame rate, offset by the stream's start
+    timecode.
 
     QCTools timestamps are real wall-clock seconds; an NLE displays the file's
-    NDF timecode, which labels every frame at the nominal integer rate (30 for
-    29.97). Because 29.97 fps NDF counts 30 labels per ~1.001 real seconds, the
-    timecode drifts ~0.1% behind wall time (~3.6 s/hour) — so converting the
-    real-time position to a frame index and re-labelling it base-nominal makes
-    the reported position match what the NLE shows. Assumes the stream's start
-    timecode is 00:00:00:00 (true for the NTSC vrecord captures this targets).
+    embedded timecode. NDF labels every frame at the nominal integer rate (30 for
+    29.97), so it drifts ~0.1% behind wall time (~3.6 s/hour); DF skips frame
+    *numbers* to stay aligned with wall time. Converting the real-time position
+    to a frame index, adding the stream's start-TC offset, and re-labelling in
+    the file's own convention makes the reported position match the NLE.
     """
     if not fps or fps <= 0:
         fps = _NTSC_FPS
     nominal = max(1, int(round(fps)))
-    frame = int(round(seconds * fps))
-    ff = frame % nominal
-    total_s = frame // nominal
-    s = total_s % 60
-    m = (total_s // 60) % 60
-    h = total_s // 3600
-    return f'{h:02d}:{m:02d}:{s:02d}:{ff:02d}'
+    total = start_frames + int(round(seconds * fps))
+    if total < 0:
+        total = 0
+    # Drop-frame is only defined for fractional NTSC-family rates (29.97/59.94).
+    if drop_frame and abs(nominal - fps) > 1e-6:
+        h, m, s, f = _tc_frames_to_df(total, nominal)
+        return f'{h:02d}:{m:02d}:{s:02d};{f:02d}'
+    f = total % nominal
+    ts = total // nominal
+    s = ts % 60
+    m = (ts // 60) % 60
+    h = ts // 3600
+    return f'{h:02d}:{m:02d}:{s:02d}:{f:02d}'
 
 
 def _tc_filter_by_consecutive(detections, min_consecutive):
@@ -3046,12 +3107,16 @@ def _detect_astats_channel_tc(frames, times, channel):
     return _tc_filter_by_consecutive(detections, _TC_ASTATS_MIN_WINDOWS)
 
 
-def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directory, fps=None):
+def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directory, fps=None,
+                                       tc_start_frames=0, tc_drop_frame=False):
     """Run audible timecode detection and write results to CSV.
 
-    Region start/end positions are written as NDF timecode (HH:MM:SS:FF) at
-    `fps` so they line up with an NLE; durations stay as elapsed M:SS.s.
+    Region start/end positions are written as timecode (HH:MM:SS:FF NDF or
+    HH:MM:SS;FF DF) at `fps`, offset by the stream start timecode, so they line
+    up with an NLE; durations stay as elapsed M:SS.s.
     """
+    def _fmt_tc(seconds):
+        return _tc_format_timecode(seconds, fps, tc_start_frames, tc_drop_frame)
     if not tc_frames:
         logger.debug("No audio frame data available for audible timecode detection\n")
         return None
@@ -3123,8 +3188,8 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
             writer.writerow(["Start Time", "End Time", "Duration", "Channel", "Confidence", "Detection Methods"])
             for r in consensus:
                 writer.writerow([
-                    _tc_format_timecode(r.start_time, fps),
-                    _tc_format_timecode(r.end_time, fps),
+                    _fmt_tc(r.start_time),
+                    _fmt_tc(r.end_time),
                     _tc_format_time(r.end_time - r.start_time),
                     r.channel,
                     r.confidence,
@@ -3138,8 +3203,8 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
             writer.writerow(["Start Time", "End Time", "Criterion", "Channel", "Confidence", "Details"])
             for d in detections:
                 writer.writerow([
-                    _tc_format_timecode(d.start_time, fps),
-                    _tc_format_timecode(d.end_time, fps),
+                    _fmt_tc(d.start_time),
+                    _fmt_tc(d.end_time),
                     d.criterion,
                     d.channel,
                     d.confidence,
@@ -3149,7 +3214,7 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
     # Log summary
     if tc_detected:
         regions = "; ".join(
-            f"{_tc_format_timecode(r.start_time, fps)}-{_tc_format_timecode(r.end_time, fps)} "
+            f"{_fmt_tc(r.start_time)}-{_fmt_tc(r.end_time)} "
             f"[{r.confidence}] {r.methods}"
             for r in consensus
         )
@@ -3212,6 +3277,30 @@ def _get_video_frame_rate(video_path):
                 return float(out)
     except Exception:
         pass
+    return None
+
+
+def _get_video_start_timecode(video_path):
+    """Get the stream's start timecode tag (e.g. '00:00:00:09' for NDF or
+    '01:00:00;00' for DF) using ffprobe, checked on the video stream first then
+    the container.
+
+    Returns:
+        str or None: The raw TIMECODE tag, or None if absent.
+    """
+    queries = [
+        ['-select_streams', 'v:0', '-show_entries', 'stream_tags=timecode'],
+        ['-show_entries', 'format_tags=timecode'],
+    ]
+    for q in queries:
+        try:
+            command = ['ffprobe', '-v', 'error'] + q + ['-of', 'default=noprint_wrappers=1:nokey=1', video_path]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            out = result.stdout.strip()
+            if result.returncode == 0 and out:
+                return out.splitlines()[0].strip()
+        except Exception:
+            pass
     return None
 
 
@@ -3397,9 +3486,13 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     # Estimate total video frames for progress reporting
     total_duration = _get_video_duration(video_path)
-    # Frame rate is used to report audible-timecode positions as NDF timecode
-    # matching the NLE.
+    # Frame rate and the stream's start timecode are used to report
+    # audible-timecode positions as the file's own timecode, matching the NLE.
     video_fps = _get_video_frame_rate(video_path)
+    _tc_nominal = max(1, int(round(video_fps))) if video_fps else 30
+    tc_start_frames, tc_drop_frame = _tc_parse_start_timecode(
+        _get_video_start_timecode(video_path), _tc_nominal
+    )
 
     ###### Initialize variables ######
     startObj = qctools_output_path
@@ -3754,7 +3847,8 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             detect_imbalance=True,
             detect_timecode=True,
             detect_dropout=True,
-            signals=signals, total_duration=total_duration, fps=video_fps
+            signals=signals, total_duration=total_duration, fps=video_fps,
+            tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame
         )
         if clipping_results is None:
             logger.warning("Audio clipping detection could not be performed\n")

@@ -259,6 +259,47 @@ def test_tc_format_timecode_defaults_to_ntsc():
     assert qp._tc_format_timecode(0.0, 0) == "00:00:00:00"
 
 
+def test_tc_format_timecode_applies_start_offset():
+    """The stream start-timecode offset (in frames) is added to every position."""
+    fps = 30000 / 1001
+    # 9-frame NDF start (the LC vrecord captures): frame 0 reads 00:00:00:09
+    assert qp._tc_format_timecode(0.0, fps, start_frames=9) == "00:00:00:09"
+    # 1-hour start offset (the earlier broadcast batch): 3600 s * 30 = 108000 frames
+    one_hour = 3600 * 30
+    assert qp._tc_format_timecode(0.0, fps, start_frames=one_hour) == "01:00:00:00"
+
+
+@pytest.mark.parametrize("tc,nominal,expected_frames,expected_df", [
+    ("00:00:00:09", 30, 9, False),
+    ("01:00:00:00", 30, 3600 * 30, False),
+    ("00:00:00;00", 30, 0, True),       # ';' marks drop-frame
+    ("00:01:00;02", 30, 1800, True),    # first valid frame after the 1-min drop
+    ("garbage", 30, 0, False),
+    (None, 30, 0, False),
+])
+def test_tc_parse_start_timecode(tc, nominal, expected_frames, expected_df):
+    frames, drop = qp._tc_parse_start_timecode(tc, nominal)
+    assert frames == expected_frames
+    assert drop == expected_df
+
+
+@pytest.mark.parametrize("h,m,s,f", [
+    (0, 0, 0, 0), (0, 1, 0, 2), (0, 9, 59, 29), (0, 10, 0, 0), (1, 0, 0, 0),
+])
+def test_tc_df_roundtrip(h, m, s, f):
+    """Drop-frame fields → frame index → fields is the identity for valid TCs."""
+    frame = qp._tc_df_to_frames(h, m, s, f, 30)
+    assert qp._tc_frames_to_df(frame, 30) == (h, m, s, f)
+
+
+def test_tc_format_timecode_drop_frame_tracks_wall_time():
+    """Drop-frame output uses ';' and tracks wall-clock time: at 600 s real it
+    reads 00:10:00;00, where plain NDF would have drifted to ~00:09:59:12."""
+    fps = 30000 / 1001
+    assert qp._tc_format_timecode(600.0, fps, drop_frame=True) == "00:10:00;00"
+    assert qp._tc_format_timecode(600.0, fps, drop_frame=False) == "00:09:59:12"
+
+
 # ---- _tc_filter_by_consecutive ------------------------------------------
 
 def _make_tc(start, end, criterion="A"):
