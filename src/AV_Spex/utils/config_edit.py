@@ -1504,7 +1504,8 @@ profile_vendor = {
         "validate_stream_fixity": False,
         "embed_stream_fixity": True,
         "output_fixity": False,
-        "overwrite_stream_fixity": False
+        "overwrite_stream_fixity": False,
+        "stream_hash_algorithm": "md5"
     }
 }
 
