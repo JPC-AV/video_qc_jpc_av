@@ -221,64 +221,92 @@ def extract_tags(video_path):
     return result.stdout
 
 
+# Target child elements that scope a tag to a specific track/edition/chapter/
+# attachment. A tag with none of these is a "global" (whole-file) tag.
+_TARGET_UID_ELEMENTS = ("TrackUID", "EditionUID", "ChapterUID", "AttachmentUID")
+
+
+def _is_global_tag(tag):
+    """A tag is global (whole-file) if its <Targets> names no specific UID."""
+    targets = tag.find('Targets')
+    if targets is None:
+        return True
+    return not any(child.tag in _TARGET_UID_ELEMENTS for child in targets)
+
+
+def _global_tags_only(root):
+    """
+    Return a new <Tags> root containing only the global (whole-file) tags.
+
+    Stream hashes are whole-file fixity, so we write them via
+    `mkvpropedit --tags global:` which manages only global tags. Track-/
+    edition-/chapter-targeted tags are left entirely untouched in the file —
+    and, crucially, kept out of the XML we hand mkvpropedit so it never has to
+    validate (and reject) elements it can't round-trip, e.g. the <DummyElement>
+    mkvextract emits for unrecognized elements inside a track <Targets>.
+    """
+    new_root = ET.Element('Tags')
+    for tag in root.findall('Tag'):
+        if _is_global_tag(tag):
+            new_root.append(tag)
+    return new_root
+
+
 def remove_existing_stream_hashes(xml_tags):
     """
     Remove any existing VIDEO_STREAM_HASH and AUDIO_STREAM_HASH tags from the XML.
+
+    Handles both the current layout (a dedicated <Tag> holding only the stream
+    hashes) and the legacy layout (hashes embedded as Simple elements inside
+    another tag). A tag that held only stream hashes is dropped entirely so we
+    don't leave an empty <Tag> behind; tags with other content are preserved.
     """
     root = ET.fromstring(xml_tags)
 
-    for tag in root.findall('.//Tag'):
-        for simple in list(tag.findall('.//Simple')):
-            name_element = simple.find('Name')
-            if name_element is not None and name_element.text in ["VIDEO_STREAM_HASH", "AUDIO_STREAM_HASH"]:
-                tag.remove(simple)
+    for tag in list(root.findall('Tag')):
+        hash_simples = [
+            simple for simple in tag.findall('Simple')
+            if (simple.find('Name') is not None
+                and simple.find('Name').text in ("VIDEO_STREAM_HASH", "AUDIO_STREAM_HASH"))
+        ]
+        if not hash_simples:
+            continue
+
+        for simple in hash_simples:
+            tag.remove(simple)
+
+        # If the tag held nothing but stream hashes, drop the now-empty tag.
+        if not tag.findall('Simple'):
+            root.remove(tag)
 
     return ET.tostring(root, encoding="unicode")
 
 
 def add_stream_hash_tag(xml_tags, video_hash, audio_hash):
-    root = ET.fromstring(xml_tags)
+    """
+    Add a new whole-file <Tag> holding the stream hashes.
 
-    # Find 'Tag' elements
-    tags = root.findall('.//Tag')
+    Only the existing global tags are carried over (verbatim) alongside the new
+    hash tag; track-targeted tags are dropped from the returned XML because the
+    write goes through `mkvpropedit --tags global:`, which does not touch them
+    in the file. We only add an additional tag — existing tags, including any
+    garbage track-targeted ones, are left untouched on disk.
+    """
+    root = _global_tags_only(ET.fromstring(xml_tags))
 
-    # The tag describing the whole file do not contain the element "Targets", loop through tags to find whole file <Tag>
-    tags_without_target = []
-    for tag in tags:
-        if tag.find('Targets'):
-            continue
-        else:
-            tags_without_target.append(tag)
+    # Build a new standalone <Tag>. An empty <Targets/> scopes it to the whole file.
+    new_tag = ET.SubElement(root, "Tag")
+    ET.SubElement(new_tag, "Targets")
 
-    # Assigns last_tag to last tag not containing element "Targets"
-    last_tag = tags_without_target[-1]
-
-    # Create a new 'Simple' element
-    video_md5_tag = ET.Element("Simple")
-    name = ET.SubElement(video_md5_tag, "Name")
-    name.text = "VIDEO_STREAM_HASH"
-    string = ET.SubElement(video_md5_tag, "String")
-    string.text = video_hash
-    tag_language = ET.SubElement(video_md5_tag, "TagLanguageIETF")
-    tag_language.text = "und"
-
-    # Create a new 'Simple' element
-    audio_md5_tag = ET.Element("Simple")
-    name = ET.SubElement(audio_md5_tag, "Name")
-    name.text = "AUDIO_STREAM_HASH"
-    string = ET.SubElement(audio_md5_tag, "String")
-    string.text = audio_hash
-    tag_language = ET.SubElement(audio_md5_tag, "TagLanguageIETF")
-    tag_language.text = "und"
-
-    # insert new stream_hash subelement into last_tag
-    last_tag.insert(-1, video_md5_tag)
-    # insert new stream_hash subelement into last_tag
-    last_tag.insert(-1, audio_md5_tag)
-    # remove last tag from XML
-    root.remove(last_tag)
-    # insert last_tag to top of <Tags> tree
-    root.insert(0, last_tag)
+    for tag_name, hash_value in (("VIDEO_STREAM_HASH", video_hash),
+                                 ("AUDIO_STREAM_HASH", audio_hash)):
+        simple = ET.SubElement(new_tag, "Simple")
+        name = ET.SubElement(simple, "Name")
+        name.text = tag_name
+        string = ET.SubElement(simple, "String")
+        string.text = hash_value
+        tag_language = ET.SubElement(simple, "TagLanguageIETF")
+        tag_language.text = "und"
 
     return ET.tostring(root, encoding="unicode")
 
@@ -292,6 +320,12 @@ def write_tags_to_temp_file(xml_tags):
 
 
 def write_tags_to_mkv(mkv_file, temp_xml_file):
+    """
+    Write the tags XML into the MKV via mkvpropedit.
+
+    Returns True if mkvpropedit reported success (exit code 0 or 1; 1 means it
+    completed with warnings but still wrote the changes), False otherwise.
+    """
     command = f'mkvpropedit --tags "global:{temp_xml_file}" "{mkv_file}"'
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
@@ -303,6 +337,18 @@ def write_tags_to_mkv(mkv_file, temp_xml_file):
         logger.info(f'Running mkvpropedit:\n{modified_output}')  # Or do something else with the modified output
     if stderr:
         logger.critical(f"Running mkvpropedit:\n{stderr.decode('utf-8')}")  # Print any errors if they occur
+
+    # mkvpropedit exit codes: 0 = success, 1 = success with warnings, 2 = error (nothing written)
+    if process.returncode == 0:
+        return True
+    if process.returncode == 1:
+        logger.warning(f"mkvpropedit completed with warnings (exit code 1).\n")
+        return True
+
+    logger.critical(
+        f"mkvpropedit failed (exit code {process.returncode}); stream hashes were NOT embedded.\n"
+    )
+    return False
 
 
 def extract_hashes(xml_tags):
@@ -401,9 +447,15 @@ def embed_fixity(video_path, check_cancelled=None, signals=None):
     temp_xml_file = write_tags_to_temp_file(updated_tags)
 
     logger.debug('Embedding video and audio stream hashes to XML in MKV file.')
-    write_tags_to_mkv(video_path, temp_xml_file)
+    success = write_tags_to_mkv(video_path, temp_xml_file)
 
     os.remove(temp_xml_file)
+
+    if not success:
+        logger.critical("Failed to embed stream hashes into MKV file.\n")
+        return False
+
+    return True
 
 
 
