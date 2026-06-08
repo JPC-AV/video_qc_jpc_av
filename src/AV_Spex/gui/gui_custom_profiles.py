@@ -1107,7 +1107,7 @@ class ProfileSelectionDialog(QDialog, ThemeableMixin):
         self.profile_list.clear()
         
         # Add built-in profiles
-        builtin_profiles = ["Step 1 Profile", "Step 2 Profile", "All Off Profile"]
+        builtin_profiles = ["Step 1 Profile", "Step 2 Profile", "All Off Profile", "Vendor Profile"]
         for profile_name in builtin_profiles:
             self.profile_list.addItem(f"[Built-in] {profile_name}")
         
@@ -1181,6 +1181,7 @@ class ProfileSelectionDialog(QDialog, ThemeableMixin):
             "Step 1 Profile": config_edit.profile_step1,
             "Step 2 Profile": config_edit.profile_step2,
             "All Off Profile": config_edit.profile_allOff,
+            "Vendor Profile": config_edit.profile_vendor,
         }
         
         if item_text.startswith("[Built-in]"):
@@ -1365,6 +1366,8 @@ class ProfileSelectionDialog(QDialog, ThemeableMixin):
                     config_edit.apply_profile(config_edit.profile_step2)
                 elif profile_name == "All Off Profile":
                     config_edit.apply_profile(config_edit.profile_allOff)
+                elif profile_name == "Vendor Profile":
+                    config_edit.apply_profile(config_edit.profile_vendor)
             else:
                 profile_name = item_text.replace("[Custom] ", "")
                 # Apply custom profile
@@ -1391,6 +1394,8 @@ class ProfileSelectionDialog(QDialog, ThemeableMixin):
                             dropdown.setCurrentText("Step 2")
                         elif profile_name == "All Off Profile":
                             dropdown.setCurrentText("All Off")
+                        elif profile_name == "Vendor Profile":
+                            dropdown.setCurrentText("Vendor")
                     else:
                         # For custom profiles, use the [Custom] prefix format
                         dropdown.setCurrentText(f"[Custom] {profile_name}")

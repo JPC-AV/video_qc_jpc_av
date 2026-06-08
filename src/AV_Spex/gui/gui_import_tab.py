@@ -93,7 +93,9 @@ class ImportTab(ThemeableMixin):
                         self.main_window.checks_profile_dropdown.blockSignals(True)
                         
                         # Set based on exiftool.run_tool value (using boolean now)
-                        if checks_config.tools.exiftool.run_tool:
+                        if checks_config.tools.exiftool.run_tool and not checks_config.tools.exiftool.check_tool:
+                            self.main_window.checks_profile_dropdown.setCurrentText("Vendor")
+                        elif checks_config.tools.exiftool.run_tool:
                             self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
                         elif not checks_config.tools.exiftool.run_tool and checks_config.tools.exiftool.check_tool:
                             self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
@@ -302,9 +304,11 @@ class ImportTab(ThemeableMixin):
                         self.main_window.checks_profile_dropdown.blockSignals(True)
                         
                         # Set based on exiftool.run_tool value (using boolean now)
-                        if checks_config.tools.exiftool.run_tool:
+                        if checks_config.tools.exiftool.run_tool and not checks_config.tools.exiftool.check_tool:
+                            self.main_window.checks_profile_dropdown.setCurrentText("Vendor")
+                        elif checks_config.tools.exiftool.run_tool:
                             self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
-                        elif not checks_config.tools.exiftool.run_tool:
+                        elif not checks_config.tools.exiftool.run_tool and checks_config.tools.exiftool.check_tool:
                             self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
                         else:
                             # Fallback to "All Off" if both are False
