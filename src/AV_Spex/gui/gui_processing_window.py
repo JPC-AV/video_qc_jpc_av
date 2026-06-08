@@ -708,7 +708,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         clear_button_style = f"""
             QPushButton {{
                 font-weight: bold;
-                padding: 4px 8px;
+                padding: 8px;
                 border: 1px solid gray;
                 border-radius: 4px;
                 background-color: {button_color};
