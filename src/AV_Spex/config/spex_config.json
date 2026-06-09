@@ -25,7 +25,7 @@
     "expected_video": {
       "Format": "FFV1",
       "Format_Settings_GOP": "N=1",
-      "CodecID": "V_MS/VFW/FOURCC / FFV1",
+      "CodecID": ["V_MS/VFW/FOURCC / FFV1", "V_FFV1"],
       "Width": "720",
       "Height": "486",
       "PixelAspectRatio": "0.909",
@@ -44,7 +44,7 @@
       "transfer_characteristics": "BT.709",
       "transfer_characteristics_Source": "Container",
       "matrix_coefficients": "BT.601",
-      "MaxSlicesCount": "24",
+      "MaxSlicesCount": ["24", "4"],
       "ErrorDetectionType": "Per slice"
     },
     "expected_audio": {
@@ -76,8 +76,8 @@
       "codec_name": "ffv1",
       "codec_long_name": "FFmpeg video codec #1",
       "codec_type": "video",
-      "codec_tag_string": "FFV1",
-      "codec_tag": "0x31564646",
+      "codec_tag_string": ["FFV1", "[0][0][0][0]"],
+      "codec_tag": ["0x31564646", "0x0000"],
       "width": "720",
       "height": "486",
       "display_aspect_ratio": "400:297",
