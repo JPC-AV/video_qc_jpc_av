@@ -22,7 +22,7 @@ class MediainfoGeneralValues:
 class MediainfoVideoValues:
     Format: str
     Format_Settings_GOP: str
-    CodecID: str
+    CodecID: List[str]
     Width: str
     Height: str
     PixelAspectRatio: str
@@ -41,7 +41,7 @@ class MediainfoVideoValues:
     transfer_characteristics: str
     transfer_characteristics_Source: str
     matrix_coefficients: str
-    MaxSlicesCount: str
+    MaxSlicesCount: List[str]
     ErrorDetectionType: str
 
 @dataclass
@@ -74,8 +74,8 @@ class FFmpegVideoStream:
     codec_name: str
     codec_long_name: str
     codec_type: str
-    codec_tag_string: str
-    codec_tag: str
+    codec_tag_string: List[str]
+    codec_tag: List[str]
     width: str
     height: str
     display_aspect_ratio: str
