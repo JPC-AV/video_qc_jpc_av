@@ -1,12 +1,13 @@
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QListWidget, QListWidgetItem, QPushButton, QAbstractItemView, QTextEdit, 
-    QProgressBar, QSplitter, QMessageBox
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QListWidget, QListWidgetItem, QPushButton, QAbstractItemView, QTextEdit,
+    QProgressBar, QSplitter, QMessageBox, QFileDialog
 )
-from PyQt6.QtCore import Qt, QEvent, QSize, QSettings
-from PyQt6.QtGui import QPalette, QFont
+from PyQt6.QtCore import Qt, QEvent, QSize, QSettings, QMarginsF
+from PyQt6.QtGui import QPalette, QFont, QPdfWriter, QPageSize, QPageLayout, QTextOption
 
 import os
+from datetime import datetime
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
 from AV_Spex.gui.gui_processing_window_console import ConsoleTextEdit, MessageType
 from AV_Spex.gui.gui_theme_manager import ThemeManager
@@ -109,6 +110,12 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         # Add separator space
         zoom_layout.addSpacing(20)
 
+        # Save as PDF button - exports the console contents, preserving styling
+        self.save_pdf_button = QPushButton("Save as PDF")
+        self.save_pdf_button.setToolTip("Save the console output to a PDF file")
+        self.save_pdf_button.clicked.connect(self.save_console_as_pdf)
+        zoom_layout.addWidget(self.save_pdf_button)
+
         # Clear console button
         self.clear_console_button = QPushButton("Clear")
         self.clear_console_button.setMaximumWidth(60)
@@ -193,6 +200,62 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
             # Add a message indicating console was cleared
             self.details_text.append_message("Console cleared", MessageType.INFO)
             
+    def save_console_as_pdf(self):
+        """Export the console output to a PDF, preserving its styling.
+
+        The console (`details_text`) is already a fully formatted
+        QTextDocument, so we print that document straight to PDF. This keeps
+        the exact colors, bold, monospace font, and spacing seen on screen.
+        NORMAL text carries no explicit color, so it renders black on the
+        white page; the colored message types keep their console colors.
+        """
+        # Nothing to export if the console is empty
+        if not self.details_text.toPlainText().strip():
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Nothing to Save")
+            msg_box.setText("The console is empty — there is nothing to export.")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg_box.setStyleSheet(self.get_message_box_style())
+            msg_box.exec()
+            return
+
+        # Default filename includes a timestamp so repeated exports don't collide
+        default_name = f"AVSpex_console_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.pdf"
+        default_path = os.path.join(os.path.expanduser("~"), default_name)
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Console Output as PDF", default_path, "PDF Files (*.pdf)"
+        )
+        if not file_path:
+            return  # user cancelled
+        if not file_path.lower().endswith(".pdf"):
+            file_path += ".pdf"
+
+        try:
+            writer = QPdfWriter(file_path)
+            writer.setPageSize(QPageSize(QPageSize.PageSizeId.Letter))
+            writer.setPageMargins(QMarginsF(15, 15, 15, 15), QPageLayout.Unit.Millimeter)
+
+            # Clone the live document so we can enable wrapping for the page
+            # width without disturbing the on-screen console (which uses NoWrap).
+            doc = self.details_text.document().clone(self)
+            doc.setDefaultFont(self.details_text.font())
+            text_option = QTextOption()
+            text_option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+            doc.setDefaultTextOption(text_option)
+            doc.print(writer)
+
+            self.update_status(f"Console output saved to {file_path}", MessageType.SUCCESS)
+        except Exception as e:
+            self.update_status(f"Failed to save PDF: {str(e)}", MessageType.ERROR)
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Save Failed")
+            msg_box.setText("Could not save the console output to PDF.")
+            msg_box.setInformativeText(str(e))
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg_box.setStyleSheet(self.get_message_box_style())
+            msg_box.exec()
+
     def get_message_box_style(self):
         """Get theme-aware styling for message boxes."""
         palette = self.palette()
@@ -635,6 +698,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         theme_manager.style_button(self.zoom_in_button)
         theme_manager.style_button(self.zoom_out_button)
         theme_manager.style_button(self.zoom_reset_button)
+        theme_manager.style_button(self.save_pdf_button)
         
         # Style clear button with a slightly different look
         palette = self.palette()
@@ -644,7 +708,7 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
         clear_button_style = f"""
             QPushButton {{
                 font-weight: bold;
-                padding: 4px 8px;
+                padding: 8px;
                 border: 1px solid gray;
                 border-radius: 4px;
                 background-color: {button_color};

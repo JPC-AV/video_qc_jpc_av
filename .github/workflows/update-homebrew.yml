@@ -29,11 +29,6 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
 
     - name: Install dependencies
       run: sudo apt-get update && sudo apt-get install -y jq
@@ -207,6 +202,36 @@ jobs:
             sha256 "eae3cf522bc7df64b42cad3925c876e1b0b6c35c1337c93e12c0f366f55b0eaf"
           end
 
+          resource "lazy-loader" do
+            url "https://files.pythonhosted.org/packages/49/ac/21a1f8aa3777f5658576777ea76bfb124b702c520bbe90edf4ae9915eafa/lazy_loader-0.5.tar.gz"
+            sha256 "717f9179a0dbed357012ddad50a5ad3d5e4d9a0b8712680d4e687f5e6e6ed9b3"
+          end
+          
+          resource "networkx" do
+            url "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz"
+            sha256 "26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509"
+          end
+          
+          resource "pillow" do
+            url "https://files.pythonhosted.org/packages/8c/21/c2bcdd5906101a30244eaffc1b6e6ce71a31bd0742a01eb89e660ebfac2d/pillow-12.2.0.tar.gz"
+            sha256 "a830b1a40919539d07806aa58e1b114df53ddd43213d9c8b75847eee6c0182b5"
+          end
+          
+          resource "imageio" do
+            url "https://files.pythonhosted.org/packages/b1/84/93bcd1300216ea50811cee96873b84a1bebf8d0489ffaf7f2a3756bab866/imageio-2.37.3.tar.gz"
+            sha256 "bbb37efbfc4c400fcd534b367b91fcd66d5da639aaa138034431a1c5e0a41451"
+          end
+          
+          resource "tifffile" do
+            url "https://files.pythonhosted.org/packages/6c/3e/695c7ab56be57814e369c1f38bc3f64b9dea0a83e867d00c0c9d613a9929/tifffile-2026.5.2.tar.gz"
+            sha256 "21b10227ede8493814a34676774797f721f487e36cb0530e7c3bd882caa87f5a"
+          end
+          
+          resource "scikit-image" do
+            url "https://files.pythonhosted.org/packages/a1/b4/2528bb43c67d48053a7a649a9666432dc307d66ba02e3a6d5c40f46655df/scikit_image-0.26.0.tar.gz"
+            sha256 "f5f970ab04efad85c24714321fcc91613fcb64ef2a892a13167df2f3e59199fa"
+          end
+
           resource "opencv-python-headless" do
             url "https://files.pythonhosted.org/packages/36/2f/5b2b3ba52c864848885ba988f24b7f105052f68da9ab0e693cc7c25b0b30/opencv-python-headless-4.11.0.86.tar.gz"
             sha256 "996eb282ca4b43ec6a3972414de0e2331f5d9cda2b41091a49739c19fb843798"
@@ -225,7 +250,11 @@ jobs:
           def install
             venv = virtualenv_create(libexec, "python3.13")
 
-            venv.pip_install resources.reject { |r| r.name == "plotly" || r.name == "lxml" || r.name == "PyQt6" || r.name == "numpy" || r.name == "scipy" || r.name == "opencv-python-headless" || r.name == "matplotlib" }
+            venv.pip_install resources.reject { |r| 
+              r.name == "plotly" || r.name == "lxml" || r.name == "PyQt6" || 
+              r.name == "numpy" || r.name == "scipy" || r.name == "opencv-python-headless" || 
+              r.name == "matplotlib" || r.name == "scikit-image" 
+            }
 
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "plotly==5.23.0"
 
@@ -238,6 +267,8 @@ jobs:
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "opencv-python-headless==4.11.0.86"
 
             system libexec/"bin/python", "-m", "pip", "install", "--only-binary", ":all:", "matplotlib==3.10.3"
+
+            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "scikit-image==0.25.2"
 
             system libexec/"bin/python", "-m", "pip", "install", "--only-binary", ":all:", "PyQt6==6.9.1", "PyQt6-Qt6==6.9.1"
         

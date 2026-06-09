@@ -627,8 +627,9 @@ def get_all_profiles() -> Dict[str, Union[dict, ChecksProfile]]:
     # Add built-in profiles
     all_profiles.update({
         "Step 1 Profile": profile_step1,
-        "Step 2 Profile": profile_step2, 
-        "All Off Profile": profile_allOff
+        "Step 2 Profile": profile_step2,
+        "All Off Profile": profile_allOff,
+        "Vendor Profile": profile_vendor
     })
     
     # Add custom profiles
@@ -1243,7 +1244,7 @@ profile_step1 = {
             "run_tool": True
         },
         "mediaconch": {
-            "mediaconch_policy": "JPC_AV_NTSC_MKV_2025_03_26.xml",
+            "mediaconch_policy": "JPC_FFV1-MKV_Preservation_Policy_20260112.xml",
             "run_mediaconch": True
         },
         "mediainfo": {
@@ -1312,7 +1313,7 @@ profile_step2 = {
             "run_tool": False
         },
         "mediaconch": {
-            "mediaconch_policy": "JPC_AV_NTSC_MKV_2024-09-20.xml",
+            "mediaconch_policy": "JPC_FFV1-MKV_Preservation_Policy_20260112.xml",
             "run_mediaconch": True
         },
         "mediainfo": {
@@ -1381,7 +1382,7 @@ profile_allOff = {
             "run_tool": False
         },
         "mediaconch": {
-            "mediaconch_policy": "JPC_AV_NTSC_MKV_2024-09-20.xml",
+            "mediaconch_policy": "JPC_FFV1-MKV_Preservation_Policy_20260112.xml",
             "run_mediaconch": False
         },
         "mediainfo": {
@@ -1435,6 +1436,79 @@ profile_allOff = {
         "embed_stream_fixity": False,
         "output_fixity": False,
         "overwrite_stream_fixity": False
+    }
+}
+
+profile_vendor = {
+    "validate_filename": True,
+    "tools": {
+        "exiftool": {
+            "check_tool": False,
+            "run_tool": True
+        },
+        "ffprobe": {
+            "check_tool": False,
+            "run_tool": True
+        },
+        "mediaconch": {
+            "mediaconch_policy": "JPC_FFV1-MKV_Preservation_Policy_20260112.xml",
+            "run_mediaconch": False
+        },
+        "mediainfo": {
+            "check_tool": False,
+            "run_tool": True
+        },
+        "mediatrace": {
+            "check_tool": False,
+            "run_tool": False
+        },
+        "qctools": {
+            "run_tool": False
+        },
+        "qct_parse": {
+            "run_tool": False,
+            "barsDetection": False,
+            "evaluateBars": False,
+            "thumbExport": False,
+            "audio_analysis": False,
+            "detect_clamped_levels": False
+        },
+        "clams_detection": {
+            "run_tool": False,
+            "bars": {
+                "threshold": 0.7,
+                "sample_ratio": 30,
+                "stop_at_frame": 9000,
+                "min_frame_count": 10,
+                "stop_after_one": True
+            },
+            "tone": {
+                "tolerance": 1.0,
+                "min_tone_duration_ms": 2000,
+                "stop_at_seconds": 3600
+            }
+        }
+    },
+    "outputs": {
+        "access_file": False,
+        "report": False,
+        "qctools_ext": "qctools.xml.gz",
+        "frame_analysis": {
+            "enable_bitplane_check": False,
+            "enable_border_detection": False,
+            "enable_brng_analysis": False,
+            "enable_signalstats": False,
+            "enable_dropped_sample_detection": False,
+            "enable_duplicate_frame_detection": False
+        }
+    },
+    "fixity": {
+        "check_fixity": False,
+        "validate_stream_fixity": False,
+        "embed_stream_fixity": True,
+        "output_fixity": False,
+        "overwrite_stream_fixity": False,
+        "stream_hash_algorithm": "md5"
     }
 }
 

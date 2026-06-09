@@ -121,6 +121,49 @@ def test_add_stream_hash_tag_roundtrip():
     assert audio_hash == "a" * 32
 
 
+def test_add_stream_hash_tag_drops_track_targeted_tags():
+    """
+    Regression: stream hashes are written via `mkvpropedit --tags global:`, so
+    track-targeted tags must be excluded from the produced XML. Otherwise an
+    un-round-trippable element inside a track <Targets> (e.g. a <DummyElement>
+    that mkvextract emits for unrecognized elements) makes mkvpropedit reject
+    the whole write and no hashes get embedded.
+    """
+    xml = (
+        '<Tags>'
+        # whole-file tag — must be preserved
+        '<Tag><Targets/><Simple><Name>ENCODER</Name><String>Lavf</String></Simple></Tag>'
+        # track-targeted tag carrying a DummyElement — must be dropped from output
+        '<Tag><Targets><TrackUID>123</TrackUID>'
+        '<DummyElement format="hex">65</DummyElement></Targets>'
+        '<Simple><Name>TITLE</Name><String>VITC2</String></Simple></Tag>'
+        '</Tags>'
+    )
+    result = ef.add_stream_hash_tag(xml, "v" * 32, "a" * 32)
+
+    # hashes present, global ENCODER tag preserved, track tag + garbage excluded
+    assert ef.extract_hashes(result) == ("v" * 32, "a" * 32)
+    assert "ENCODER" in result
+    assert "DummyElement" not in result
+    assert "TrackUID" not in result
+
+
+def test_global_tag_classification():
+    root = ET.fromstring(
+        '<Tags>'
+        '<Tag><Targets/></Tag>'
+        '<Tag></Tag>'
+        '<Tag><Targets><TargetTypeValue>50</TargetTypeValue></Targets></Tag>'
+        '<Tag><Targets><TrackUID>1</TrackUID></Targets></Tag>'
+        '</Tags>'
+    )
+    tags = root.findall('Tag')
+    assert ef._is_global_tag(tags[0]) is True   # empty <Targets/>
+    assert ef._is_global_tag(tags[1]) is True   # no <Targets>
+    assert ef._is_global_tag(tags[2]) is True   # only TargetTypeValue (whole-file)
+    assert ef._is_global_tag(tags[3]) is False  # has a TrackUID
+
+
 # ---------------------------------------------------------------------------
 # get_stream_hash_algorithm
 # ---------------------------------------------------------------------------
