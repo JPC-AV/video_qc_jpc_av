@@ -113,7 +113,8 @@ class ParsedArguments:
 PROFILE_MAPPING = {
     "step1": config_edit.profile_step1,
     "step2": config_edit.profile_step2,
-    "off": config_edit.profile_allOff
+    "off": config_edit.profile_allOff,
+    "vendor": config_edit.profile_vendor
 }
 
 

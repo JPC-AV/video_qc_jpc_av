@@ -96,8 +96,21 @@ a = Analysis(['av_spex_launcher.py'],
     excludes=[
         # Qt modules not needed
         'PyQt6.QtDBus', 'PyQt6.QtPdf', 'PyQt6.QtSvg', 'PyQt6.QtNetwork',
-        # Plotly sub-packages not needed
+        'PyQt6.QtWebEngineCore', 'PyQt6.QtWebEngineWidgets', 'PyQt6.QtWebChannel',
+        'PyQt6.QtQml', 'PyQt6.QtQuick', 'PyQt6.QtQuickWidgets',
+        'PyQt6.QtMultimedia', 'PyQt6.QtMultimediaWidgets',
+        'PyQt6.QtPositioning', 'PyQt6.QtBluetooth', 'PyQt6.QtNfc',
+        'PyQt6.QtTest', 'PyQt6.QtSensors', 'PyQt6.QtSerialPort',
+        # Plotly sub-packages not needed. NOTE: do NOT exclude 'plotly.offline' —
+        # graph_objs.Figure.__init__ imports it at runtime even with
+        # include_plotlyjs='cdn'. The bundled plotly.min.js data file IS unused
+        # under CDN mode and is pruned from the TOC below instead.
         'plotly.matplotlylib', 'plotly.figure_factory',
+        # scikit-image removed; exclude it and its transitive tail so a stray
+        # import can't silently pull tens of MB back into the bundle
+        'skimage', 'scikit_image', 'networkx', 'tifffile', 'imageio', 'pywt',
+        # Test suites bundled inside heavy packages
+        'matplotlib.tests', 'numpy.tests', 'scipy.tests', 'PIL.ImageQt',
         # Test/dev frameworks
         'tkinter',
         'test',
@@ -105,6 +118,31 @@ a = Analysis(['av_spex_launcher.py'],
     ],
     noarchive=False,
 )
+
+# --- Post-analysis pruning ---------------------------------------------------
+# Drop binaries/data files that nothing we ship actually uses. These are data
+# files and transitively-pulled Qt frameworks, so `excludes` (module-level)
+# can't reach them — they must be filtered out of the TOC here.
+#
+# Qt removals were verified with `otool -L` against a real build: none of the
+# kept binaries (QtCore/QtGui/QtWidgets, libqcocoa, the PyQt6 bindings) link
+# these. NOTE: QtGui *does* link QtDBus, so QtDBus is intentionally NOT pruned.
+_prune_substrings = (
+    'QtPdf',                              # PDF module — unused (~7 MB)
+    'QtNetwork',                          # only used by QtPdf + the TUIO plugin (~1.6 MB)
+    'qtuiotouchplugin',                   # TUIO multitouch input — unused
+    'plotly/package_data/plotly.min.js',  # report uses include_plotlyjs='cdn'; never read (~3.5 MB)
+    'mpl-data/sample_data',              # matplotlib example datasets — unused
+    'mpl-data/fonts/afm',                # Adobe Font Metrics — only the PS backend uses these
+    'mpl-data/fonts/pdfcorefonts',       # PDF-core fonts — only the PDF backend uses these
+)
+
+def _keep(entry):
+    dest = entry[0].replace(os.sep, '/')
+    return not any(s in dest for s in _prune_substrings)
+
+a.binaries = [b for b in a.binaries if _keep(b)]
+a.datas = [d for d in a.datas if _keep(d)]
 
 pyz = PYZ(a.pure, a.zipped_data)
 

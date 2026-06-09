@@ -26,9 +26,55 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import cv2
-from skimage.metrics import structural_similarity
+import numpy as np
+from scipy.ndimage import uniform_filter
 
 from AV_Spex.utils.log_setup import logger
+
+
+def structural_similarity(im1, im2, win_size=7, data_range=255.0,
+                          K1=0.01, K2=0.03):
+    """Mean structural similarity (MSSIM) between two equal-shape 2D images.
+
+    Drop-in replacement for ``skimage.metrics.structural_similarity`` as it was
+    previously called here: two same-shape grayscale arrays, all-default
+    parameters. Faithfully reproduces skimage's 2D path — uniform (box) filter
+    over ``win_size``, sample-covariance normalization, and border crop — so the
+    returned scores are byte-for-byte comparable to the prior implementation.
+    Uses ``scipy.ndimage`` (already bundled) instead of pulling in scikit-image
+    and its large transitive dependency tail.
+    """
+    im1 = im1.astype(np.float64)
+    im2 = im2.astype(np.float64)
+
+    # Number of pixels in the sliding window (2D).
+    NP = win_size ** im1.ndim
+
+    # uniform_filter defaults to 'reflect' mode, matching skimage.
+    ux = uniform_filter(im1, size=win_size)
+    uy = uniform_filter(im2, size=win_size)
+    uxx = uniform_filter(im1 * im1, size=win_size)
+    uyy = uniform_filter(im2 * im2, size=win_size)
+    uxy = uniform_filter(im1 * im2, size=win_size)
+
+    # Sample-covariance normalization (skimage default use_sample_covariance=True).
+    cov_norm = NP / (NP - 1)
+    vx = cov_norm * (uxx - ux * ux)
+    vy = cov_norm * (uyy - uy * uy)
+    vxy = cov_norm * (uxy - ux * uy)
+
+    C1 = (K1 * data_range) ** 2
+    C2 = (K2 * data_range) ** 2
+
+    A1 = 2 * ux * uy + C1
+    A2 = 2 * vxy + C2
+    B1 = ux * ux + uy * uy + C1
+    B2 = vx + vy + C2
+    S = (A1 * A2) / (B1 * B2)
+
+    # Crop the border (filter footprint) before averaging, like skimage.
+    pad = (win_size - 1) // 2
+    return S[pad:-pad, pad:-pad].mean(dtype=np.float64)
 
 
 REFERENCE_FILENAME = "smpte_bars_reference.png"

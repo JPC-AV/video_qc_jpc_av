@@ -40,6 +40,9 @@ class ChecksTab(ThemeableMixin):
             elif selected_profile == "All Off":
                 profile = config_edit.profile_allOff
                 config_edit.apply_profile(profile)
+            elif selected_profile == "Vendor":
+                profile = config_edit.profile_vendor
+                config_edit.apply_profile(profile)
             else:
                 # Handle custom profiles - check if it's a custom profile
                 if selected_profile.startswith("[Custom] "):
@@ -132,9 +135,10 @@ class ChecksTab(ThemeableMixin):
             
             # Add built-in profiles
             self.main_window.checks_profile_dropdown.addItem("Step 1")
-            self.main_window.checks_profile_dropdown.addItem("Step 2") 
+            self.main_window.checks_profile_dropdown.addItem("Step 2")
             self.main_window.checks_profile_dropdown.addItem("All Off")
-            
+            self.main_window.checks_profile_dropdown.addItem("Vendor")
+
             # Add custom profiles
             custom_profiles = config_edit.get_available_custom_profiles()
             for profile_name in custom_profiles:
@@ -156,9 +160,11 @@ class ChecksTab(ThemeableMixin):
             checks_config = config_mgr.get_config('checks', ChecksConfig)
             
             # Simple heuristic to determine which profile is closest to current config
-            if checks_config.tools.exiftool.run_tool:  
+            if checks_config.tools.exiftool.run_tool and not checks_config.tools.exiftool.check_tool:
+                self.main_window.checks_profile_dropdown.setCurrentText("Vendor")
+            elif checks_config.tools.exiftool.run_tool:
                 self.main_window.checks_profile_dropdown.setCurrentText("Step 1")
-            elif checks_config.tools.qctools.run_tool:  
+            elif checks_config.tools.qctools.run_tool:
                 self.main_window.checks_profile_dropdown.setCurrentText("Step 2")
             else:
                 # Check if it matches any custom profile
@@ -237,7 +243,8 @@ class ChecksTab(ThemeableMixin):
         self.main_window.checks_profile_dropdown.addItem("Step 1")
         self.main_window.checks_profile_dropdown.addItem("Step 2")
         self.main_window.checks_profile_dropdown.addItem("All Off")
-        
+        self.main_window.checks_profile_dropdown.addItem("Vendor")
+
         # Add custom profiles to dropdown
         self.profile_handlers.refresh_profile_dropdown()
         

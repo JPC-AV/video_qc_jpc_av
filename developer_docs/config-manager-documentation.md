@@ -1,5 +1,7 @@
 # ConfigManager Documentation
 
+> **See also:** [`../CLAUDE.md`](../CLAUDE.md) for the project map · [`cli-documentation.md`](cli-documentation.md) for the processing flow · [`gui-documentation.md`](gui-documentation.md) for how the GUI reads/writes config.
+
 ## Overview
 
 The ConfigManager is a singleton class. It handles loading, caching, updating, and persisting configuration data across all modules in the AV Spex app.

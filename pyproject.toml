@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "AV_Spex"
-version = "0.9.9"
+version = "1.0.0"
 description = "A Python project written for NMAAHC media conservation lab"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -27,7 +27,6 @@ dependencies = [
     "opencv-python-headless>=4.10.0",
     "scipy>=1.14.0",
     "matplotlib>=3.9.0",
-    "scikit-image>=0.21.0",
 ]
 
 [project.urls]
