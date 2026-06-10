@@ -31,6 +31,11 @@ import matplotlib.patches as patches
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import ChecksConfig
+from AV_Spex.checks.qct_parse import (
+    _tc_format_timecode,
+    _tc_parse_start_timecode,
+    _get_video_start_timecode,
+)
 
 # Data classes for structured results
 @dataclass
@@ -111,6 +116,8 @@ class DuplicateFrameRun:
     cv_verified: bool           # True if MSE confirms near-identical frames
     first_frame_thumbnail: Optional[str] = None  # path to JPG of run's first frame
     last_frame_thumbnail: Optional[str] = None   # path to JPG of run's last frame
+    start_timecode: Optional[str] = None  # file timecode (NDF/DF, start-TC offset) of run start
+    end_timecode: Optional[str] = None    # file timecode of run end
 
 @dataclass
 class DuplicateFrameResult:
@@ -3773,6 +3780,20 @@ class EnhancedFrameAnalysis:
                 if thumb_cap is not None:
                     thumb_cap.release()
 
+        # Label each run with the file's own timecode (NDF/DF aware, offset by
+        # the stream's start TC) so reported positions match what an NLE shows,
+        # rather than the raw QCTools wall-clock seconds.
+        if final_runs:
+            tc_nominal = max(1, int(round(fps))) if fps else 30
+            tc_start_frames, tc_drop_frame = _tc_parse_start_timecode(
+                _get_video_start_timecode(str(self.video_path)), tc_nominal
+            )
+            for r in final_runs:
+                r.start_timecode = _tc_format_timecode(
+                    r.start_time, fps, tc_start_frames, tc_drop_frame)
+                r.end_timecode = _tc_format_timecode(
+                    r.end_time, fps, tc_start_frames, tc_drop_frame)
+
         total_dupes = sum(r.duplicate_count for r in final_runs)
         total_loss = sum(r.estimated_loss_seconds for r in final_runs)
 
@@ -3795,7 +3816,7 @@ class EnhancedFrameAnalysis:
         logger.info(f"Duplicate frame detection result: {status} — {message}\n")
         if final_runs:
             for i, r in enumerate(final_runs[:10], 1):
-                start_tc = f"{int(r.start_time // 60):02d}:{r.start_time % 60:05.2f}"
+                start_tc = r.start_timecode or f"{int(r.start_time // 60):02d}:{r.start_time % 60:05.2f}"
                 vrep_str = f", VREP={r.avg_vrep:.1f}" if r.avg_vrep > 0 else ""
                 mse_str = f", MSE={r.cv_mse:.2f}" if r.cv_mse is not None else ""
                 logger.info(

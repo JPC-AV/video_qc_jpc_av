@@ -4703,8 +4703,10 @@ def generate_duplicate_frame_html(frame_outputs):
                 return '<span style="color:#999; font-size:12px;">unavailable</span>'
 
         for i, run in enumerate(runs, 1):
-            start_t = run.get('start_time', 0.0)
-            end_t = run.get('end_time', 0.0)
+            # Prefer the file-timecode labels (NDF/DF aware, start-TC offset);
+            # fall back to raw seconds for results saved before they existed.
+            start_tc = run.get('start_timecode') or _fmt_tc(run.get('start_time', 0.0))
+            end_tc = run.get('end_timecode') or _fmt_tc(run.get('end_time', 0.0))
             frozen = run.get('frozen_frames', 0)
             est_loss = run.get('estimated_loss_seconds', 0.0)
             avg_ydif = run.get('avg_ydif', 0.0)
@@ -4717,8 +4719,8 @@ def generate_duplicate_frame_html(frame_outputs):
             html += f"""
             <tr>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{i}</td>
-                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{_fmt_tc(start_t)}</td>
-                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{_fmt_tc(end_t)}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; font-family: monospace;">{start_tc}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; font-family: monospace;">{end_tc}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{frozen}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{est_loss:.3f}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_ydif:.3f}</td>
