@@ -2504,10 +2504,16 @@ def _tc_merge_detections(detections):
 # measures only the channel *mix*, so a single loud channel keeps its meter
 # pinned and it smooths over gaps astats correctly reports. So astats region
 # boundaries are taken as authoritative; R128 is demoted to corroboration: it
-# adds "R128" to a region's method list where it overlaps, and only
-# contributes a standalone region where astats detected nothing at all (e.g.
-# TC sharing one channel with program audio, which the per-channel gate can
-# miss).
+# adds "R128" to a region's method list where it overlaps.
+#
+# When per-channel astats data exists in the report, R128 is corroboration
+# *only* — an R128 span that astats never confirmed is discarded, because the
+# R128 loudness-statistics gates alone cannot tell LTC from other
+# steady-loudness audio (heavily compressed music passes criterion A; quiet
+# speech over a near-silent second channel passes criterion C), whereas real
+# LTC reliably trips the per-channel astats fingerprint. Standalone R128
+# regions are only trusted on older QCTools reports that carry no per-channel
+# astats measurements, where R128 is the only evidence available.
 _TC_CONF_RANK = {'high': 3, 'medium': 2, 'low': 1}
 
 
@@ -2559,16 +2565,18 @@ def _tc_overlaps(a_start, a_end, b_start, b_end):
     return a_start <= b_end and b_start <= a_end
 
 
-def _tc_build_consensus(detections):
+def _tc_build_consensus(detections, astats_available=False):
     """Build consensus regions from the per-method detections, privileging
     astats for segmentation. The incoming astats detections are already
     per-channel-merged, so their boundaries are the authoritative region
     boundaries — overlapping channel-1/channel-2 spans are unioned into one
     region, but a gap astats left between two same-channel spans is preserved.
     R128 detections never create or extend a boundary; they only add the "R128"
-    method label where they overlap an astats region, and stand alone only on
-    spans astats never detected. Returns _TCConsensusRegion list sorted by start
-    time."""
+    method label where they overlap an astats region. An R128 span astats never
+    detected stands alone only when astats_available is False (the report has
+    no per-channel astats data, so R128 is the only evidence); with astats data
+    present, an uncorroborated R128 span is discarded as a false positive.
+    Returns _TCConsensusRegion list sorted by start time."""
     if not detections:
         return []
 
@@ -2587,11 +2595,21 @@ def _tc_build_consensus(detections):
             regions.append({'start': d.start_time, 'end': d.end_time, 'dets': [d]})
 
     # R128-only spans: an R128 detection that overlaps no astats region becomes
-    # its own region (TC astats couldn't isolate per-channel).
+    # its own region, but only when per-channel astats data was unavailable —
+    # if astats measured the channels and found no TC fingerprint there, the
+    # R128 loudness statistics alone are not trusted (stable music and quiet
+    # speech both pass them).
     for d in sorted(r128, key=lambda d: d.start_time):
         if not any(_tc_overlaps(d.start_time, d.end_time, r['start'], r['end'])
                    for r in regions):
-            regions.append({'start': d.start_time, 'end': d.end_time, 'dets': [d]})
+            if astats_available:
+                logger.debug(
+                    f"Discarding uncorroborated R128 timecode detection "
+                    f"{d.start_time:.1f}-{d.end_time:.1f}s ({d.criterion}): "
+                    f"per-channel astats data shows no TC fingerprint\n"
+                )
+            else:
+                regions.append({'start': d.start_time, 'end': d.end_time, 'dets': [d]})
 
     regions.sort(key=lambda r: r['start'])
 
@@ -2846,12 +2864,9 @@ def _detect_r128_criterion_c(times, m_vals, s_vals, lra_high_vals, window_size):
     return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
 
 
-def _detect_astats_timecode(frames):
-    """Detect audible timecode using FFmpeg astats per-channel measurements."""
-    if not frames:
-        return []
-
-    # Determine available channels
+def _tc_astats_channels(frames):
+    """Return the set of channel numbers (as strings) that carry per-channel
+    astats measurements, probed from the first few frames."""
     channels = set()
     for frame in frames[:5]:
         for key in frame['tags']:
@@ -2859,7 +2874,15 @@ def _detect_astats_timecode(frames):
                 channels.add('1')
             elif key.startswith('lavfi.astats.2.'):
                 channels.add('2')
+    return channels
 
+
+def _detect_astats_timecode(frames):
+    """Detect audible timecode using FFmpeg astats per-channel measurements."""
+    if not frames:
+        return []
+
+    channels = _tc_astats_channels(frames)
     if not channels:
         return []
 
@@ -3134,12 +3157,16 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
         logger.debug("No recognized audio metrics (r128 or astats) found for timecode detection\n")
         return None
 
-    tc_detected = len(detections) > 0
     duration = tc_frames[-1]['time'] if tc_frames else 0
 
     # Collapse the overlapping per-method detections into consensus regions —
     # this is what the report shows and what "Regions Detected" now counts.
-    consensus = _tc_build_consensus(detections)
+    # When per-channel astats data exists, an R128 detection astats never
+    # corroborated is discarded, so "detected" follows the consensus, not the
+    # raw per-method list.
+    consensus = _tc_build_consensus(
+        detections, astats_available=bool(_tc_astats_channels(tc_frames)))
+    tc_detected = len(consensus) > 0
 
     results = {
         'timecode_detected': tc_detected,

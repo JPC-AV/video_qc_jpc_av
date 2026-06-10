@@ -427,8 +427,8 @@ def test_tc_build_consensus_r128_does_not_bridge_astats_gap():
 
 
 def test_tc_build_consensus_r128_only_span_stands_alone():
-    """An R128 detection that overlaps no astats region becomes its own
-    region, labelled as mix-based."""
+    """Without per-channel astats data, an R128 detection that overlaps no
+    astats region becomes its own region, labelled as mix-based."""
     dets = [
         qp._TCDetection(start_time=0, end_time=100,
                         criterion="astats (ch1)", channel="ch1", confidence="high"),
@@ -442,6 +442,77 @@ def test_tc_build_consensus_r128_only_span_stands_alone():
     assert r128_region.start_time == 300 and r128_region.end_time == 400
     assert r128_region.methods == "R128"
     assert r128_region.channel == "Not channel-specific (mix-based)"
+
+
+def test_tc_build_consensus_uncorroborated_r128_dropped_when_astats_available():
+    """With per-channel astats data present, an R128 detection astats never
+    corroborated is discarded (stable music / quiet speech pass the R128
+    loudness gates without being LTC); overlapping R128 still corroborates."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+        qp._TCDetection(start_time=5, end_time=95,
+                        criterion="R128-A (stable mix at TC level)",
+                        channel="n/a (mix-based)", confidence="high"),
+        qp._TCDetection(start_time=300, end_time=400,
+                        criterion="R128-C (TC + program audio)",
+                        channel="one channel", confidence="high"),
+    ]
+    regions = qp._tc_build_consensus(dets, astats_available=True)
+    assert len(regions) == 1
+    assert regions[0].start_time == 0 and regions[0].end_time == 100
+    assert regions[0].methods == "R128 + astats (ch1)"
+
+
+def test_tc_build_consensus_r128_only_detections_all_dropped_when_astats_available():
+    """A detection list that is *only* uncorroborated R128 spans collapses to
+    no consensus regions when astats data was available."""
+    dets = [
+        qp._TCDetection(start_time=49, end_time=302,
+                        criterion="R128-A (stable mix at TC level)",
+                        channel="n/a (mix-based)", confidence="high"),
+    ]
+    assert qp._tc_build_consensus(dets, astats_available=True) == []
+
+
+def _r128_astats_frames(n_frames, astats_tc):
+    """Synthetic 'both metrics' frames at 1s spacing: rock-stable r128 mix
+    loudness at TC level (passes R128-A in every window) plus per-channel
+    astats tags that are LTC-like when astats_tc=True, non-TC otherwise."""
+    frames = []
+    for i in range(n_frames):
+        f = _astats_frame(float(i), tc=astats_tc)
+        f["tags"]["lavfi.r128.M"] = -19.0
+        f["tags"]["lavfi.r128.LRA"] = 2.0
+        frames.append(f)
+    return frames
+
+
+def test_detect_and_write_timecode_uncorroborated_r128_reports_no(tmp_path):
+    """When the report carries per-channel astats data but only R128 fires
+    (e.g. stable compressed music), the run reports no audible timecode: no
+    consensus regions, detected=False, CSV summary says No — while the raw
+    R128 detection is still recorded in the per-method forensic section."""
+    frames = _r128_astats_frames(240, astats_tc=False)
+    results = qp._detect_and_write_timecode_results(frames, 'both', str(tmp_path))
+    assert results['timecode_detected'] is False
+    assert results['consensus_regions'] == []
+    assert any(d['criterion'].startswith('R128') for d in results['detections'])
+    csv_text = (tmp_path / "qct-parse_audible_timecode.csv").read_text()
+    assert "Audible Timecode Detected,No" in csv_text
+    assert "Regions Detected,0" in csv_text
+
+
+def test_detect_and_write_timecode_astats_corroborated_reports_yes(tmp_path):
+    """Same r128 mix, but the per-channel astats fingerprint is LTC-like:
+    consensus keeps the region and the run reports detection."""
+    frames = _r128_astats_frames(240, astats_tc=True)
+    results = qp._detect_and_write_timecode_results(frames, 'both', str(tmp_path))
+    assert results['timecode_detected'] is True
+    assert len(results['consensus_regions']) == 1
+    assert results['consensus_regions'][0]['methods'] == "R128 + astats (ch1)"
+    csv_text = (tmp_path / "qct-parse_audible_timecode.csv").read_text()
+    assert "Audible Timecode Detected,Yes" in csv_text
 
 
 def test_tc_build_consensus_both_channels_label():

@@ -1436,7 +1436,10 @@ def make_audible_timecode_html(audible_timecode_csv):
             <strong>consensus regions</strong> shown below &mdash; one row per contiguous span of
             audible timecode. The per-channel <code>astats</code> boundaries are authoritative
             (they resolve true breaks where the TC carrier stutters or one channel drops out, which
-            the mix-based R128 meter smooths over); R128 corroborates. The <em>Detection Methods</em>
+            the mix-based R128 meter smooths over); R128 corroborates. When the QCTools report
+            carries per-channel <code>astats</code> data, an R128 detection that <code>astats</code>
+            never corroborated is discarded &mdash; loudness statistics alone can't tell LTC from
+            other steady-loudness audio (e.g. heavily compressed music). The <em>Detection Methods</em>
             column lists which methods agreed on each region.
         </p>
         <p style="margin: 10px 0 0 0;">
