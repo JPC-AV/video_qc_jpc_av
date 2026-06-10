@@ -241,6 +241,65 @@ def test_tc_format_time(seconds, expected):
     assert qp._tc_format_time(seconds) == expected
 
 
+def test_tc_format_timecode_ndf_matches_nle():
+    """Real-elapsed seconds format as NDF timecode at 29.97: frame index =
+    round(seconds*fps), relabelled base-30. At 36:32.3 real this is 00:36:30:xx,
+    ~2s lower than the elapsed minutes/seconds (the NDF drift the NLE shows)."""
+    fps = 30000 / 1001
+    assert qp._tc_format_timecode(0.0, fps) == "00:00:00:00"
+    # 2192.36 s ≈ DVR-reported 00:36:30:05 for 21458342
+    assert qp._tc_format_timecode(2192.36, fps) == "00:36:30:05"
+    # frame boundary: 100 frames at 29.97 → 00:00:03:10
+    assert qp._tc_format_timecode(100 / fps, fps) == "00:00:03:10"
+
+
+def test_tc_format_timecode_defaults_to_ntsc():
+    """A missing/zero fps falls back to NTSC 29.97 rather than erroring."""
+    assert qp._tc_format_timecode(0.0, None) == "00:00:00:00"
+    assert qp._tc_format_timecode(0.0, 0) == "00:00:00:00"
+
+
+def test_tc_format_timecode_applies_start_offset():
+    """The stream start-timecode offset (in frames) is added to every position."""
+    fps = 30000 / 1001
+    # 9-frame NDF start (the LC vrecord captures): frame 0 reads 00:00:00:09
+    assert qp._tc_format_timecode(0.0, fps, start_frames=9) == "00:00:00:09"
+    # 1-hour start offset (the earlier broadcast batch): 3600 s * 30 = 108000 frames
+    one_hour = 3600 * 30
+    assert qp._tc_format_timecode(0.0, fps, start_frames=one_hour) == "01:00:00:00"
+
+
+@pytest.mark.parametrize("tc,nominal,expected_frames,expected_df", [
+    ("00:00:00:09", 30, 9, False),
+    ("01:00:00:00", 30, 3600 * 30, False),
+    ("00:00:00;00", 30, 0, True),       # ';' marks drop-frame
+    ("00:01:00;02", 30, 1800, True),    # first valid frame after the 1-min drop
+    ("garbage", 30, 0, False),
+    (None, 30, 0, False),
+])
+def test_tc_parse_start_timecode(tc, nominal, expected_frames, expected_df):
+    frames, drop = qp._tc_parse_start_timecode(tc, nominal)
+    assert frames == expected_frames
+    assert drop == expected_df
+
+
+@pytest.mark.parametrize("h,m,s,f", [
+    (0, 0, 0, 0), (0, 1, 0, 2), (0, 9, 59, 29), (0, 10, 0, 0), (1, 0, 0, 0),
+])
+def test_tc_df_roundtrip(h, m, s, f):
+    """Drop-frame fields → frame index → fields is the identity for valid TCs."""
+    frame = qp._tc_df_to_frames(h, m, s, f, 30)
+    assert qp._tc_frames_to_df(frame, 30) == (h, m, s, f)
+
+
+def test_tc_format_timecode_drop_frame_tracks_wall_time():
+    """Drop-frame output uses ';' and tracks wall-clock time: at 600 s real it
+    reads 00:10:00;00, where plain NDF would have drifted to ~00:09:59:12."""
+    fps = 30000 / 1001
+    assert qp._tc_format_timecode(600.0, fps, drop_frame=True) == "00:10:00;00"
+    assert qp._tc_format_timecode(600.0, fps, drop_frame=False) == "00:09:59:12"
+
+
 # ---- _tc_filter_by_consecutive ------------------------------------------
 
 def _make_tc(start, end, criterion="A"):
@@ -316,6 +375,240 @@ def test_tc_merge_detections_promotes_high_confidence():
     merged = qp._tc_merge_detections([a, b])
     assert len(merged) == 1
     assert merged[0].confidence == "high"
+
+
+# ---------------------------------------------------------------------------
+# Cross-method consensus
+# ---------------------------------------------------------------------------
+
+def test_tc_build_consensus_empty_returns_empty():
+    assert qp._tc_build_consensus([]) == []
+
+
+def test_tc_build_consensus_astats_boundaries_authoritative():
+    """An overlapping R128 region only corroborates — the consensus region
+    takes astats' boundaries, not R128's wider span."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="R128-A (stable mix at TC level)",
+                        channel="n/a (mix-based)", confidence="high"),
+        qp._TCDetection(start_time=5, end_time=90,
+                        criterion="astats (ch1)", channel="ch1", confidence="medium"),
+    ]
+    regions = qp._tc_build_consensus(dets)
+    assert len(regions) == 1
+    r = regions[0]
+    assert r.start_time == 5 and r.end_time == 90   # astats boundaries, not 0–100
+    assert r.channel == "Channel 1"
+    assert r.confidence == "high"                   # highest contributor wins
+    assert r.method_count == 2
+    assert r.methods == "R128 + astats (ch1)"
+
+
+def test_tc_build_consensus_r128_does_not_bridge_astats_gap():
+    """R128's continuous coverage must NOT bridge a gap astats left between two
+    same-channel regions — astats is authoritative, so the gap stays a
+    boundary (the 21458279 51:20–51:55 case)."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=600,
+                        criterion="R128-A (stable mix at TC level)",
+                        channel="n/a (mix-based)", confidence="high"),
+        qp._TCDetection(start_time=0, end_time=180,
+                        criterion="astats (ch1)", channel="ch1", confidence="medium"),
+        qp._TCDetection(start_time=200, end_time=600,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+    ]
+    regions = qp._tc_build_consensus(dets)
+    assert len(regions) == 2
+    assert regions[0].start_time == 0 and regions[0].end_time == 180
+    assert regions[1].start_time == 200 and regions[1].end_time == 600
+    # Both still credit R128 as corroborating.
+    assert all(r.methods == "R128 + astats (ch1)" for r in regions)
+
+
+def test_tc_build_consensus_r128_only_span_stands_alone():
+    """Without per-channel astats data, an R128 detection that overlaps no
+    astats region becomes its own region, labelled as mix-based."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+        qp._TCDetection(start_time=300, end_time=400,
+                        criterion="R128-C (TC + program audio)",
+                        channel="one channel", confidence="medium"),
+    ]
+    regions = qp._tc_build_consensus(dets)
+    assert len(regions) == 2
+    r128_region = regions[1]
+    assert r128_region.start_time == 300 and r128_region.end_time == 400
+    assert r128_region.methods == "R128"
+    assert r128_region.channel == "Not channel-specific (mix-based)"
+
+
+def test_tc_build_consensus_uncorroborated_r128_dropped_when_astats_available():
+    """With per-channel astats data present, an R128 detection astats never
+    corroborated is discarded (stable music / quiet speech pass the R128
+    loudness gates without being LTC); overlapping R128 still corroborates."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+        qp._TCDetection(start_time=5, end_time=95,
+                        criterion="R128-A (stable mix at TC level)",
+                        channel="n/a (mix-based)", confidence="high"),
+        qp._TCDetection(start_time=300, end_time=400,
+                        criterion="R128-C (TC + program audio)",
+                        channel="one channel", confidence="high"),
+    ]
+    regions = qp._tc_build_consensus(dets, astats_available=True)
+    assert len(regions) == 1
+    assert regions[0].start_time == 0 and regions[0].end_time == 100
+    assert regions[0].methods == "R128 + astats (ch1)"
+
+
+def test_tc_build_consensus_r128_only_detections_all_dropped_when_astats_available():
+    """A detection list that is *only* uncorroborated R128 spans collapses to
+    no consensus regions when astats data was available."""
+    dets = [
+        qp._TCDetection(start_time=49, end_time=302,
+                        criterion="R128-A (stable mix at TC level)",
+                        channel="n/a (mix-based)", confidence="high"),
+    ]
+    assert qp._tc_build_consensus(dets, astats_available=True) == []
+
+
+def _r128_astats_frames(n_frames, astats_tc):
+    """Synthetic 'both metrics' frames at 1s spacing: rock-stable r128 mix
+    loudness at TC level (passes R128-A in every window) plus per-channel
+    astats tags that are LTC-like when astats_tc=True, non-TC otherwise."""
+    frames = []
+    for i in range(n_frames):
+        f = _astats_frame(float(i), tc=astats_tc)
+        f["tags"]["lavfi.r128.M"] = -19.0
+        f["tags"]["lavfi.r128.LRA"] = 2.0
+        frames.append(f)
+    return frames
+
+
+def test_detect_and_write_timecode_uncorroborated_r128_reports_no(tmp_path):
+    """When the report carries per-channel astats data but only R128 fires
+    (e.g. stable compressed music), the run reports no audible timecode: no
+    consensus regions, detected=False, CSV summary says No — while the raw
+    R128 detection is still recorded in the per-method forensic section."""
+    frames = _r128_astats_frames(240, astats_tc=False)
+    results = qp._detect_and_write_timecode_results(frames, 'both', str(tmp_path))
+    assert results['timecode_detected'] is False
+    assert results['consensus_regions'] == []
+    assert any(d['criterion'].startswith('R128') for d in results['detections'])
+    csv_text = (tmp_path / "qct-parse_audible_timecode.csv").read_text()
+    assert "Audible Timecode Detected,No" in csv_text
+    assert "Regions Detected,0" in csv_text
+
+
+def test_detect_and_write_timecode_astats_corroborated_reports_yes(tmp_path):
+    """Same r128 mix, but the per-channel astats fingerprint is LTC-like:
+    consensus keeps the region and the run reports detection."""
+    frames = _r128_astats_frames(240, astats_tc=True)
+    results = qp._detect_and_write_timecode_results(frames, 'both', str(tmp_path))
+    assert results['timecode_detected'] is True
+    assert len(results['consensus_regions']) == 1
+    assert results['consensus_regions'][0]['methods'] == "R128 + astats (ch1)"
+    csv_text = (tmp_path / "qct-parse_audible_timecode.csv").read_text()
+    assert "Audible Timecode Detected,Yes" in csv_text
+
+
+def test_tc_build_consensus_both_channels_label():
+    """Overlapping ch1 + ch2 astats detections union into one 'Both channels'
+    region."""
+    dets = [
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="astats (ch1)", channel="both (ch1)", confidence="high"),
+        qp._TCDetection(start_time=0, end_time=100,
+                        criterion="astats (ch2)", channel="both (ch2)", confidence="high"),
+    ]
+    regions = qp._tc_build_consensus(dets)
+    assert len(regions) == 1
+    assert regions[0].channel == "Both channels"
+    assert regions[0].method_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Per-frame astats gap refinement
+# ---------------------------------------------------------------------------
+
+def _astats_frame(t, ch="1", tc=True):
+    """Synthetic audio frame: in-band LTC fingerprint when tc=True, otherwise a
+    silent/disturbed (non-TC) frame."""
+    if tc:
+        vals = {"RMS_level": -21.0, "Crest_factor": 1.7,
+                "Zero_crossings_rate": 0.07, "Entropy": 0.68}
+    else:
+        vals = {"RMS_level": -70.0, "Crest_factor": 5.0,
+                "Zero_crossings_rate": 0.30, "Entropy": 0.30}
+    return {"time": t, "tags": {f"lavfi.astats.{ch}.{k}": v for k, v in vals.items()}}
+
+
+def _astats_frames(segments, fps=10, ch="1"):
+    """Build a frame list from (duration_sec, is_tc) segments at the given fps."""
+    frames = []
+    t = 0.0
+    step = 1.0 / fps
+    for dur, tc in segments:
+        for _ in range(int(round(dur * fps))):
+            frames.append(_astats_frame(round(t, 3), ch=ch, tc=tc))
+            t += step
+    return frames
+
+
+def test_tc_frame_in_band_accepts_tc_rejects_others():
+    assert qp._tc_frame_in_band(_astats_frame(0, tc=True)["tags"], "1")
+    assert not qp._tc_frame_in_band(_astats_frame(0, tc=False)["tags"], "1")
+    # missing metrics → not TC
+    assert not qp._tc_frame_in_band({}, "1")
+
+
+def test_tc_find_tc_subregions_splits_on_sustained_gap():
+    """A sustained non-TC run (>= _TC_GAP_MIN_SEC) splits the span in two."""
+    frames = _astats_frames([(20, True), (5, False), (20, True)])
+    subs = qp._tc_find_tc_subregions(frames, "1", 0.0, frames[-1]["time"])
+    assert len(subs) == 2
+    assert subs[0][0] == 0.0 and abs(subs[0][1] - 19.9) < 0.2
+    assert abs(subs[1][0] - 25.0) < 0.2
+
+
+def test_tc_find_tc_subregions_ignores_brief_blip():
+    """A non-TC blip shorter than _TC_GAP_MIN_SEC is not a gap — one region."""
+    blip = qp._TC_GAP_MIN_SEC / 2.0
+    frames = _astats_frames([(20, True), (blip, False), (20, True)])
+    subs = qp._tc_find_tc_subregions(frames, "1", 0.0, frames[-1]["time"])
+    assert len(subs) == 1
+
+
+def test_tc_refine_astats_gaps_reclaims_tc_across_spurious_window_gap():
+    """Two windowed regions split by a spurious gap, but with TC frames spanning
+    the gap, merge back into one region (the 21458342 over-drop case)."""
+    frames = _astats_frames([(100, True)])   # TC is continuous the whole time
+    windowed = [
+        qp._TCDetection(start_time=0, end_time=40,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+        qp._TCDetection(start_time=60, end_time=100,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+    ]
+    refined = qp._tc_refine_astats_gaps(frames, windowed)
+    assert len(refined) == 1
+    assert refined[0].start_time == 0.0
+    assert refined[0].end_time >= 99.0
+
+
+def test_tc_refine_astats_gaps_splits_on_real_gap():
+    """A genuine sustained gap inside a windowed region splits it in two."""
+    frames = _astats_frames([(40, True), (10, False), (40, True)])
+    windowed = [
+        qp._TCDetection(start_time=0, end_time=90,
+                        criterion="astats (ch1)", channel="ch1", confidence="high"),
+    ]
+    refined = qp._tc_refine_astats_gaps(frames, windowed)
+    assert len(refined) == 2
+    assert abs(refined[0].end_time - 39.9) < 0.3
+    assert abs(refined[1].start_time - 50.0) < 0.3
 
 
 # ===========================================================================
