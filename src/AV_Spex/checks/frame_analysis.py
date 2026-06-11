@@ -31,6 +31,11 @@ import matplotlib.patches as patches
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import ChecksConfig
+from AV_Spex.checks.qct_parse import (
+    _tc_format_timecode,
+    _tc_parse_start_timecode,
+    _get_video_start_timecode,
+)
 
 # Data classes for structured results
 @dataclass
@@ -111,6 +116,8 @@ class DuplicateFrameRun:
     cv_verified: bool           # True if MSE confirms near-identical frames
     first_frame_thumbnail: Optional[str] = None  # path to JPG of run's first frame
     last_frame_thumbnail: Optional[str] = None   # path to JPG of run's last frame
+    start_timecode: Optional[str] = None  # file timecode (NDF/DF, start-TC offset) of run start
+    end_timecode: Optional[str] = None    # file timecode of run end
 
 @dataclass
 class DuplicateFrameResult:
@@ -163,21 +170,43 @@ class QCToolsParser:
         self.bit_depth_10 = self._detect_bit_depth()
         
     def _detect_bit_depth(self) -> bool:
-        """Detect if video is 10-bit by checking YMAX values"""
+        """Detect whether the QCTools stats are in 10-bit scale.
+
+        Primary signal: the chroma midpoint. UAVG/VAVG sits near 512 in a
+        10-bit-scale report and near 128 in an 8-bit one, regardless of
+        content — including the black leader many tapes open with, which
+        defeats a YMAX-based scan (dark head frames never exceed 250, so a
+        10-bit file reads as 8-bit). Note QCTools may compute stats in
+        10-bit scale even when the frame element's pix_fmt says 8-bit, so
+        the stats themselves are the only reliable source. Falls back to
+        the YMAX heuristic when chroma tags are absent.
+        """
         try:
             if self.report_path.endswith('.gz'):
                 file_handle = gzip.open(self.report_path, 'rt')
             else:
                 file_handle = open(self.report_path, 'r')
-            
+
             parser = ET.iterparse(file_handle, events=['start', 'end'])
             parser = iter(parser)
             event, root = next(parser)
-            
+
             frame_count = 0
             for event, elem in parser:
                 if event == 'end' and elem.tag == 'frame':
-                    ymax = float(elem.findtext('.//tag[@key="lavfi.signalstats.YMAX"]', '255'))
+                    # Real QCTools tags are empty elements (<tag key=... value=.../>),
+                    # so read the value attribute; text content is a fallback.
+                    for chroma_key in ('UAVG', 'VAVG'):
+                        tag = elem.find(f'.//tag[@key="lavfi.signalstats.{chroma_key}"]')
+                        if tag is not None:
+                            avg = tag.get('value') or tag.text
+                            if avg:
+                                file_handle.close()
+                                return float(avg) > 300
+                    ymax_tag = elem.find('.//tag[@key="lavfi.signalstats.YMAX"]')
+                    ymax = 255.0
+                    if ymax_tag is not None:
+                        ymax = float(ymax_tag.get('value') or ymax_tag.text or '255')
                     if ymax > 250:
                         file_handle.close()
                         return True
@@ -186,7 +215,7 @@ class QCToolsParser:
                         break
                     elem.clear()
                     root.clear()
-            
+
             file_handle.close()
             return False
         except:
@@ -579,20 +608,31 @@ class QCToolsParser:
                 avg_udif, avg_vdif, avg_vrep
               thresholds is {'ydif': float, 'udif': float, 'vdif': float}
         """
-        # Bit-depth-aware thresholds. The qct-parse module scales 10-bit
-        # thresholds ~4x relative to 8-bit (10-bit codes are 4x 8-bit codes).
-        # A genuine TBC duplicate has effectively zero diff; allow a small
-        # margin for digital noise.
+        # Bit-depth-aware thresholds. A genuine TBC duplicate has effectively
+        # zero diff; the margin only needs to cover capture noise on the
+        # repeated frame. Calibrated against vendor LC tapes (10-bit scale):
+        # real freezes sit at YDIF ~0.6-0.8 while ordinary low-motion content
+        # starts around 1.5, so 1.0 separates them cleanly. 4.0 (the naive
+        # "10-bit codes are 4x" scaling) admits low-motion content. 8-bit
+        # threshold is the proportional equivalent.
         if self.bit_depth_10:
-            ydif_thresh = 4.0
-            udif_thresh = 4.0
-            vdif_thresh = 4.0
-        else:
             ydif_thresh = 1.0
             udif_thresh = 1.0
             vdif_thresh = 1.0
+        else:
+            ydif_thresh = 0.25
+            udif_thresh = 0.25
+            vdif_thresh = 0.25
 
         thresholds = {'ydif': ydif_thresh, 'udif': udif_thresh, 'vdif': vdif_thresh}
+        # Flat-field exclusion: during signal loss the deck/TBC outputs a
+        # synthetic frame in which every pixel is identical (YMIN == YMAX,
+        # zero saturation). Runs of those are bit-identical and sail through
+        # the diff thresholds, but they're signal loss, not a TBC/framesync
+        # freeze of picture content. Real frozen picture keeps spatial
+        # structure (YMAX - YMIN in the hundreds, even for dark scenes).
+        flat_spread_thresh = 8.0 if self.bit_depth_10 else 2.0
+        flat_frames_excluded = 0
         black_segments = black_segments or []
         runs: List[Dict] = []
 
@@ -678,10 +718,26 @@ class QCToolsParser:
                 vdif = float(vdif_tag.get('value', '999')) if vdif_tag is not None else 999.0
                 vrep = float(vrep_tag.get('value', '0')) if vrep_tag is not None else 0.0
 
-                is_candidate = (
+                is_low_diff = (
                     ydif < ydif_thresh
                     and udif < udif_thresh
                     and vdif < vdif_thresh
+                )
+
+                is_flat = False
+                if is_low_diff:
+                    ymin_tag = elem.find('.//tag[@key="lavfi.signalstats.YMIN"]')
+                    ymax_tag = elem.find('.//tag[@key="lavfi.signalstats.YMAX"]')
+                    if ymin_tag is not None and ymax_tag is not None:
+                        y_spread = (float(ymax_tag.get('value', '999'))
+                                    - float(ymin_tag.get('value', '0')))
+                        is_flat = y_spread < flat_spread_thresh
+                    if is_flat:
+                        flat_frames_excluded += 1
+
+                is_candidate = (
+                    is_low_diff
+                    and not is_flat
                     and not _in_excluded_region(timestamp)
                 )
 
@@ -702,6 +758,12 @@ class QCToolsParser:
             # Close any open run at end of file
             _close_run()
             file_handle.close()
+
+            if flat_frames_excluded:
+                logger.info(
+                    f"  Excluded {flat_frames_excluded} flat-field frame(s) "
+                    f"(signal-loss black/mute output, not frozen picture)"
+                )
 
         except Exception as e:
             logger.error(f"Error scanning QCTools report for duplicate frames: {e}")
@@ -3668,9 +3730,12 @@ class EnhancedFrameAnalysis:
 
         # MSE threshold: an actual duplicate has near-zero MSE; allow a tiny
         # margin for codec noise. Computed on luma only (matches YDIF semantics).
-        mse_threshold = 5.0
+        # Calibrated against vendor LC tapes: verified freezes measure MSE
+        # 0.02-0.09; merely similar frames (low-motion content) start at ~0.7.
+        mse_threshold = 0.5
 
         verified_runs: List[DuplicateFrameRun] = []
+        flat_runs_rejected = 0
         for idx, candidate in enumerate(candidate_runs):
             if self.check_cancelled():
                 break
@@ -3685,6 +3750,7 @@ class EnhancedFrameAnalysis:
                 seek_time_s = max(0.0, candidate['start_time'] - frame_period)
                 pairs_to_test = min(3, candidate['duplicate_count'])
                 mse_values: List[float] = []
+                frame_stds: List[float] = []
                 try:
                     cap.set(cv2.CAP_PROP_POS_MSEC, seek_time_s * 1000.0)
                     ret, prev_frame = cap.read()
@@ -3699,9 +3765,22 @@ class EnhancedFrameAnalysis:
                                 break
                             diff = cur_y.astype(np.int32) - prev_y.astype(np.int32)
                             mse_values.append(float((diff * diff).mean()))
+                            frame_stds.append(float(cur_y.std()))
                             prev_y = cur_y
                 except Exception as e:
                     logger.debug(f"  OpenCV verification error for run {idx + 1}: {e}")
+
+                # Flat-field rejection (mirrors the QCTools-level exclusion,
+                # for reports that lack YMIN/YMAX): a frame with essentially
+                # no spatial variation is the deck's signal-loss black/mute
+                # output, not frozen picture content.
+                if frame_stds and max(frame_stds) < 1.0:
+                    flat_runs_rejected += 1
+                    logger.debug(
+                        f"  Run {idx + 1} at {candidate['start_time']:.3f}s rejected: "
+                        f"flat-field frames (signal loss), not a freeze"
+                    )
+                    continue
 
                 if mse_values:
                     cv_mse = sum(mse_values) / len(mse_values)
@@ -3725,6 +3804,12 @@ class EnhancedFrameAnalysis:
 
         if cap is not None:
             cap.release()
+
+        if flat_runs_rejected:
+            logger.info(
+                f"  OpenCV verification rejected {flat_runs_rejected} run(s) as "
+                f"flat-field signal loss (not frozen picture)"
+            )
 
         # Keep only runs that OpenCV verified (when verification was available)
         if cap is None:
@@ -3773,6 +3858,20 @@ class EnhancedFrameAnalysis:
                 if thumb_cap is not None:
                     thumb_cap.release()
 
+        # Label each run with the file's own timecode (NDF/DF aware, offset by
+        # the stream's start TC) so reported positions match what an NLE shows,
+        # rather than the raw QCTools wall-clock seconds.
+        if final_runs:
+            tc_nominal = max(1, int(round(fps))) if fps else 30
+            tc_start_frames, tc_drop_frame = _tc_parse_start_timecode(
+                _get_video_start_timecode(str(self.video_path)), tc_nominal
+            )
+            for r in final_runs:
+                r.start_timecode = _tc_format_timecode(
+                    r.start_time, fps, tc_start_frames, tc_drop_frame)
+                r.end_timecode = _tc_format_timecode(
+                    r.end_time, fps, tc_start_frames, tc_drop_frame)
+
         total_dupes = sum(r.duplicate_count for r in final_runs)
         total_loss = sum(r.estimated_loss_seconds for r in final_runs)
 
@@ -3795,7 +3894,7 @@ class EnhancedFrameAnalysis:
         logger.info(f"Duplicate frame detection result: {status} — {message}\n")
         if final_runs:
             for i, r in enumerate(final_runs[:10], 1):
-                start_tc = f"{int(r.start_time // 60):02d}:{r.start_time % 60:05.2f}"
+                start_tc = r.start_timecode or f"{int(r.start_time // 60):02d}:{r.start_time % 60:05.2f}"
                 vrep_str = f", VREP={r.avg_vrep:.1f}" if r.avg_vrep > 0 else ""
                 mse_str = f", MSE={r.cv_mse:.2f}" if r.cv_mse is not None else ""
                 logger.info(

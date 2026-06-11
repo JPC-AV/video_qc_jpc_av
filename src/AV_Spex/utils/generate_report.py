@@ -4627,7 +4627,9 @@ def generate_duplicate_frame_html(frame_outputs):
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
             <li style="margin-bottom: 4px;"><strong>QCTools candidate filter</strong> &mdash; The QCTools
                 report is scanned for runs of consecutive frames whose YDIF, UDIF, and VDIF values all fall
-                below bit-depth-aware thresholds. Color bars and detected black segments are excluded.</li>
+                below bit-depth-aware thresholds. Color bars, detected black segments, and flat-field
+                frames (the deck's synthetic black/mute output during signal loss, which is bit-identical
+                frame to frame but is not frozen picture content) are excluded.</li>
             <li style="margin-bottom: 4px;"><strong>OpenCV verification</strong> &mdash; Each candidate is
                 verified by reading the actual frames with OpenCV and computing the mean squared error
                 against the preceding frame. Candidates that don't confirm as near-identical are dropped.</li>
@@ -4703,8 +4705,10 @@ def generate_duplicate_frame_html(frame_outputs):
                 return '<span style="color:#999; font-size:12px;">unavailable</span>'
 
         for i, run in enumerate(runs, 1):
-            start_t = run.get('start_time', 0.0)
-            end_t = run.get('end_time', 0.0)
+            # Prefer the file-timecode labels (NDF/DF aware, start-TC offset);
+            # fall back to raw seconds for results saved before they existed.
+            start_tc = run.get('start_timecode') or _fmt_tc(run.get('start_time', 0.0))
+            end_tc = run.get('end_timecode') or _fmt_tc(run.get('end_time', 0.0))
             frozen = run.get('frozen_frames', 0)
             est_loss = run.get('estimated_loss_seconds', 0.0)
             avg_ydif = run.get('avg_ydif', 0.0)
@@ -4717,8 +4721,8 @@ def generate_duplicate_frame_html(frame_outputs):
             html += f"""
             <tr>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{i}</td>
-                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{_fmt_tc(start_t)}</td>
-                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{_fmt_tc(end_t)}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; font-family: monospace;">{start_tc}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; font-family: monospace;">{end_tc}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{frozen}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{est_loss:.3f}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_ydif:.3f}</td>
