@@ -4627,7 +4627,9 @@ def generate_duplicate_frame_html(frame_outputs):
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
             <li style="margin-bottom: 4px;"><strong>QCTools candidate filter</strong> &mdash; The QCTools
                 report is scanned for runs of consecutive frames whose YDIF, UDIF, and VDIF values all fall
-                below bit-depth-aware thresholds. Color bars and detected black segments are excluded.</li>
+                below bit-depth-aware thresholds. Color bars, detected black segments, and flat-field
+                frames (the deck's synthetic black/mute output during signal loss, which is bit-identical
+                frame to frame but is not frozen picture content) are excluded.</li>
             <li style="margin-bottom: 4px;"><strong>OpenCV verification</strong> &mdash; Each candidate is
                 verified by reading the actual frames with OpenCV and computing the mean squared error
                 against the preceding frame. Candidates that don't confirm as near-identical are dropped.</li>

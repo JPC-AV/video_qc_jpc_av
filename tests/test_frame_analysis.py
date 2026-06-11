@@ -203,6 +203,22 @@ def test_detect_bit_depth_unreadable_returns_false():
     assert parser.bit_depth_10 is False
 
 
+def test_detect_bit_depth_chroma_midpoint_overrides_dark_ymax(tmp_path):
+    """UAVG ~512 → 10-bit scale, even when the file opens with black leader
+    (YMAX never exceeds 250 in the scanned frames)."""
+    frames = [{"tags": {"YMAX": "64", "UAVG": "512.3"}}] * 5
+    path = _write_qctools(tmp_path, frames)
+    parser = fa.QCToolsParser(path)
+    assert parser.bit_depth_10 is True
+
+
+def test_detect_bit_depth_chroma_midpoint_8bit(tmp_path):
+    """UAVG ~128 → 8-bit scale, decided from the first frame."""
+    path = _write_qctools(tmp_path, [{"tags": {"YMAX": "200", "UAVG": "128.1"}}])
+    parser = fa.QCToolsParser(path)
+    assert parser.bit_depth_10 is False
+
+
 # ---- _extract_frame_violations -------------------------------------------
 
 def _frame_elem(frame_dict):
@@ -379,8 +395,8 @@ def test_detect_black_segments_flushes_run_at_eof(tmp_path):
 # ---- find_duplicate_frame_candidates -------------------------------------
 
 def test_find_duplicate_runs_groups_consecutive_low_diff_frames(tmp_path):
-    # Force 8-bit thresholds (1.0) by explicitly setting YMAX < 250 on every frame
-    # (otherwise _detect_bit_depth's findtext default of '255' triggers 10-bit).
+    # Force 8-bit thresholds (0.25) by explicitly setting YMAX < 250 on every frame
+    # (otherwise _detect_bit_depth's missing-YMAX default of 255 triggers 10-bit).
     frames = (
         [{"pkt_pts_time": str(t), "tags": {"YMAX": "200", "YDIF": "5", "UDIF": "5", "VDIF": "5"}}
             for t in range(0, 3)] +
@@ -392,7 +408,7 @@ def test_find_duplicate_runs_groups_consecutive_low_diff_frames(tmp_path):
     path = _write_qctools(tmp_path, frames)
     parser = fa.QCToolsParser(path)
     runs, thresholds = parser.find_duplicate_frame_candidates(min_run_length=2)
-    assert thresholds == {"ydif": 1.0, "udif": 1.0, "vdif": 1.0}
+    assert thresholds == {"ydif": 0.25, "udif": 0.25, "vdif": 0.25}
     assert len(runs) == 1
     assert runs[0]["start_time"] == pytest.approx(3.0)
     assert runs[0]["end_time"] == pytest.approx(6.0)
@@ -439,20 +455,52 @@ def test_find_duplicate_runs_excludes_black_segments(tmp_path):
     assert runs == []
 
 
+def test_find_duplicate_runs_excludes_flat_field_frames(tmp_path):
+    """Zero-diff frames with no spatial variation (YMIN == YMAX) are the
+    deck's signal-loss black/mute output, not a freeze — no run reported."""
+    frames = [
+        {"pkt_pts_time": str(t),
+         "tags": {"YDIF": "0", "UDIF": "0", "VDIF": "0", "VREP": "0.99",
+                  "YMIN": "64", "YMAX": "64"}}
+        for t in range(0, 5)
+    ]
+    path = _write_qctools(tmp_path, frames)
+    parser = fa.QCToolsParser(path)
+    runs, _ = parser.find_duplicate_frame_candidates(min_run_length=2)
+    assert runs == []
+
+
+def test_find_duplicate_runs_keeps_low_diff_frames_with_spatial_structure(tmp_path):
+    """Near-zero diff frames that still have luma spread (real frozen
+    picture) are reported. UAVG ~512 marks the report as 10-bit scale,
+    mirroring the real vendor-tape freeze this is modeled on."""
+    frames = [
+        {"pkt_pts_time": str(t),
+         "tags": {"YDIF": "0.8", "UDIF": "0.8", "VDIF": "0.8", "VREP": "0.07",
+                  "YMIN": "4", "YMAX": "200", "UAVG": "512"}}
+        for t in range(0, 5)
+    ]
+    path = _write_qctools(tmp_path, frames)
+    parser = fa.QCToolsParser(path)
+    runs, _ = parser.find_duplicate_frame_candidates(min_run_length=2)
+    assert len(runs) == 1
+    assert runs[0]["duplicate_count"] == 5
+
+
 def test_find_duplicate_runs_uses_10bit_thresholds_when_detected(tmp_path):
-    """10-bit fixture (YMAX > 250) bumps thresholds to 4.0 each."""
+    """10-bit fixture (YMAX > 250) bumps thresholds to 1.0 each."""
     frames = (
         [{"pkt_pts_time": "0", "tags": {"YMAX": "940"}}] +  # triggers 10-bit detection
         [{"pkt_pts_time": str(t), "tags": {"YDIF": "5", "UDIF": "5", "VDIF": "5"}}
             for t in range(1, 4)] +
-        [{"pkt_pts_time": str(t), "tags": {"YDIF": "2", "UDIF": "2", "VDIF": "2"}}
-            for t in range(4, 8)]  # below 4.0 → would NOT be candidates with 8-bit thresholds
+        [{"pkt_pts_time": str(t), "tags": {"YDIF": "0.5", "UDIF": "0.5", "VDIF": "0.5"}}
+            for t in range(4, 8)]  # below 1.0 → would NOT be candidates with 8-bit thresholds
     )
     path = _write_qctools(tmp_path, frames)
     parser = fa.QCToolsParser(path)
     assert parser.bit_depth_10 is True
     _, thresholds = parser.find_duplicate_frame_candidates(min_run_length=2)
-    assert thresholds == {"ydif": 4.0, "udif": 4.0, "vdif": 4.0}
+    assert thresholds == {"ydif": 1.0, "udif": 1.0, "vdif": 1.0}
 
 
 # ===========================================================================
