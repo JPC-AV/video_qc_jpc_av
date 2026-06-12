@@ -1491,7 +1491,7 @@ profile_vendor = {
     },
     "outputs": {
         "access_file": False,
-        "report": False,
+        "report": True,
         "qctools_ext": "qctools.xml.gz",
         "frame_analysis": {
             "enable_bitplane_check": False,
