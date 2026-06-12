@@ -99,6 +99,7 @@ class ParsedArguments:
     access_trim_color_bars: Optional[str]
     access_crop_borders: Optional[str]
     access_crop_to_480: Optional[str]
+    access_exclude_flagged_audio: Optional[str]
     qctools_ext: Optional[str]
     checksum_algorithm: Optional[str]
     stream_hash_algorithm: Optional[str]
@@ -232,6 +233,10 @@ The scripts will confirm that the digital files conform to predetermined specifi
                               help='If sophisticated border detection finds an active picture area, crop to it in the access file (requires --access-crop-to-480 on)')
     output_group.add_argument('--access-crop-to-480', choices=['on', 'off'],
                               help='Trim NTSC sources to 720x480 in the access file; off keeps the native 720x486 height')
+    output_group.add_argument('--access-exclude-flagged-audio', choices=['on', 'off'],
+                              help='If audio analysis flags a stereo channel as silent or carrying audible timecode, '
+                                   'exclude it from the access file and output the good channel as dual-mono '
+                                   '(default: off; requires --enable-audio-analysis on)')
     output_group.add_argument('--qctools-ext', choices=['qctools.xml.gz', 'qctools.mkv'],
                               help='Extension for QCTools output files')
 
@@ -302,6 +307,7 @@ The scripts will confirm that the digital files conform to predetermined specifi
         access_trim_color_bars=getattr(args, 'access_trim_color_bars', None),
         access_crop_borders=getattr(args, 'access_crop_borders', None),
         access_crop_to_480=getattr(args, 'access_crop_to_480', None),
+        access_exclude_flagged_audio=getattr(args, 'access_exclude_flagged_audio', None),
         qctools_ext=getattr(args, 'qctools_ext', None),
         checksum_algorithm=getattr(args, 'checksum_algorithm', None),
         stream_hash_algorithm=getattr(args, 'stream_hash_algorithm', None),
@@ -521,6 +527,8 @@ def run_cli_mode(args):
         outputs_updates['access_file_crop_borders'] = (args.access_crop_borders == 'on')
     if args.access_crop_to_480:
         outputs_updates['access_file_crop_to_480'] = (args.access_crop_to_480 == 'on')
+    if args.access_exclude_flagged_audio:
+        outputs_updates['access_file_exclude_flagged_audio'] = (args.access_exclude_flagged_audio == 'on')
     if args.qctools_ext:
         outputs_updates['qctools_ext'] = args.qctools_ext
 
@@ -582,6 +590,17 @@ def run_cli_mode(args):
     if tools_updates:
         config_mgr.update_config('checks', {'tools': tools_updates})
         config_mgr.save_config('checks', is_last_used=True)
+
+    # Soft warning (no forcing): excluding a flagged audio channel from the
+    # access file depends on qct-parse audio analysis findings. If audio
+    # analysis is off, the option silently includes all audio.
+    final_checks = config_mgr.get_config('checks', ChecksConfig)
+    if (getattr(final_checks.outputs, 'access_file_exclude_flagged_audio', False)
+            and not final_checks.tools.qct_parse.audio_analysis):
+        logger.warning(
+            "access_file_exclude_flagged_audio is on but qct-parse audio analysis is off; "
+            "the option will have no effect until --enable-audio-analysis on is set."
+        )
 
     if args.dry_run_only:
         logger.critical("Dry run selected. Exiting now.")

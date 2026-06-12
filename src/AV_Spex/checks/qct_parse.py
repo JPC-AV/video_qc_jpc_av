@@ -3866,6 +3866,8 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     ######## Audio Analysis (Clipping Detection / Channel Imbalance / Audible Timecode) ########
     do_audio_analysis = qct_parse.get('audio_analysis', False)
+    imbalance_results = None
+    timecode_results = None
     if do_audio_analysis:
         logger.debug(f"Starting audio analysis on {baseName}\n")
         clipping_results, imbalance_results, timecode_results, dropout_results = analyzeAudio(
@@ -3895,10 +3897,24 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         signals.qctparse_progress.emit(100)
 
     head_region = next((r for r in all_bars_regions if r[0] in ("head", "head-relaxed")), None)
+
+    # Audio findings consumed downstream by access file creation (channel
+    # exclusion). None when audio analysis is off or produced no results, so
+    # the caller can distinguish "nothing flagged" from "analysis didn't run".
+    audio_findings = None
+    if do_audio_analysis and (imbalance_results or timecode_results):
+        audio_findings = {
+            'silent_channels': (imbalance_results or {}).get('silent_channels', []),
+            'num_channels': (imbalance_results or {}).get('num_channels'),
+            'timecode_consensus_regions': (timecode_results or {}).get('consensus_regions', []),
+            'duration': total_duration or (timecode_results or {}).get('duration'),
+        }
+
     return {
         'head_bars_start': head_region[1] if head_region else None,
         'head_bars_end': head_region[2] if head_region else None,
         'all_bars_regions': all_bars_regions,
+        'audio_findings': audio_findings,
     }
 
 

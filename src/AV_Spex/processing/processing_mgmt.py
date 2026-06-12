@@ -18,7 +18,7 @@ from AV_Spex.checks.mediatrace_check import parse_mediatrace, create_metadata_di
 from AV_Spex.checks.exiftool_check import parse_exiftool
 from AV_Spex.checks.ffprobe_check import parse_ffprobe
 from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_fixity
-from AV_Spex.checks.make_access import process_access_file
+from AV_Spex.checks.make_access import process_access_file, determine_excluded_audio_channels
 from AV_Spex.checks.qct_parse import run_qctparse
 from AV_Spex.checks import bars_detection_clams, tone_detection_clams
 from AV_Spex.checks.bars_detection_clams import run_clams_bars_detection
@@ -241,6 +241,7 @@ class ProcessingManager:
             check_cancelled=self.check_cancelled, signals=self.signals
         )
         color_bars_end_time = qctools_results.get('color_bars_end_time') if qctools_results else None
+        audio_findings = qctools_results.get('audio_findings') if qctools_results else None
         clams_bars_start_time = qctools_results.get('clams_bars_start_time') if qctools_results else None
         clams_bars_end_time = qctools_results.get('clams_bars_end_time') if qctools_results else None
         processing_results['clams_bars_start_time'] = clams_bars_start_time
@@ -300,13 +301,38 @@ class ProcessingManager:
         trim_start = color_bars_end_time if outputs_cfg.access_file_trim_color_bars else None
         crop_for_access = access_crop_area if outputs_cfg.access_file_crop_borders else None
 
+        # When enabled, a stereo channel flagged by qct-parse audio analysis
+        # (silent, or carrying audible timecode) is excluded from the access
+        # copy and the good channel output as dual-mono.
+        excluded_audio = None
+        if getattr(outputs_cfg, 'access_file_exclude_flagged_audio', False) and outputs_cfg.access_file:
+            if audio_findings:
+                excluded_audio, exclusion_reasons = determine_excluded_audio_channels(audio_findings)
+                if excluded_audio:
+                    logger.info(
+                        f"Excluding flagged audio channel(s) from access copy: "
+                        f"{'; '.join(exclusion_reasons)}"
+                    )
+                elif exclusion_reasons:
+                    logger.warning(
+                        f"All audio channels were flagged ({'; '.join(exclusion_reasons)}); "
+                        f"keeping all audio in the access copy"
+                    )
+            else:
+                logger.warning(
+                    "Access file option 'exclude flagged audio channel' is on, but "
+                    "qct-parse audio analysis did not run or produced no results; "
+                    "including all audio in the access copy"
+                )
+
         processing_results['access_file'] = process_access_file(
             video_path, source_directory, video_id,
             check_cancelled=self.check_cancelled,
             signals=self.signals,
             color_bars_end_time=trim_start,
             crop_area=crop_for_access,
-            crop_to_480=outputs_cfg.access_file_crop_to_480
+            crop_to_480=outputs_cfg.access_file_crop_to_480,
+            excluded_audio_channels=excluded_audio
         )
 
         if self.signals:
@@ -540,6 +566,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         'clams_bars_start_time': None,
         'clams_bars_end_time': None,
         'clams_tones': [],
+        'audio_findings': None,
     }
 
     if check_cancelled and check_cancelled():
@@ -856,6 +883,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
 
             if qctparse_result:
                 qctparse_head_end = qctparse_result.get('head_bars_end')
+                results['audio_findings'] = qctparse_result.get('audio_findings')
 
             # Fallback: read CSV if run_qctparse returned None (cancelled/error)
             if qctparse_head_end is None:
