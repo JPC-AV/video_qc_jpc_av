@@ -5,6 +5,83 @@ from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
+# Fraction of the file duration that channel-specific audible-timecode (LTC)
+# regions must cover before the channel is excluded from the access copy. A
+# channel with program audio and only brief TC contamination stays in.
+LTC_COVERAGE_THRESHOLD = 0.75
+
+
+def determine_excluded_audio_channels(audio_findings):
+    """Decide which stereo channels (1-based) to exclude from the access copy.
+
+    audio_findings is the dict returned by run_qctparse() under 'audio_findings':
+    silent_channels (1-based ints from channel imbalance analysis), num_channels,
+    timecode_consensus_regions (audible-TC consensus regions with raw-seconds
+    start_time/end_time and a channel label of "Channel 1", "Channel 2",
+    "Both channels", or "Not channel-specific (mix-based)"), and duration.
+
+    A channel is flagged if it is silent, or if its channel-specific LTC regions
+    cover at least LTC_COVERAGE_THRESHOLD of the file duration. Mix-based
+    regions name no channel and never trigger exclusion. If both channels end
+    up flagged, nothing is excluded (the caller warns and keeps all audio).
+
+    Only stereo sources are in scope — the analysis itself measures astats
+    channels 1 and 2 only. Findings from audio analysis run in a previous pass
+    (CSV reuse) are not consulted; the caller falls back to including all audio.
+
+    Returns:
+        tuple: (excluded_channels, reasons) — excluded_channels is a sorted
+        list of 1-based ints, empty when nothing should be excluded; reasons
+        describe every flagged channel (still populated when the both-flagged
+        safety empties excluded_channels).
+    """
+    if not audio_findings:
+        return [], []
+
+    num_channels = audio_findings.get('num_channels')
+    if num_channels is not None and num_channels != 2:
+        logger.debug(
+            f'Audio channel exclusion skipped: source has {num_channels} '
+            f'channel(s); only stereo is supported\n'
+        )
+        return [], []
+
+    flagged = {}
+
+    for ch in audio_findings.get('silent_channels') or []:
+        if ch in (1, 2):
+            flagged[ch] = f'channel {ch} is silent (mean RMS below silence threshold)'
+
+    duration = audio_findings.get('duration')
+    regions = audio_findings.get('timecode_consensus_regions') or []
+    if duration and regions:
+        for ch in (1, 2):
+            labels = (f'channel {ch}', 'both channels')
+            intervals = sorted(
+                (r['start_time'], r['end_time']) for r in regions
+                if (r.get('channel') or '').strip().lower() in labels
+            )
+            covered = 0.0
+            merged_end = None
+            for start, end in intervals:
+                if merged_end is not None and start < merged_end:
+                    start = merged_end
+                if end > start:
+                    covered += end - start
+                    merged_end = end if merged_end is None else max(merged_end, end)
+            coverage = covered / duration
+            if coverage >= LTC_COVERAGE_THRESHOLD and ch not in flagged:
+                flagged[ch] = (
+                    f'channel {ch} carries audible timecode over '
+                    f'{coverage:.0%} of the file duration'
+                )
+
+    reasons = [flagged[ch] for ch in sorted(flagged)]
+    if set(flagged) == {1, 2}:
+        return [], reasons
+    return sorted(flagged), reasons
+
+
 def get_duration(video_path):
     command = [
         'ffprobe',
@@ -39,12 +116,16 @@ def get_video_dimensions(video_path):
         return None, None
 
 
-def make_access_file(video_path, output_path, check_cancelled=None, signals=None, start_time=None, crop_area=None, crop_to_480=True):
+def make_access_file(video_path, output_path, check_cancelled=None, signals=None, start_time=None, crop_area=None, crop_to_480=True, excluded_audio_channels=None):
     """Create access file using ffmpeg.
 
     If start_time (seconds) is provided and > 0, the input is seeked past that
     point so head content (e.g. color bars detected by qct-parse) is excluded
     from the access copy.
+
+    If excluded_audio_channels names a stereo channel (1-based), only the first
+    audio stream is mapped and the remaining good channel is output as
+    dual-mono stereo via the pan filter.
 
     Output dimensions for NTSC sources are controlled by crop_to_480:
       * crop_to_480=True (default): NTSC (720x486 input) → 720x480 by trimming
@@ -106,9 +187,23 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
     # through with no default crop.
     vf_filters.extend(['yadif=1', 'format=yuv420p'])
 
+    if excluded_audio_channels:
+        # Keep only the good channel of the first audio stream, output as
+        # dual-mono stereo. pan channel indices are 0-based (ch1 -> c0).
+        keep = ({1, 2} - set(excluded_audio_channels)).pop()
+        excluded_str = ', '.join(str(ch) for ch in sorted(excluded_audio_channels))
+        logger.info(
+            f'Excluding audio channel {excluded_str} from access copy; '
+            f'output is dual-mono from channel {keep}. '
+            f'Only the first audio stream is included.\n'
+        )
+        audio_args = ['-map', '0:a:0?', '-af', f'pan=stereo|c0=c{keep - 1}|c1=c{keep - 1}']
+    else:
+        audio_args = ['-map', '0:a?']
+
     ffmpeg_command.extend([
         '-i', video_path,
-        '-movflags', 'faststart', '-map', '0:v:0', '-map', '0:a?', '-c:v', 'libx264',
+        '-movflags', 'faststart', '-map', '0:v:0', *audio_args, '-c:v', 'libx264',
         '-vf', ','.join(vf_filters), '-crf', '18', '-preset', 'fast', '-maxrate', '1000k', '-bufsize', '1835k',
         '-c:a', 'aac', '-strict', '-2', '-b:a', '192k', '-f', 'mp4', output_path
     ])
@@ -148,7 +243,7 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
     print("\n")
 
 
-def process_access_file(video_path, source_directory, video_id, check_cancelled=None, signals=None, color_bars_end_time=None, crop_area=None, crop_to_480=True):
+def process_access_file(video_path, source_directory, video_id, check_cancelled=None, signals=None, color_bars_end_time=None, crop_area=None, crop_to_480=True, excluded_audio_channels=None):
     """
     Generate access file if configured and not already existing.
 
@@ -166,6 +261,10 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
             cropped off the access copy.
         crop_to_480 (bool): When True (default), NTSC sources are output at 720x480.
             When False, NTSC sources keep their native 720x486 height.
+        excluded_audio_channels (list, optional): 1-based stereo channel numbers
+            flagged by audio analysis (silent or carrying audible timecode), as
+            decided by determine_excluded_audio_channels(). When provided, the
+            flagged channel is dropped and the good channel output as dual-mono.
 
     Returns:
         str or None: Path to the created access file, or None
@@ -199,7 +298,8 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
             check_cancelled=check_cancelled, signals=signals,
             start_time=color_bars_end_time,
             crop_area=crop_area,
-            crop_to_480=crop_to_480
+            crop_to_480=crop_to_480,
+            excluded_audio_channels=excluded_audio_channels
         )
         if signals:
             signals.step_completed.emit("Generate Access File")

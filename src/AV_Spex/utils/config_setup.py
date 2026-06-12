@@ -283,6 +283,7 @@ class OutputsConfig:
     access_file_trim_color_bars: bool = True
     access_file_crop_borders: bool = True
     access_file_crop_to_480: bool = True
+    access_file_exclude_flagged_audio: bool = False
 
 @dataclass
 class ChecksumAlgorithm(Enum):

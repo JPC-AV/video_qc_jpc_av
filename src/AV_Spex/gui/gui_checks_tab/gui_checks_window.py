@@ -134,12 +134,22 @@ class ChecksWindow(QWidget, ThemeableMixin):
         access_crop_to_480_desc.setIndent(20)
         access_crop_to_480_desc.setStyleSheet("color: gray; font-size: 10px;")
 
+        self.access_exclude_audio_cb = QCheckBox("Exclude flagged audio channel")
+        self.access_exclude_audio_cb.setStyleSheet("font-weight: bold;")
+        access_exclude_audio_desc = QLabel(
+            "If audio analysis flags a channel as silent or carrying audible<br>timecode, output dual-mono from the good channel"
+        )
+        access_exclude_audio_desc.setIndent(20)
+        access_exclude_audio_desc.setStyleSheet("color: gray; font-size: 10px;")
+
         access_options_layout.addWidget(self.access_trim_bars_cb)
         access_options_layout.addWidget(access_trim_bars_desc)
         access_options_layout.addWidget(self.access_crop_to_480_cb)
         access_options_layout.addWidget(access_crop_to_480_desc)
         access_options_layout.addWidget(self.access_crop_borders_cb)
         access_options_layout.addWidget(access_crop_borders_desc)
+        access_options_layout.addWidget(self.access_exclude_audio_cb)
+        access_options_layout.addWidget(access_exclude_audio_desc)
 
         access_row_layout.addWidget(access_options_widget)
         access_row_layout.addStretch()
@@ -462,6 +472,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
             lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_crop_borders'])
         )
         self.access_crop_to_480_cb.stateChanged.connect(self.on_access_crop_to_480_changed)
+        self.access_exclude_audio_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_exclude_flagged_audio'])
+        )
         self.report_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'report'])
         )
@@ -526,6 +539,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
         )
         self.access_crop_to_480_cb.setChecked(
             getattr(checks_config.outputs, 'access_file_crop_to_480', True)
+        )
+        self.access_exclude_audio_cb.setChecked(
+            getattr(checks_config.outputs, 'access_file_exclude_flagged_audio', False)
         )
         self._update_access_suboptions_enabled(checks_config.outputs.access_file)
         self.report_cb.setChecked(checks_config.outputs.report)
@@ -621,6 +637,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.access_crop_borders_cb.setEnabled(
             access_file_enabled and self.access_crop_to_480_cb.isChecked()
         )
+        self.access_exclude_audio_cb.setEnabled(access_file_enabled)
 
     def on_access_file_changed(self, state):
         """Persist Access File state and grey out its sub-options when off."""
