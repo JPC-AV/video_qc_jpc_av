@@ -2108,7 +2108,8 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     dropout_results = None
     if detect_dropout:
         dropout_results = _detect_and_write_dropout_results(
-            dropout_candidates, report_directory, total_audio_frames
+            dropout_candidates, report_directory, total_audio_frames,
+            fps=fps, tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame
         )
 
     return clipping_results, imbalance_results, timecode_results, dropout_results
@@ -3410,8 +3411,14 @@ def _merge_dropout_candidates(candidates):
     return events
 
 
-def _detect_and_write_dropout_results(dropout_candidates, report_directory, total_audio_frames):
-    """Merge dropout candidates into events, write CSV, and return results dict."""
+def _detect_and_write_dropout_results(dropout_candidates, report_directory, total_audio_frames,
+                                      fps=None, tc_start_frames=0, tc_drop_frame=False):
+    """Merge dropout candidates into events, write CSV, and return results dict.
+
+    Event Timestamp Start/End are written as the file's own timecode (NDF
+    HH:MM:SS:FF or DF HH:MM:SS;FF) at `fps`, offset by the stream start
+    timecode, so they line up with an NLE.
+    """
 
     events = _merge_dropout_candidates(dropout_candidates)
 
@@ -3455,8 +3462,8 @@ def _detect_and_write_dropout_results(dropout_candidates, report_directory, tota
             for ev in events:
                 drop_db = ev.median_rms_level - ev.worst_rms_level
                 writer.writerow([
-                    dts2ts(str(ev.start_time)),
-                    dts2ts(str(ev.end_time)),
+                    _tc_format_timecode(ev.start_time, fps, tc_start_frames, tc_drop_frame),
+                    _tc_format_timecode(ev.end_time, fps, tc_start_frames, tc_drop_frame),
                     ev.channel,
                     f"{ev.worst_rms_level:.1f}",
                     f"{ev.median_rms_level:.1f}",
