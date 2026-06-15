@@ -1166,6 +1166,7 @@ DROPOUT_ZCR_SPIKE_FACTOR = 3.0        # Zero_crossings_rate must exceed 3x rolli
 DROPOUT_MERGE_GAP_SEC = 3.5           # merge candidates within this gap on same channel
 DROPOUT_LONG_EVENT_SEC = 2.0          # events longer than this require high confidence
 DROPOUT_LONG_EVENT_MIN_CORR = 2       # minimum corroborating metrics for long events
+DROPOUT_BARS_MARGIN_SEC = 1.0         # suppress candidates this long past a bars region (tone-off cliff)
 
 
 @dataclass
@@ -1827,7 +1828,7 @@ def _write_chroma_phase_results(report_directory, results):
         )
 
 
-def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None, fps=None, tc_start_frames=0, tc_drop_frame=False):
+def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None, fps=None, tc_start_frames=0, tc_drop_frame=False, bars_regions=None):
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
     audio clipping (Peak_level >= threshold), channel imbalance (comparing
@@ -2109,7 +2110,8 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     if detect_dropout:
         dropout_results = _detect_and_write_dropout_results(
             dropout_candidates, report_directory, total_audio_frames,
-            fps=fps, tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame
+            fps=fps, tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame,
+            bars_regions=bars_regions
         )
 
     return clipping_results, imbalance_results, timecode_results, dropout_results
@@ -3332,6 +3334,28 @@ def _get_video_start_timecode(video_path):
     return None
 
 
+def _time_in_bars_region(t, bars_regions, margin=DROPOUT_BARS_MARGIN_SEC):
+    """True if time `t` (seconds) falls inside a detected color-bars region, or
+    within `margin` seconds after one.
+
+    A reference tone shutting off at the end of a bars+tone segment produces the
+    same loud-steady -> silence RMS cliff a tape dropout does, so candidates in
+    the bars region (and just past its end, where the tone-off transition lands)
+    are false positives for dropout. `bars_regions` is the `all_bars_regions`
+    list of (label, start_sec, end_sec) tuples from run_qctparse; entries with a
+    missing start or end are skipped.
+    """
+    if not bars_regions:
+        return False
+    for region in bars_regions:
+        start, end = region[1], region[2]
+        if start is None or end is None:
+            continue
+        if start <= t <= end + margin:
+            return True
+    return False
+
+
 def _merge_dropout_candidates(candidates):
     """Merge consecutive dropout candidates into events.
 
@@ -3412,13 +3436,26 @@ def _merge_dropout_candidates(candidates):
 
 
 def _detect_and_write_dropout_results(dropout_candidates, report_directory, total_audio_frames,
-                                      fps=None, tc_start_frames=0, tc_drop_frame=False):
+                                      fps=None, tc_start_frames=0, tc_drop_frame=False,
+                                      bars_regions=None):
     """Merge dropout candidates into events, write CSV, and return results dict.
 
     Event Timestamp Start/End are written as the file's own timecode (NDF
     HH:MM:SS:FF or DF HH:MM:SS;FF) at `fps`, offset by the stream start
     timecode, so they line up with an NLE.
+
+    `bars_regions` (the run_qctparse `all_bars_regions` list) suppresses
+    candidates inside a color-bars region or just past its end — a reference
+    tone shutting off there mimics a dropout's RMS cliff but isn't one.
     """
+
+    # Drop candidates that fall in a color-bars/tone region before merging.
+    if bars_regions:
+        kept = [c for c in dropout_candidates if not _time_in_bars_region(c.time, bars_regions)]
+        suppressed = len(dropout_candidates) - len(kept)
+        if suppressed:
+            logger.debug(f"Dropout: suppressed {suppressed} candidate(s) in color-bars regions\n")
+        dropout_candidates = kept
 
     events = _merge_dropout_candidates(dropout_candidates)
 
@@ -3884,7 +3921,8 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             detect_timecode=True,
             detect_dropout=True,
             signals=signals, total_duration=total_duration, fps=video_fps,
-            tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame
+            tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame,
+            bars_regions=all_bars_regions
         )
         if clipping_results is None:
             logger.warning("Audio clipping detection could not be performed\n")

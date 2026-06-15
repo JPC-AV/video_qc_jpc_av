@@ -724,6 +724,52 @@ def test_merge_dropout_candidates_confidence_low_with_no_corroborating():
 
 
 # ===========================================================================
+# Section 4b — _time_in_bars_region (dropout bars/tone suppression)
+# ===========================================================================
+
+def test_time_in_bars_region_inside_region():
+    regions = [("head", 0.0, 60.0)]
+    assert qp._time_in_bars_region(30.0, regions) is True
+
+
+def test_time_in_bars_region_within_margin_after_end():
+    """A tone-off cliff just past bars_end is still suppressed (within margin)."""
+    regions = [("head", 0.0, 60.0)]
+    assert qp._time_in_bars_region(60.0 + qp.DROPOUT_BARS_MARGIN_SEC / 2, regions) is True
+
+
+def test_time_in_bars_region_outside_region_kept():
+    regions = [("head", 0.0, 60.0)]
+    assert qp._time_in_bars_region(60.0 + qp.DROPOUT_BARS_MARGIN_SEC + 1.0, regions) is False
+
+
+def test_time_in_bars_region_no_regions_is_false():
+    assert qp._time_in_bars_region(30.0, None) is False
+    assert qp._time_in_bars_region(30.0, []) is False
+
+
+def test_time_in_bars_region_skips_none_bounds():
+    """Regions with a missing start or end are ignored, not crashed on."""
+    regions = [("head", None, None), ("windowed", 100.0, 120.0)]
+    assert qp._time_in_bars_region(110.0, regions) is True
+    assert qp._time_in_bars_region(30.0, regions) is False
+
+
+def test_dropout_results_suppresses_bars_region_candidates(tmp_path):
+    """Candidates inside a bars region are dropped before merging; others survive."""
+    cands = [
+        _cand(5.0, channel=1, corr=("a", "b")),    # inside bars region → suppressed
+        _cand(500.0, channel=1, corr=("a", "b")),  # real dropout → kept
+    ]
+    results = qp._detect_and_write_dropout_results(
+        cands, str(tmp_path), total_audio_frames=1000,
+        bars_regions=[("head", 0.0, 60.0)],
+    )
+    assert results["dropout_events"] == 1
+    assert results["events"][0].start_time == pytest.approx(500.0)
+
+
+# ===========================================================================
 # Section 5 — CSV writers
 # ===========================================================================
 
