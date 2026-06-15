@@ -1606,7 +1606,7 @@ def make_audio_dropout_html(audio_dropout_csv):
     '''
 
     # Add dropout events table if there are any
-    dropout_events = [r for r in rows[9:] if len(r) >= 7]
+    dropout_events = [r for r in rows[9:] if len(r) >= 7 and r[0] != "Timestamp Start"]
     if dropout_events:
         confidence_colors = {
             'high': '#dc3545',
@@ -1618,14 +1618,14 @@ def make_audio_dropout_html(audio_dropout_csv):
         <div id="audio_dropout_events" style="display: none;">
         <table style="border-collapse: collapse; margin: 10px 0;">
             <tr>
-                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start</th>
-                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Timestamp Start</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Timestamp End</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Worst RMS (dBFS)</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Median RMS (dBFS)</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Drop (dB)</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Confidence</th>
-                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Corroborating</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Corroborating Metrics</th>
             </tr>
         '''
         for event in dropout_events:
