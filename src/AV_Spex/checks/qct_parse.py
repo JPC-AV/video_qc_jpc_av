@@ -1166,6 +1166,8 @@ DROPOUT_ZCR_SPIKE_FACTOR = 3.0        # Zero_crossings_rate must exceed 3x rolli
 DROPOUT_MERGE_GAP_SEC = 3.5           # merge candidates within this gap on same channel
 DROPOUT_LONG_EVENT_SEC = 2.0          # events longer than this require high confidence
 DROPOUT_LONG_EVENT_MIN_CORR = 2       # minimum corroborating metrics for long events
+DROPOUT_BARS_MARGIN_SEC = 1.0         # suppress candidates this long past a bars region (tone-off cliff)
+DROPOUT_ZCR_XCHAN_TOLERANCE_SEC = 0.5  # ZCR-only events need another channel firing within this window
 
 
 @dataclass
@@ -1827,7 +1829,7 @@ def _write_chroma_phase_results(report_directory, results):
         )
 
 
-def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None, fps=None, tc_start_frames=0, tc_drop_frame=False):
+def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None, fps=None, tc_start_frames=0, tc_drop_frame=False, bars_regions=None):
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
     audio clipping (Peak_level >= threshold), channel imbalance (comparing
@@ -2108,7 +2110,9 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     dropout_results = None
     if detect_dropout:
         dropout_results = _detect_and_write_dropout_results(
-            dropout_candidates, report_directory, total_audio_frames
+            dropout_candidates, report_directory, total_audio_frames,
+            fps=fps, tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame,
+            bars_regions=bars_regions
         )
 
     return clipping_results, imbalance_results, timecode_results, dropout_results
@@ -3331,6 +3335,58 @@ def _get_video_start_timecode(video_path):
     return None
 
 
+def _time_in_bars_region(t, bars_regions, margin=DROPOUT_BARS_MARGIN_SEC):
+    """True if time `t` (seconds) falls inside a detected color-bars region, or
+    within `margin` seconds after one.
+
+    A reference tone shutting off at the end of a bars+tone segment produces the
+    same loud-steady -> silence RMS cliff a tape dropout does, so candidates in
+    the bars region (and just past its end, where the tone-off transition lands)
+    are false positives for dropout. `bars_regions` is the `all_bars_regions`
+    list of (label, start_sec, end_sec) tuples from run_qctparse; entries with a
+    missing start or end are skipped.
+    """
+    if not bars_regions:
+        return False
+    for region in bars_regions:
+        start, end = region[1], region[2]
+        if start is None or end is None:
+            continue
+        if start <= t <= end + margin:
+            return True
+    return False
+
+
+def _is_zcr_only(event):
+    """True if the event's sole corroborating metric is the Zero_crossings_rate
+    spike. ZCR climbs during ordinary silence (the noise floor hovers around
+    zero) without the Max/RMS_difference collapse a real tape dropout shows, so a
+    ZCR-only event is the dominant single-channel false-positive signature."""
+    return event.corroborating == ['Zero_crossings_rate spike']
+
+
+def _zcr_only_has_cross_channel_support(event, all_events,
+                                        tolerance=DROPOUT_ZCR_XCHAN_TOLERANCE_SEC):
+    """True if a ZCR-only event overlaps in time (within `tolerance` seconds)
+    with a detection on a *different* channel that carries a stronger metric
+    (Max_difference / RMS_difference drop).
+
+    A real dropout that briefly silences one channel almost always disturbs the
+    other, where the RMS-based corroborators fire; an isolated ZCR-only event
+    with no such cross-channel support is natural silence, not a dropout."""
+    for other in all_events:
+        if other is event or other.channel == event.channel:
+            continue
+        # Require the supporting channel to have a non-ZCR corroborator so two
+        # simultaneous silent channels can't prop each other up.
+        if not any(c != 'Zero_crossings_rate spike' for c in other.corroborating):
+            continue
+        if (event.start_time - tolerance) <= other.end_time and \
+           (other.start_time - tolerance) <= event.end_time:
+            return True
+    return False
+
+
 def _merge_dropout_candidates(candidates):
     """Merge consecutive dropout candidates into events.
 
@@ -3410,8 +3466,27 @@ def _merge_dropout_candidates(candidates):
     return events
 
 
-def _detect_and_write_dropout_results(dropout_candidates, report_directory, total_audio_frames):
-    """Merge dropout candidates into events, write CSV, and return results dict."""
+def _detect_and_write_dropout_results(dropout_candidates, report_directory, total_audio_frames,
+                                      fps=None, tc_start_frames=0, tc_drop_frame=False,
+                                      bars_regions=None):
+    """Merge dropout candidates into events, write CSV, and return results dict.
+
+    Event Timestamp Start/End are written as the file's own timecode (NDF
+    HH:MM:SS:FF or DF HH:MM:SS;FF) at `fps`, offset by the stream start
+    timecode, so they line up with an NLE.
+
+    `bars_regions` (the run_qctparse `all_bars_regions` list) suppresses
+    candidates inside a color-bars region or just past its end — a reference
+    tone shutting off there mimics a dropout's RMS cliff but isn't one.
+    """
+
+    # Drop candidates that fall in a color-bars/tone region before merging.
+    if bars_regions:
+        kept = [c for c in dropout_candidates if not _time_in_bars_region(c.time, bars_regions)]
+        suppressed = len(dropout_candidates) - len(kept)
+        if suppressed:
+            logger.debug(f"Dropout: suppressed {suppressed} candidate(s) in color-bars regions\n")
+        dropout_candidates = kept
 
     events = _merge_dropout_candidates(dropout_candidates)
 
@@ -3423,6 +3498,20 @@ def _detect_and_write_dropout_results(dropout_candidates, report_directory, tota
         if (ev.end_time - ev.start_time) <= DROPOUT_LONG_EVENT_SEC
         or len(ev.corroborating) >= DROPOUT_LONG_EVENT_MIN_CORR
     ]
+
+    # Suppress ZCR-only events (natural-silence false positives) unless another
+    # channel corroborates them at the same time. Filtered against the full event
+    # list so a kept event still counts as support for its cross-channel twin.
+    zcr_kept = [
+        ev for ev in events
+        if not _is_zcr_only(ev) or _zcr_only_has_cross_channel_support(ev, events)
+    ]
+    zcr_suppressed = len(events) - len(zcr_kept)
+    if zcr_suppressed:
+        logger.debug(
+            f"Dropout: suppressed {zcr_suppressed} ZCR-only event(s) "
+            f"without cross-channel support\n")
+    events = zcr_kept
 
     dropout_detected = len(events) > 0
     frames_flagged = len(dropout_candidates)
@@ -3455,8 +3544,8 @@ def _detect_and_write_dropout_results(dropout_candidates, report_directory, tota
             for ev in events:
                 drop_db = ev.median_rms_level - ev.worst_rms_level
                 writer.writerow([
-                    dts2ts(str(ev.start_time)),
-                    dts2ts(str(ev.end_time)),
+                    _tc_format_timecode(ev.start_time, fps, tc_start_frames, tc_drop_frame),
+                    _tc_format_timecode(ev.end_time, fps, tc_start_frames, tc_drop_frame),
                     ev.channel,
                     f"{ev.worst_rms_level:.1f}",
                     f"{ev.median_rms_level:.1f}",
@@ -3877,7 +3966,8 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             detect_timecode=True,
             detect_dropout=True,
             signals=signals, total_duration=total_duration, fps=video_fps,
-            tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame
+            tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame,
+            bars_regions=all_bars_regions
         )
         if clipping_results is None:
             logger.warning("Audio clipping detection could not be performed\n")
