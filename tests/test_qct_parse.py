@@ -770,6 +770,82 @@ def test_dropout_results_suppresses_bars_region_candidates(tmp_path):
 
 
 # ===========================================================================
+# Section 4c — ZCR-only cross-channel suppression
+# ===========================================================================
+
+_ZCR = "Zero_crossings_rate spike"
+
+
+def test_is_zcr_only_true_for_sole_zcr_metric():
+    assert qp._is_zcr_only(qp._DropoutEvent(corroborating=[_ZCR])) is True
+
+
+def test_is_zcr_only_false_when_other_metric_present():
+    assert qp._is_zcr_only(
+        qp._DropoutEvent(corroborating=["Max_difference drop", _ZCR])) is False
+    assert qp._is_zcr_only(qp._DropoutEvent(corroborating=[])) is False
+
+
+def test_zcr_only_support_requires_non_zcr_other_channel():
+    target = qp._DropoutEvent(start_time=100.0, end_time=100.0, channel=2,
+                              corroborating=[_ZCR])
+    strong = qp._DropoutEvent(start_time=100.0, end_time=100.1, channel=1,
+                              corroborating=["Max_difference drop"])
+    # Another ZCR-only on the other channel is NOT support (stereo silence).
+    weak = qp._DropoutEvent(start_time=100.0, end_time=100.0, channel=1,
+                            corroborating=[_ZCR])
+    assert qp._zcr_only_has_cross_channel_support(target, [target, strong]) is True
+    assert qp._zcr_only_has_cross_channel_support(target, [target, weak]) is False
+
+
+def test_zcr_only_support_respects_time_and_channel():
+    target = qp._DropoutEvent(start_time=100.0, end_time=100.0, channel=2,
+                              corroborating=[_ZCR])
+    # Same channel doesn't count as cross-channel.
+    same_ch = qp._DropoutEvent(start_time=100.0, end_time=100.0, channel=2,
+                               corroborating=["Max_difference drop"])
+    # Too far away in time.
+    far = qp._DropoutEvent(start_time=200.0, end_time=200.0, channel=1,
+                           corroborating=["Max_difference drop"])
+    assert qp._zcr_only_has_cross_channel_support(target, [target, same_ch]) is False
+    assert qp._zcr_only_has_cross_channel_support(target, [target, far]) is False
+
+
+def test_dropout_results_suppresses_isolated_zcr_only_event(tmp_path):
+    """An isolated ZCR-only event (natural silence) is dropped."""
+    cands = [_cand(300.0, channel=1, corr=(_ZCR,))]
+    results = qp._detect_and_write_dropout_results(
+        cands, str(tmp_path), total_audio_frames=1000)
+    assert results["dropout_events"] == 0
+    assert results["dropout_detected"] is False
+
+
+def test_dropout_results_keeps_cross_channel_corroborated_zcr_event(tmp_path):
+    """A ZCR-only event is kept when the other channel fires a strong metric
+    at the same time (the 21459323 'both' case)."""
+    cands = [
+        _cand(300.0, channel=1, corr=("Max_difference drop", "RMS_difference drop")),
+        _cand(300.0, channel=2, corr=(_ZCR,)),
+    ]
+    results = qp._detect_and_write_dropout_results(
+        cands, str(tmp_path), total_audio_frames=1000)
+    assert results["dropout_events"] == 2
+    channels = sorted(ev.channel for ev in results["events"])
+    assert channels == [1, 2]
+
+
+def test_dropout_results_suppresses_stereo_silence_zcr_events(tmp_path):
+    """Two simultaneous ZCR-only events can't prop each other up."""
+    cands = [
+        _cand(300.0, channel=1, corr=(_ZCR,)),
+        _cand(300.0, channel=2, corr=(_ZCR,)),
+    ]
+    results = qp._detect_and_write_dropout_results(
+        cands, str(tmp_path), total_audio_frames=1000)
+    assert results["dropout_events"] == 0
+
+
+# ===========================================================================
 # Section 5 — CSV writers
 # ===========================================================================
 

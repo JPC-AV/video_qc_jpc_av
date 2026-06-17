@@ -1167,6 +1167,7 @@ DROPOUT_MERGE_GAP_SEC = 3.5           # merge candidates within this gap on same
 DROPOUT_LONG_EVENT_SEC = 2.0          # events longer than this require high confidence
 DROPOUT_LONG_EVENT_MIN_CORR = 2       # minimum corroborating metrics for long events
 DROPOUT_BARS_MARGIN_SEC = 1.0         # suppress candidates this long past a bars region (tone-off cliff)
+DROPOUT_ZCR_XCHAN_TOLERANCE_SEC = 0.5  # ZCR-only events need another channel firing within this window
 
 
 @dataclass
@@ -3356,6 +3357,36 @@ def _time_in_bars_region(t, bars_regions, margin=DROPOUT_BARS_MARGIN_SEC):
     return False
 
 
+def _is_zcr_only(event):
+    """True if the event's sole corroborating metric is the Zero_crossings_rate
+    spike. ZCR climbs during ordinary silence (the noise floor hovers around
+    zero) without the Max/RMS_difference collapse a real tape dropout shows, so a
+    ZCR-only event is the dominant single-channel false-positive signature."""
+    return event.corroborating == ['Zero_crossings_rate spike']
+
+
+def _zcr_only_has_cross_channel_support(event, all_events,
+                                        tolerance=DROPOUT_ZCR_XCHAN_TOLERANCE_SEC):
+    """True if a ZCR-only event overlaps in time (within `tolerance` seconds)
+    with a detection on a *different* channel that carries a stronger metric
+    (Max_difference / RMS_difference drop).
+
+    A real dropout that briefly silences one channel almost always disturbs the
+    other, where the RMS-based corroborators fire; an isolated ZCR-only event
+    with no such cross-channel support is natural silence, not a dropout."""
+    for other in all_events:
+        if other is event or other.channel == event.channel:
+            continue
+        # Require the supporting channel to have a non-ZCR corroborator so two
+        # simultaneous silent channels can't prop each other up.
+        if not any(c != 'Zero_crossings_rate spike' for c in other.corroborating):
+            continue
+        if (event.start_time - tolerance) <= other.end_time and \
+           (other.start_time - tolerance) <= event.end_time:
+            return True
+    return False
+
+
 def _merge_dropout_candidates(candidates):
     """Merge consecutive dropout candidates into events.
 
@@ -3467,6 +3498,20 @@ def _detect_and_write_dropout_results(dropout_candidates, report_directory, tota
         if (ev.end_time - ev.start_time) <= DROPOUT_LONG_EVENT_SEC
         or len(ev.corroborating) >= DROPOUT_LONG_EVENT_MIN_CORR
     ]
+
+    # Suppress ZCR-only events (natural-silence false positives) unless another
+    # channel corroborates them at the same time. Filtered against the full event
+    # list so a kept event still counts as support for its cross-channel twin.
+    zcr_kept = [
+        ev for ev in events
+        if not _is_zcr_only(ev) or _zcr_only_has_cross_channel_support(ev, events)
+    ]
+    zcr_suppressed = len(events) - len(zcr_kept)
+    if zcr_suppressed:
+        logger.debug(
+            f"Dropout: suppressed {zcr_suppressed} ZCR-only event(s) "
+            f"without cross-channel support\n")
+    events = zcr_kept
 
     dropout_detected = len(events) > 0
     frames_flagged = len(dropout_candidates)
