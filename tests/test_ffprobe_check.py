@@ -93,20 +93,33 @@ DEFAULT_EXPECTED = {
 }
 
 
+class FakeChecks:
+    """Minimal checks-config stand-in; parse_ffprobe only reads video_file_extension."""
+    def __init__(self, video_file_extension="mkv"):
+        self.video_file_extension = video_file_extension
+
+
 @pytest.fixture
 def patch_config_mgr(monkeypatch):
     """Patch ConfigManager so parse_ffprobe gets a spex with controllable ffmpeg_values."""
-    state = {"expected": json.loads(json.dumps(DEFAULT_EXPECTED))}
+    state = {
+        "expected": json.loads(json.dumps(DEFAULT_EXPECTED)),
+        "extension": "mkv",
+    }
 
-    def _configure(expected=None):
+    def _configure(expected=None, extension=None):
         if expected is not None:
             state["expected"] = expected
+        if extension is not None:
+            state["extension"] = extension
 
     mock_mgr = MagicMock()
 
     def fake_get_config(name, _cls):
         if name == "spex":
             return FakeSpex(state["expected"])
+        if name == "checks":
+            return FakeChecks(state["extension"])
         return MagicMock()
 
     mock_mgr.get_config.side_effect = fake_get_config
@@ -276,6 +289,17 @@ def test_encoder_settings_present_not_flagged(tmp_path, patch_config_mgr, setup_
     patch_config_mgr()
     # Default payload has ENCODER_SETTINGS.
     path = _write_ffprobe_json(tmp_path, make_ffprobe_json())
+
+    diffs = parse_ffprobe(path)
+
+    assert "Encoder Settings" not in diffs
+
+
+def test_missing_encoder_settings_not_flagged_for_non_mkv(tmp_path, patch_config_mgr, setup_logging):
+    """Signal flow is a Matroska tag; non-MKV input must not flag missing ENCODER_SETTINGS."""
+    patch_config_mgr(extension="mov")
+    payload = make_ffprobe_json(format_fields={"tags": {}})
+    path = _write_ffprobe_json(tmp_path, payload)
 
     diffs = parse_ffprobe(path)
 

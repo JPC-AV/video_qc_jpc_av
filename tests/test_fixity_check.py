@@ -35,6 +35,8 @@ def patch_config_mgr(monkeypatch):
 
     fake_checks = MagicMock()
     fake_checks.fixity = _FakeFixity()
+    # Sample fixtures use .mkv; get_video_file_extension() reads this field.
+    fake_checks.video_file_extension = "mkv"
 
     mock_mgr = MagicMock()
     mock_mgr.get_config.return_value = fake_checks
