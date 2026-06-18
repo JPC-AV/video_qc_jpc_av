@@ -1,7 +1,7 @@
 import os
 import subprocess
 from AV_Spex.utils.log_setup import logger
-from AV_Spex.utils.config_setup import ChecksConfig
+from AV_Spex.utils.config_setup import ChecksConfig, is_mkv_extension
 from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
@@ -61,9 +61,19 @@ def run_tool_command(tool_name, video_path, destination_directory, video_id):
         tool = getattr(checks_config.tools, tool_name)
         if tool.run_tool:
             if tool_name == 'mediatrace':
+                # mediatrace reads Matroska SimpleTags (custom MKV Tag metadata);
+                # it only applies to MKV input. If it slipped through on a non-MKV
+                # file, skip it gracefully rather than producing a meaningless XML.
+                ext = getattr(checks_config, 'video_file_extension', 'mkv')
+                if not is_mkv_extension(ext):
+                    logger.warning(
+                        f"Input extension '{ext}' is not MKV; the mediatrace custom-tag "
+                        "check only applies to Matroska. Skipping mediatrace.\n"
+                    )
+                    return None
                 logger.debug(f"Creating {tool_name.capitalize()} XML file to check custom MKV Tag metadata fields:")
             run_command(command, video_path, '>', output_path)
-        
+
     return output_path
 
 

@@ -67,9 +67,14 @@ def test_run_command_handles_paths_with_spaces():
 # run_tool_command
 # ---------------------------------------------------------------------------
 
-def _make_fake_checks_config(tool_run_flags):
-    """Build a stand-in ChecksConfig where each named tool has run_tool=<bool>."""
+def _make_fake_checks_config(tool_run_flags, video_file_extension="mkv"):
+    """Build a stand-in ChecksConfig where each named tool has run_tool=<bool>.
+
+    Defaults video_file_extension to 'mkv' so the mediatrace non-MKV guardrail
+    is a no-op; tests exercising that guardrail pass a non-MKV extension.
+    """
     checks = MagicMock()
+    checks.video_file_extension = video_file_extension
     for name, run in tool_run_flags.items():
         getattr(checks.tools, name).run_tool = run
     return checks
@@ -111,6 +116,19 @@ def test_run_tool_command_skips_when_run_tool_false(tmp_path, monkeypatch):
     # Output path is still returned (callers compute parser expectations from it),
     # but no shell command should have been invoked.
     assert out.endswith("JPC_AV_05000_exiftool_output.json")
+    run_cmd_mock.assert_not_called()
+
+
+def test_run_tool_command_mediatrace_skips_on_non_mkv(tmp_path, monkeypatch):
+    """mediatrace only applies to Matroska; on non-MKV input it should be
+    skipped (no command run) and return None so downstream parsing is skipped."""
+    fake_cfg = _make_fake_checks_config({"mediatrace": True}, video_file_extension="mxf")
+    monkeypatch.setattr(rt.config_mgr, "get_config", lambda *a, **kw: fake_cfg)
+
+    with patch.object(rt, "run_command") as run_cmd_mock:
+        out = rt.run_tool_command("mediatrace", "/v/in.mxf", str(tmp_path), "JPC_AV_05000")
+
+    assert out is None
     run_cmd_mock.assert_not_called()
 
 
