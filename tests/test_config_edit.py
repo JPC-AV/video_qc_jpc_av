@@ -138,8 +138,14 @@ def test_resolve_config_unknown_key_returns_none():
 
 @pytest.fixture
 def mock_cfg(monkeypatch):
-    """Replace the module-level config_mgr singleton with a MagicMock."""
+    """Replace the module-level config_mgr singleton with a MagicMock.
+
+    Defaults the loaded config's video_file_extension to 'mkv' so the
+    non-MKV guardrail in apply_profile is a no-op; tests that exercise the
+    guardrail set it to a non-MKV value explicitly.
+    """
     mock = MagicMock()
+    mock.get_config.return_value.video_file_extension = "mkv"
     monkeypatch.setattr(config_edit, "config_mgr", mock)
     return mock
 
@@ -285,6 +291,25 @@ def test_apply_profile_builtin_step1(mock_cfg):
     # Spot-check a key value.
     assert updates["fixity"]["embed_stream_fixity"] is True
     assert updates["tools"]["qctools"]["run_tool"] is False
+
+
+def test_apply_profile_non_mkv_forces_mkv_only_checks_off(mock_cfg):
+    """On a non-MKV config, applying a profile that enables MKV-only checks
+    (step1) re-applies the extension guardrail, forcing them off."""
+    mock_cfg.get_config.return_value.video_file_extension = "mov"
+    config_edit.apply_profile(config_edit.profile_step1)
+    # The last update_config call is the guardrail's correction.
+    updates = _last_updates(mock_cfg)
+    assert updates["fixity"]["embed_stream_fixity"] is False
+    assert updates["fixity"]["validate_stream_fixity"] is False
+    assert updates["fixity"]["overwrite_stream_fixity"] is False
+    assert updates["tools"]["mediatrace"] == {"run_tool": False, "check_tool": False}
+
+
+def test_enforce_extension_compatibility_noop_for_mkv(mock_cfg):
+    mock_cfg.get_config.return_value.video_file_extension = "mkv"
+    assert config_edit.enforce_extension_compatibility() is False
+    assert mock_cfg.update_config.called is False
 
 
 # ---------------------------------------------------------------------------

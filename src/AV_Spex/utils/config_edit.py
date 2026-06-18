@@ -6,10 +6,10 @@ import os
 
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import (
-    ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, 
+    ChecksConfig, SpexConfig, FilenameProfile, FilenameValues,
     FilenameSection, SignalflowConfig, ChecksProfile, ChecksProfilesConfig,
     ExiftoolConfig, ExiftoolProfile, MediainfoConfig, MediainfoProfile,
-    FfprobeConfig, FfprobeProfile
+    FfprobeConfig, FfprobeProfile, is_mkv_extension
 )
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -312,9 +312,52 @@ def apply_signalflow_profile(selected_profile):
     logger.debug(f"FFmpeg encoder settings keys: {final_ffmpeg_keys}")
 
 
+def enforce_extension_compatibility():
+    """Force off the checks that only work on Matroska when the configured
+    input extension is non-MKV.
+
+    Embedded stream fixity uses mkvextract/mkvpropedit and the mediatrace
+    custom-tag check reads Matroska SimpleTags; neither works on other
+    containers. This mirrors the CLI guardrail (av_spex_the_file) and the GUI
+    graying (gui_checks_window), and is re-applied here because applying a
+    profile replaces the fixity/tools sections wholesale and can re-enable
+    these MKV-only options on a non-MKV configuration.
+
+    Returns True if it changed anything, False otherwise.
+    """
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    ext = getattr(checks_config, 'video_file_extension', 'mkv')
+    if is_mkv_extension(ext):
+        return False
+
+    fixity_off = {}
+    for field in ('embed_stream_fixity', 'validate_stream_fixity', 'overwrite_stream_fixity'):
+        if getattr(checks_config.fixity, field):
+            fixity_off[field] = False
+
+    tools_off = {}
+    if checks_config.tools.mediatrace.run_tool or checks_config.tools.mediatrace.check_tool:
+        tools_off['mediatrace'] = {'run_tool': False, 'check_tool': False}
+
+    if not (fixity_off or tools_off):
+        return False
+
+    updates = {}
+    if fixity_off:
+        updates['fixity'] = fixity_off
+    if tools_off:
+        updates['tools'] = tools_off
+    config_mgr.update_config('checks', updates)
+    logger.warning(
+        f"Input extension '{ext}' is not MKV; embedded stream fixity and the "
+        "mediatrace custom-tag check only work on Matroska. Forcing them off."
+    )
+    return True
+
+
 def apply_profile(selected_profile):
     """Apply profile changes to checks_config.
-    
+
     Args:
         selected_profile (dict): The profile configuration to apply
     """
@@ -348,6 +391,10 @@ def apply_profile(selected_profile):
     # Apply all updates at once using the new update_config method
     if updates:
         config_mgr.update_config('checks', updates)
+
+    # A profile replaces the fixity/tools sections wholesale, which can re-enable
+    # MKV-only checks on a non-MKV configuration. Re-apply the extension guardrail.
+    enforce_extension_compatibility()
 
 
 def apply_exiftool_profile(profile_data):
