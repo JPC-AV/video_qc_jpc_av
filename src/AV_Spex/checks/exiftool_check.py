@@ -14,6 +14,14 @@ from AV_Spex.utils.config_manager import ConfigManager
 
 def parse_exiftool(file_path):
     exif_data_dict = parse_exiftool_json(file_path)
+
+    # An empty result means the output file was missing or unparseable (the
+    # reason was already logged by parse_exiftool_json). Don't run the spec
+    # comparison — with no data it finds no differences and would falsely report
+    # "All specified fields and values found", masking a check that never ran.
+    if not exif_data_dict:
+        return None
+
     exiftool_differences = check_exif_spex(exif_data_dict)
 
     return exiftool_differences

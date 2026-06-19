@@ -13,6 +13,14 @@ from AV_Spex.utils.config_manager import ConfigManager
 
 def parse_mediainfo(file_path):
     section_data = parse_mediainfo_json(file_path)
+
+    # All sections empty means the output file was missing or unparseable (the
+    # reason was already logged by parse_mediainfo_json). Don't run the spec
+    # comparison — with no data it finds no differences and would falsely report
+    # "All specified fields and values found", masking a check that never ran.
+    if not any(section_data.get(section) for section in ("General", "Video", "Audio")):
+        return None
+
     mediainfo_differences = check_mediainfo_spex(section_data)
 
     return mediainfo_differences

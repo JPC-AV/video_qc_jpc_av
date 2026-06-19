@@ -404,5 +404,14 @@ def test_parse_mediainfo_integration(sample_json_file, patch_config_mgr, monkeyp
     # we expect no differences
     differences = parse_mediainfo(str(sample_json_file))
     assert differences == {}
-    
+
     # To test with differences, we'd need to alter the file or config values
+
+# A missing output file must not be reported as a passing check.
+def test_parse_mediainfo_missing_file_returns_none(monkeypatch):
+    monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
+
+    # parse_mediainfo_json logs "Cannot perform" and returns all-empty sections;
+    # parse_mediainfo must short-circuit to None rather than falling through to a
+    # false "all fields found" pass.
+    assert parse_mediainfo("non_existent_file.json") is None
