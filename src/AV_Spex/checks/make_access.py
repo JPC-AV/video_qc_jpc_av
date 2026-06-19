@@ -12,7 +12,7 @@ LTC_COVERAGE_THRESHOLD = 0.75
 
 
 def determine_excluded_audio_channels(audio_findings):
-    """Decide which stereo channels (1-based) to exclude from the access copy.
+    """Decide which channels (1-based) to exclude from the access copy.
 
     audio_findings is the dict returned by run_qctparse() under 'audio_findings':
     silent_channels (1-based ints from channel imbalance analysis), num_channels,
@@ -22,12 +22,16 @@ def determine_excluded_audio_channels(audio_findings):
 
     A channel is flagged if it is silent, or if its channel-specific LTC regions
     cover at least LTC_COVERAGE_THRESHOLD of the file duration. Mix-based
-    regions name no channel and never trigger exclusion. If both channels end
-    up flagged, nothing is excluded (the caller warns and keeps all audio).
+    regions name no channel and never trigger exclusion.
 
-    Only stereo sources are in scope — the analysis itself measures astats
-    channels 1 and 2 only. Findings from audio analysis run in a previous pass
-    (CSV reuse) are not consulted; the caller falls back to including all audio.
+    The audio analysis only examines the first stereo pair (astats channels 1
+    and 2), so audible-timecode findings are limited to channels 1-2; silence
+    findings may name any analyzed channel (e.g. on a 4-channel source). If both
+    analyzed program channels (1 and 2) end up flagged, nothing is excluded (the
+    caller warns and keeps all audio) — without a surviving channel of the
+    analyzed pair the access copy's program audio can't be reconstructed.
+    Findings from audio analysis run in a previous pass (CSV reuse) are not
+    consulted; the caller falls back to including all audio.
 
     Returns:
         tuple: (excluded_channels, reasons) — excluded_channels is a sorted
@@ -39,18 +43,17 @@ def determine_excluded_audio_channels(audio_findings):
         return [], []
 
     num_channels = audio_findings.get('num_channels')
-    if num_channels is not None and num_channels != 2:
+    if num_channels is not None and num_channels < 2:
         logger.debug(
             f'Audio channel exclusion skipped: source has {num_channels} '
-            f'channel(s); only stereo is supported\n'
+            f'channel(s); at least a stereo pair is required\n'
         )
         return [], []
 
     flagged = {}
 
     for ch in audio_findings.get('silent_channels') or []:
-        if ch in (1, 2):
-            flagged[ch] = f'channel {ch} is silent (mean RMS below silence threshold)'
+        flagged[ch] = f'channel {ch} is silent (mean RMS below silence threshold)'
 
     duration = audio_findings.get('duration')
     regions = audio_findings.get('timecode_consensus_regions') or []
@@ -77,7 +80,9 @@ def determine_excluded_audio_channels(audio_findings):
                 )
 
     reasons = [flagged[ch] for ch in sorted(flagged)]
-    if set(flagged) == {1, 2}:
+    # Both analyzed program channels flagged → no surviving pair channel to
+    # build the access audio from; keep all audio (the caller warns).
+    if {1, 2}.issubset(flagged):
         return [], reasons
     return sorted(flagged), reasons
 
@@ -123,9 +128,13 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
     point so head content (e.g. color bars detected by qct-parse) is excluded
     from the access copy.
 
-    If excluded_audio_channels names a stereo channel (1-based), only the first
-    audio stream is mapped and the remaining good channel is output as
-    dual-mono stereo via the pan filter.
+    If excluded_audio_channels names a channel (1-based), only the first audio
+    stream is mapped and the access copy is rebuilt from the good channel(s) of
+    the analyzed stereo pair (channels 1-2) via the pan filter: a single
+    surviving pair channel is output as dual-mono stereo, two surviving pair
+    channels as straight stereo. The pan reads the wanted channels by index, so
+    sources with extra (unanalyzed) channels — e.g. a 4-channel stream — are
+    handled correctly; the extra channels are dropped.
 
     Output dimensions for NTSC sources are controlled by crop_to_480:
       * crop_to_480=True (default): NTSC (720x486 input) → 720x480 by trimming
@@ -187,18 +196,34 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
     # through with no default crop.
     vf_filters.extend(['yadif=1', 'format=yuv420p'])
 
-    if excluded_audio_channels:
-        # Keep only the good channel of the first audio stream, output as
-        # dual-mono stereo. pan channel indices are 0-based (ch1 -> c0).
-        keep = ({1, 2} - set(excluded_audio_channels)).pop()
-        excluded_str = ', '.join(str(ch) for ch in sorted(excluded_audio_channels))
-        logger.info(
-            f'Excluding audio channel {excluded_str} from access copy; '
-            f'output is dual-mono from channel {keep}. '
-            f'Only the first audio stream is included.\n'
-        )
-        audio_args = ['-map', '0:a:0?', '-af', f'pan=stereo|c0=c{keep - 1}|c1=c{keep - 1}']
+    # The audio analysis only examines the first stereo pair (channels 1-2), so
+    # the access copy is rebuilt from the good channel(s) of that pair; any extra
+    # (unanalyzed) channels on the source stream — e.g. on a 4-channel file — are
+    # dropped. pan channel indices are 0-based (ch1 -> c0).
+    excluded = set(excluded_audio_channels or [])
+    good = [ch for ch in (1, 2) if ch not in excluded]
+    if excluded and good:
+        excluded_str = ', '.join(str(ch) for ch in sorted(excluded))
+        if len(good) == 1:
+            keep = good[0]
+            pan = f'pan=stereo|c0=c{keep - 1}|c1=c{keep - 1}'
+            logger.info(
+                f'Excluding audio channel(s) {excluded_str} from access copy; '
+                f'output is dual-mono from channel {keep}. '
+                f'Only the first audio stream is included.\n'
+            )
+        else:
+            pan = f'pan=stereo|c0=c{good[0] - 1}|c1=c{good[1] - 1}'
+            logger.info(
+                f'Excluding audio channel(s) {excluded_str} from access copy; '
+                f'output is stereo from channels {good[0]} and {good[1]}. '
+                f'Only the first audio stream is included.\n'
+            )
+        audio_args = ['-map', '0:a:0?', '-af', pan]
     else:
+        # No exclusions, or no surviving channel of the analyzed pair — keep all
+        # audio. determine_excluded_audio_channels() already empties the
+        # exclusion list when both analyzed channels are flagged.
         audio_args = ['-map', '0:a?']
 
     ffmpeg_command.extend([
@@ -261,10 +286,12 @@ def process_access_file(video_path, source_directory, video_id, check_cancelled=
             cropped off the access copy.
         crop_to_480 (bool): When True (default), NTSC sources are output at 720x480.
             When False, NTSC sources keep their native 720x486 height.
-        excluded_audio_channels (list, optional): 1-based stereo channel numbers
-            flagged by audio analysis (silent or carrying audible timecode), as
-            decided by determine_excluded_audio_channels(). When provided, the
-            flagged channel is dropped and the good channel output as dual-mono.
+        excluded_audio_channels (list, optional): 1-based channel numbers flagged
+            by audio analysis (silent or carrying audible timecode), as decided by
+            determine_excluded_audio_channels(). When provided, the access copy is
+            rebuilt from the surviving channel(s) of the analyzed stereo pair
+            (dual-mono from one, or stereo from two); extra channels on a
+            multi-channel source stream are dropped.
 
     Returns:
         str or None: Path to the created access file, or None
