@@ -620,7 +620,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                 results['qctools_output_path'] = qctools_output_path
             else:
                 # Create new QCTools report
-                logger.info(f"No existing QCTools report found. Creating new report: {qctools_output_path}")
+                logger.info(f"No existing QCTools report found. Creating new report: {qctools_output_path}\n")
                 run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled, signals=signals)
                 logger.debug('')  # Add new line for cleaner terminal output
                 results['qctools_output_path'] = qctools_output_path

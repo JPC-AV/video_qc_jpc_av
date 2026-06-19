@@ -116,6 +116,29 @@ def get_video_dimensions(video_path):
         return None, None
 
 
+def get_audio_stream_channels(video_path):
+    """Return the channel count of every audio stream, in order.
+
+    e.g. ``[2]`` for a single stereo stream (typical MKV) or ``[1, 1]`` for two
+    separate mono streams (typical broadcast MXF, where each track is its own
+    mono PCM stream). Returns an empty list if it can't be determined.
+    """
+    command = [
+        'ffprobe',
+        '-v', 'error',
+        '-select_streams', 'a',
+        '-show_entries', 'stream=channels',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        video_path,
+    ]
+    try:
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out = result.stdout.decode().strip()
+        return [int(x) for x in out.split() if x.strip()]
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return []
+
+
 def make_access_file(video_path, output_path, check_cancelled=None, signals=None, start_time=None, crop_area=None, crop_to_480=True, excluded_audio_channels=None):
     """Create access file using ffmpeg.
 
@@ -187,22 +210,50 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
     # through with no default crop.
     vf_filters.extend(['yadif=1', 'format=yuv420p'])
 
+    # Audio layout differs by container: MKV stores one multi-channel (stereo)
+    # stream, while broadcast MXF stores each channel as its own mono stream.
+    # Detect the layout so the access copy carries all channels in either case.
+    audio_stream_channels = get_audio_stream_channels(video_path)
+    multi_stream = len(audio_stream_channels) > 1
+    filter_complex_args = []
+
     if excluded_audio_channels:
-        # Keep only the good channel of the first audio stream, output as
-        # dual-mono stereo. pan channel indices are 0-based (ch1 -> c0).
+        # Keep only the good channel, output as dual-mono stereo.
         keep = ({1, 2} - set(excluded_audio_channels)).pop()
         excluded_str = ', '.join(str(ch) for ch in sorted(excluded_audio_channels))
+        if multi_stream:
+            # Each channel is its own mono stream; keep the good stream and fan
+            # it out to dual-mono stereo (a mono stream only has channel c0).
+            logger.info(
+                f'Excluding audio channel {excluded_str} from access copy; '
+                f'output is dual-mono from channel {keep} (audio stream {keep - 1}).\n'
+            )
+            audio_args = ['-map', f'0:a:{keep - 1}?', '-af', 'pan=stereo|c0=c0|c1=c0']
+        else:
+            # Single multi-channel stream: pan the good channel within it.
+            # pan channel indices are 0-based (ch1 -> c0).
+            logger.info(
+                f'Excluding audio channel {excluded_str} from access copy; '
+                f'output is dual-mono from channel {keep}. '
+                f'Only the first audio stream is included.\n'
+            )
+            audio_args = ['-map', '0:a:0?', '-af', f'pan=stereo|c0=c{keep - 1}|c1=c{keep - 1}']
+    elif multi_stream:
+        # Merge the separate mono streams into one multi-channel stream so the
+        # access copy carries all audio in a single track (mirroring the MKV
+        # single-stream output) instead of several parallel mono tracks.
+        n = len(audio_stream_channels)
+        merge_inputs = ''.join(f'[0:a:{i}]' for i in range(n))
+        filter_complex_args = ['-filter_complex', f'{merge_inputs}amerge=inputs={n}[aout]']
+        audio_args = ['-map', '[aout]']
         logger.info(
-            f'Excluding audio channel {excluded_str} from access copy; '
-            f'output is dual-mono from channel {keep}. '
-            f'Only the first audio stream is included.\n'
+            f'Merging {n} mono audio streams into one {n}-channel access-copy audio track.\n'
         )
-        audio_args = ['-map', '0:a:0?', '-af', f'pan=stereo|c0=c{keep - 1}|c1=c{keep - 1}']
     else:
         audio_args = ['-map', '0:a?']
 
     ffmpeg_command.extend([
-        '-i', video_path,
+        '-i', video_path, *filter_complex_args,
         '-movflags', 'faststart', '-map', '0:v:0', *audio_args, '-c:v', 'libx264',
         '-vf', ','.join(vf_filters), '-crf', '18', '-preset', 'fast', '-maxrate', '1000k', '-bufsize', '1835k',
         '-c:a', 'aac', '-strict', '-2', '-b:a', '192k', '-f', 'mp4', output_path
