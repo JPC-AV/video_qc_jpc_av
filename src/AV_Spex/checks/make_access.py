@@ -1,7 +1,7 @@
 import subprocess
 import os
 import sys
-from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger, report_ffmpeg_stderr
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -287,8 +287,9 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
                 else:
                     print(f"\rFFmpeg Access Copy Progress: {percent_complete:.2f}%", end='', flush=True)
         ffmpeg_stderr = ffmpeg_process.stderr.read()
-        if ffmpeg_stderr:
-            logger.error(f"ffmpeg stderr: {ffmpeg_stderr.strip()}")
+        ffmpeg_process.wait()
+        report_ffmpeg_stderr(ffmpeg_stderr, "access copy",
+                             failure=ffmpeg_process.returncode not in (0, None))
     except Exception as e:
         logger.error(f"Error during ffmpeg process: {str(e)}")
     print("\n")

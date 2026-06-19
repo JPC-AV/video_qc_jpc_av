@@ -28,7 +28,7 @@ matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger, report_ffmpeg_stderr
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.checks.qct_parse import (
@@ -4007,8 +4007,7 @@ class EnhancedFrameAnalysis:
                 return output_path
             else:
                 logger.warning(f"FFmpeg spectrogram generation failed (exit code {proc.returncode})")
-                if stderr_text:
-                    logger.debug(f"FFmpeg stderr: {stderr_text[-500:]}")
+                report_ffmpeg_stderr(stderr_text, "spectrogram", failure=True)
         except Exception as e:
             logger.warning(f"Error generating spectrogram: {e}")
 

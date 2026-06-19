@@ -128,3 +128,74 @@ def test_stop_file_log_cleans_up_orphaned_per_file_handlers(tmp_path):
 
     assert orphan not in log_setup.logger.handlers
     assert _per_file_handlers() == []
+
+
+# ---------------------------------------------------------------------------
+# report_ffmpeg_stderr
+# ---------------------------------------------------------------------------
+
+DNXHD_NOTICE = "[dnxhd @ 0x8e8c58380] Unsupported: variable ACT flag."
+
+
+def test_report_ffmpeg_stderr_benign_dnxhd_is_warning_not_error(caplog):
+    with caplog.at_level(logging.DEBUG):
+        log_setup.report_ffmpeg_stderr(DNXHD_NOTICE, "access copy")
+    # Reported once, at WARNING, with explanatory context — never ERROR.
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert "access copy" in msg
+    assert "known-benign" in msg
+    assert "ACT" in msg
+
+
+def test_report_ffmpeg_stderr_real_error_with_failure_is_error(caplog):
+    with caplog.at_level(logging.DEBUG):
+        log_setup.report_ffmpeg_stderr("Invalid argument", "access copy", failure=True)
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert "access copy" in errors[0].getMessage()
+    assert "Invalid argument" in errors[0].getMessage()
+
+
+def test_report_ffmpeg_stderr_real_output_without_failure_is_warning(caplog):
+    with caplog.at_level(logging.DEBUG):
+        log_setup.report_ffmpeg_stderr("some notice", "audio waveform", failure=False)
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+    assert any(r.levelno == logging.WARNING and "some notice" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_report_ffmpeg_stderr_mixed_separates_benign_from_real(caplog):
+    text = f"{DNXHD_NOTICE}\nConversion failed!"
+    with caplog.at_level(logging.DEBUG):
+        log_setup.report_ffmpeg_stderr(text, "access copy", failure=True)
+    # Benign notice → WARNING; the real failure line → ERROR.
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("known-benign" in r.getMessage() for r in warnings)
+    assert any("Conversion failed!" in r.getMessage() for r in errors)
+    # The benign line must not leak into the error message.
+    assert all("ACT" not in r.getMessage() for r in errors)
+
+
+def test_report_ffmpeg_stderr_dedupes_repeated_benign_lines(caplog):
+    text = "\n".join([DNXHD_NOTICE, DNXHD_NOTICE, DNXHD_NOTICE])
+    with caplog.at_level(logging.DEBUG):
+        log_setup.report_ffmpeg_stderr(text, "access copy")
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
+def test_report_ffmpeg_stderr_accepts_bytes(caplog):
+    with caplog.at_level(logging.DEBUG):
+        log_setup.report_ffmpeg_stderr(DNXHD_NOTICE.encode("utf-8"), "spectrogram")
+    assert any("known-benign" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "\n\n"])
+def test_report_ffmpeg_stderr_empty_logs_nothing(caplog, value):
+    with caplog.at_level(logging.DEBUG):
+        log_setup.report_ffmpeg_stderr(value, "access copy")
+    assert caplog.records == []

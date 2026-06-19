@@ -23,7 +23,7 @@ import io
 from dataclasses import asdict, dataclass, field
 from collections import defaultdict
 
-from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger, report_ffmpeg_stderr
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -1757,10 +1757,8 @@ def _export_chroma_thumb(video_path, time_seconds, out_path):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
-            logger.warning(
-                f"ffmpeg failed for chroma-phase thumbnail at {ts_str}: "
-                f"{result.stderr.strip()[:200]}"
-            )
+            logger.warning(f"ffmpeg failed for chroma-phase thumbnail at {ts_str} (exit code {result.returncode})")
+            report_ffmpeg_stderr(result.stderr, "chroma-phase thumbnail", failure=True)
             return False
         return os.path.isfile(out_path)
     except subprocess.TimeoutExpired:

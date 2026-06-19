@@ -126,7 +126,71 @@ def setup_logger():
     return logger
 
 # Initialize logger once on module import
-logger = setup_logger() 
+logger = setup_logger()
+
+
+# Known-benign ffmpeg stderr notices: messages a decoder prints for bitstream
+# features it doesn't fully model, even though the operation still succeeds.
+# Each entry maps a substring to match → a plain-language explanation. Add new
+# entries here so every ffmpeg call site reports them the same way.
+_BENIGN_FFMPEG_NOTICES = (
+    (
+        "variable ACT flag",
+        "the DNxHD/VC-3 decoder does not model this file's variable Adaptive "
+        "Coding/Truncation (ACT) flag. This is a decoder limitation, not a fault "
+        "in the file — frames still decode and the output is produced. Common in "
+        "DNxHD-in-MXF (e.g. exports from professional NLEs).",
+    ),
+)
+
+
+def report_ffmpeg_stderr(stderr_text, operation, *, failure=False):
+    """Log ffmpeg stderr output consistently across the app.
+
+    Every ffmpeg call site should route its captured stderr through here so the
+    same message reads the same way regardless of which step produced it.
+
+    Known-benign decoder notices (see ``_BENIGN_FFMPEG_NOTICES``, e.g. the DNxHD
+    "variable ACT flag" message emitted for many MXF files) are reported once at
+    WARNING with a plain-language explanation — never as an ERROR — because they
+    don't indicate a failed operation. Any remaining, unrecognized stderr lines
+    are logged together at ERROR when ``failure`` is True (the ffmpeg run failed)
+    or WARNING otherwise.
+
+    Args:
+        stderr_text (str | bytes | None): Raw stderr captured from ffmpeg.
+        operation (str): Short description of the step, e.g. "access copy".
+        failure (bool): Whether the ffmpeg run actually failed. Controls the
+            level used for unrecognized output (ERROR vs WARNING).
+    """
+    if not stderr_text:
+        return
+    if isinstance(stderr_text, bytes):
+        stderr_text = stderr_text.decode("utf-8", errors="replace")
+
+    lines = [ln.strip() for ln in stderr_text.splitlines() if ln.strip()]
+    if not lines:
+        return
+
+    benign_seen = []   # preserve order, de-duplicate repeats
+    other_lines = []
+    for line in lines:
+        match = next(((needle, exp) for needle, exp in _BENIGN_FFMPEG_NOTICES if needle in line), None)
+        if match:
+            if match not in benign_seen:
+                benign_seen.append(match)
+        else:
+            other_lines.append(line)
+
+    for _needle, explanation in benign_seen:
+        logger.warning(f"ffmpeg [{operation}]: known-benign decoder notice — {explanation}\n")
+
+    if other_lines:
+        joined = "; ".join(other_lines)
+        if failure:
+            logger.error(f"ffmpeg [{operation}] failed: {joined}\n")
+        else:
+            logger.warning(f"ffmpeg [{operation}] stderr: {joined}\n")
 
 
 # Store reference to the current per-file handler so we can remove it later

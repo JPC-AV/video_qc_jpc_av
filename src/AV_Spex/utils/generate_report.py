@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
-from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger, report_ffmpeg_stderr
 
 config_mgr = ConfigManager()
 
@@ -823,10 +823,8 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
                 time.sleep(poll_interval)
 
             stderr_text = process.stderr.read() if process.stderr else ''
-            if stderr_text:
-                lines = [ln for ln in stderr_text.splitlines() if ln.strip()]
-                if lines:
-                    logger.warning(f"Audio waveform ffmpeg stderr: {'; '.join(lines)}")
+            report_ffmpeg_stderr(stderr_text, "audio waveform",
+                                 failure=process.returncode not in (0, None))
 
             if not os.path.isfile(output_path):
                 logger.warning("Audio waveform: ffmpeg produced no output — skipping")
@@ -944,7 +942,8 @@ def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile
         if result.returncode == 0 and os.path.isfile(ffoutputFramePath):
             return ffoutputFramePath
         else:
-            logger.error(f"Failed to generate thumbnail: {result.stderr.decode()}")
+            logger.warning(f"Failed to generate {tag} thumbnail at {timestamp} (exit code {result.returncode})")
+            report_ffmpeg_stderr(result.stderr, f"{tag} thumbnail", failure=True)
             return None
     except Exception as e:
         logger.error(f"Error generating thumbnail: {e}")
