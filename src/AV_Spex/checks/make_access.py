@@ -88,16 +88,27 @@ def determine_excluded_audio_channels(audio_findings):
 
 
 def get_duration(video_path):
-    command = [
-        'ffprobe',
-        '-v', 'error',
-        '-show_entries', 'format=duration',
-        '-of', 'csv=p=0',
-        video_path
-    ]
-    result = subprocess.run(command, stdout=subprocess.PIPE)
-    duration = result.stdout.decode().strip()
-    return duration
+    """Return the file duration in seconds as a string, or None if unavailable.
+
+    Tries the container (format) duration first, then falls back to the first
+    video stream's duration — some MKVs report 'N/A' for format=duration.
+    Returns None when neither is available so callers can skip progress math.
+    """
+    def _probe(entries, stream_args=()):
+        command = [
+            'ffprobe', '-v', 'error', *stream_args,
+            '-show_entries', entries, '-of', 'csv=p=0', video_path,
+        ]
+        result = subprocess.run(command, stdout=subprocess.PIPE)
+        return result.stdout.decode().strip()
+
+    for duration in (
+        _probe('format=duration'),
+        _probe('stream=duration', ('-select_streams', 'v:0')),
+    ):
+        if duration and duration != 'N/A':
+            return duration
+    return None
 
 
 def get_video_dimensions(video_path):
@@ -219,30 +230,71 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
     # through with no default crop.
     vf_filters.extend(['yadif=1', 'format=yuv420p'])
 
+    # Determine the source audio layout. A single stream carrying the analyzed
+    # stereo pair (typical MKV, possibly with extra channels) is handled with the
+    # pan filter on that one stream. Separate mono streams (typical broadcast MXF,
+    # one PCM stream per track) are handled by mapping/merging whole streams,
+    # since each analyzed channel N is then its own stream a:(N-1).
+    stream_channels = get_audio_stream_channels(video_path)
+    multi_mono = len(stream_channels) > 1 and all(c == 1 for c in stream_channels)
+
     # The audio analysis only examines the first stereo pair (channels 1-2), so
     # the access copy is rebuilt from the good channel(s) of that pair; any extra
-    # (unanalyzed) channels on the source stream — e.g. on a 4-channel file — are
-    # dropped. pan channel indices are 0-based (ch1 -> c0).
+    # (unanalyzed) channels/streams — e.g. on a 4-channel file — are dropped.
+    # pan channel indices are 0-based (ch1 -> c0).
     excluded = set(excluded_audio_channels or [])
     good = [ch for ch in (1, 2) if ch not in excluded]
     if excluded and good:
         excluded_str = ', '.join(str(ch) for ch in sorted(excluded))
-        if len(good) == 1:
-            keep = good[0]
-            pan = f'pan=stereo|c0=c{keep - 1}|c1=c{keep - 1}'
-            logger.info(
-                f'Excluding audio channel(s) {excluded_str} from access copy; '
-                f'output is dual-mono from channel {keep}. '
-                f'Only the first audio stream is included.\n'
-            )
+        if multi_mono:
+            # Each analyzed channel is its own mono stream (channel N -> a:(N-1)).
+            if len(good) == 1:
+                keep = good[0]
+                # The kept mono stream has a single channel (c0); duplicate it to
+                # both output channels for dual-mono stereo.
+                audio_args = ['-map', f'0:a:{keep - 1}?', '-af', 'pan=stereo|c0=c0|c1=c0']
+                logger.info(
+                    f'Excluding audio channel(s) {excluded_str} from access copy; '
+                    f'output is dual-mono from channel {keep} (stream a:{keep - 1}).\n'
+                )
+            else:
+                # Both analyzed channels survive — merge their two mono streams
+                # into one stereo track; any extra mono streams are dropped.
+                fc = f'[0:a:{good[0] - 1}][0:a:{good[1] - 1}]amerge=inputs=2[aout]'
+                audio_args = ['-filter_complex', fc, '-map', '[aout]']
+                logger.info(
+                    f'Excluding audio channel(s) {excluded_str} from access copy; '
+                    f'output is stereo from channels {good[0]} and {good[1]} '
+                    f'(streams a:{good[0] - 1} and a:{good[1] - 1}).\n'
+                )
         else:
-            pan = f'pan=stereo|c0=c{good[0] - 1}|c1=c{good[1] - 1}'
-            logger.info(
-                f'Excluding audio channel(s) {excluded_str} from access copy; '
-                f'output is stereo from channels {good[0]} and {good[1]}. '
-                f'Only the first audio stream is included.\n'
-            )
-        audio_args = ['-map', '0:a:0?', '-af', pan]
+            # Single stream containing the analyzed pair (and maybe extra channels).
+            if len(good) == 1:
+                keep = good[0]
+                pan = f'pan=stereo|c0=c{keep - 1}|c1=c{keep - 1}'
+                logger.info(
+                    f'Excluding audio channel(s) {excluded_str} from access copy; '
+                    f'output is dual-mono from channel {keep}. '
+                    f'Only the first audio stream is included.\n'
+                )
+            else:
+                pan = f'pan=stereo|c0=c{good[0] - 1}|c1=c{good[1] - 1}'
+                logger.info(
+                    f'Excluding audio channel(s) {excluded_str} from access copy; '
+                    f'output is stereo from channels {good[0]} and {good[1]}. '
+                    f'Only the first audio stream is included.\n'
+                )
+            audio_args = ['-map', '0:a:0?', '-af', pan]
+    elif multi_mono:
+        # No exclusions: merge every mono stream into a single track so the access
+        # copy keeps all audio (matching the single-stream "-map 0:a?" behavior).
+        inputs = ''.join(f'[0:a:{i}]' for i in range(len(stream_channels)))
+        fc = f'{inputs}amerge=inputs={len(stream_channels)}[aout]'
+        audio_args = ['-filter_complex', fc, '-map', '[aout]']
+        logger.info(
+            f'Merging {len(stream_channels)} mono audio streams into a single '
+            f'track for the access copy.\n'
+        )
     else:
         # No exclusions, or no surviving channel of the analyzed pair — keep all
         # audio. determine_excluded_audio_channels() already empties the
@@ -250,39 +302,49 @@ def make_access_file(video_path, output_path, check_cancelled=None, signals=None
         audio_args = ['-map', '0:a?']
 
     ffmpeg_command.extend([
-        '-i', video_path, *filter_complex_args,
+        '-i', video_path,
         '-movflags', 'faststart', '-map', '0:v:0', *audio_args, '-c:v', 'libx264',
         '-vf', ','.join(vf_filters), '-crf', '18', '-preset', 'fast', '-maxrate', '1000k', '-bufsize', '1835k',
         '-c:a', 'aac', '-strict', '-2', '-b:a', '192k', '-f', 'mp4', output_path
     ])
 
+    # Total output duration in microseconds, used to compute progress percent.
+    # None when the duration couldn't be probed (e.g. ffprobe returned 'N/A');
+    # in that case we still run ffmpeg, just without a percentage readout.
+    try:
+        total_duration = float(duration_str) if duration_str else None
+    except (TypeError, ValueError):
+        total_duration = None
+    if total_duration is not None and start_time and start_time > 0:
+        total_duration = max(0.001, total_duration - start_time)
+    duration_ms = total_duration * 1000000 if total_duration else None
+
     try:
         ffmpeg_process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        duration_prefix = 'out_time_ms='  # prefix of ffmpeg microsecond progress output
         while True:
             ff_output = ffmpeg_process.stdout.readline()
             if not ff_output:
                 break
-            duration_prefix = 'out_time_ms='
-            # define prefix of ffmpeg microsecond progress output
-            duration = float(duration_str)
-            if start_time and start_time > 0:
-                duration = max(0.001, duration - start_time)
-            # Convert string integer
-            duration_ms = (duration * 1000000)
-            # Calculate the total duration in microseconds
             if ff_output.startswith(duration_prefix):
                 if check_cancelled():
-                    ffmpeg_process.terminate
+                    ffmpeg_process.terminate()
                     return
-                current_frame_str = ff_output.split(duration_prefix)[1]
-                current_frame_ms = float(current_frame_str)
-                percent_complete = (current_frame_ms / duration_ms) * 100
-                if signals:
-                    # Make doubly sure we're emitting an integer percentage in range 0-100
-                    safe_percent = min(100, max(0, int(percent_complete)))
-                    signals.access_file_progress.emit(safe_percent)
-                else:
-                    print(f"\rFFmpeg Access Copy Progress: {percent_complete:.2f}%", end='', flush=True)
+                if duration_ms:
+                    current_frame_str = ff_output.split(duration_prefix)[1].strip()
+                    try:
+                        current_frame_ms = float(current_frame_str)
+                    except ValueError:
+                        # ffmpeg emits out_time_ms=N/A before a timestamp is
+                        # established; skip those lines rather than aborting.
+                        continue
+                    percent_complete = (current_frame_ms / duration_ms) * 100
+                    if signals:
+                        # Make doubly sure we're emitting an integer percentage in range 0-100
+                        safe_percent = min(100, max(0, int(percent_complete)))
+                        signals.access_file_progress.emit(safe_percent)
+                    else:
+                        print(f"\rFFmpeg Access Copy Progress: {percent_complete:.2f}%", end='', flush=True)
         ffmpeg_stderr = ffmpeg_process.stderr.read()
         ffmpeg_process.wait()
         report_ffmpeg_stderr(ffmpeg_stderr, "access copy",
