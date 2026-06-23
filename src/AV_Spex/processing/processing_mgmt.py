@@ -9,7 +9,7 @@ from pathlib import Path
 from AV_Spex.processing import run_tools
 from AV_Spex.utils import dir_setup
 from AV_Spex.utils.log_setup import logger
-from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, VALID_QCTOOLS_EXTENSIONS
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, VALID_QCTOOLS_EXTENSIONS, is_mkv_extension
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.generate_report import generate_final_report
 from AV_Spex.checks.fixity_check import check_fixity, output_fixity
@@ -50,9 +50,26 @@ class ProcessingManager:
         
         if self.check_cancelled():
             return None
-        
-        # Embed stream fixity if required  
-        if self.checks_config.fixity.embed_stream_fixity:
+
+        # Embedded stream fixity (embed + validate) relies on mkvextract/
+        # mkvpropedit, which only work on Matroska. If a non-MKV extension is
+        # configured but a profile or stale config left these enabled, skip them
+        # gracefully rather than letting mkvextract output fail XML parsing.
+        embed_stream_fixity = self.checks_config.fixity.embed_stream_fixity
+        validate_stream_fixity = self.checks_config.fixity.validate_stream_fixity
+        if (embed_stream_fixity or validate_stream_fixity) and not is_mkv_extension(
+            getattr(self.checks_config, 'video_file_extension', 'mkv')
+        ):
+            logger.warning(
+                f"Input extension '{self.checks_config.video_file_extension}' is not MKV; "
+                "embedded stream fixity only works on Matroska. Skipping embed/validate "
+                "stream fixity for this file.\n"
+            )
+            embed_stream_fixity = False
+            validate_stream_fixity = False
+
+        # Embed stream fixity if required
+        if embed_stream_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Embedding fixity...")
             if self.check_cancelled():
@@ -65,10 +82,10 @@ class ProcessingManager:
                 self.signals.step_completed.emit("Embed Stream Fixity")
 
         # Validate stream hashes if required
-        if self.checks_config.fixity.validate_stream_fixity:
+        if validate_stream_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Validating embedded fixity...")
-            if self.checks_config.fixity.embed_stream_fixity:
+            if embed_stream_fixity:
                 logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
             else:
                 validation_result = validate_embedded_md5(video_path, check_cancelled=self.check_cancelled, signals=self.signals)
@@ -603,7 +620,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                 results['qctools_output_path'] = qctools_output_path
             else:
                 # Create new QCTools report
-                logger.info(f"No existing QCTools report found. Creating new report: {qctools_output_path}")
+                logger.info(f"No existing QCTools report found. Creating new report: {qctools_output_path}\n")
                 run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled, signals=signals)
                 logger.debug('')  # Add new line for cleaner terminal output
                 results['qctools_output_path'] = qctools_output_path

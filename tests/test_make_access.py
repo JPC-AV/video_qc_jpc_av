@@ -34,10 +34,15 @@ def _fake_popen(stdout_lines=()):
     return proc
 
 
-def _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), duration="60.0"):
-    """Patch helpers + Popen so we can inspect the ffmpeg command list build."""
+def _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), duration="60.0", audio_streams=(2,)):
+    """Patch helpers + Popen so we can inspect the ffmpeg command list build.
+
+    audio_streams defaults to a single stereo stream ``(2,)`` (typical MKV);
+    pass e.g. ``(1, 1)`` to simulate two mono streams (typical MXF).
+    """
     monkeypatch.setattr(ma, "get_duration", lambda _p: duration)
     monkeypatch.setattr(ma, "get_video_dimensions", lambda _p: dim)
+    monkeypatch.setattr(ma, "get_audio_stream_channels", lambda _p: list(audio_streams))
     fake_proc = _fake_popen()
     popen_mock = MagicMock(return_value=fake_proc)
     monkeypatch.setattr(ma.subprocess, "Popen", popen_mock)
@@ -366,6 +371,58 @@ def test_make_access_file_no_exclusion_keeps_default_audio_mapping(monkeypatch, 
     mapped = [cmd[i + 1] for i in map_indices]
     assert "0:a?" in mapped
     assert "-af" not in cmd
+
+
+def test_make_access_file_multi_mono_streams_merged_to_one_track(monkeypatch):
+    """Two mono audio streams (MXF) are amerged into a single track."""
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), audio_streams=(1, 1))
+    ma.make_access_file(
+        "/v/in.mxf", "/v/out.mp4",
+        check_cancelled=lambda: False,
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    fc_idx = cmd.index("-filter_complex")
+    assert cmd[fc_idx + 1] == "[0:a:0][0:a:1]amerge=inputs=2[aout]"
+    map_indices = [i for i, v in enumerate(cmd) if v == "-map"]
+    mapped = [cmd[i + 1] for i in map_indices]
+    assert "[aout]" in mapped
+    assert "0:a?" not in mapped
+
+
+def test_make_access_file_multi_mono_excluded_ch2_keeps_first_stream(monkeypatch):
+    """With two mono streams, excluding channel 2 keeps stream a:0 as dual-mono."""
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), audio_streams=(1, 1))
+    ma.make_access_file(
+        "/v/in.mxf", "/v/out.mp4",
+        check_cancelled=lambda: False,
+        excluded_audio_channels=[2],
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    map_indices = [i for i, v in enumerate(cmd) if v == "-map"]
+    mapped = [cmd[i + 1] for i in map_indices]
+    assert "0:a:0?" in mapped
+    af_idx = cmd.index("-af")
+    assert cmd[af_idx + 1] == "pan=stereo|c0=c0|c1=c0"
+    assert "-filter_complex" not in cmd
+
+
+def test_make_access_file_multi_mono_excluded_ch1_keeps_second_stream(monkeypatch):
+    """With two mono streams, excluding channel 1 keeps stream a:1 as dual-mono."""
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), audio_streams=(1, 1))
+    ma.make_access_file(
+        "/v/in.mxf", "/v/out.mp4",
+        check_cancelled=lambda: False,
+        excluded_audio_channels=[1],
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    map_indices = [i for i, v in enumerate(cmd) if v == "-map"]
+    mapped = [cmd[i + 1] for i in map_indices]
+    assert "0:a:1?" in mapped
+    af_idx = cmd.index("-af")
+    assert cmd[af_idx + 1] == "pan=stereo|c0=c0|c1=c0"
 
 
 # ---------------------------------------------------------------------------

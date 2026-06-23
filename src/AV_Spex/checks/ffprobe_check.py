@@ -6,7 +6,7 @@ import sys
 import json
 
 from AV_Spex.utils.log_setup import logger
-from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, is_mkv_extension
 from AV_Spex.utils.config_manager import ConfigManager
 
 
@@ -91,10 +91,11 @@ def parse_ffprobe(file_path):
         if expected_format_values['format_long_name'] not in ffmpeg_output['format']['format_long_name']:
             ffprobe_differences["Encoder setting 'format_long_name'"] = [ffmpeg_output['format']['format_long_name'], expected_format_values['format_long_name']]
 
-    # Check for ENCODER_SETTINGS in format tags
-    # This is handled by the signal flow profile system, but we still
-    # check for its presence as a basic validation
-    if 'ENCODER_SETTINGS' not in ffmpeg_output['format'].get('tags', {}):
+    # Check for ENCODER_SETTINGS in format tags. Signal flow is embedded as a
+    # Matroska tag, so this presence check only applies to MKV input — skip it for
+    # other containers, which legitimately won't carry ENCODER_SETTINGS.
+    if is_mkv_extension(getattr(checks_config, 'video_file_extension', 'mkv')) \
+            and 'ENCODER_SETTINGS' not in ffmpeg_output['format'].get('tags', {}):
         ffprobe_differences["Encoder Settings"] = ['No Encoder Settings found, No Signal Flow data embedded', '']
 
     if not ffprobe_differences:

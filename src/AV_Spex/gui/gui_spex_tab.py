@@ -20,9 +20,10 @@ from AV_Spex.gui.gui_custom_ffprobe import CustomFfprobeDialog
 
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.config_setup import (
-    SpexConfig, ChecksConfig, FilenameConfig, 
+    SpexConfig, ChecksConfig, FilenameConfig,
     SignalflowConfig, SignalflowProfile, ExiftoolConfig, ExiftoolProfile,
-    MediainfoConfig, MediainfoProfile, FfprobeConfig, FfprobeProfile
+    MediainfoConfig, MediainfoProfile, FfprobeConfig, FfprobeProfile,
+    is_mkv_extension
 )
 from AV_Spex.utils.log_setup import logger
 
@@ -1119,6 +1120,13 @@ class SpexTab(ThemeableMixin):
             self.profile_handlers.on_signalflow_profile_changed
         )
         mediatrace_layout.addWidget(self.main_window.signalflow_profile_dropdown)
+
+        # Signal flow is embedded as an MKV tag, so disable the dropdown for
+        # non-MKV input (the Checks tab keeps this in sync on live changes).
+        checks_config = config_mgr.get_config('checks', ChecksConfig)
+        self.main_window.signalflow_profile_dropdown.setEnabled(
+            is_mkv_extension(getattr(checks_config, 'video_file_extension', 'mkv'))
+        )
         
         # Store the layout as an instance variable so it can be accessed by other methods
         self.mediatrace_section_layout = mediatrace_layout

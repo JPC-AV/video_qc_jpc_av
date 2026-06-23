@@ -654,6 +654,33 @@ def test_get_video_duration_unparseable_stdout_returns_none(monkeypatch):
     assert qp._get_video_duration("/v.mkv") is None
 
 
+# ---- _get_audio_stream_count ---------------------------------------------
+
+def test_get_audio_stream_count_single_stream(monkeypatch):
+    # One audio stream (typical MKV: a single multi-channel stream).
+    fake_proc = MagicMock(returncode=0, stdout="1\n", stderr="")
+    monkeypatch.setattr(qp.subprocess, "run", lambda *a, **kw: fake_proc)
+    assert qp._get_audio_stream_count("/v.mkv") == 1
+
+
+def test_get_audio_stream_count_multiple_mono_streams(monkeypatch):
+    # Four discrete mono streams (typical broadcast MXF).
+    fake_proc = MagicMock(returncode=0, stdout="1\n2\n3\n4\n", stderr="")
+    monkeypatch.setattr(qp.subprocess, "run", lambda *a, **kw: fake_proc)
+    assert qp._get_audio_stream_count("/v.mxf") == 4
+
+
+def test_get_audio_stream_count_no_audio_returns_zero(monkeypatch):
+    fake_proc = MagicMock(returncode=0, stdout="\n", stderr="")
+    monkeypatch.setattr(qp.subprocess, "run", lambda *a, **kw: fake_proc)
+    assert qp._get_audio_stream_count("/v.mkv") == 0
+
+
+def test_get_audio_stream_count_subprocess_error_returns_none(monkeypatch):
+    monkeypatch.setattr(qp.subprocess, "run", MagicMock(side_effect=qp.subprocess.SubprocessError("boom")))
+    assert qp._get_audio_stream_count("/v.mxf") is None
+
+
 # ===========================================================================
 # Section 4 — _merge_dropout_candidates
 # ===========================================================================

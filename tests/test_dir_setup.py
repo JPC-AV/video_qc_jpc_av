@@ -83,6 +83,45 @@ def test_find_mkv_case_insensitive(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# find_video_file (extension-aware)
+# ---------------------------------------------------------------------------
+
+def test_find_video_file_finds_mov(tmp_path):
+    (tmp_path / "JPC_AV_05000.mov").write_text("")
+    assert ds.find_video_file(str(tmp_path), extension="mov") == str(tmp_path / "JPC_AV_05000.mov")
+
+
+def test_find_video_file_accepts_leading_dot(tmp_path):
+    (tmp_path / "JPC_AV_05000.mp4").write_text("")
+    assert ds.find_video_file(str(tmp_path), extension=".mp4") == str(tmp_path / "JPC_AV_05000.mp4")
+
+
+def test_find_video_file_ignores_other_extensions(tmp_path):
+    """An .mkv present should not match when looking for .mov."""
+    (tmp_path / "JPC_AV_05000.mkv").write_text("")
+    assert ds.find_video_file(str(tmp_path), extension="mov") is None
+
+
+def test_find_video_file_none_when_multiple(tmp_path):
+    (tmp_path / "a.mov").write_text("")
+    (tmp_path / "b.mov").write_text("")
+    assert ds.find_video_file(str(tmp_path), extension="mov") is None
+
+
+def test_find_video_file_reads_config_extension(tmp_path, monkeypatch):
+    """With no explicit extension, the configured video_file_extension is used."""
+    (tmp_path / "JPC_AV_05000.avi").write_text("")
+
+    fake_checks = MagicMock()
+    fake_checks.video_file_extension = "avi"
+    fake_mgr = MagicMock()
+    fake_mgr.get_config.return_value = fake_checks
+    monkeypatch.setattr(ds, "config_mgr", fake_mgr)
+
+    assert ds.find_video_file(str(tmp_path)) == str(tmp_path / "JPC_AV_05000.avi")
+
+
+# ---------------------------------------------------------------------------
 # check_directory
 # ---------------------------------------------------------------------------
 

@@ -410,26 +410,43 @@ def test_get_audio_channel_count_failure_returns_none(monkeypatch):
     assert gr._get_audio_channel_count("/v.mkv") is None
 
 
+def test_get_audio_stream_channels_single_stereo(monkeypatch):
+    fake = MagicMock(returncode=0, stdout="2\n")
+    monkeypatch.setattr(gr.subprocess, "run", lambda *a, **kw: fake)
+    assert gr._get_audio_stream_channels("/v.mkv") == [2]
+
+
+def test_get_audio_stream_channels_two_mono_streams(monkeypatch):
+    fake = MagicMock(returncode=0, stdout="1\n1\n")
+    monkeypatch.setattr(gr.subprocess, "run", lambda *a, **kw: fake)
+    assert gr._get_audio_stream_channels("/v.mxf") == [1, 1]
+
+
+def test_get_audio_stream_channels_failure_returns_none(monkeypatch):
+    monkeypatch.setattr(gr.subprocess, "run", MagicMock(side_effect=subprocess.CalledProcessError(1, "ffprobe")))
+    assert gr._get_audio_stream_channels("/v.mkv") is None
+
+
 # ===========================================================================
 # Section 8 — _build_waveform_filter
 # ===========================================================================
 
 def test_build_waveform_filter_mono_no_channelsplit():
-    f = gr._build_waveform_filter(num_channels=1, width=1200, height=80)
+    f = gr._build_waveform_filter([1], width=1200, height=80)
     assert "channelsplit" not in f
     assert "showwavespic" in f
     assert "1200x80" in f
 
 
 def test_build_waveform_filter_stereo_uses_layout_stereo():
-    f = gr._build_waveform_filter(num_channels=2, width=1200, height=80)
+    f = gr._build_waveform_filter([2], width=1200, height=80)
     assert "channelsplit=channel_layout=stereo" in f
     # vstack inputs = 2 waveforms + 1 separator = 3
     assert "vstack=inputs=3" in f
 
 
 def test_build_waveform_filter_quad_uses_layout_quad():
-    f = gr._build_waveform_filter(num_channels=4, width=800, height=60)
+    f = gr._build_waveform_filter([4], width=800, height=60)
     assert "channelsplit=channel_layout=quad" in f
     # 4 channels: 4 waveforms + 3 separators = vstack=inputs=7
     assert "vstack=inputs=7" in f
@@ -437,8 +454,28 @@ def test_build_waveform_filter_quad_uses_layout_quad():
 
 def test_build_waveform_filter_unknown_count_uses_generic_layout():
     """Channel count not in the standard layout map → 'Nc' generic layout."""
-    f = gr._build_waveform_filter(num_channels=5, width=800, height=60)
+    f = gr._build_waveform_filter([5], width=800, height=60)
     assert "channelsplit=channel_layout=5c" in f
+
+
+def test_build_waveform_filter_two_mono_streams_no_channelsplit():
+    """Two separate mono streams (MXF) draw both channels without channelsplit."""
+    f = gr._build_waveform_filter([1, 1], width=1200, height=80)
+    assert "channelsplit" not in f
+    # Each mono stream is referenced directly.
+    assert "[0:a:0]" in f
+    assert "[0:a:1]" in f
+    # 2 channels: 2 waveforms + 1 separator = vstack=inputs=3
+    assert "vstack=inputs=3" in f
+
+
+def test_build_waveform_filter_mono_and_stereo_streams_mixed():
+    """A mono stream plus a stereo stream → 3 channels total."""
+    f = gr._build_waveform_filter([1, 2], width=800, height=60)
+    assert "[0:a:0]" in f  # mono stream used directly
+    assert "[0:a:1]channelsplit=channel_layout=stereo" in f  # stereo stream split
+    # 3 channels: 3 waveforms + 2 separators = vstack=inputs=5
+    assert "vstack=inputs=5" in f
 
 
 # ===========================================================================

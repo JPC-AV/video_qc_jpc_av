@@ -23,7 +23,7 @@ import io
 from dataclasses import asdict, dataclass, field
 from collections import defaultdict
 
-from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger, report_ffmpeg_stderr
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -1757,10 +1757,8 @@ def _export_chroma_thumb(video_path, time_seconds, out_path):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
-            logger.warning(
-                f"ffmpeg failed for chroma-phase thumbnail at {ts_str}: "
-                f"{result.stderr.strip()[:200]}"
-            )
+            logger.warning(f"ffmpeg failed for chroma-phase thumbnail at {ts_str} (exit code {result.returncode})")
+            report_ffmpeg_stderr(result.stderr, "chroma-phase thumbnail", failure=True)
             return False
         return os.path.isfile(out_path)
     except subprocess.TimeoutExpired:
@@ -3281,6 +3279,34 @@ def _get_video_duration(video_path):
     return None
 
 
+def _get_audio_stream_count(video_path):
+    """Get the number of separate audio streams in the file using ffprobe.
+
+    Used to detect the multi-stream layout (e.g. broadcast MXF, where each audio
+    channel is its own discrete mono stream). A count greater than 1 means the
+    QCTools-based audio analysis cannot see the real per-stream audio, because
+    qcli downmixes multiple streams into a single analysis signal.
+
+    Returns:
+        int or None: Number of audio streams, or None if it can't be determined.
+    """
+    try:
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 'a',
+            '-show_entries', 'stream=index',
+            '-of', 'csv=p=0',
+            video_path
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return len([ln for ln in result.stdout.splitlines() if ln.strip()])
+    except Exception:
+        pass
+    return None
+
+
 def _get_video_frame_rate(video_path):
     """Get the video frame rate as a float (e.g. 29.97 for NTSC) using ffprobe.
 
@@ -3957,6 +3983,25 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
     do_audio_analysis = qct_parse.get('audio_analysis', False)
     imbalance_results = None
     timecode_results = None
+
+    # Gate audio analysis off for multi-stream inputs (e.g. broadcast MXF, where
+    # each audio channel is a discrete mono stream). The audio checks read the
+    # QCTools sidecar, but qcli downmixes multiple audio streams into a single
+    # analysis signal — so per-channel clipping, channel imbalance, dropout, and
+    # audible-timecode results would describe the downmix, not the real streams.
+    # These checks only support a single multi-channel stream (e.g. MKV).
+    if do_audio_analysis:
+        audio_stream_count = _get_audio_stream_count(video_path)
+        if audio_stream_count and audio_stream_count > 1:
+            logger.warning(
+                f"Audio analysis skipped: input has {audio_stream_count} separate audio streams "
+                "(discrete mono tracks, typical of broadcast MXF). QCTools/qcli downmixes multiple "
+                "streams into one analysis signal, so audio clipping, channel imbalance, audio "
+                "dropout, and audible-timecode results would not reflect the real per-stream audio. "
+                "These checks support a single multi-channel stream (e.g. MKV) only.\n"
+            )
+            do_audio_analysis = False
+
     if do_audio_analysis:
         logger.debug(f"Starting audio analysis on {baseName}\n")
         clipping_results, imbalance_results, timecode_results, dropout_results = analyzeAudio(

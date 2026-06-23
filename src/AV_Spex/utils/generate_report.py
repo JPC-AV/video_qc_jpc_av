@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
-from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger, report_ffmpeg_stderr
 
 config_mgr = ConfigManager()
 
@@ -617,6 +617,34 @@ def _get_audio_channel_count(video_path):
         return None
 
 
+def _get_audio_stream_channels(video_path):
+    """Get the channel count of every audio stream, in order, using ffprobe.
+
+    Returns a list with one entry per audio stream, e.g. ``[2]`` for a single
+    stereo stream (typical MKV) or ``[1, 1]`` for two separate mono streams
+    (typical broadcast MXF, where each track is its own mono PCM stream).
+
+    Returns:
+        list[int] or None: Per-stream channel counts, or None if unavailable
+        or there are no audio streams.
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=channels",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        counts = [int(x) for x in result.stdout.split() if x.strip()]
+        return counts or None
+    except Exception as e:
+        logger.warning(f"Could not probe audio channel count: {e}")
+        return None
+
+
 # Colors assigned per channel for waveform visualization
 _WAVEFORM_CHANNEL_COLORS = [
     "#378d6a",  # green (channel 1 / left)
@@ -630,15 +658,22 @@ _WAVEFORM_CHANNEL_COLORS = [
 ]
 
 
-def _build_waveform_filter(num_channels, width, height):
+def _build_waveform_filter(stream_channels, width, height):
     """Build an FFmpeg filter_complex string that renders each audio channel
     as a separate waveform strip stacked vertically.
 
+    Handles both common source layouts transparently:
+      * a single multi-channel stream (e.g. one stereo stream in an MKV), which
+        is split into its channels with ``channelsplit``; and
+      * multiple separate streams (e.g. two mono PCM streams in a broadcast
+        MXF), where each stream contributes its channel(s) directly.
+
     A thin separator line is inserted between channels so they are easy to
-    distinguish regardless of the number of channels.
+    distinguish regardless of the channel count or source layout.
 
     Args:
-        num_channels (int): Number of audio channels.
+        stream_channels (list[int]): Channel count per audio stream, in order.
+            e.g. ``[2]`` (one stereo stream) or ``[1, 1]`` (two mono streams).
         width (int): Image width.
         height (int): Height per channel in pixels.
 
@@ -650,45 +685,57 @@ def _build_waveform_filter(num_channels, width, height):
     separator_height = 2
     separator_color = "333333"
 
-    if num_channels == 1:
-        # Mono — single waveform, no split needed
+    total_channels = sum(stream_channels)
+
+    if total_channels <= 1:
+        # Single mono channel — one waveform, no split needed
         return f"[0:a]showwavespic=s={width}x{height}:colors={colors[0]}@{opacity}:draw=full:scale=sqrt"
 
     # Map channel count to a standard FFmpeg layout name for channelsplit
     layout_map = {2: "stereo", 3: "2.1", 4: "quad", 6: "5.1", 8: "7.1"}
-    layout_arg = layout_map.get(num_channels, f"{num_channels}c")
 
-    # Build channelsplit → per-channel showwavespic → vstack
-    split_outputs = "".join(f"[ch{i}]" for i in range(num_channels))
-    lines = [f"[0:a]channelsplit=channel_layout={layout_arg}{split_outputs};"]
+    # Build one filtergraph label per channel, in order. Mono streams are used
+    # directly; multi-channel streams are split into their channels.
+    lines = []
+    channel_labels = []
+    for s, count in enumerate(stream_channels):
+        if count <= 1:
+            channel_labels.append(f"[0:a:{s}]")
+        else:
+            layout_arg = layout_map.get(count, f"{count}c")
+            outs = "".join(f"[s{s}c{j}]" for j in range(count))
+            lines.append(f"[0:a:{s}]channelsplit=channel_layout={layout_arg}{outs};")
+            channel_labels.extend(f"[s{s}c{j}]" for j in range(count))
+
+    n = len(channel_labels)
 
     # Create a thin separator strip
     lines.append(
         f"color=c=#{separator_color}:s={width}x{separator_height}:d=1[sep];"
     )
 
-    for i in range(num_channels):
+    for i, label in enumerate(channel_labels):
         color = colors[i % len(colors)]
         lines.append(
-            f"[ch{i}]showwavespic=s={width}x{height}:colors={color}@{opacity}:draw=full:scale=sqrt[w{i}];"
+            f"{label}showwavespic=s={width}x{height}:colors={color}@{opacity}:draw=full:scale=sqrt[w{i}];"
         )
 
-    # Interleave waveform strips with separator copies, then vstack
-    # We need (num_channels - 1) copies of the separator
-    if num_channels > 2:
-        lines.append(f"[sep]split={num_channels - 1}" + "".join(f"[s{i}]" for i in range(num_channels - 1)) + ";")
+    # Interleave waveform strips with separator copies, then vstack.
+    # We need (n - 1) copies of the separator.
+    if n > 2:
+        lines.append(f"[sep]split={n - 1}" + "".join(f"[s{i}]" for i in range(n - 1)) + ";")
     else:
-        # For stereo, the single [sep] can be used directly
+        # For two channels, the single [sep] can be used directly
         lines.append("[sep]copy[s0];")
 
     # Build the vstack input list: w0, s0, w1, s1, w2, ..., w(N-1)
     vstack_inputs = ""
-    for i in range(num_channels):
+    for i in range(n):
         vstack_inputs += f"[w{i}]"
-        if i < num_channels - 1:
+        if i < n - 1:
             vstack_inputs += f"[s{i}]"
 
-    total_inputs = num_channels + (num_channels - 1)  # waveforms + separators
+    total_inputs = n + (n - 1)  # waveforms + separators
     lines.append(f"{vstack_inputs}vstack=inputs={total_inputs}")
 
     return "\n".join(lines)
@@ -722,12 +769,12 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
             logger.warning("Audio waveform: could not determine video duration — skipping")
             return None
 
-        num_channels = _get_audio_channel_count(video_path)
-        if num_channels is None or num_channels <= 0:
+        stream_channels = _get_audio_stream_channels(video_path)
+        if not stream_channels:
             logger.warning("Audio waveform: could not determine audio channel count — skipping")
             return None
 
-        filter_complex = _build_waveform_filter(num_channels, width, height)
+        filter_complex = _build_waveform_filter(stream_channels, width, height)
 
         progress_range = progress_end - progress_start
 
@@ -776,10 +823,8 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
                 time.sleep(poll_interval)
 
             stderr_text = process.stderr.read() if process.stderr else ''
-            if stderr_text:
-                lines = [ln for ln in stderr_text.splitlines() if ln.strip()]
-                if lines:
-                    logger.warning(f"Audio waveform ffmpeg stderr: {'; '.join(lines)}")
+            report_ffmpeg_stderr(stderr_text, "audio waveform",
+                                 failure=process.returncode not in (0, None))
 
             if not os.path.isfile(output_path):
                 logger.warning("Audio waveform: ffmpeg produced no output — skipping")
@@ -897,7 +942,8 @@ def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile
         if result.returncode == 0 and os.path.isfile(ffoutputFramePath):
             return ffoutputFramePath
         else:
-            logger.error(f"Failed to generate thumbnail: {result.stderr.decode()}")
+            logger.warning(f"Failed to generate {tag} thumbnail at {timestamp} (exit code {result.returncode})")
+            report_ffmpeg_stderr(result.stderr, f"{tag} thumbnail", failure=True)
             return None
     except Exception as e:
         logger.error(f"Error generating thumbnail: {e}")

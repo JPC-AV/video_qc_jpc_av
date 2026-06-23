@@ -91,5 +91,6 @@
       }
     }
   },
-  "validate_filename": false
+  "validate_filename": false,
+  "video_file_extension": "mkv"
 }
