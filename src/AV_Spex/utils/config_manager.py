@@ -111,27 +111,40 @@ class ConfigManager:
             
         return file_path if os.path.exists(file_path) else None
 
+    def remove_all_last_used_configs(self) -> int:
+        """
+        Delete every last_used_*_config.json in the user config dir and clear
+        the in-memory cache. Returns the number of files removed.
+
+        Globbing (rather than a hardcoded list) keeps this correct as new
+        configs are added — it covers checks, spex, filename, signalflow, the
+        per-tool expected-value profiles (exiftool/ffprobe/mediainfo), and the
+        custom checks profiles (profiles_checks). Used both to recover from
+        corrupted configs and to back the CLI --use-default-config reset.
+        """
+        pattern = os.path.join(self._user_config_dir, "last_used_*_config.json")
+        last_used_files = glob.glob(pattern)
+
+        deleted_count = 0
+        for file_path in last_used_files:
+            try:
+                os.remove(file_path)
+                logger.info(f"Removed last_used config file: {os.path.basename(file_path)}")
+                deleted_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete {file_path}: {str(e)}")
+
+        # Clear the entire config cache to ensure clean state
+        self._configs.clear()
+        return deleted_count
+
     def _cleanup_corrupted_configs(self) -> None:
         """
         Delete all last_used config files and clear the config cache.
         This is called when config loading fails to reset to a clean state.
         """
-        # Delete all last_used config files
-        pattern = os.path.join(self._user_config_dir, "last_used_*_config.json")
-        last_used_files = glob.glob(pattern)
-        
-        deleted_count = 0
-        for file_path in last_used_files:
-            try:
-                os.remove(file_path)
-                logger.info(f"Deleted corrupted config file: {os.path.basename(file_path)}")
-                deleted_count += 1
-            except Exception as e:
-                logger.warning(f"Failed to delete {file_path}: {str(e)}")
-        
-        # Clear the entire config cache to ensure clean state
-        self._configs.clear()
-        
+        deleted_count = self.remove_all_last_used_configs()
+
         if deleted_count > 0:
             logger.info(f"Cleaned up {deleted_count} corrupted config file(s), will use default configs")
         else:

@@ -264,15 +264,14 @@ The scripts will confirm that the digital files conform to predetermined specifi
 
     if args.use_default_config:
         try:
-            # Remove user config files from user config directory
-            user_config_dir = config_mgr._user_config_dir
-            try:
-                os.remove(os.path.join(user_config_dir, "last_used_checks_config.json"))
-                os.remove(os.path.join(user_config_dir, "last_used_spex_config.json"))
-                os.remove(os.path.join(user_config_dir, "last_used_filename_config.json"))
+            # Remove every last_used_*_config.json so the reset covers all
+            # configs the app persists (checks, spex, filename, signalflow, the
+            # per-tool expected-value profiles, and custom checks profiles),
+            # not just a hardcoded subset.
+            removed = config_mgr.remove_all_last_used_configs()
+            if removed > 0:
                 print("Reset to default configuration")
-            except FileNotFoundError:
-                # It's okay if the files don't exist
+            else:
                 print("Already using default configuration")
         except PermissionError:
             print("Error: Unable to reset config - permission denied. Try running with administrator privileges.")

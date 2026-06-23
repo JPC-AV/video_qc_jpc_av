@@ -511,6 +511,48 @@ def test_cleanup_corrupted_configs_only_removes_last_used_files(sandbox_mgr):
     assert (user_dir / "some_other.json").exists()
 
 
+def test_remove_all_last_used_configs_covers_every_config_type(sandbox_mgr):
+    """Backs the CLI --use-default-config reset: it must clear last_used files
+    for *all* configs the app persists, not just checks/spex/filename."""
+    mgr, _, user_dir = sandbox_mgr
+    user_dir.mkdir(parents=True, exist_ok=True)
+    names = [
+        "checks", "spex", "filename", "signalflow",
+        "exiftool", "ffprobe", "mediainfo", "profiles_checks",
+    ]
+    for name in names:
+        (user_dir / f"last_used_{name}_config.json").write_text("{}")
+    # A bundled (non-last_used) config and an unrelated file must survive.
+    (user_dir / "checks_config.json").write_text("{}")
+    (user_dir / "notes.txt").write_text("keep-me")
+
+    removed = mgr.remove_all_last_used_configs()
+
+    assert removed == len(names)
+    for name in names:
+        assert not (user_dir / f"last_used_{name}_config.json").exists()
+    assert (user_dir / "checks_config.json").exists()
+    assert (user_dir / "notes.txt").exists()
+
+
+def test_remove_all_last_used_configs_clears_cache(sandbox_mgr):
+    mgr, _, user_dir = sandbox_mgr
+    user_dir.mkdir(parents=True, exist_ok=True)
+    (user_dir / "last_used_checks_config.json").write_text("{}")
+    mgr._configs["checks"] = object()
+
+    mgr.remove_all_last_used_configs()
+
+    assert mgr._configs == {}
+
+
+def test_remove_all_last_used_configs_returns_zero_when_none_present(sandbox_mgr):
+    mgr, _, user_dir = sandbox_mgr
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    assert mgr.remove_all_last_used_configs() == 0
+
+
 def test_load_json_config_raises_on_missing_file(sandbox_mgr):
     mgr, _, _ = sandbox_mgr
     with pytest.raises(FileNotFoundError):
