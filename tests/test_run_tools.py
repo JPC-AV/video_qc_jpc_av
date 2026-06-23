@@ -48,9 +48,10 @@ def test_run_command_builds_quoted_shell_string_and_prepends_path():
     # shell=True is required for the redirect to work
     assert run_mock.call_args.kwargs["shell"] is True
 
-    # PATH must be prepended with /usr/local/bin
+    # PATH must be prepended with the Homebrew bin dirs, /opt/homebrew/bin
+    # first so Apple Silicon native binaries win over x86_64 ones under Rosetta
     env = run_mock.call_args.kwargs["env"]
-    assert env["PATH"].startswith("/usr/local/bin:")
+    assert env["PATH"].startswith("/opt/homebrew/bin:/usr/local/bin:")
 
 
 def test_run_command_handles_paths_with_spaces():

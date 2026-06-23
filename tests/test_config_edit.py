@@ -293,6 +293,24 @@ def test_apply_profile_builtin_step1(mock_cfg):
     assert updates["tools"]["qctools"]["run_tool"] is False
 
 
+def test_apply_profile_builtin_step2(mock_cfg):
+    """The built-in step2 profile should apply all four sections."""
+    config_edit.apply_profile(config_edit.profile_step2)
+    updates = _last_updates(mock_cfg)
+    assert set(updates.keys()) == {"validate_filename", "outputs", "fixity", "tools"}
+    # qctools/qct-parse drive the step2 analysis pass.
+    assert updates["tools"]["qctools"]["run_tool"] is True
+    assert updates["tools"]["qct_parse"]["run_tool"] is True
+    # CLAMS detection and the bit-plane check are part of step2 (regression
+    # guard — these were added to the profile and are easy to silently drop).
+    assert updates["tools"]["clams_detection"]["run_tool"] is True
+    assert updates["outputs"]["frame_analysis"]["enable_bitplane_check"] is True
+    # The previously-present frame analysis sub-steps remain on.
+    assert updates["outputs"]["frame_analysis"]["enable_border_detection"] is True
+    assert updates["outputs"]["frame_analysis"]["enable_brng_analysis"] is True
+    assert updates["outputs"]["frame_analysis"]["enable_signalstats"] is True
+
+
 def test_apply_profile_non_mkv_forces_mkv_only_checks_off(mock_cfg):
     """On a non-MKV config, applying a profile that enables MKV-only checks
     (step1) re-applies the extension guardrail, forcing them off."""
@@ -569,6 +587,7 @@ def test_create_profile_from_current_config(mock_cfg):
     to construct every nested dataclass with required positional args."""
     cur = SimpleNamespace(
         validate_filename=True,
+        video_file_extension="mkv",
         outputs=SimpleNamespace(),
         fixity=SimpleNamespace(),
         tools=SimpleNamespace(),
@@ -578,6 +597,7 @@ def test_create_profile_from_current_config(mock_cfg):
     assert profile.name == "Snapshot"
     assert profile.description == "d"
     assert profile.validate_filename is True
+    assert profile.video_file_extension == "mkv"
 
 
 # ---------------------------------------------------------------------------
