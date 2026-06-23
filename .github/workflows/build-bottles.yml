@@ -100,6 +100,12 @@ jobs:
       - name: Build bottle
         id: build
         timeout-minutes: 180
+        env:
+          # Workaround for Homebrew/brew#22719: for source builds (--build-bottle),
+          # the sandboxed build.rb child raises an UntrustedTapError that gets
+          # swallowed into an opaque "build.rb ... exited with 1". This var is read
+          # by both the parent and the sandbox child, so no trust check is attempted.
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
         run: |
           export HOMEBREW_NO_AUTO_UPDATE=1
           export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
@@ -108,6 +114,11 @@ jobs:
           # Tap the repository
           brew tap JPC-AV/AV-Spex https://github.com/JPC-AV/homebrew-AV-Spex
           brew tap --repair
+          
+          # Trust the formula explicitly (long-term fix; the env var above is the
+          # reliable fallback and will be needed if trust resolution misbehaves,
+          # e.g. Homebrew/brew#22603). Don't fail the build if this errors.
+          brew trust JPC-AV/AV-Spex/av-spex || echo "⚠️ brew trust unavailable or failed; relying on HOMEBREW_NO_REQUIRE_TAP_TRUST"
           
           echo "=== Final Python Check ==="
           python3.13 --version || python3 --version
@@ -138,11 +149,15 @@ jobs:
         if: failure()
         run: |
           echo "=== Homebrew build logs ==="
+          shopt -s nullglob
+          found=0
           for f in ~/Library/Logs/Homebrew/av-spex/*; do
             echo "----- $f -----"
             cat "$f"
-          done 2>/dev/null || echo "No logs found"
-      
+            found=1
+          done
+          [ "$found" -eq 1 ] || echo "No per-formula logs found (failure likely occurred at formula load time, before any build step ran)."
+
       - name: Test bottle installation
         run: |
           echo "Testing bottle installation..."
