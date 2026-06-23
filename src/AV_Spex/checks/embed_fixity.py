@@ -218,6 +218,15 @@ def make_stream_hash(video_path, check_cancelled=None, signals=None):
 def extract_tags(video_path):
     command = f"mkvextract tags {video_path}"
     result = subprocess.run(command, capture_output=True, text=True, shell=True)
+    # mkvextract returns non-zero on non-Matroska input (and may still write
+    # non-XML text to stdout). Treat that as "no tags" so downstream parsing
+    # is skipped gracefully instead of raising a ParseError.
+    if result.returncode != 0:
+        logger.warning(
+            f"mkvextract could not read tags from '{video_path}' "
+            f"(exit code {result.returncode}). The file may not be Matroska.\n"
+        )
+        return ""
     return result.stdout
 
 
@@ -355,7 +364,13 @@ def extract_hashes(xml_tags):
     video_hash = None
     audio_hash = None
 
-    root = ET.fromstring(xml_tags)
+    try:
+        root = ET.fromstring(xml_tags)
+    except ET.ParseError as e:
+        # mkvextract output wasn't valid tag XML (e.g. non-Matroska input).
+        # Treat as "no hashes found" rather than crashing the run.
+        logger.warning(f"Could not parse stream-hash tags as XML: {e}\n")
+        return video_hash, audio_hash
 
     # Find 'video_stream_hash' element
     v_stream_element = root.find('.//Simple[Name="VIDEO_STREAM_HASH"]/String')

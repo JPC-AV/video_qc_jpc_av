@@ -9,7 +9,7 @@ from pathlib import Path
 from AV_Spex.processing import run_tools
 from AV_Spex.utils import dir_setup
 from AV_Spex.utils.log_setup import logger
-from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, VALID_QCTOOLS_EXTENSIONS
+from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig, VALID_QCTOOLS_EXTENSIONS, is_mkv_extension
 from AV_Spex.utils.config_manager import ConfigManager
 from AV_Spex.utils.generate_report import generate_final_report
 from AV_Spex.checks.fixity_check import check_fixity, output_fixity
@@ -18,7 +18,7 @@ from AV_Spex.checks.mediatrace_check import parse_mediatrace, create_metadata_di
 from AV_Spex.checks.exiftool_check import parse_exiftool
 from AV_Spex.checks.ffprobe_check import parse_ffprobe
 from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_fixity
-from AV_Spex.checks.make_access import process_access_file
+from AV_Spex.checks.make_access import process_access_file, determine_excluded_audio_channels
 from AV_Spex.checks.qct_parse import run_qctparse
 from AV_Spex.checks import bars_detection_clams, tone_detection_clams
 from AV_Spex.checks.bars_detection_clams import run_clams_bars_detection
@@ -50,9 +50,26 @@ class ProcessingManager:
         
         if self.check_cancelled():
             return None
-        
-        # Embed stream fixity if required  
-        if self.checks_config.fixity.embed_stream_fixity:
+
+        # Embedded stream fixity (embed + validate) relies on mkvextract/
+        # mkvpropedit, which only work on Matroska. If a non-MKV extension is
+        # configured but a profile or stale config left these enabled, skip them
+        # gracefully rather than letting mkvextract output fail XML parsing.
+        embed_stream_fixity = self.checks_config.fixity.embed_stream_fixity
+        validate_stream_fixity = self.checks_config.fixity.validate_stream_fixity
+        if (embed_stream_fixity or validate_stream_fixity) and not is_mkv_extension(
+            getattr(self.checks_config, 'video_file_extension', 'mkv')
+        ):
+            logger.warning(
+                f"Input extension '{self.checks_config.video_file_extension}' is not MKV; "
+                "embedded stream fixity only works on Matroska. Skipping embed/validate "
+                "stream fixity for this file.\n"
+            )
+            embed_stream_fixity = False
+            validate_stream_fixity = False
+
+        # Embed stream fixity if required
+        if embed_stream_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Embedding fixity...")
             if self.check_cancelled():
@@ -65,10 +82,10 @@ class ProcessingManager:
                 self.signals.step_completed.emit("Embed Stream Fixity")
 
         # Validate stream hashes if required
-        if self.checks_config.fixity.validate_stream_fixity:
+        if validate_stream_fixity:
             if self.signals:
                 self.signals.fixity_progress.emit("Validating embedded fixity...")
-            if self.checks_config.fixity.embed_stream_fixity:
+            if embed_stream_fixity:
                 logger.critical("Embed stream fixity is turned on, which overrides validate_fixity. Skipping validate_fixity.\n")
             else:
                 validation_result = validate_embedded_md5(video_path, check_cancelled=self.check_cancelled, signals=self.signals)
@@ -241,6 +258,7 @@ class ProcessingManager:
             check_cancelled=self.check_cancelled, signals=self.signals
         )
         color_bars_end_time = qctools_results.get('color_bars_end_time') if qctools_results else None
+        audio_findings = qctools_results.get('audio_findings') if qctools_results else None
         clams_bars_start_time = qctools_results.get('clams_bars_start_time') if qctools_results else None
         clams_bars_end_time = qctools_results.get('clams_bars_end_time') if qctools_results else None
         processing_results['clams_bars_start_time'] = clams_bars_start_time
@@ -300,13 +318,38 @@ class ProcessingManager:
         trim_start = color_bars_end_time if outputs_cfg.access_file_trim_color_bars else None
         crop_for_access = access_crop_area if outputs_cfg.access_file_crop_borders else None
 
+        # When enabled, a stereo channel flagged by qct-parse audio analysis
+        # (silent, or carrying audible timecode) is excluded from the access
+        # copy and the good channel output as dual-mono.
+        excluded_audio = None
+        if getattr(outputs_cfg, 'access_file_exclude_flagged_audio', False) and outputs_cfg.access_file:
+            if audio_findings:
+                excluded_audio, exclusion_reasons = determine_excluded_audio_channels(audio_findings)
+                if excluded_audio:
+                    logger.info(
+                        f"Excluding flagged audio channel(s) from access copy: "
+                        f"{'; '.join(exclusion_reasons)}"
+                    )
+                elif exclusion_reasons:
+                    logger.warning(
+                        f"All audio channels were flagged ({'; '.join(exclusion_reasons)}); "
+                        f"keeping all audio in the access copy"
+                    )
+            else:
+                logger.warning(
+                    "Access file option 'exclude flagged audio channel' is on, but "
+                    "qct-parse audio analysis did not run or produced no results; "
+                    "including all audio in the access copy"
+                )
+
         processing_results['access_file'] = process_access_file(
             video_path, source_directory, video_id,
             check_cancelled=self.check_cancelled,
             signals=self.signals,
             color_bars_end_time=trim_start,
             crop_area=crop_for_access,
-            crop_to_480=outputs_cfg.access_file_crop_to_480
+            crop_to_480=outputs_cfg.access_file_crop_to_480,
+            excluded_audio_channels=excluded_audio
         )
 
         if self.signals:
@@ -540,6 +583,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
         'clams_bars_start_time': None,
         'clams_bars_end_time': None,
         'clams_tones': [],
+        'audio_findings': None,
     }
 
     if check_cancelled and check_cancelled():
@@ -576,7 +620,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
                 results['qctools_output_path'] = qctools_output_path
             else:
                 # Create new QCTools report
-                logger.info(f"No existing QCTools report found. Creating new report: {qctools_output_path}")
+                logger.info(f"No existing QCTools report found. Creating new report: {qctools_output_path}\n")
                 run_qctools_command('qcli -i', video_path, '-o', qctools_output_path, check_cancelled=check_cancelled, signals=signals)
                 logger.debug('')  # Add new line for cleaner terminal output
                 results['qctools_output_path'] = qctools_output_path
@@ -856,6 +900,7 @@ def process_qctools_output(video_path, source_directory, destination_directory, 
 
             if qctparse_result:
                 qctparse_head_end = qctparse_result.get('head_bars_end')
+                results['audio_findings'] = qctparse_result.get('audio_findings')
 
             # Fallback: read CSV if run_qctparse returned None (cancelled/error)
             if qctparse_head_end is None:

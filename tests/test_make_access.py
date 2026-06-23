@@ -9,6 +9,7 @@ Covers:
   - Optional start_time to skip color bars detected by qct-parse
   - Even-dimension safety for yuv420p
 * process_access_file — config gating, existing-file short-circuit, signal emission
+* determine_excluded_audio_channels — silent/LTC channel exclusion decisions
 """
 
 import os
@@ -33,10 +34,15 @@ def _fake_popen(stdout_lines=()):
     return proc
 
 
-def _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), duration="60.0"):
-    """Patch helpers + Popen so we can inspect the ffmpeg command list build."""
+def _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), duration="60.0", audio_streams=(2,)):
+    """Patch helpers + Popen so we can inspect the ffmpeg command list build.
+
+    audio_streams defaults to a single stereo stream ``(2,)`` (typical MKV);
+    pass e.g. ``(1, 1)`` to simulate two mono streams (typical MXF).
+    """
     monkeypatch.setattr(ma, "get_duration", lambda _p: duration)
     monkeypatch.setattr(ma, "get_video_dimensions", lambda _p: dim)
+    monkeypatch.setattr(ma, "get_audio_stream_channels", lambda _p: list(audio_streams))
     fake_proc = _fake_popen()
     popen_mock = MagicMock(return_value=fake_proc)
     monkeypatch.setattr(ma.subprocess, "Popen", popen_mock)
@@ -268,3 +274,265 @@ def test_process_access_file_calls_make_access_file_when_enabled(tmp_path, monke
     assert call_kwargs["signals"] is signals
 
     signals.step_completed.emit.assert_called_with("Generate Access File")
+
+
+def test_process_access_file_forwards_excluded_audio_channels(tmp_path, monkeypatch):
+    _patch_process_config(monkeypatch, access_file_enabled=True)
+
+    with patch.object(ma, "make_access_file") as make_mock:
+        ma.process_access_file(
+            "/v/in.mkv", str(tmp_path), "video_x",
+            excluded_audio_channels=[2],
+        )
+
+    _, call_kwargs = make_mock.call_args
+    assert call_kwargs["excluded_audio_channels"] == [2]
+
+
+# ---------------------------------------------------------------------------
+# make_access_file — excluded audio channels
+# ---------------------------------------------------------------------------
+
+def test_make_access_file_excluded_ch2_maps_first_stream_dual_mono_ch1(monkeypatch):
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486))
+    ma.make_access_file(
+        "/v/in.mkv", "/v/out.mp4",
+        check_cancelled=lambda: False,
+        excluded_audio_channels=[2],
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    map_indices = [i for i, v in enumerate(cmd) if v == "-map"]
+    mapped = [cmd[i + 1] for i in map_indices]
+    assert "0:a:0?" in mapped
+    assert "0:a?" not in mapped
+    af_idx = cmd.index("-af")
+    assert cmd[af_idx + 1] == "pan=stereo|c0=c0|c1=c0"
+
+
+def test_make_access_file_excluded_ch1_pans_from_ch2(monkeypatch):
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486))
+    ma.make_access_file(
+        "/v/in.mkv", "/v/out.mp4",
+        check_cancelled=lambda: False,
+        excluded_audio_channels=[1],
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    af_idx = cmd.index("-af")
+    assert cmd[af_idx + 1] == "pan=stereo|c0=c1|c1=c1"
+
+
+def test_make_access_file_excluded_ch1_on_four_channel_pans_ch2_dual_mono(monkeypatch):
+    # 4-channel source with ch1 (timecode) excluded: pan extracts the program
+    # channel (c1) as dual-mono and drops the extra channels (c2, c3).
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486))
+    ma.make_access_file(
+        "/v/in.mkv", "/v/out.mp4",
+        check_cancelled=lambda: False,
+        excluded_audio_channels=[1],
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    map_indices = [i for i, v in enumerate(cmd) if v == "-map"]
+    mapped = [cmd[i + 1] for i in map_indices]
+    assert "0:a:0?" in mapped
+    assert "0:a?" not in mapped
+    af_idx = cmd.index("-af")
+    assert cmd[af_idx + 1] == "pan=stereo|c0=c1|c1=c1"
+
+
+def test_make_access_file_excluded_extra_channels_keeps_pair_as_stereo(monkeypatch):
+    # When only extra (non-pair) channels are excluded, both analyzed channels
+    # survive and are output as straight stereo.
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486))
+    ma.make_access_file(
+        "/v/in.mkv", "/v/out.mp4",
+        check_cancelled=lambda: False,
+        excluded_audio_channels=[3, 4],
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    af_idx = cmd.index("-af")
+    assert cmd[af_idx + 1] == "pan=stereo|c0=c0|c1=c1"
+
+
+@pytest.mark.parametrize("excluded", [None, []])
+def test_make_access_file_no_exclusion_keeps_default_audio_mapping(monkeypatch, excluded):
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486))
+    ma.make_access_file(
+        "/v/in.mkv", "/v/out.mp4",
+        check_cancelled=lambda: False,
+        excluded_audio_channels=excluded,
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    map_indices = [i for i, v in enumerate(cmd) if v == "-map"]
+    mapped = [cmd[i + 1] for i in map_indices]
+    assert "0:a?" in mapped
+    assert "-af" not in cmd
+
+
+def test_make_access_file_multi_mono_streams_merged_to_one_track(monkeypatch):
+    """Two mono audio streams (MXF) are amerged into a single track."""
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), audio_streams=(1, 1))
+    ma.make_access_file(
+        "/v/in.mxf", "/v/out.mp4",
+        check_cancelled=lambda: False,
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    fc_idx = cmd.index("-filter_complex")
+    assert cmd[fc_idx + 1] == "[0:a:0][0:a:1]amerge=inputs=2[aout]"
+    map_indices = [i for i, v in enumerate(cmd) if v == "-map"]
+    mapped = [cmd[i + 1] for i in map_indices]
+    assert "[aout]" in mapped
+    assert "0:a?" not in mapped
+
+
+def test_make_access_file_multi_mono_excluded_ch2_keeps_first_stream(monkeypatch):
+    """With two mono streams, excluding channel 2 keeps stream a:0 as dual-mono."""
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), audio_streams=(1, 1))
+    ma.make_access_file(
+        "/v/in.mxf", "/v/out.mp4",
+        check_cancelled=lambda: False,
+        excluded_audio_channels=[2],
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    map_indices = [i for i, v in enumerate(cmd) if v == "-map"]
+    mapped = [cmd[i + 1] for i in map_indices]
+    assert "0:a:0?" in mapped
+    af_idx = cmd.index("-af")
+    assert cmd[af_idx + 1] == "pan=stereo|c0=c0|c1=c0"
+    assert "-filter_complex" not in cmd
+
+
+def test_make_access_file_multi_mono_excluded_ch1_keeps_second_stream(monkeypatch):
+    """With two mono streams, excluding channel 1 keeps stream a:1 as dual-mono."""
+    popen_mock = _capture_ffmpeg_cmd(monkeypatch, dim=(720, 486), audio_streams=(1, 1))
+    ma.make_access_file(
+        "/v/in.mxf", "/v/out.mp4",
+        check_cancelled=lambda: False,
+        excluded_audio_channels=[1],
+    )
+
+    cmd = popen_mock.call_args[0][0]
+    map_indices = [i for i, v in enumerate(cmd) if v == "-map"]
+    mapped = [cmd[i + 1] for i in map_indices]
+    assert "0:a:1?" in mapped
+    af_idx = cmd.index("-af")
+    assert cmd[af_idx + 1] == "pan=stereo|c0=c0|c1=c0"
+
+
+# ---------------------------------------------------------------------------
+# determine_excluded_audio_channels
+# ---------------------------------------------------------------------------
+
+def _findings(silent=(), regions=(), duration=100.0, num_channels=2):
+    return {
+        "silent_channels": list(silent),
+        "num_channels": num_channels,
+        "timecode_consensus_regions": list(regions),
+        "duration": duration,
+    }
+
+
+def _region(start, end, channel):
+    return {"start_time": start, "end_time": end, "channel": channel}
+
+
+def test_determine_none_findings_returns_empty():
+    assert ma.determine_excluded_audio_channels(None) == ([], [])
+
+
+def test_determine_silent_channel_2_excluded():
+    excluded, reasons = ma.determine_excluded_audio_channels(_findings(silent=[2]))
+    assert excluded == [2]
+    assert len(reasons) == 1
+    assert "channel 2" in reasons[0]
+
+
+def test_determine_silent_channel_1_excluded():
+    excluded, _ = ma.determine_excluded_audio_channels(_findings(silent=[1]))
+    assert excluded == [1]
+
+
+def test_determine_ltc_above_coverage_threshold_excluded():
+    regions = [_region(0.0, 80.0, "Channel 2")]
+    excluded, reasons = ma.determine_excluded_audio_channels(_findings(regions=regions))
+    assert excluded == [2]
+    assert "audible timecode" in reasons[0]
+
+
+def test_determine_ltc_below_coverage_threshold_not_excluded():
+    regions = [_region(0.0, 50.0, "Channel 2")]
+    assert ma.determine_excluded_audio_channels(_findings(regions=regions)) == ([], [])
+
+
+def test_determine_ltc_overlapping_regions_not_double_counted():
+    # Two 50% regions that fully overlap = 50% coverage, below threshold
+    regions = [_region(0.0, 50.0, "Channel 2"), _region(0.0, 50.0, "Channel 2")]
+    assert ma.determine_excluded_audio_channels(_findings(regions=regions)) == ([], [])
+
+
+def test_determine_mix_based_regions_ignored():
+    regions = [_region(0.0, 100.0, "Not channel-specific (mix-based)")]
+    assert ma.determine_excluded_audio_channels(_findings(regions=regions)) == ([], [])
+
+
+def test_determine_both_channels_ltc_safety_keeps_all_audio():
+    regions = [_region(0.0, 100.0, "Both channels")]
+    excluded, reasons = ma.determine_excluded_audio_channels(_findings(regions=regions))
+    assert excluded == []
+    assert len(reasons) == 2  # both channels flagged, reasons preserved
+
+
+def test_determine_silent_ch1_plus_ltc_ch2_safety_keeps_all_audio():
+    regions = [_region(0.0, 100.0, "Channel 2")]
+    excluded, reasons = ma.determine_excluded_audio_channels(
+        _findings(silent=[1], regions=regions)
+    )
+    assert excluded == []
+    assert len(reasons) == 2
+
+
+def test_determine_mono_source_not_excluded():
+    findings = _findings(silent=[2], num_channels=1)
+    assert ma.determine_excluded_audio_channels(findings) == ([], [])
+
+
+def test_determine_four_channel_source_silent_pair_channel_excluded():
+    # The analysis only reports a stereo pair on this source; a silent analyzed
+    # channel is still excluded even though the file has 4 channels.
+    findings = _findings(silent=[2], num_channels=4)
+    excluded, reasons = ma.determine_excluded_audio_channels(findings)
+    assert excluded == [2]
+    assert "channel 2" in reasons[0]
+
+
+def test_determine_four_channel_source_ltc_ch1_excluded():
+    # Mirrors the real 21463704 case: 4-channel source, ch1 carries audible
+    # timecode over the whole file, ch2 is the (quiet) program channel.
+    regions = [_region(0.0, 100.0, "Channel 1")]
+    excluded, reasons = ma.determine_excluded_audio_channels(
+        _findings(regions=regions, num_channels=4)
+    )
+    assert excluded == [1]
+    assert "audible timecode" in reasons[0]
+
+
+def test_determine_silent_non_pair_channels_excluded():
+    # Silent channels beyond the analyzed pair (3, 4) are reported/excluded;
+    # the analyzed pair (1, 2) survives.
+    findings = _findings(silent=[3, 4], num_channels=4)
+    excluded, _ = ma.determine_excluded_audio_channels(findings)
+    assert excluded == [3, 4]
+
+
+def test_determine_zero_duration_skips_ltc_but_silent_still_works():
+    regions = [_region(0.0, 100.0, "Channel 2")]
+    excluded, _ = ma.determine_excluded_audio_channels(
+        _findings(silent=[1], regions=regions, duration=0)
+    )
+    assert excluded == [1]

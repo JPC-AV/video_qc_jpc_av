@@ -14,7 +14,7 @@ from .processing.avspex_processor import AVSpexProcessor
 from .utils import dir_setup
 from .utils import config_edit
 from .utils.log_setup import logger
-from .utils.config_setup import SpexConfig, FilenameConfig, ChecksConfig
+from .utils.config_setup import SpexConfig, FilenameConfig, ChecksConfig, SUPPORTED_VIDEO_EXTENSIONS, is_mkv_extension
 from .utils import exiftool_import, mediainfo_import, ffprobe_import
 from .utils.config_manager import ConfigManager
 from .utils.config_io import ConfigIO
@@ -99,7 +99,9 @@ class ParsedArguments:
     access_trim_color_bars: Optional[str]
     access_crop_borders: Optional[str]
     access_crop_to_480: Optional[str]
+    access_exclude_flagged_audio: Optional[str]
     qctools_ext: Optional[str]
+    video_file_extension: Optional[str]
     checksum_algorithm: Optional[str]
     stream_hash_algorithm: Optional[str]
     exiftool_profile: Optional[str]
@@ -225,6 +227,11 @@ The scripts will confirm that the digital files conform to predetermined specifi
                              help='Maximum duration in seconds for BRNG analysis')
 
     # Output settings (access file sub-options + qctools extension)
+    input_group = parser.add_argument_group("Input settings")
+    input_group.add_argument('--video-file-extension', choices=list(SUPPORTED_VIDEO_EXTENSIONS),
+                             help='Input video container extension (default mkv). Non-mkv input '
+                                  'auto-disables MKV-only checks (stream fixity, mediatrace, signal flow).')
+
     output_group = parser.add_argument_group("Output settings")
     output_group.add_argument('--access-trim-color-bars', choices=['on', 'off'],
                               help='If qct-parse detects color bars at the head of the tape, skip them in the access file')
@@ -232,6 +239,10 @@ The scripts will confirm that the digital files conform to predetermined specifi
                               help='If sophisticated border detection finds an active picture area, crop to it in the access file (requires --access-crop-to-480 on)')
     output_group.add_argument('--access-crop-to-480', choices=['on', 'off'],
                               help='Trim NTSC sources to 720x480 in the access file; off keeps the native 720x486 height')
+    output_group.add_argument('--access-exclude-flagged-audio', choices=['on', 'off'],
+                              help='If audio analysis flags a stereo channel as silent or carrying audible timecode, '
+                                   'exclude it from the access file and output the good channel as dual-mono '
+                                   '(default: off; requires --enable-audio-analysis on)')
     output_group.add_argument('--qctools-ext', choices=['qctools.xml.gz', 'qctools.mkv'],
                               help='Extension for QCTools output files')
 
@@ -302,7 +313,9 @@ The scripts will confirm that the digital files conform to predetermined specifi
         access_trim_color_bars=getattr(args, 'access_trim_color_bars', None),
         access_crop_borders=getattr(args, 'access_crop_borders', None),
         access_crop_to_480=getattr(args, 'access_crop_to_480', None),
+        access_exclude_flagged_audio=getattr(args, 'access_exclude_flagged_audio', None),
         qctools_ext=getattr(args, 'qctools_ext', None),
+        video_file_extension=getattr(args, 'video_file_extension', None),
         checksum_algorithm=getattr(args, 'checksum_algorithm', None),
         stream_hash_algorithm=getattr(args, 'stream_hash_algorithm', None),
         exiftool_profile=args.exiftool_profile,
@@ -521,6 +534,8 @@ def run_cli_mode(args):
         outputs_updates['access_file_crop_borders'] = (args.access_crop_borders == 'on')
     if args.access_crop_to_480:
         outputs_updates['access_file_crop_to_480'] = (args.access_crop_to_480 == 'on')
+    if args.access_exclude_flagged_audio:
+        outputs_updates['access_file_exclude_flagged_audio'] = (args.access_exclude_flagged_audio == 'on')
     if args.qctools_ext:
         outputs_updates['qctools_ext'] = args.qctools_ext
 
@@ -582,6 +597,52 @@ def run_cli_mode(args):
     if tools_updates:
         config_mgr.update_config('checks', {'tools': tools_updates})
         config_mgr.save_config('checks', is_last_used=True)
+
+    # Soft warning (no forcing): excluding a flagged audio channel from the
+    # access file depends on qct-parse audio analysis findings. If audio
+    # analysis is off, the option silently includes all audio.
+    final_checks = config_mgr.get_config('checks', ChecksConfig)
+    if (getattr(final_checks.outputs, 'access_file_exclude_flagged_audio', False)
+            and not final_checks.tools.qct_parse.audio_analysis):
+        logger.warning(
+            "access_file_exclude_flagged_audio is on but qct-parse audio analysis is off; "
+            "the option will have no effect until --enable-audio-analysis on is set."
+        )
+
+    # Input video extension. Persist the selection, then auto-disable MKV-only
+    # features for non-Matroska containers (mirrors the GUI graying in
+    # gui_checks_window). Idempotent: only changes/warns when something is on.
+    if args.video_file_extension:
+        config_mgr.update_config('checks', {'video_file_extension': args.video_file_extension})
+        config_mgr.save_config('checks', is_last_used=True)
+
+    resolved_ext = config_mgr.get_config('checks', ChecksConfig).video_file_extension
+    if not is_mkv_extension(resolved_ext):
+        current = config_mgr.get_config('checks', ChecksConfig)
+
+        # Stream fixity uses mkvextract/mkvpropedit; mediatrace reads Matroska
+        # SimpleTags. Neither works on non-MKV containers.
+        fixity_off = {}
+        for f in ('embed_stream_fixity', 'validate_stream_fixity', 'overwrite_stream_fixity'):
+            if getattr(current.fixity, f):
+                fixity_off[f] = False
+        tools_off = {}
+        if current.tools.mediatrace.run_tool or current.tools.mediatrace.check_tool:
+            tools_off['mediatrace'] = {'run_tool': False, 'check_tool': False}
+
+        if fixity_off or tools_off:
+            checks_updates = {}
+            if fixity_off:
+                checks_updates['fixity'] = fixity_off
+            if tools_off:
+                checks_updates['tools'] = tools_off
+            config_mgr.update_config('checks', checks_updates)
+            config_mgr.save_config('checks', is_last_used=True)
+            logger.warning(
+                f"Input extension '{resolved_ext}' is not MKV; embedded stream fixity and the "
+                "mediatrace custom-tag check only work on Matroska. Forcing them off. "
+                "The ffprobe signal-flow (ENCODER_SETTINGS) check is skipped for non-MKV input."
+            )
 
     if args.dry_run_only:
         logger.critical("Dry run selected. Exiting now.")

@@ -23,7 +23,7 @@ import io
 from dataclasses import asdict, dataclass, field
 from collections import defaultdict
 
-from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger, report_ffmpeg_stderr
 from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -1140,6 +1140,20 @@ _TC_ASTATS_CREST_STDEV_MAX = 0.30
 _TC_ASTATS_ZCR_STDEV_MAX = 0.02
 _TC_ASTATS_ENTROPY_STDEV_MAX = 0.05
 
+# Per-frame gap refinement (astats). The 30s windowed stability gate above is
+# easily poisoned: a brief silence or carrier dropout inside a window spikes the
+# window's stdev and rejects the whole 30s, so a ~3s real gap gets reported as a
+# ~100s hole and tens of seconds of valid TC on either side are discarded. After
+# the windowed pass has identified TC territory, we re-scan it per frame to
+# recover precise boundaries: a frame counts as TC only if all four astats
+# metrics sit in their LTC bands (reusing the band constants above), and a gap
+# is a sustained run of non-TC frames.
+_TC_GAP_REFINE_SMOOTH_FRAMES = 3   # majority vote over +/- this many frames
+_TC_GAP_MERGE_SEC = 1.0            # merge non-TC runs split by a shorter TC flicker
+_TC_GAP_MIN_SEC = 2.0              # minimum sustained non-TC run to count as a real gap
+_TC_GAP_BRIDGE_SEC = 120.0         # bridge windowed regions up to this gap, then re-split
+_TC_GAP_REFINE_MARGIN_SEC = 15.0   # extend each bridged span by this much before re-scanning
+
 # ---------------------------------------------------------------------------
 # Audio dropout detection thresholds
 # ---------------------------------------------------------------------------
@@ -1152,6 +1166,8 @@ DROPOUT_ZCR_SPIKE_FACTOR = 3.0        # Zero_crossings_rate must exceed 3x rolli
 DROPOUT_MERGE_GAP_SEC = 3.5           # merge candidates within this gap on same channel
 DROPOUT_LONG_EVENT_SEC = 2.0          # events longer than this require high confidence
 DROPOUT_LONG_EVENT_MIN_CORR = 2       # minimum corroborating metrics for long events
+DROPOUT_BARS_MARGIN_SEC = 1.0         # suppress candidates this long past a bars region (tone-off cliff)
+DROPOUT_ZCR_XCHAN_TOLERANCE_SEC = 0.5  # ZCR-only events need another channel firing within this window
 
 
 @dataclass
@@ -1741,10 +1757,8 @@ def _export_chroma_thumb(video_path, time_seconds, out_path):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
-            logger.warning(
-                f"ffmpeg failed for chroma-phase thumbnail at {ts_str}: "
-                f"{result.stderr.strip()[:200]}"
-            )
+            logger.warning(f"ffmpeg failed for chroma-phase thumbnail at {ts_str} (exit code {result.returncode})")
+            report_ffmpeg_stderr(result.stderr, "chroma-phase thumbnail", failure=True)
             return False
         return os.path.isfile(out_path)
     except subprocess.TimeoutExpired:
@@ -1813,7 +1827,7 @@ def _write_chroma_phase_results(report_directory, results):
         )
 
 
-def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None):
+def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_imbalance=False, detect_timecode=False, detect_dropout=False, signals=None, total_duration=None, fps=None, tc_start_frames=0, tc_drop_frame=False, bars_regions=None):
     """
     Analyzes audio frames in a QCTools report in a single pass. Optionally detects
     audio clipping (Peak_level >= threshold), channel imbalance (comparing
@@ -1830,6 +1844,12 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
         detect_dropout (bool): Whether to run audio dropout detection.
         signals: Optional signals object for emitting progress updates.
         total_duration (float or None): Total video duration in seconds for progress reporting.
+        fps (float or None): Video frame rate, used to format audible-timecode region
+            positions as timecode matching an NLE. Defaults to NTSC 29.97 when None.
+        tc_start_frames (int): Stream start-timecode offset in frames (from the file's
+            TIMECODE tag), added to every reported position.
+        tc_drop_frame (bool): Whether the stream timecode is drop-frame, so positions
+            are formatted as DF (HH:MM:SS;FF) rather than NDF.
 
     Returns:
         tuple: (clipping_results, imbalance_results, timecode_results, dropout_results)
@@ -2080,14 +2100,17 @@ def analyzeAudio(startObj, pkt, report_directory, detect_clipping=False, detect_
     timecode_results = None
     if detect_timecode:
         timecode_results = _detect_and_write_timecode_results(
-            tc_frames, tc_metric_type, report_directory
+            tc_frames, tc_metric_type, report_directory, fps=fps,
+            tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame
         )
 
     # Run dropout detection
     dropout_results = None
     if detect_dropout:
         dropout_results = _detect_and_write_dropout_results(
-            dropout_candidates, report_directory, total_audio_frames
+            dropout_candidates, report_directory, total_audio_frames,
+            fps=fps, tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame,
+            bars_regions=bars_regions
         )
 
     return clipping_results, imbalance_results, timecode_results, dropout_results
@@ -2310,13 +2333,97 @@ def _tc_stdev(values):
 
 
 def _tc_format_time(seconds):
-    """Format seconds as HH:MM:SS.s"""
+    """Format a duration in seconds as HH:MM:SS.s (an elapsed length, not a
+    timecode position)."""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = seconds % 60
     if h > 0:
         return f'{h:d}:{m:02d}:{s:04.1f}'
     return f'{m:d}:{s:04.1f}'
+
+
+_NTSC_FPS = 30000 / 1001  # 29.97
+
+
+def _tc_drop_count(nominal):
+    """Frames dropped per minute for drop-frame timecode at this nominal rate
+    (2 at 30 fps, 4 at 60 fps)."""
+    return nominal // 15
+
+
+def _tc_df_to_frames(h, m, s, f, nominal):
+    """Drop-frame timecode fields → absolute frame index."""
+    drop = _tc_drop_count(nominal)
+    total_minutes = 60 * h + m
+    base = (((h * 60 + m) * 60 + s) * nominal) + f
+    return base - drop * (total_minutes - total_minutes // 10)
+
+
+def _tc_frames_to_df(frame, nominal):
+    """Absolute frame index → drop-frame timecode fields (h, m, s, f)."""
+    drop = _tc_drop_count(nominal)
+    frames_per_10min = nominal * 600 - drop * 9
+    frames_per_min = nominal * 60 - drop
+    d, mod = divmod(frame, frames_per_10min)
+    if mod > drop:
+        frame += drop * 9 * d + drop * ((mod - drop) // frames_per_min)
+    else:
+        frame += drop * 9 * d
+    f = frame % nominal
+    s = (frame // nominal) % 60
+    m = (frame // (nominal * 60)) % 60
+    h = (frame // (nominal * 3600)) % 24
+    return h, m, s, f
+
+
+def _tc_parse_start_timecode(tc_string, nominal):
+    """Parse an ffprobe TIMECODE tag ('HH:MM:SS:FF' NDF / 'HH:MM:SS;FF' DF) into
+    (start_frame_offset, drop_frame). Returns (0, False) on anything unparseable."""
+    if not tc_string:
+        return 0, False
+    tc = tc_string.strip()
+    drop = ';' in tc          # SMPTE uses ';' before the frames field for DF
+    parts = re.split(r'[:;]', tc)
+    if len(parts) != 4:
+        return 0, False
+    try:
+        h, m, s, f = (int(p) for p in parts)
+    except ValueError:
+        return 0, False
+    if drop:
+        return _tc_df_to_frames(h, m, s, f, nominal), True
+    return (((h * 60 + m) * 60 + s) * nominal) + f, False
+
+
+def _tc_format_timecode(seconds, fps=None, start_frames=0, drop_frame=False):
+    """Format a real-elapsed-seconds position as a timecode HH:MM:SS:FF (NDF) or
+    HH:MM:SS;FF (DF) at the given frame rate, offset by the stream's start
+    timecode.
+
+    QCTools timestamps are real wall-clock seconds; an NLE displays the file's
+    embedded timecode. NDF labels every frame at the nominal integer rate (30 for
+    29.97), so it drifts ~0.1% behind wall time (~3.6 s/hour); DF skips frame
+    *numbers* to stay aligned with wall time. Converting the real-time position
+    to a frame index, adding the stream's start-TC offset, and re-labelling in
+    the file's own convention makes the reported position match the NLE.
+    """
+    if not fps or fps <= 0:
+        fps = _NTSC_FPS
+    nominal = max(1, int(round(fps)))
+    total = start_frames + int(round(seconds * fps))
+    if total < 0:
+        total = 0
+    # Drop-frame is only defined for fractional NTSC-family rates (29.97/59.94).
+    if drop_frame and abs(nominal - fps) > 1e-6:
+        h, m, s, f = _tc_frames_to_df(total, nominal)
+        return f'{h:02d}:{m:02d}:{s:02d};{f:02d}'
+    f = total % nominal
+    ts = total // nominal
+    s = ts % 60
+    m = (ts // 60) % 60
+    h = ts // 3600
+    return f'{h:02d}:{m:02d}:{s:02d}:{f:02d}'
 
 
 def _tc_filter_by_consecutive(detections, min_consecutive):
@@ -2385,6 +2492,157 @@ def _tc_merge_detections(detections):
 
     merged.sort(key=lambda d: d.start_time)
     return merged
+
+
+# Cross-method consensus. The per-method detectors (R128 criteria A/B/C and
+# per-channel astats) each emit their own regions, and the same stretch of
+# audible timecode typically lights up several of them at once — so the raw
+# detection list is full of overlapping near-duplicates that differ only by
+# which method fired. The consensus collapses them into one row per region.
+#
+# astats is privileged for segmentation. It measures each channel
+# independently, so it resolves the true region boundaries — including spots
+# where the TC carrier briefly stutters or one channel drops out. R128
+# measures only the channel *mix*, so a single loud channel keeps its meter
+# pinned and it smooths over gaps astats correctly reports. So astats region
+# boundaries are taken as authoritative; R128 is demoted to corroboration: it
+# adds "R128" to a region's method list where it overlaps.
+#
+# When per-channel astats data exists in the report, R128 is corroboration
+# *only* — an R128 span that astats never confirmed is discarded, because the
+# R128 loudness-statistics gates alone cannot tell LTC from other
+# steady-loudness audio (heavily compressed music passes criterion A; quiet
+# speech over a near-silent second channel passes criterion C), whereas real
+# LTC reliably trips the per-channel astats fingerprint. Standalone R128
+# regions are only trusted on older QCTools reports that carry no per-channel
+# astats measurements, where R128 is the only evidence available.
+_TC_CONF_RANK = {'high': 3, 'medium': 2, 'low': 1}
+
+
+@dataclass
+class _TCConsensusRegion:
+    """A consensus region built by merging overlapping per-method detections."""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    channel: str = ""
+    confidence: str = ""
+    methods: str = ""
+    method_count: int = 0
+
+
+def _tc_base_method(criterion):
+    """Collapse a per-method criterion to its detector family for corroboration
+    counting: every 'R128-*' criterion is the R128 detector; 'astats (chN)'
+    stays per-channel so a both-channels region still reads as two methods."""
+    c = (criterion or "").strip()
+    if c.lower().startswith('r128'):
+        return 'R128'
+    if c.lower().startswith('astats'):
+        return c
+    return c or 'unknown'
+
+
+def _tc_consensus_channel(dets):
+    """Human-readable 'which channel carries TC' label for a consensus region,
+    derived from the per-channel astats detections that contributed (R128 rows
+    are mix-based and name no channel). Same vocabulary as the report's
+    top-level channel summary."""
+    chans = set()
+    saw_both = False
+    for d in dets:
+        ch = (d.channel or "").strip().lower()
+        if "both" in ch:
+            saw_both = True
+        for num in re.findall(r'ch(\d+)', ch):
+            chans.add(num)
+    if saw_both or len(chans) > 1:
+        return "Both channels"
+    if len(chans) == 1:
+        return f"Channel {next(iter(chans))}"
+    return "Not channel-specific (mix-based)"
+
+
+def _tc_overlaps(a_start, a_end, b_start, b_end):
+    """True if spans [a_start, a_end] and [b_start, b_end] overlap or touch."""
+    return a_start <= b_end and b_start <= a_end
+
+
+def _tc_build_consensus(detections, astats_available=False):
+    """Build consensus regions from the per-method detections, privileging
+    astats for segmentation. The incoming astats detections are already
+    per-channel-merged, so their boundaries are the authoritative region
+    boundaries — overlapping channel-1/channel-2 spans are unioned into one
+    region, but a gap astats left between two same-channel spans is preserved.
+    R128 detections never create or extend a boundary; they only add the "R128"
+    method label where they overlap an astats region. An R128 span astats never
+    detected stands alone only when astats_available is False (the report has
+    no per-channel astats data, so R128 is the only evidence); with astats data
+    present, an uncorroborated R128 span is discarded as a false positive.
+    Returns _TCConsensusRegion list sorted by start time."""
+    if not detections:
+        return []
+
+    astats = [d for d in detections if _tc_base_method(d.criterion) != 'R128']
+    r128 = [d for d in detections if _tc_base_method(d.criterion) == 'R128']
+
+    # Group astats detections that overlap (across channels) into regions.
+    # Same-channel detections arrive pre-merged and non-overlapping, so a gap
+    # the detector deliberately left survives here as a region boundary.
+    regions = []
+    for d in sorted(astats, key=lambda d: d.start_time):
+        if regions and d.start_time <= regions[-1]['end']:
+            regions[-1]['end'] = max(regions[-1]['end'], d.end_time)
+            regions[-1]['dets'].append(d)
+        else:
+            regions.append({'start': d.start_time, 'end': d.end_time, 'dets': [d]})
+
+    # R128-only spans: an R128 detection that overlaps no astats region becomes
+    # its own region, but only when per-channel astats data was unavailable —
+    # if astats measured the channels and found no TC fingerprint there, the
+    # R128 loudness statistics alone are not trusted (stable music and quiet
+    # speech both pass them).
+    for d in sorted(r128, key=lambda d: d.start_time):
+        if not any(_tc_overlaps(d.start_time, d.end_time, r['start'], r['end'])
+                   for r in regions):
+            if astats_available:
+                logger.debug(
+                    f"Discarding uncorroborated R128 timecode detection "
+                    f"{d.start_time:.1f}-{d.end_time:.1f}s ({d.criterion}): "
+                    f"per-channel astats data shows no TC fingerprint\n"
+                )
+            else:
+                regions.append({'start': d.start_time, 'end': d.end_time, 'dets': [d]})
+
+    regions.sort(key=lambda r: r['start'])
+
+    out = []
+    for r in regions:
+        overlapping_r128 = [
+            d for d in r128 if _tc_overlaps(d.start_time, d.end_time, r['start'], r['end'])
+        ]
+        astats_methods = sorted({
+            _tc_base_method(d.criterion) for d in r['dets']
+            if _tc_base_method(d.criterion) != 'R128'
+        })
+        has_r128 = overlapping_r128 or any(
+            _tc_base_method(d.criterion) == 'R128' for d in r['dets']
+        )
+        methods = (['R128'] if has_r128 else []) + astats_methods or ['R128']
+
+        confs = [d.confidence for d in r['dets']] + [d.confidence for d in overlapping_r128]
+        best_conf = max(
+            confs, key=lambda c: _TC_CONF_RANK.get((c or '').lower(), 0)
+        ) if confs else ''
+
+        out.append(_TCConsensusRegion(
+            start_time=r['start'],
+            end_time=r['end'],
+            channel=_tc_consensus_channel(r['dets']),
+            confidence=best_conf,
+            methods=" + ".join(methods),
+            method_count=len(methods),
+        ))
+    return out
 
 
 # Boundary refinement: window detection is quantized to the 15s step, so the
@@ -2608,12 +2866,9 @@ def _detect_r128_criterion_c(times, m_vals, s_vals, lra_high_vals, window_size):
     return _tc_filter_by_consecutive(detections, _TC_R128_MIN_WINDOWS)
 
 
-def _detect_astats_timecode(frames):
-    """Detect audible timecode using FFmpeg astats per-channel measurements."""
-    if not frames:
-        return []
-
-    # Determine available channels
+def _tc_astats_channels(frames):
+    """Return the set of channel numbers (as strings) that carry per-channel
+    astats measurements, probed from the first few frames."""
     channels = set()
     for frame in frames[:5]:
         for key in frame['tags']:
@@ -2621,7 +2876,15 @@ def _detect_astats_timecode(frames):
                 channels.add('1')
             elif key.startswith('lavfi.astats.2.'):
                 channels.add('2')
+    return channels
 
+
+def _detect_astats_timecode(frames):
+    """Detect audible timecode using FFmpeg astats per-channel measurements."""
+    if not frames:
+        return []
+
+    channels = _tc_astats_channels(frames)
     if not channels:
         return []
 
@@ -2642,19 +2905,128 @@ def _detect_astats_timecode(frames):
 
     merged = _tc_merge_detections(detections)
 
-    # Refine each region's start time using per-channel astats RMS_level
-    for d in merged:
-        # criterion is "astats (ch{N})" — extract channel number
-        try:
-            ch = d.criterion.split('ch')[1].split(')')[0]
-        except IndexError:
-            continue
-        prefix = f'lavfi.astats.{ch}.RMS_level'
-        def _get_rms(frame, _p=prefix):
-            return frame['tags'].get(_p, float('nan'))
-        d.start_time = _tc_refine_start_time(frames, times, d.start_time, _get_rms)
+    # Re-derive boundaries per frame: reclaim TC the coarse 30s window dropped
+    # around brief interruptions and split each region on sustained per-frame
+    # gaps, pinning boundaries to the frame.
+    return _tc_refine_astats_gaps(frames, merged)
 
-    return merged
+
+def _tc_frame_in_band(tags, channel):
+    """Per-frame LTC fingerprint test for one channel: True only when all four
+    astats metrics sit in their TC bands (the same bands the windowed detector
+    uses for its means)."""
+    p = f'lavfi.astats.{channel}.'
+    rms = tags.get(p + 'RMS_level', float('nan'))
+    cf = tags.get(p + 'Crest_factor', float('nan'))
+    zcr = tags.get(p + 'Zero_crossings_rate', float('nan'))
+    ent = tags.get(p + 'Entropy', float('nan'))
+    if any(math.isnan(v) for v in (rms, cf, zcr, ent)):
+        return False
+    return (_TC_ASTATS_RMS_LEVEL_MIN <= rms <= _TC_ASTATS_RMS_LEVEL_MAX
+            and _TC_ASTATS_CREST_FACTOR_MIN <= cf <= _TC_ASTATS_CREST_FACTOR_MAX
+            and _TC_ASTATS_ZERO_CROSSINGS_RATE_MIN <= zcr <= _TC_ASTATS_ZERO_CROSSINGS_RATE_MAX
+            and _TC_ASTATS_ENTROPY_MIN <= ent <= _TC_ASTATS_ENTROPY_MAX)
+
+
+def _tc_find_tc_subregions(frames, channel, span_start, span_end):
+    """Within [span_start, span_end], classify each frame by the per-frame TC
+    fingerprint, find sustained non-TC gaps, and return the TC sub-regions
+    (start, end) between them — each trimmed to its first/last TC frame."""
+    seg = [f for f in frames if span_start <= f['time'] <= span_end]
+    if not seg:
+        return []
+
+    raw = [_tc_frame_in_band(f['tags'], channel) for f in seg]
+    n = len(seg)
+    k = _TC_GAP_REFINE_SMOOTH_FRAMES
+    smoothed = []
+    for i in range(n):
+        window = raw[max(0, i - k):min(n, i + k + 1)]
+        smoothed.append(sum(window) > len(window) / 2)
+
+    # contiguous non-TC runs
+    gaps = []
+    i = 0
+    while i < n:
+        if not smoothed[i]:
+            j = i
+            while j < n and not smoothed[j]:
+                j += 1
+            gaps.append([seg[i]['time'], seg[j - 1]['time']])
+            i = j
+        else:
+            i += 1
+
+    # merge runs split only by a brief TC flicker, then keep the sustained ones
+    merged = []
+    for g in gaps:
+        if merged and g[0] - merged[-1][1] < _TC_GAP_MERGE_SEC:
+            merged[-1][1] = g[1]
+        else:
+            merged.append(g)
+    real_gaps = [g for g in merged if (g[1] - g[0]) >= _TC_GAP_MIN_SEC]
+
+    # TC sub-regions = span minus real gaps; trim each to its actual TC frames
+    bounds = [span_start] + [t for g in real_gaps for t in g] + [span_end]
+    subs = []
+    for a, b in zip(bounds[0::2], bounds[1::2]):
+        tc_times = [f['time'] for f in seg
+                    if a <= f['time'] <= b and _tc_frame_in_band(f['tags'], channel)]
+        if tc_times and (tc_times[-1] - tc_times[0]) >= _TC_GAP_MIN_SEC:
+            subs.append((tc_times[0], tc_times[-1]))
+    return subs
+
+
+def _tc_refine_astats_gaps(frames, regions):
+    """Re-derive astats region boundaries from per-frame data. Bridges regions
+    separated by a spurious windowed gap, then splits each bridged span on
+    sustained per-frame TC gaps. This recovers TC the coarse 30s stability gate
+    discarded around a brief interruption and pins gap boundaries to the frame.
+    Operates per channel (criterion 'astats (chN)'); non-astats regions pass
+    through untouched."""
+    if not frames or not regions:
+        return regions
+
+    file_start = frames[0]['time']
+    file_end = frames[-1]['time']
+
+    by_crit = defaultdict(list)
+    for d in regions:
+        by_crit[d.criterion].append(d)
+
+    refined = []
+    for crit, dets in by_crit.items():
+        try:
+            channel = crit.split('ch')[1].split(')')[0]
+        except IndexError:
+            refined.extend(dets)
+            continue
+
+        dets.sort(key=lambda d: d.start_time)
+        groups = [[dets[0]]]
+        for d in dets[1:]:
+            if d.start_time - max(g.end_time for g in groups[-1]) <= _TC_GAP_BRIDGE_SEC:
+                groups[-1].append(d)
+            else:
+                groups.append([d])
+
+        for g in groups:
+            best_conf = max(
+                (d.confidence for d in g),
+                key=lambda c: _TC_CONF_RANK.get((c or '').lower(), 0),
+            )
+            channel_label = g[0].channel
+            details = g[0].details
+            span_start = max(file_start, min(d.start_time for d in g) - _TC_GAP_REFINE_MARGIN_SEC)
+            span_end = min(file_end, max(d.end_time for d in g) + _TC_GAP_REFINE_MARGIN_SEC)
+            for rs, re in _tc_find_tc_subregions(frames, channel, span_start, span_end):
+                refined.append(_TCDetection(
+                    start_time=rs, end_time=re, criterion=crit,
+                    channel=channel_label, confidence=best_conf, details=details,
+                ))
+
+    refined.sort(key=lambda d: d.start_time)
+    return refined
 
 
 def _detect_astats_channel_tc(frames, times, channel):
@@ -2760,8 +3132,16 @@ def _detect_astats_channel_tc(frames, times, channel):
     return _tc_filter_by_consecutive(detections, _TC_ASTATS_MIN_WINDOWS)
 
 
-def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directory):
-    """Run audible timecode detection and write results to CSV."""
+def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directory, fps=None,
+                                       tc_start_frames=0, tc_drop_frame=False):
+    """Run audible timecode detection and write results to CSV.
+
+    Region start/end positions are written as timecode (HH:MM:SS:FF NDF or
+    HH:MM:SS;FF DF) at `fps`, offset by the stream start timecode, so they line
+    up with an NLE; durations stay as elapsed M:SS.s.
+    """
+    def _fmt_tc(seconds):
+        return _tc_format_timecode(seconds, fps, tc_start_frames, tc_drop_frame)
     if not tc_frames:
         logger.debug("No audio frame data available for audible timecode detection\n")
         return None
@@ -2779,14 +3159,33 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
         logger.debug("No recognized audio metrics (r128 or astats) found for timecode detection\n")
         return None
 
-    tc_detected = len(detections) > 0
     duration = tc_frames[-1]['time'] if tc_frames else 0
+
+    # Collapse the overlapping per-method detections into consensus regions —
+    # this is what the report shows and what "Regions Detected" now counts.
+    # When per-channel astats data exists, an R128 detection astats never
+    # corroborated is discarded, so "detected" follows the consensus, not the
+    # raw per-method list.
+    consensus = _tc_build_consensus(
+        detections, astats_available=bool(_tc_astats_channels(tc_frames)))
+    tc_detected = len(consensus) > 0
 
     results = {
         'timecode_detected': tc_detected,
         'metric_type': tc_metric_type,
         'total_audio_frames': len(tc_frames),
         'duration': duration,
+        'consensus_regions': [
+            {
+                'start_time': r.start_time,
+                'end_time': r.end_time,
+                'channel': r.channel,
+                'confidence': r.confidence,
+                'methods': r.methods,
+                'method_count': r.method_count,
+            }
+            for r in consensus
+        ],
         'detections': [
             {
                 'start_time': d.start_time,
@@ -2800,7 +3199,9 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
         ],
     }
 
-    # Write CSV
+    # Write CSV. The consensus regions are the primary table (the report reads
+    # these); the raw per-method detections follow in a separate section as a
+    # forensic record and are not shown in the report.
     tc_csv = os.path.join(report_directory, "qct-parse_audible_timecode.csv")
     with open(tc_csv, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -2809,15 +3210,30 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
         writer.writerow(["Total Audio Frames", len(tc_frames)])
         writer.writerow(["Duration", _tc_format_time(duration)])
         writer.writerow(["Audible Timecode Detected", "Yes" if tc_detected else "No"])
-        writer.writerow(["Regions Detected", len(detections)])
+        writer.writerow(["Regions Detected", len(consensus)])
         writer.writerow([])
 
+        if consensus:
+            writer.writerow(["Start Time", "End Time", "Duration", "Channel", "Confidence", "Detection Methods"])
+            for r in consensus:
+                writer.writerow([
+                    _fmt_tc(r.start_time),
+                    _fmt_tc(r.end_time),
+                    _tc_format_time(r.end_time - r.start_time),
+                    r.channel,
+                    r.confidence,
+                    r.methods,
+                ])
+            writer.writerow([])
+
         if detections:
+            writer.writerow(["Per-Method Detections", len(detections)])
+            writer.writerow([])
             writer.writerow(["Start Time", "End Time", "Criterion", "Channel", "Confidence", "Details"])
             for d in detections:
                 writer.writerow([
-                    _tc_format_time(d.start_time),
-                    _tc_format_time(d.end_time),
+                    _fmt_tc(d.start_time),
+                    _fmt_tc(d.end_time),
                     d.criterion,
                     d.channel,
                     d.confidence,
@@ -2827,10 +3243,14 @@ def _detect_and_write_timecode_results(tc_frames, tc_metric_type, report_directo
     # Log summary
     if tc_detected:
         regions = "; ".join(
-            f"{_tc_format_time(d.start_time)}-{_tc_format_time(d.end_time)} [{d.confidence}] {d.criterion}"
-            for d in detections
+            f"{_fmt_tc(r.start_time)}-{_fmt_tc(r.end_time)} "
+            f"[{r.confidence}] {r.methods}"
+            for r in consensus
         )
-        logger.warning(f"Audible timecode detected: {len(detections)} region(s) — {regions}\n")
+        logger.warning(
+            f"Audible timecode detected: {len(consensus)} consensus region(s) "
+            f"from {len(detections)} per-method detection(s) — {regions}\n"
+        )
     else:
         logger.debug("No audible timecode detected\n")
 
@@ -2857,6 +3277,140 @@ def _get_video_duration(video_path):
     except Exception:
         pass
     return None
+
+
+def _get_audio_stream_count(video_path):
+    """Get the number of separate audio streams in the file using ffprobe.
+
+    Used to detect the multi-stream layout (e.g. broadcast MXF, where each audio
+    channel is its own discrete mono stream). A count greater than 1 means the
+    QCTools-based audio analysis cannot see the real per-stream audio, because
+    qcli downmixes multiple streams into a single analysis signal.
+
+    Returns:
+        int or None: Number of audio streams, or None if it can't be determined.
+    """
+    try:
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 'a',
+            '-show_entries', 'stream=index',
+            '-of', 'csv=p=0',
+            video_path
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return len([ln for ln in result.stdout.splitlines() if ln.strip()])
+    except Exception:
+        pass
+    return None
+
+
+def _get_video_frame_rate(video_path):
+    """Get the video frame rate as a float (e.g. 29.97 for NTSC) using ffprobe.
+
+    Returns:
+        float or None: Frames per second, or None if unavailable.
+    """
+    try:
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=r_frame_rate',
+            '-of', 'csv=p=0',
+            video_path
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        out = result.stdout.strip()
+        if result.returncode == 0 and out:
+            if '/' in out:
+                num, den = out.split('/')
+                den = float(den)
+                if den:
+                    return float(num) / den
+            else:
+                return float(out)
+    except Exception:
+        pass
+    return None
+
+
+def _get_video_start_timecode(video_path):
+    """Get the stream's start timecode tag (e.g. '00:00:00:09' for NDF or
+    '01:00:00;00' for DF) using ffprobe, checked on the video stream first then
+    the container.
+
+    Returns:
+        str or None: The raw TIMECODE tag, or None if absent.
+    """
+    queries = [
+        ['-select_streams', 'v:0', '-show_entries', 'stream_tags=timecode'],
+        ['-show_entries', 'format_tags=timecode'],
+    ]
+    for q in queries:
+        try:
+            command = ['ffprobe', '-v', 'error'] + q + ['-of', 'default=noprint_wrappers=1:nokey=1', video_path]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            out = result.stdout.strip()
+            if result.returncode == 0 and out:
+                return out.splitlines()[0].strip()
+        except Exception:
+            pass
+    return None
+
+
+def _time_in_bars_region(t, bars_regions, margin=DROPOUT_BARS_MARGIN_SEC):
+    """True if time `t` (seconds) falls inside a detected color-bars region, or
+    within `margin` seconds after one.
+
+    A reference tone shutting off at the end of a bars+tone segment produces the
+    same loud-steady -> silence RMS cliff a tape dropout does, so candidates in
+    the bars region (and just past its end, where the tone-off transition lands)
+    are false positives for dropout. `bars_regions` is the `all_bars_regions`
+    list of (label, start_sec, end_sec) tuples from run_qctparse; entries with a
+    missing start or end are skipped.
+    """
+    if not bars_regions:
+        return False
+    for region in bars_regions:
+        start, end = region[1], region[2]
+        if start is None or end is None:
+            continue
+        if start <= t <= end + margin:
+            return True
+    return False
+
+
+def _is_zcr_only(event):
+    """True if the event's sole corroborating metric is the Zero_crossings_rate
+    spike. ZCR climbs during ordinary silence (the noise floor hovers around
+    zero) without the Max/RMS_difference collapse a real tape dropout shows, so a
+    ZCR-only event is the dominant single-channel false-positive signature."""
+    return event.corroborating == ['Zero_crossings_rate spike']
+
+
+def _zcr_only_has_cross_channel_support(event, all_events,
+                                        tolerance=DROPOUT_ZCR_XCHAN_TOLERANCE_SEC):
+    """True if a ZCR-only event overlaps in time (within `tolerance` seconds)
+    with a detection on a *different* channel that carries a stronger metric
+    (Max_difference / RMS_difference drop).
+
+    A real dropout that briefly silences one channel almost always disturbs the
+    other, where the RMS-based corroborators fire; an isolated ZCR-only event
+    with no such cross-channel support is natural silence, not a dropout."""
+    for other in all_events:
+        if other is event or other.channel == event.channel:
+            continue
+        # Require the supporting channel to have a non-ZCR corroborator so two
+        # simultaneous silent channels can't prop each other up.
+        if not any(c != 'Zero_crossings_rate spike' for c in other.corroborating):
+            continue
+        if (event.start_time - tolerance) <= other.end_time and \
+           (other.start_time - tolerance) <= event.end_time:
+            return True
+    return False
 
 
 def _merge_dropout_candidates(candidates):
@@ -2938,8 +3492,27 @@ def _merge_dropout_candidates(candidates):
     return events
 
 
-def _detect_and_write_dropout_results(dropout_candidates, report_directory, total_audio_frames):
-    """Merge dropout candidates into events, write CSV, and return results dict."""
+def _detect_and_write_dropout_results(dropout_candidates, report_directory, total_audio_frames,
+                                      fps=None, tc_start_frames=0, tc_drop_frame=False,
+                                      bars_regions=None):
+    """Merge dropout candidates into events, write CSV, and return results dict.
+
+    Event Timestamp Start/End are written as the file's own timecode (NDF
+    HH:MM:SS:FF or DF HH:MM:SS;FF) at `fps`, offset by the stream start
+    timecode, so they line up with an NLE.
+
+    `bars_regions` (the run_qctparse `all_bars_regions` list) suppresses
+    candidates inside a color-bars region or just past its end — a reference
+    tone shutting off there mimics a dropout's RMS cliff but isn't one.
+    """
+
+    # Drop candidates that fall in a color-bars/tone region before merging.
+    if bars_regions:
+        kept = [c for c in dropout_candidates if not _time_in_bars_region(c.time, bars_regions)]
+        suppressed = len(dropout_candidates) - len(kept)
+        if suppressed:
+            logger.debug(f"Dropout: suppressed {suppressed} candidate(s) in color-bars regions\n")
+        dropout_candidates = kept
 
     events = _merge_dropout_candidates(dropout_candidates)
 
@@ -2951,6 +3524,20 @@ def _detect_and_write_dropout_results(dropout_candidates, report_directory, tota
         if (ev.end_time - ev.start_time) <= DROPOUT_LONG_EVENT_SEC
         or len(ev.corroborating) >= DROPOUT_LONG_EVENT_MIN_CORR
     ]
+
+    # Suppress ZCR-only events (natural-silence false positives) unless another
+    # channel corroborates them at the same time. Filtered against the full event
+    # list so a kept event still counts as support for its cross-channel twin.
+    zcr_kept = [
+        ev for ev in events
+        if not _is_zcr_only(ev) or _zcr_only_has_cross_channel_support(ev, events)
+    ]
+    zcr_suppressed = len(events) - len(zcr_kept)
+    if zcr_suppressed:
+        logger.debug(
+            f"Dropout: suppressed {zcr_suppressed} ZCR-only event(s) "
+            f"without cross-channel support\n")
+    events = zcr_kept
 
     dropout_detected = len(events) > 0
     frames_flagged = len(dropout_candidates)
@@ -2983,8 +3570,8 @@ def _detect_and_write_dropout_results(dropout_candidates, report_directory, tota
             for ev in events:
                 drop_db = ev.median_rms_level - ev.worst_rms_level
                 writer.writerow([
-                    dts2ts(str(ev.start_time)),
-                    dts2ts(str(ev.end_time)),
+                    _tc_format_timecode(ev.start_time, fps, tc_start_frames, tc_drop_frame),
+                    _tc_format_timecode(ev.end_time, fps, tc_start_frames, tc_drop_frame),
                     ev.channel,
                     f"{ev.worst_rms_level:.1f}",
                     f"{ev.median_rms_level:.1f}",
@@ -3041,6 +3628,13 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     # Estimate total video frames for progress reporting
     total_duration = _get_video_duration(video_path)
+    # Frame rate and the stream's start timecode are used to report
+    # audible-timecode positions as the file's own timecode, matching the NLE.
+    video_fps = _get_video_frame_rate(video_path)
+    _tc_nominal = max(1, int(round(video_fps))) if video_fps else 30
+    tc_start_frames, tc_drop_frame = _tc_parse_start_timecode(
+        _get_video_start_timecode(video_path), _tc_nominal
+    )
 
     ###### Initialize variables ######
     startObj = qctools_output_path
@@ -3387,6 +3981,27 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
 
     ######## Audio Analysis (Clipping Detection / Channel Imbalance / Audible Timecode) ########
     do_audio_analysis = qct_parse.get('audio_analysis', False)
+    imbalance_results = None
+    timecode_results = None
+
+    # Gate audio analysis off for multi-stream inputs (e.g. broadcast MXF, where
+    # each audio channel is a discrete mono stream). The audio checks read the
+    # QCTools sidecar, but qcli downmixes multiple audio streams into a single
+    # analysis signal — so per-channel clipping, channel imbalance, dropout, and
+    # audible-timecode results would describe the downmix, not the real streams.
+    # These checks only support a single multi-channel stream (e.g. MKV).
+    if do_audio_analysis:
+        audio_stream_count = _get_audio_stream_count(video_path)
+        if audio_stream_count and audio_stream_count > 1:
+            logger.warning(
+                f"Audio analysis skipped: input has {audio_stream_count} separate audio streams "
+                "(discrete mono tracks, typical of broadcast MXF). QCTools/qcli downmixes multiple "
+                "streams into one analysis signal, so audio clipping, channel imbalance, audio "
+                "dropout, and audible-timecode results would not reflect the real per-stream audio. "
+                "These checks support a single multi-channel stream (e.g. MKV) only.\n"
+            )
+            do_audio_analysis = False
+
     if do_audio_analysis:
         logger.debug(f"Starting audio analysis on {baseName}\n")
         clipping_results, imbalance_results, timecode_results, dropout_results = analyzeAudio(
@@ -3395,7 +4010,9 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
             detect_imbalance=True,
             detect_timecode=True,
             detect_dropout=True,
-            signals=signals, total_duration=total_duration
+            signals=signals, total_duration=total_duration, fps=video_fps,
+            tc_start_frames=tc_start_frames, tc_drop_frame=tc_drop_frame,
+            bars_regions=all_bars_regions
         )
         if clipping_results is None:
             logger.warning("Audio clipping detection could not be performed\n")
@@ -3415,10 +4032,24 @@ def run_qctparse(video_path, qctools_output_path, report_directory, check_cancel
         signals.qctparse_progress.emit(100)
 
     head_region = next((r for r in all_bars_regions if r[0] in ("head", "head-relaxed")), None)
+
+    # Audio findings consumed downstream by access file creation (channel
+    # exclusion). None when audio analysis is off or produced no results, so
+    # the caller can distinguish "nothing flagged" from "analysis didn't run".
+    audio_findings = None
+    if do_audio_analysis and (imbalance_results or timecode_results):
+        audio_findings = {
+            'silent_channels': (imbalance_results or {}).get('silent_channels', []),
+            'num_channels': (imbalance_results or {}).get('num_channels'),
+            'timecode_consensus_regions': (timecode_results or {}).get('consensus_regions', []),
+            'duration': total_duration or (timecode_results or {}).get('duration'),
+        }
+
     return {
         'head_bars_start': head_region[1] if head_region else None,
         'head_bars_end': head_region[2] if head_region else None,
         'all_bars_regions': all_bars_regions,
+        'audio_findings': audio_findings,
     }
 
 

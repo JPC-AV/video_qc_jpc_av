@@ -294,7 +294,7 @@ class ChecksTab(ThemeableMixin):
                 border: none;
             }
         """)
-        self.main_window.config_widget = ChecksWindow()
+        self.main_window.config_widget = ChecksWindow(main_window=self.main_window)
         config_scroll_area.setWidgetResizable(True)
         config_scroll_area.setWidget(self.main_window.config_widget)
 

@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from AV_Spex.utils.config_setup import ChecksConfig
 from AV_Spex.utils.config_manager import ConfigManager
-from AV_Spex.utils.log_setup import logger
+from AV_Spex.utils.log_setup import logger, report_ffmpeg_stderr
 
 config_mgr = ConfigManager()
 
@@ -617,6 +617,34 @@ def _get_audio_channel_count(video_path):
         return None
 
 
+def _get_audio_stream_channels(video_path):
+    """Get the channel count of every audio stream, in order, using ffprobe.
+
+    Returns a list with one entry per audio stream, e.g. ``[2]`` for a single
+    stereo stream (typical MKV) or ``[1, 1]`` for two separate mono streams
+    (typical broadcast MXF, where each track is its own mono PCM stream).
+
+    Returns:
+        list[int] or None: Per-stream channel counts, or None if unavailable
+        or there are no audio streams.
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=channels",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        counts = [int(x) for x in result.stdout.split() if x.strip()]
+        return counts or None
+    except Exception as e:
+        logger.warning(f"Could not probe audio channel count: {e}")
+        return None
+
+
 # Colors assigned per channel for waveform visualization
 _WAVEFORM_CHANNEL_COLORS = [
     "#378d6a",  # green (channel 1 / left)
@@ -630,15 +658,22 @@ _WAVEFORM_CHANNEL_COLORS = [
 ]
 
 
-def _build_waveform_filter(num_channels, width, height):
+def _build_waveform_filter(stream_channels, width, height):
     """Build an FFmpeg filter_complex string that renders each audio channel
     as a separate waveform strip stacked vertically.
 
+    Handles both common source layouts transparently:
+      * a single multi-channel stream (e.g. one stereo stream in an MKV), which
+        is split into its channels with ``channelsplit``; and
+      * multiple separate streams (e.g. two mono PCM streams in a broadcast
+        MXF), where each stream contributes its channel(s) directly.
+
     A thin separator line is inserted between channels so they are easy to
-    distinguish regardless of the number of channels.
+    distinguish regardless of the channel count or source layout.
 
     Args:
-        num_channels (int): Number of audio channels.
+        stream_channels (list[int]): Channel count per audio stream, in order.
+            e.g. ``[2]`` (one stereo stream) or ``[1, 1]`` (two mono streams).
         width (int): Image width.
         height (int): Height per channel in pixels.
 
@@ -650,45 +685,57 @@ def _build_waveform_filter(num_channels, width, height):
     separator_height = 2
     separator_color = "333333"
 
-    if num_channels == 1:
-        # Mono — single waveform, no split needed
+    total_channels = sum(stream_channels)
+
+    if total_channels <= 1:
+        # Single mono channel — one waveform, no split needed
         return f"[0:a]showwavespic=s={width}x{height}:colors={colors[0]}@{opacity}:draw=full:scale=sqrt"
 
     # Map channel count to a standard FFmpeg layout name for channelsplit
     layout_map = {2: "stereo", 3: "2.1", 4: "quad", 6: "5.1", 8: "7.1"}
-    layout_arg = layout_map.get(num_channels, f"{num_channels}c")
 
-    # Build channelsplit → per-channel showwavespic → vstack
-    split_outputs = "".join(f"[ch{i}]" for i in range(num_channels))
-    lines = [f"[0:a]channelsplit=channel_layout={layout_arg}{split_outputs};"]
+    # Build one filtergraph label per channel, in order. Mono streams are used
+    # directly; multi-channel streams are split into their channels.
+    lines = []
+    channel_labels = []
+    for s, count in enumerate(stream_channels):
+        if count <= 1:
+            channel_labels.append(f"[0:a:{s}]")
+        else:
+            layout_arg = layout_map.get(count, f"{count}c")
+            outs = "".join(f"[s{s}c{j}]" for j in range(count))
+            lines.append(f"[0:a:{s}]channelsplit=channel_layout={layout_arg}{outs};")
+            channel_labels.extend(f"[s{s}c{j}]" for j in range(count))
+
+    n = len(channel_labels)
 
     # Create a thin separator strip
     lines.append(
         f"color=c=#{separator_color}:s={width}x{separator_height}:d=1[sep];"
     )
 
-    for i in range(num_channels):
+    for i, label in enumerate(channel_labels):
         color = colors[i % len(colors)]
         lines.append(
-            f"[ch{i}]showwavespic=s={width}x{height}:colors={color}@{opacity}:draw=full:scale=sqrt[w{i}];"
+            f"{label}showwavespic=s={width}x{height}:colors={color}@{opacity}:draw=full:scale=sqrt[w{i}];"
         )
 
-    # Interleave waveform strips with separator copies, then vstack
-    # We need (num_channels - 1) copies of the separator
-    if num_channels > 2:
-        lines.append(f"[sep]split={num_channels - 1}" + "".join(f"[s{i}]" for i in range(num_channels - 1)) + ";")
+    # Interleave waveform strips with separator copies, then vstack.
+    # We need (n - 1) copies of the separator.
+    if n > 2:
+        lines.append(f"[sep]split={n - 1}" + "".join(f"[s{i}]" for i in range(n - 1)) + ";")
     else:
-        # For stereo, the single [sep] can be used directly
+        # For two channels, the single [sep] can be used directly
         lines.append("[sep]copy[s0];")
 
     # Build the vstack input list: w0, s0, w1, s1, w2, ..., w(N-1)
     vstack_inputs = ""
-    for i in range(num_channels):
+    for i in range(n):
         vstack_inputs += f"[w{i}]"
-        if i < num_channels - 1:
+        if i < n - 1:
             vstack_inputs += f"[s{i}]"
 
-    total_inputs = num_channels + (num_channels - 1)  # waveforms + separators
+    total_inputs = n + (n - 1)  # waveforms + separators
     lines.append(f"{vstack_inputs}vstack=inputs={total_inputs}")
 
     return "\n".join(lines)
@@ -722,12 +769,12 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
             logger.warning("Audio waveform: could not determine video duration — skipping")
             return None
 
-        num_channels = _get_audio_channel_count(video_path)
-        if num_channels is None or num_channels <= 0:
+        stream_channels = _get_audio_stream_channels(video_path)
+        if not stream_channels:
             logger.warning("Audio waveform: could not determine audio channel count — skipping")
             return None
 
-        filter_complex = _build_waveform_filter(num_channels, width, height)
+        filter_complex = _build_waveform_filter(stream_channels, width, height)
 
         progress_range = progress_end - progress_start
 
@@ -776,10 +823,8 @@ def generate_audio_waveform_base64(video_path, width=1200, height=80, signals=No
                 time.sleep(poll_interval)
 
             stderr_text = process.stderr.read() if process.stderr else ''
-            if stderr_text:
-                lines = [ln for ln in stderr_text.splitlines() if ln.strip()]
-                if lines:
-                    logger.warning(f"Audio waveform ffmpeg stderr: {'; '.join(lines)}")
+            report_ffmpeg_stderr(stderr_text, "audio waveform",
+                                 failure=process.returncode not in (0, None))
 
             if not os.path.isfile(output_path):
                 logger.warning("Audio waveform: ffmpeg produced no output — skipping")
@@ -897,7 +942,8 @@ def generate_thumbnail_for_failure(video_path, tag, tagValue, timestamp, profile
         if result.returncode == 0 and os.path.isfile(ffoutputFramePath):
             return ffoutputFramePath
         else:
-            logger.error(f"Failed to generate thumbnail: {result.stderr.decode()}")
+            logger.warning(f"Failed to generate {tag} thumbnail at {timestamp} (exit code {result.returncode})")
+            report_ffmpeg_stderr(result.stderr, f"{tag} thumbnail", failure=True)
             return None
     except Exception as e:
         logger.error(f"Error generating thumbnail: {e}")
@@ -1308,27 +1354,18 @@ def make_channel_imbalance_html(channel_imbalance_csv):
     return html
 
 
-def _tc_channel_summary(detection_rows):
-    """
-    Derive a human-readable 'which channel carries the timecode' label from the
-    detection rows. Only the per-channel astats rows identify a specific channel
-    ('ch1', 'ch2', 'both (ch1)'); the mix-based R128 rows carry non-channel
-    descriptors ('n/a (mix-based)', 'one channel') and must be ignored here.
-    Returns 'Both channels', 'Channel N', or 'Not channel-specific (mix-based)'
-    when only R128 rows fired.
-    """
-    chans = set()
-    saw_both = False
-    for r in detection_rows:
-        ch = (r[3] if len(r) > 3 else "").strip().lower()
-        if "both" in ch:
-            saw_both = True
-        for num in re.findall(r'ch(\d+)', ch):
-            chans.add(num)
-    if saw_both or len(chans) > 1:
+def _tc_consensus_channel_summary(consensus_rows):
+    """Aggregate the per-region channel labels (column index 3, already
+    human-readable: 'Channel 1', 'Both channels', 'Not channel-specific
+    (mix-based)') into one top-level 'Timecode Channel(s)' label. If regions
+    disagree on a single channel, or any region spans both, report both
+    channels; if only mix-based regions exist, say so."""
+    labels = {r[3].strip() for r in consensus_rows if len(r) > 3 and r[3].strip()}
+    specific = {l for l in labels if l.startswith("Channel")}
+    if any("Both" in l for l in labels) or len(specific) > 1:
         return "Both channels"
-    if len(chans) == 1:
-        return f"Channel {next(iter(chans))}"
+    if len(specific) == 1:
+        return next(iter(specific))
     return "Not channel-specific (mix-based)"
 
 
@@ -1366,8 +1403,23 @@ def make_audible_timecode_html(audible_timecode_csv):
     duration = rows[3][1] if len(rows[3]) > 1 else "N/A"
     tc_detected = rows[4][1] if len(rows[4]) > 1 else "No"
 
-    detection_rows = [r for r in rows[8:] if len(r) >= 5]
-    tc_channel = _tc_channel_summary(detection_rows) if detection_rows else "—"
+    # Read the consensus regions table — the header row carries "Detection
+    # Methods" as its last column, distinguishing it from the per-method
+    # forensic section that follows. Collect rows up to the next blank line.
+    consensus_rows = []
+    header_idx = None
+    for i, r in enumerate(rows):
+        if r and r[0] == "Start Time" and len(r) >= 6 and r[5] == "Detection Methods":
+            header_idx = i
+            break
+    if header_idx is not None:
+        for r in rows[header_idx + 1:]:
+            if not r or not r[0].strip() or r[0] == "Per-Method Detections":
+                break
+            if len(r) >= 6:
+                consensus_rows.append(r)
+
+    tc_channel = _tc_consensus_channel_summary(consensus_rows) if consensus_rows else "—"
 
     if tc_detected == "Yes":
         status_color = "#dc3545"
@@ -1425,7 +1477,22 @@ def make_audible_timecode_html(audible_timecode_csv):
         </table>
         <p style="margin: 0;">
             Detections must persist across multiple consecutive windows to be reported, reducing
-            false positives from transient audio events.
+            false positives from transient audio events. The same stretch of timecode usually
+            triggers several methods at once, so the overlapping detections are collapsed into the
+            <strong>consensus regions</strong> shown below &mdash; one row per contiguous span of
+            audible timecode. The per-channel <code>astats</code> boundaries are authoritative
+            (they resolve true breaks where the TC carrier stutters or one channel drops out, which
+            the mix-based R128 meter smooths over); R128 corroborates. When the QCTools report
+            carries per-channel <code>astats</code> data, an R128 detection that <code>astats</code>
+            never corroborated is discarded &mdash; loudness statistics alone can't tell LTC from
+            other steady-loudness audio (e.g. heavily compressed music). The <em>Detection Methods</em>
+            column lists which methods agreed on each region.
+        </p>
+        <p style="margin: 10px 0 0 0;">
+            Region <strong>start and end positions are shown as non-drop-frame timecode</strong>
+            (<code>HH:MM:SS:FF</code>) at the video frame rate, so they match what an NLE displays;
+            the <em>Duration</em> column is elapsed time. (NDF timecode runs ~0.1% behind wall-clock
+            time, so it reads a couple of seconds lower than elapsed seconds late in a long file.)
         </p>
     </div>
     <div style="background-color: {status_bg}; padding: 15px; border: 1px solid {status_border}; margin: 10px 0; border-radius: 5px;">
@@ -1438,18 +1505,10 @@ def make_audible_timecode_html(audible_timecode_csv):
     </table>
     '''
 
-    # Add detection regions table if there are any
-    if detection_rows:
-        def parse_ts(ts):
-            # Handles both M:SS.s and H:MM:SS.s from _tc_format_time().
-            try:
-                sec = 0.0
-                for part in ts.split(":"):
-                    sec = sec * 60 + float(part)
-                return sec
-            except (ValueError, AttributeError):
-                return None
-
+    # Add the consensus regions table if there are any. These are the merged
+    # regions agreed on across detection methods — the per-method detections
+    # they were built from are kept in the CSV but intentionally not shown.
+    if consensus_rows:
         def conf_badge(conf):
             c = (conf or "").strip().lower()
             color = {"high": "#0a5f1c", "medium": "#b8860b"}.get(c, "#666")
@@ -1460,55 +1519,41 @@ def make_audible_timecode_html(audible_timecode_csv):
             )
 
         # Plain-language summary: region count, overall span, highest confidence.
-        starts = [parse_ts(r[0]) for r in detection_rows]
-        ends = [parse_ts(r[1]) for r in detection_rows]
-        valid_starts = [s for s in starts if s is not None]
-        valid_ends = [e for e in ends if e is not None]
+        # Rows are sorted by start, so the span runs from the first start to the
+        # last end — shown verbatim as the NDF timecodes from the CSV.
         conf_rank = {"high": 3, "medium": 2, "low": 1}
-        confidences = [(r[4] or "").strip().lower() for r in detection_rows]
+        confidences = [(r[4] or "").strip().lower() for r in consensus_rows]
         top = max(confidences, key=lambda c: conf_rank.get(c, 0)) if confidences else ""
         top_conf = top.capitalize() if top else "N/A"
-        if valid_starts and valid_ends:
-            span = f"{_short_ts(min(valid_starts))}–{_short_ts(max(valid_ends))}"
-            summary_text = (f"Audible timecode detected in {len(detection_rows)} region(s), "
-                            f"{span}; highest confidence: {top_conf}.")
-        else:
-            summary_text = (f"Audible timecode detected in {len(detection_rows)} region(s); "
-                            f"highest confidence: {top_conf}.")
+        span = f"{consensus_rows[0][0]}–{consensus_rows[-1][1]}"
+        summary_text = (f"Audible timecode detected in {len(consensus_rows)} region(s), "
+                        f"{span}; highest confidence: {top_conf}.")
         html += (
             f'<p style="margin: 10px 0; padding: 10px 14px; background-color: #f5e9e3; '
             f'border-radius: 4px; color: #4d2b12;">{summary_text}</p>'
         )
 
-        html += f'''
-        <a href="javascript:void(0);" onclick="toggleContent('timecode_regions', 'Show detected regions ({len(detection_rows)}) ▼', 'Hide detected regions ▲')" style="color: #378d6a; text-decoration: underline; margin: 10px 0; display: block;">Show detected regions ({len(detection_rows)}) ▼</a>
-        <div id="timecode_regions" style="display: none;">
+        html += '''
         <table style="border-collapse: collapse; margin: 10px 0;">
             <tr>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start Time</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End Time</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Duration</th>
-                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Criterion</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Confidence</th>
-                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Details</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Detection Methods</th>
             </tr>
         '''
-        for row in detection_rows:
-            details = row[5] if len(row) > 5 else ""
-            s = parse_ts(row[0])
-            e = parse_ts(row[1])
-            dur = f"{e - s:.1f}s" if (s is not None and e is not None) else "—"
+        for row in consensus_rows:
             html += f'''<tr>
                 <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{row[0]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace;">{row[1]}</td>
-                <td style="padding: 4px 12px; border: 1px solid #ddd; text-align: right;">{dur}</td>
-                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[2]}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd; font-family: monospace; text-align: right;">{row[2]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[3]}</td>
                 <td style="padding: 4px 12px; border: 1px solid #ddd;">{conf_badge(row[4])}</td>
-                <td style="padding: 4px 12px; border: 1px solid #ddd;">{details}</td>
+                <td style="padding: 4px 12px; border: 1px solid #ddd;">{row[5]}</td>
             </tr>\n'''
-        html += '</table></div>\n'
+        html += '</table>\n'
 
     return html
 
@@ -1607,7 +1652,7 @@ def make_audio_dropout_html(audio_dropout_csv):
     '''
 
     # Add dropout events table if there are any
-    dropout_events = [r for r in rows[9:] if len(r) >= 7]
+    dropout_events = [r for r in rows[9:] if len(r) >= 7 and r[0] != "Timestamp Start"]
     if dropout_events:
         confidence_colors = {
             'high': '#dc3545',
@@ -1619,14 +1664,14 @@ def make_audio_dropout_html(audio_dropout_csv):
         <div id="audio_dropout_events" style="display: none;">
         <table style="border-collapse: collapse; margin: 10px 0;">
             <tr>
-                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Start</th>
-                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">End</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Timestamp Start</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Timestamp End</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Channel</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Worst RMS (dBFS)</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Median RMS (dBFS)</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Drop (dB)</th>
                 <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Confidence</th>
-                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Corroborating</th>
+                <th style="padding: 4px 12px; border: 1px solid #ddd; background-color: #f2f2f2;">Corroborating Metrics</th>
             </tr>
         '''
         for event in dropout_events:
@@ -4628,7 +4673,9 @@ def generate_duplicate_frame_html(frame_outputs):
         <ul style="margin: 4px 0 10px 20px; padding: 0;">
             <li style="margin-bottom: 4px;"><strong>QCTools candidate filter</strong> &mdash; The QCTools
                 report is scanned for runs of consecutive frames whose YDIF, UDIF, and VDIF values all fall
-                below bit-depth-aware thresholds. Color bars and detected black segments are excluded.</li>
+                below bit-depth-aware thresholds. Color bars, detected black segments, and flat-field
+                frames (the deck's synthetic black/mute output during signal loss, which is bit-identical
+                frame to frame but is not frozen picture content) are excluded.</li>
             <li style="margin-bottom: 4px;"><strong>OpenCV verification</strong> &mdash; Each candidate is
                 verified by reading the actual frames with OpenCV and computing the mean squared error
                 against the preceding frame. Candidates that don't confirm as near-identical are dropped.</li>
@@ -4704,8 +4751,10 @@ def generate_duplicate_frame_html(frame_outputs):
                 return '<span style="color:#999; font-size:12px;">unavailable</span>'
 
         for i, run in enumerate(runs, 1):
-            start_t = run.get('start_time', 0.0)
-            end_t = run.get('end_time', 0.0)
+            # Prefer the file-timecode labels (NDF/DF aware, start-TC offset);
+            # fall back to raw seconds for results saved before they existed.
+            start_tc = run.get('start_timecode') or _fmt_tc(run.get('start_time', 0.0))
+            end_tc = run.get('end_timecode') or _fmt_tc(run.get('end_time', 0.0))
             frozen = run.get('frozen_frames', 0)
             est_loss = run.get('estimated_loss_seconds', 0.0)
             avg_ydif = run.get('avg_ydif', 0.0)
@@ -4718,8 +4767,8 @@ def generate_duplicate_frame_html(frame_outputs):
             html += f"""
             <tr>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{i}</td>
-                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{_fmt_tc(start_t)}</td>
-                <td style="padding: 6px 12px; border: 1px solid #d0c0b0;">{_fmt_tc(end_t)}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; font-family: monospace;">{start_tc}</td>
+                <td style="padding: 6px 12px; border: 1px solid #d0c0b0; font-family: monospace;">{end_tc}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{frozen}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{est_loss:.3f}</td>
                 <td style="padding: 6px 12px; border: 1px solid #d0c0b0; text-align: right;">{avg_ydif:.3f}</td>

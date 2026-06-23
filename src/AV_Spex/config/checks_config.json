@@ -4,6 +4,7 @@
     "access_file_trim_color_bars": true,
     "access_file_crop_borders": true,
     "access_file_crop_to_480": true,
+    "access_file_exclude_flagged_audio": false,
     "report": false,
     "qctools_ext": "qctools.xml.gz",
     "frame_analysis": {
@@ -90,5 +91,6 @@
       }
     }
   },
-  "validate_filename": false
+  "validate_filename": false,
+  "video_file_extension": "mkv"
 }

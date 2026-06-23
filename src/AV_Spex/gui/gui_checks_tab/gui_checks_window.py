@@ -6,7 +6,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
 
 from AV_Spex.gui.gui_theme_manager import ThemeManager, ThemeableMixin
-from AV_Spex.utils.config_setup import ChecksConfig, SpexConfig
+from AV_Spex.utils.config_setup import (
+    ChecksConfig, SpexConfig, SUPPORTED_VIDEO_EXTENSIONS, is_mkv_extension
+)
 from AV_Spex.utils.config_manager import ConfigManager
 
 from AV_Spex.processing.processing_mgmt import setup_mediaconch_policy
@@ -17,9 +19,13 @@ checks_config = config_mgr.get_config('checks', ChecksConfig)
 class ChecksWindow(QWidget, ThemeableMixin):
     """Configuration window for managing application settings."""
     
-    def __init__(self):
+    def __init__(self, main_window=None):
         super().__init__()
         self.is_loading = False
+        # Optional reference to the MainWindow so we can gray cross-tab widgets
+        # (e.g. the signal-flow dropdown on the Spex tab) when a non-MKV
+        # extension is selected.
+        self.main_window = main_window
 
         # Initialize themed_group_boxes before setup_theme_handling
         self.themed_group_boxes = {}
@@ -35,12 +41,50 @@ class ChecksWindow(QWidget, ThemeableMixin):
         """Create fixed layout structure"""
         main_layout = QVBoxLayout(self)
 
+        self.setup_input_section(main_layout)
         self.setup_validation_section(main_layout)
         self.setup_outputs_section(main_layout)
         self.setup_fixity_section(main_layout)
         self.setup_tools_section(main_layout)
         self.connect_signals()
         
+    # Input Section
+    def setup_input_section(self, main_layout):
+        """Set up the input section with the video file extension selector."""
+        theme_manager = ThemeManager.instance()
+
+        self.input_group = QGroupBox("Input")
+        theme_manager.style_groupbox(self.input_group, "top left")
+        self.themed_group_boxes['input'] = self.input_group
+
+        input_layout = QVBoxLayout()
+
+        ext_label = QLabel("Video File Extension")
+        ext_label.setStyleSheet("font-weight: bold;")
+        ext_desc = QLabel(
+            "Container extension of the input video file. Non-MKV containers can't carry "
+            "embedded stream fixity, custom Matroska tags (mediatrace), or signal flow, "
+            "so those options are disabled automatically."
+        )
+        ext_desc.setIndent(20)
+        ext_desc.setStyleSheet("color: gray; font-size: 10px;")
+        ext_desc.setWordWrap(True)
+
+        self.video_extension_combo = QComboBox()
+        self.video_extension_combo.addItems(list(SUPPORTED_VIDEO_EXTENSIONS))
+        self.video_extension_combo.setMinimumWidth(120)
+
+        ext_row = QHBoxLayout()
+        ext_row.addWidget(ext_label)
+        ext_row.addWidget(self.video_extension_combo)
+        ext_row.addStretch()
+
+        input_layout.addLayout(ext_row)
+        input_layout.addWidget(ext_desc)
+
+        self.input_group.setLayout(input_layout)
+        main_layout.addWidget(self.input_group)
+
     # Validation Section
     def setup_validation_section(self, main_layout):
         """Set up the validation section with palette-aware styling"""
@@ -92,7 +136,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
         self.access_file_cb = QCheckBox("Access File")
         self.access_file_cb.setStyleSheet("font-weight: bold;")
-        access_file_desc = QLabel("Creates a h264 access file of the input .mkv file")
+        access_file_desc = QLabel("Creates a h264 access file of the input video file")
         access_file_desc.setIndent(20)
         access_file_desc.setStyleSheet("color: gray; font-size: 10px;")
 
@@ -134,12 +178,22 @@ class ChecksWindow(QWidget, ThemeableMixin):
         access_crop_to_480_desc.setIndent(20)
         access_crop_to_480_desc.setStyleSheet("color: gray; font-size: 10px;")
 
+        self.access_exclude_audio_cb = QCheckBox("Exclude flagged audio channel")
+        self.access_exclude_audio_cb.setStyleSheet("font-weight: bold;")
+        access_exclude_audio_desc = QLabel(
+            "If audio analysis flags a channel as silent or carrying audible<br>timecode, output dual-mono from the good channel"
+        )
+        access_exclude_audio_desc.setIndent(20)
+        access_exclude_audio_desc.setStyleSheet("color: gray; font-size: 10px;")
+
         access_options_layout.addWidget(self.access_trim_bars_cb)
         access_options_layout.addWidget(access_trim_bars_desc)
         access_options_layout.addWidget(self.access_crop_to_480_cb)
         access_options_layout.addWidget(access_crop_to_480_desc)
         access_options_layout.addWidget(self.access_crop_borders_cb)
         access_options_layout.addWidget(access_crop_borders_desc)
+        access_options_layout.addWidget(self.access_exclude_audio_cb)
+        access_options_layout.addWidget(access_exclude_audio_desc)
 
         access_row_layout.addWidget(access_options_widget)
         access_row_layout.addStretch()
@@ -218,14 +272,14 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Output fixity checkbox
         self.output_fixity_cb = QCheckBox("Output fixity")
         self.output_fixity_cb.setStyleSheet("font-weight: bold;")
-        output_fixity_desc = QLabel("Generate whole file checksum of .mkv files")
+        output_fixity_desc = QLabel("Generate whole file checksum of the video file")
         output_fixity_desc.setIndent(20)
         output_fixity_desc.setStyleSheet("color: gray; font-size: 10px;")
         
         # Validate fixity checkbox
         self.check_fixity_cb = QCheckBox("Validate fixity")
         self.check_fixity_cb.setStyleSheet("font-weight: bold;")
-        check_fixity_desc = QLabel("Validate .mkv files against existing checksum file")
+        check_fixity_desc = QLabel("Validate the video file against existing checksum file")
         check_fixity_desc.setIndent(20)
         check_fixity_desc.setStyleSheet("color: gray; font-size: 10px;")
         
@@ -288,7 +342,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Embed stream fixity checkbox
         self.embed_stream_cb = QCheckBox("Embed Stream fixity")
         self.embed_stream_cb.setStyleSheet("font-weight: bold;")
-        embed_stream_desc = QLabel("Embed video and audio stream checksums into .mkv tags")
+        embed_stream_desc = QLabel("Embed video and audio stream checksums into MKV tags (MKV only)")
         embed_stream_desc.setIndent(20)
         embed_stream_desc.setStyleSheet("color: gray; font-size: 10px;")
         
@@ -450,6 +504,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
     def connect_signals(self):
         """Connect all widget signals to their handlers"""
+        # Input section
+        self.video_extension_combo.currentTextChanged.connect(self.on_video_extension_changed)
+
         # Validation section
         self.validate_filename_cb.stateChanged.connect(self.on_validate_filename_changed)
         
@@ -462,6 +519,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
             lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_crop_borders'])
         )
         self.access_crop_to_480_cb.stateChanged.connect(self.on_access_crop_to_480_changed)
+        self.access_exclude_audio_cb.stateChanged.connect(
+            lambda state: self.on_checkbox_changed(state, ['outputs', 'access_file_exclude_flagged_audio'])
+        )
         self.report_cb.stateChanged.connect(
             lambda state: self.on_checkbox_changed(state, ['outputs', 'report'])
         )
@@ -513,6 +573,17 @@ class ChecksWindow(QWidget, ThemeableMixin):
 
         checks_config = config_mgr.get_config('checks', ChecksConfig)
 
+        # Input - video file extension
+        self.video_extension_combo.blockSignals(True)
+        current_ext = getattr(checks_config, 'video_file_extension', 'mkv')
+        ext_index = self.video_extension_combo.findText(current_ext)
+        if ext_index >= 0:
+            self.video_extension_combo.setCurrentIndex(ext_index)
+        else:
+            self.video_extension_combo.setCurrentText('mkv')
+        self.video_extension_combo.blockSignals(False)
+        self._update_mkv_dependent_widgets(is_mkv_extension(current_ext))
+
         # Validation
         self.validate_filename_cb.setChecked(checks_config.validate_filename)
 
@@ -526,6 +597,9 @@ class ChecksWindow(QWidget, ThemeableMixin):
         )
         self.access_crop_to_480_cb.setChecked(
             getattr(checks_config.outputs, 'access_file_crop_to_480', True)
+        )
+        self.access_exclude_audio_cb.setChecked(
+            getattr(checks_config.outputs, 'access_file_exclude_flagged_audio', False)
         )
         self._update_access_suboptions_enabled(checks_config.outputs.access_file)
         self.report_cb.setChecked(checks_config.outputs.report)
@@ -621,6 +695,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.access_crop_borders_cb.setEnabled(
             access_file_enabled and self.access_crop_to_480_cb.isChecked()
         )
+        self.access_exclude_audio_cb.setEnabled(access_file_enabled)
 
     def on_access_file_changed(self, state):
         """Persist Access File state and grey out its sub-options when off."""
@@ -665,6 +740,69 @@ class ChecksWindow(QWidget, ThemeableMixin):
         # Update the top-level validate_filename field
         updates = {'validate_filename': new_value}
         config_mgr.update_config('checks', updates)
+
+    def _update_mkv_dependent_widgets(self, is_mkv):
+        """Enable/disable the MKV-only features to match the selected extension.
+
+        Stream fixity (mkvextract/mkvpropedit) and the mediatrace custom Matroska
+        tag check only work on Matroska containers, and signal flow is embedded as
+        an MKV tag — so gray them out for non-MKV input. Also grays the signal-flow
+        dropdown on the Spex tab when a MainWindow reference is available.
+        """
+        self.embed_stream_cb.setEnabled(is_mkv)
+        self.overwrite_stream_cb.setEnabled(is_mkv)
+        self.validate_stream_cb.setEnabled(is_mkv)
+        self.stream_hash_algorithm_combo.setEnabled(is_mkv)
+        mediatrace_widgets = self.tool_widgets.get('mediatrace')
+        if mediatrace_widgets:
+            mediatrace_widgets['check'].setEnabled(is_mkv)
+            mediatrace_widgets['run'].setEnabled(is_mkv)
+
+        # Cross-tab: gray the signal-flow dropdown on the Spex tab if it exists.
+        signalflow_dropdown = getattr(self.main_window, 'signalflow_profile_dropdown', None)
+        if signalflow_dropdown is not None:
+            signalflow_dropdown.setEnabled(is_mkv)
+
+    def on_video_extension_changed(self, ext):
+        """Persist the selected extension and auto-disable MKV-only features.
+
+        Mirrors the CLI guardrail in av_spex_the_file.py: for non-MKV input we
+        force stream fixity + mediatrace off. The ffprobe signal-flow
+        (ENCODER_SETTINGS) check skips non-MKV input by extension, so no spex
+        config mutation is needed here.
+        """
+        is_mkv = is_mkv_extension(ext)
+        self._update_mkv_dependent_widgets(is_mkv)
+
+        if self.is_loading:
+            return
+
+        config_mgr.update_config('checks', {'video_file_extension': ext})
+
+        if is_mkv:
+            return
+
+        # Force the MKV-only checkboxes off (visually + in config).
+        for cb in (self.embed_stream_cb, self.overwrite_stream_cb, self.validate_stream_cb):
+            cb.blockSignals(True)
+            cb.setChecked(False)
+            cb.blockSignals(False)
+        mediatrace_widgets = self.tool_widgets.get('mediatrace')
+        if mediatrace_widgets:
+            for cb in (mediatrace_widgets['check'], mediatrace_widgets['run']):
+                cb.blockSignals(True)
+                cb.setChecked(False)
+                cb.blockSignals(False)
+
+        config_mgr.update_config('checks', {
+            'fixity': {
+                'embed_stream_fixity': False,
+                'validate_stream_fixity': False,
+                'overwrite_stream_fixity': False,
+            },
+            'tools': {'mediatrace': {'run_tool': False, 'check_tool': False}},
+        })
+        config_mgr.save_config('checks', is_last_used=True)
 
     def on_boolean_changed(self, state, path):
         """Handle changes in boolean checkboxes (for qct_parse fields that were already boolean)"""

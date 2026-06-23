@@ -16,6 +16,13 @@ def get_checksum_algorithm():
     return getattr(checks_config.fixity, 'checksum_algorithm', 'md5').lower()
 
 
+def get_video_file_extension():
+    """Get the configured input video container extension (without leading dot)."""
+    config_mgr = ConfigManager()
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    return getattr(checks_config, 'video_file_extension', 'mkv').lower().lstrip('.')
+
+
 def check_fixity(directory, video_id, actual_checksum=None, check_cancelled=None, signals=None):
     """
     Validate fixity of a video file against stored checksums.
@@ -93,7 +100,7 @@ def check_fixity(directory, video_id, actual_checksum=None, check_cancelled=None
     if not checksum_files:
         logger.error(f"Unable to validate fixity against previous checksum. No checksum file found.\n")
 
-    video_file_path = os.path.join(directory, f'{video_id}.mkv')
+    video_file_path = os.path.join(directory, f'{video_id}.{get_video_file_extension()}')
 
     if check_cancelled and check_cancelled():
         return None

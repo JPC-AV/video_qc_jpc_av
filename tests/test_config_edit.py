@@ -138,8 +138,14 @@ def test_resolve_config_unknown_key_returns_none():
 
 @pytest.fixture
 def mock_cfg(monkeypatch):
-    """Replace the module-level config_mgr singleton with a MagicMock."""
+    """Replace the module-level config_mgr singleton with a MagicMock.
+
+    Defaults the loaded config's video_file_extension to 'mkv' so the
+    non-MKV guardrail in apply_profile is a no-op; tests that exercise the
+    guardrail set it to a non-MKV value explicitly.
+    """
     mock = MagicMock()
+    mock.get_config.return_value.video_file_extension = "mkv"
     monkeypatch.setattr(config_edit, "config_mgr", mock)
     return mock
 
@@ -285,6 +291,43 @@ def test_apply_profile_builtin_step1(mock_cfg):
     # Spot-check a key value.
     assert updates["fixity"]["embed_stream_fixity"] is True
     assert updates["tools"]["qctools"]["run_tool"] is False
+
+
+def test_apply_profile_builtin_step2(mock_cfg):
+    """The built-in step2 profile should apply all four sections."""
+    config_edit.apply_profile(config_edit.profile_step2)
+    updates = _last_updates(mock_cfg)
+    assert set(updates.keys()) == {"validate_filename", "outputs", "fixity", "tools"}
+    # qctools/qct-parse drive the step2 analysis pass.
+    assert updates["tools"]["qctools"]["run_tool"] is True
+    assert updates["tools"]["qct_parse"]["run_tool"] is True
+    # CLAMS detection and the bit-plane check are part of step2 (regression
+    # guard — these were added to the profile and are easy to silently drop).
+    assert updates["tools"]["clams_detection"]["run_tool"] is True
+    assert updates["outputs"]["frame_analysis"]["enable_bitplane_check"] is True
+    # The previously-present frame analysis sub-steps remain on.
+    assert updates["outputs"]["frame_analysis"]["enable_border_detection"] is True
+    assert updates["outputs"]["frame_analysis"]["enable_brng_analysis"] is True
+    assert updates["outputs"]["frame_analysis"]["enable_signalstats"] is True
+
+
+def test_apply_profile_non_mkv_forces_mkv_only_checks_off(mock_cfg):
+    """On a non-MKV config, applying a profile that enables MKV-only checks
+    (step1) re-applies the extension guardrail, forcing them off."""
+    mock_cfg.get_config.return_value.video_file_extension = "mov"
+    config_edit.apply_profile(config_edit.profile_step1)
+    # The last update_config call is the guardrail's correction.
+    updates = _last_updates(mock_cfg)
+    assert updates["fixity"]["embed_stream_fixity"] is False
+    assert updates["fixity"]["validate_stream_fixity"] is False
+    assert updates["fixity"]["overwrite_stream_fixity"] is False
+    assert updates["tools"]["mediatrace"] == {"run_tool": False, "check_tool": False}
+
+
+def test_enforce_extension_compatibility_noop_for_mkv(mock_cfg):
+    mock_cfg.get_config.return_value.video_file_extension = "mkv"
+    assert config_edit.enforce_extension_compatibility() is False
+    assert mock_cfg.update_config.called is False
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +587,7 @@ def test_create_profile_from_current_config(mock_cfg):
     to construct every nested dataclass with required positional args."""
     cur = SimpleNamespace(
         validate_filename=True,
+        video_file_extension="mkv",
         outputs=SimpleNamespace(),
         fixity=SimpleNamespace(),
         tools=SimpleNamespace(),
@@ -553,6 +597,7 @@ def test_create_profile_from_current_config(mock_cfg):
     assert profile.name == "Snapshot"
     assert profile.description == "d"
     assert profile.validate_filename is True
+    assert profile.video_file_extension == "mkv"
 
 
 # ---------------------------------------------------------------------------

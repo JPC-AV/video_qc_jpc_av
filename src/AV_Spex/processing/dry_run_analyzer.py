@@ -150,22 +150,24 @@ class DryRunAnalyzer:
             tuple: (video_path, video_id, destination_directory, access_file_found)
             None: if no valid video file found
         """
-        # Find MKV files (excluding qctools reports)
-        found_mkvs = [
+        # Find the input video file with the configured extension (excluding qctools reports)
+        ext = self.checks_config.video_file_extension.lower().lstrip('.')
+        suffix = f'.{ext}'
+        found_videos = [
             f for f in os.listdir(source_directory)
-            if f.lower().endswith('.mkv') and 'qctools' not in f.lower()
+            if f.lower().endswith(suffix) and 'qctools' not in f.lower()
         ]
-        
-        if not found_mkvs:
-            logger.error(f"No MKV video file found in: {source_directory}")
+
+        if not found_videos:
+            logger.error(f"No .{ext} video file found in: {source_directory}")
             return None
-        
-        if len(found_mkvs) > 1:
-            logger.error(f"Multiple MKV files found in {source_directory}: {found_mkvs}")
+
+        if len(found_videos) > 1:
+            logger.error(f"Multiple .{ext} files found in {source_directory}: {found_videos}")
             return None
-        
-        video_path = os.path.join(source_directory, found_mkvs[0])
-        video_id = os.path.splitext(found_mkvs[0])[0]
+
+        video_path = os.path.join(source_directory, found_videos[0])
+        video_id = os.path.splitext(found_videos[0])[0]
         
         # Verify directory name matches video_id
         directory_name = os.path.basename(source_directory)
@@ -368,16 +370,24 @@ class DryRunAnalyzer:
             ('exiftool', 'ExifTool'),
             ('ffprobe', 'FFprobe')
         ]
-        
+
+        # MediaTrace reads custom Matroska SimpleTags, so it only applies to MKV.
+        is_mkv = video_path.lower().endswith('.mkv')
+
         for tool_attr, display_name in tools:
             tool_config = getattr(tools_config, tool_attr)
-            
+
             # Run tool analysis
+            run_precondition_met = True
+            run_precondition_reason = None
+            if tool_attr == 'mediatrace' and not is_mkv:
+                run_precondition_met = False
+                run_precondition_reason = "MediaTrace custom-tag check requires MKV format"
             analyses.append(self._analyze_step(
                 step_name=f"{display_name} (run)",
                 enabled=tool_config.run_tool,
-                precondition_met=True, 
-                precondition_reason=None
+                precondition_met=run_precondition_met,
+                precondition_reason=run_precondition_reason
             ))
             
             # Check tool analysis - needs output to exist OR run_tool enabled
@@ -527,6 +537,10 @@ class DryRunAnalyzer:
             qct-parse_colorbars_durations.csv)
           - access_file_crop_to_480 → no upstream dependency (fixed NTSC
             line trim, applied directly in make_access_file)
+          - access_file_exclude_flagged_audio → qct_parse.run_tool AND
+            qct_parse.audio_analysis (processing_mgmt.py:325-343 only excludes a
+            channel when audio_findings exist; without them it warns and keeps
+            all audio)
         """
         outputs_config = self.checks_config.outputs
         frame_config = self.checks_config.outputs.frame_analysis
@@ -573,6 +587,19 @@ class DryRunAnalyzer:
 
             if outputs_config.access_file_crop_to_480:
                 active_modifiers.append("crop to 480 lines")
+
+            if outputs_config.access_file_exclude_flagged_audio:
+                audio_analysis_on = (
+                    qct_parse_config.run_tool
+                    and getattr(qct_parse_config, 'audio_analysis', False)
+                )
+                if audio_analysis_on:
+                    active_modifiers.append("exclude flagged audio channel")
+                else:
+                    blocked_modifiers.append(
+                        "exclude flagged audio channel — qct-parse audio analysis "
+                        "is not enabled, all audio will be silently included"
+                    )
 
             if active_modifiers:
                 reason = "With: " + ", ".join(active_modifiers)
@@ -818,6 +845,7 @@ class DryRunAnalyzer:
         logger.info(f"        trim color bars: {out.access_file_trim_color_bars}")
         logger.info(f"        crop borders: {out.access_file_crop_borders}")
         logger.info(f"        crop to 480: {out.access_file_crop_to_480}")
+        logger.info(f"        exclude flagged audio: {out.access_file_exclude_flagged_audio}")
         logger.info(f"    - Report: {out.report}")
 
         # Frame Analysis

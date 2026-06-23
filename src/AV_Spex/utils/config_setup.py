@@ -273,6 +273,15 @@ class FrameAnalysisConfig:
 # Output configuration
 VALID_QCTOOLS_EXTENSIONS = ("qctools.xml.gz", "qctools.mkv")
 
+# Supported input video container extensions. MKV is the historical default and the
+# only container that supports the embedded stream-fixity / custom Matroska tag features.
+SUPPORTED_VIDEO_EXTENSIONS = ("mkv", "mov", "mp4", "avi", "mxf")
+
+
+def is_mkv_extension(ext: str) -> bool:
+    """True if the given extension string refers to a Matroska (.mkv) container."""
+    return ext.lower().lstrip('.') == "mkv"
+
 # Output configuration
 @dataclass
 class OutputsConfig:
@@ -283,6 +292,7 @@ class OutputsConfig:
     access_file_trim_color_bars: bool = True
     access_file_crop_borders: bool = True
     access_file_crop_to_480: bool = True
+    access_file_exclude_flagged_audio: bool = False
 
 @dataclass
 class ChecksumAlgorithm(Enum):
@@ -366,7 +376,8 @@ class ChecksConfig:
     outputs: OutputsConfig
     fixity: FixityConfig
     tools: ToolsConfig
-    validate_filename: bool = True  
+    validate_filename: bool = True
+    video_file_extension: str = "mkv"
 
 @dataclass
 class FilenameProfile:
@@ -429,6 +440,7 @@ class ChecksProfile:
         ),
         clams_detection=ClamsDetectionConfig()
     ))
+    video_file_extension: str = "mkv"
 
 @dataclass
 class ChecksProfilesConfig:

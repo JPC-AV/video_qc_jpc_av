@@ -286,3 +286,12 @@ def test_parse_exiftool_integration(sample_json_file, patch_config_mgr, monkeypa
     
     differences = parse_exiftool(str(sample_json_file))
     assert "FileType" in differences
+
+# A missing output file must not be reported as a passing check.
+def test_parse_exiftool_missing_file_returns_none(monkeypatch):
+    monkeypatch.setattr('AV_Spex.utils.log_setup.logger', Logger())
+
+    # parse_exiftool_json logs "Cannot perform" and returns {}; parse_exiftool
+    # must short-circuit to None rather than falling through to a false
+    # "all fields found" pass.
+    assert parse_exiftool("non_existent_file.json") is None

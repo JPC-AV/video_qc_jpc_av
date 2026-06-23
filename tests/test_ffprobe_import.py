@@ -211,7 +211,9 @@ def test_apply_defaults_fills_missing_str_with_empty_string():
     result = fi._apply_defaults(fields, FFmpegVideoStream)
     assert result["codec_name"] == "ffv1"
     assert result["width"] == ""
-    assert result["codec_tag_string"] == ""
+    # codec_tag_string is now a List[str] field (spex allows multiple accepted
+    # values, e.g. ["FFV1", "[0][0][0][0]"]), so it defaults to an empty list.
+    assert result["codec_tag_string"] == []
 
 
 def test_apply_defaults_fills_missing_list_with_empty_list():

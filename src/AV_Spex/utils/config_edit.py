@@ -6,10 +6,10 @@ import os
 
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import (
-    ChecksConfig, SpexConfig, FilenameProfile, FilenameValues, 
+    ChecksConfig, SpexConfig, FilenameProfile, FilenameValues,
     FilenameSection, SignalflowConfig, ChecksProfile, ChecksProfilesConfig,
     ExiftoolConfig, ExiftoolProfile, MediainfoConfig, MediainfoProfile,
-    FfprobeConfig, FfprobeProfile
+    FfprobeConfig, FfprobeProfile, is_mkv_extension
 )
 from AV_Spex.utils.config_manager import ConfigManager
 
@@ -312,9 +312,52 @@ def apply_signalflow_profile(selected_profile):
     logger.debug(f"FFmpeg encoder settings keys: {final_ffmpeg_keys}")
 
 
+def enforce_extension_compatibility():
+    """Force off the checks that only work on Matroska when the configured
+    input extension is non-MKV.
+
+    Embedded stream fixity uses mkvextract/mkvpropedit and the mediatrace
+    custom-tag check reads Matroska SimpleTags; neither works on other
+    containers. This mirrors the CLI guardrail (av_spex_the_file) and the GUI
+    graying (gui_checks_window), and is re-applied here because applying a
+    profile replaces the fixity/tools sections wholesale and can re-enable
+    these MKV-only options on a non-MKV configuration.
+
+    Returns True if it changed anything, False otherwise.
+    """
+    checks_config = config_mgr.get_config('checks', ChecksConfig)
+    ext = getattr(checks_config, 'video_file_extension', 'mkv')
+    if is_mkv_extension(ext):
+        return False
+
+    fixity_off = {}
+    for field in ('embed_stream_fixity', 'validate_stream_fixity', 'overwrite_stream_fixity'):
+        if getattr(checks_config.fixity, field):
+            fixity_off[field] = False
+
+    tools_off = {}
+    if checks_config.tools.mediatrace.run_tool or checks_config.tools.mediatrace.check_tool:
+        tools_off['mediatrace'] = {'run_tool': False, 'check_tool': False}
+
+    if not (fixity_off or tools_off):
+        return False
+
+    updates = {}
+    if fixity_off:
+        updates['fixity'] = fixity_off
+    if tools_off:
+        updates['tools'] = tools_off
+    config_mgr.update_config('checks', updates)
+    logger.warning(
+        f"Input extension '{ext}' is not MKV; embedded stream fixity and the "
+        "mediatrace custom-tag check only work on Matroska. Forcing them off."
+    )
+    return True
+
+
 def apply_profile(selected_profile):
     """Apply profile changes to checks_config.
-    
+
     Args:
         selected_profile (dict): The profile configuration to apply
     """
@@ -326,7 +369,11 @@ def apply_profile(selected_profile):
     # Handle validate_filename (top-level field)
     if 'validate_filename' in selected_profile:
         updates['validate_filename'] = selected_profile['validate_filename']
-    
+
+    # Handle video_file_extension (top-level field)
+    if 'video_file_extension' in selected_profile:
+        updates['video_file_extension'] = selected_profile['video_file_extension']
+
     # Handle outputs section
     if 'outputs' in selected_profile:
         updates['outputs'] = selected_profile['outputs']
@@ -348,6 +395,10 @@ def apply_profile(selected_profile):
     # Apply all updates at once using the new update_config method
     if updates:
         config_mgr.update_config('checks', updates)
+
+    # A profile replaces the fixity/tools sections wholesale, which can re-enable
+    # MKV-only checks on a non-MKV configuration. Re-apply the extension guardrail.
+    enforce_extension_compatibility()
 
 
 def apply_exiftool_profile(profile_data):
@@ -589,6 +640,7 @@ def apply_custom_profile(profile_name: str):
         # Convert the profile to the format expected by apply_profile
         profile_dict = {
             "validate_filename": profile.validate_filename,
+            "video_file_extension": profile.video_file_extension,
             "outputs": asdict(profile.outputs),
             "fixity": asdict(profile.fixity),
             "tools": asdict(profile.tools)
@@ -612,6 +664,7 @@ def create_profile_from_current_config(profile_name: str, description: str = "")
         name=profile_name,
         description=description,
         validate_filename=current_config.validate_filename,
+        video_file_extension=current_config.video_file_extension,
         outputs=current_config.outputs,
         fixity=current_config.fixity,
         tools=current_config.tools
@@ -1336,7 +1389,7 @@ profile_step2 = {
             "detect_clamped_levels": True
         },
         "clams_detection": {
-            "run_tool": False,
+            "run_tool": True,
             "bars": {
                 "threshold": 0.7,
                 "sample_ratio": 30,
@@ -1356,6 +1409,7 @@ profile_step2 = {
         "report": True,
         "qctools_ext": "qctools.xml.gz",
         "frame_analysis": {
+            "enable_bitplane_check": True,
             "enable_border_detection": True,
             "enable_brng_analysis": True,
             "enable_signalstats": True
@@ -1441,6 +1495,7 @@ profile_allOff = {
 
 profile_vendor = {
     "validate_filename": True,
+    "video_file_extension": "mkv",
     "tools": {
         "exiftool": {
             "check_tool": False,
@@ -1491,7 +1546,7 @@ profile_vendor = {
     },
     "outputs": {
         "access_file": False,
-        "report": False,
+        "report": True,
         "qctools_ext": "qctools.xml.gz",
         "frame_analysis": {
             "enable_bitplane_check": False,

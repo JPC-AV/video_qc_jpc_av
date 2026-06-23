@@ -177,6 +177,7 @@ Examples of supported CLI flags:
 * `--enable-clamped-levels`: toggle qct-parse's broadcast-range level-clamping detector. Auto-enables `qct_parse.run_tool` if currently off. Writes to `tools.qct_parse.detect_clamped_levels`, **not** `outputs.frame_analysis`.
 * `--enable-clams-detection`: toggle CLAMS detection (SSIM bars + cross-correlation tone). Writes to `tools.clams_detection.run_tool`. Independent of qct-parse.
 * `--access-trim-color-bars` / `--access-crop-borders` / `--access-crop-to-480`: access-file sub-options. `crop-borders` requires `crop-to-480`; the CLI enforces this with a warning.
+* `--access-exclude-flagged-audio`: if qct-parse audio analysis flags a stereo channel as silent or carrying audible timecode (LTC over ≥75% of the file), exclude it from the access file and output the good channel as dual-mono. Default off. Requires audio analysis findings from the same run; if `qct_parse.audio_analysis` is off the CLI warns but does not force it on.
 * `--qctools-ext`: choose `qctools.xml.gz` or `qctools.mkv` for QCTools output
 * `--checksum-algorithm` / `--stream-hash-algorithm`: choose `md5` or `sha256` for whole-file vs embedded-stream fixity
 
@@ -447,18 +448,21 @@ CLAMS bars/tone numeric tuning (thresholds, durations, etc.) is JSON-only — `-
 
 ### Output Settings Flags
 
-Four flags live in `outputs` (sibling of `frame_analysis`):
+Five flags live in `outputs` (sibling of `frame_analysis`):
 
 | Flag | Config field | Effect |
 |------|--------------|--------|
 | `--access-trim-color-bars {on,off}` | `outputs.access_file_trim_color_bars` | Skip head color bars when generating access file |
 | `--access-crop-borders {on,off}` | `outputs.access_file_crop_borders` | Crop access file to active picture area detected by sophisticated borders |
 | `--access-crop-to-480 {on,off}` | `outputs.access_file_crop_to_480` | Trim NTSC sources to 720x480; off keeps native 720x486 |
+| `--access-exclude-flagged-audio {on,off}` | `outputs.access_file_exclude_flagged_audio` | Exclude a silent or audible-timecode stereo channel from the access file; good channel output as dual-mono (default off) |
 | `--qctools-ext {qctools.xml.gz,qctools.mkv}` | `outputs.qctools_ext` | Extension for QCTools output files |
 
-All four are applied as a single deep-merge `update_config('checks', ...)` call sharing the `outputs` section.
+All five are applied as a single deep-merge `update_config('checks', ...)` call sharing the `outputs` section.
 
 **Crop-to-480 dependency guardrail**: `access_file_crop_borders` is only meaningful when `access_file_crop_to_480` is on (the access-file pipeline only scales to the active picture area in that path). After computing the final state from current config + this invocation's updates, the CLI forces `access_file_crop_borders = False` if `crop_to_480` would end up off, and emits a `logger.warning`. This mirrors the GUI gating in `gui_checks_window.on_access_crop_to_480_changed`.
+
+**Audio-analysis dependency (soft)**: `access_file_exclude_flagged_audio` consumes the silent-channel and audible-timecode findings produced by `qct_parse.audio_analysis` in the same run. If the final state has the option on but audio analysis off, the CLI only emits a `logger.warning` — nothing is forced, and at processing time the access copy includes all audio (with a warning).
 
 ---
 
