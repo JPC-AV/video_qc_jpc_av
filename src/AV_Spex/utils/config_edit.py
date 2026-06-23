@@ -1389,7 +1389,7 @@ profile_step2 = {
             "detect_clamped_levels": True
         },
         "clams_detection": {
-            "run_tool": False,
+            "run_tool": True,
             "bars": {
                 "threshold": 0.7,
                 "sample_ratio": 30,
@@ -1409,6 +1409,7 @@ profile_step2 = {
         "report": True,
         "qctools_ext": "qctools.xml.gz",
         "frame_analysis": {
+            "enable_bitplane_check": True,
             "enable_border_detection": True,
             "enable_brng_analysis": True,
             "enable_signalstats": True
