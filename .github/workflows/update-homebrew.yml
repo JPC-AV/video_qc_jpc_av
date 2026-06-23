@@ -253,10 +253,12 @@ jobs:
             venv.pip_install resources.reject { |r| 
               r.name == "plotly" || r.name == "lxml" || r.name == "PyQt6" || 
               r.name == "numpy" || r.name == "scipy" || r.name == "opencv-python-headless" || 
-              r.name == "matplotlib" || r.name == "scikit-image" 
+              r.name == "matplotlib" || r.name == "scikit-image" || r.name == "pillow" 
             }
 
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "plotly==5.23.0"
+
+            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "pillow==12.2.0"
 
             system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "lxml==5.3.1"
 
@@ -268,7 +270,7 @@ jobs:
 
             system libexec/"bin/python", "-m", "pip", "install", "--only-binary", ":all:", "matplotlib==3.10.3"
 
-            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "scikit-image==0.25.2"
+            system libexec/"bin/python", "-m", "pip", "install", "--no-deps", "--only-binary", ":all:", "scikit-image==0.26.0"
 
             system libexec/"bin/python", "-m", "pip", "install", "--only-binary", ":all:", "PyQt6==6.9.1", "PyQt6-Qt6==6.9.1"
         
