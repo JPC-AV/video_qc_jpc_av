@@ -569,6 +569,7 @@ def test_create_profile_from_current_config(mock_cfg):
     to construct every nested dataclass with required positional args."""
     cur = SimpleNamespace(
         validate_filename=True,
+        video_file_extension="mkv",
         outputs=SimpleNamespace(),
         fixity=SimpleNamespace(),
         tools=SimpleNamespace(),
@@ -578,6 +579,7 @@ def test_create_profile_from_current_config(mock_cfg):
     assert profile.name == "Snapshot"
     assert profile.description == "d"
     assert profile.validate_filename is True
+    assert profile.video_file_extension == "mkv"
 
 
 # ---------------------------------------------------------------------------

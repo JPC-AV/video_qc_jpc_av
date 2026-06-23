@@ -440,6 +440,7 @@ class ChecksProfile:
         ),
         clams_detection=ClamsDetectionConfig()
     ))
+    video_file_extension: str = "mkv"
 
 @dataclass
 class ChecksProfilesConfig:

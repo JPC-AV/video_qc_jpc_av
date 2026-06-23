@@ -369,7 +369,11 @@ def apply_profile(selected_profile):
     # Handle validate_filename (top-level field)
     if 'validate_filename' in selected_profile:
         updates['validate_filename'] = selected_profile['validate_filename']
-    
+
+    # Handle video_file_extension (top-level field)
+    if 'video_file_extension' in selected_profile:
+        updates['video_file_extension'] = selected_profile['video_file_extension']
+
     # Handle outputs section
     if 'outputs' in selected_profile:
         updates['outputs'] = selected_profile['outputs']
@@ -636,6 +640,7 @@ def apply_custom_profile(profile_name: str):
         # Convert the profile to the format expected by apply_profile
         profile_dict = {
             "validate_filename": profile.validate_filename,
+            "video_file_extension": profile.video_file_extension,
             "outputs": asdict(profile.outputs),
             "fixity": asdict(profile.fixity),
             "tools": asdict(profile.tools)
@@ -659,6 +664,7 @@ def create_profile_from_current_config(profile_name: str, description: str = "")
         name=profile_name,
         description=description,
         validate_filename=current_config.validate_filename,
+        video_file_extension=current_config.video_file_extension,
         outputs=current_config.outputs,
         fixity=current_config.fixity,
         tools=current_config.tools
@@ -1488,6 +1494,7 @@ profile_allOff = {
 
 profile_vendor = {
     "validate_filename": True,
+    "video_file_extension": "mkv",
     "tools": {
         "exiftool": {
             "check_tool": False,
