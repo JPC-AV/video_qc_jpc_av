@@ -537,6 +537,10 @@ class DryRunAnalyzer:
             qct-parse_colorbars_durations.csv)
           - access_file_crop_to_480 → no upstream dependency (fixed NTSC
             line trim, applied directly in make_access_file)
+          - access_file_exclude_flagged_audio → qct_parse.run_tool AND
+            qct_parse.audio_analysis (processing_mgmt.py:325-343 only excludes a
+            channel when audio_findings exist; without them it warns and keeps
+            all audio)
         """
         outputs_config = self.checks_config.outputs
         frame_config = self.checks_config.outputs.frame_analysis
@@ -583,6 +587,19 @@ class DryRunAnalyzer:
 
             if outputs_config.access_file_crop_to_480:
                 active_modifiers.append("crop to 480 lines")
+
+            if outputs_config.access_file_exclude_flagged_audio:
+                audio_analysis_on = (
+                    qct_parse_config.run_tool
+                    and getattr(qct_parse_config, 'audio_analysis', False)
+                )
+                if audio_analysis_on:
+                    active_modifiers.append("exclude flagged audio channel")
+                else:
+                    blocked_modifiers.append(
+                        "exclude flagged audio channel — qct-parse audio analysis "
+                        "is not enabled, all audio will be silently included"
+                    )
 
             if active_modifiers:
                 reason = "With: " + ", ".join(active_modifiers)
@@ -828,6 +845,7 @@ class DryRunAnalyzer:
         logger.info(f"        trim color bars: {out.access_file_trim_color_bars}")
         logger.info(f"        crop borders: {out.access_file_crop_borders}")
         logger.info(f"        crop to 480: {out.access_file_crop_to_480}")
+        logger.info(f"        exclude flagged audio: {out.access_file_exclude_flagged_audio}")
         logger.info(f"    - Report: {out.report}")
 
         # Frame Analysis
