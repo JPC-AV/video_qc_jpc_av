@@ -8,10 +8,16 @@ from AV_Spex.utils.config_manager import ConfigManager
 config_mgr = ConfigManager()
 
 # mkvalidator emits no parseable progress (just a run of dots), so its progress bar
-# is a time estimate. Runtime scales with file size at ~3 s/GiB, measured across the
-# JPC_AV sample files (3.3 GB→8 s, 5.4 GB→14 s, 21 GB→71 s). estimated_total =
-# size_in_GiB * this constant; the bar ticks toward 99% and snaps to 100% on exit.
-MKVALIDATOR_SECONDS_PER_GIB = 3.0
+# is a time estimate. Across the JPC_AV sample files (3–37 GiB, n=8) runtime grows
+# *super-linearly* with file size — the per-GiB cost rises from ~2.6 s/GiB at 3 GiB to
+# ~4.8 s/GiB at 37 GiB — so a flat per-GiB rate underestimates large files and pins
+# the bar at 99%. A power-law fit tracks the whole range:
+#     estimated_seconds ≈ MKVALIDATOR_EST_COEFF * size_in_GiB ** MKVALIDATOR_EST_EXP
+# Coefficients are lightly biased to overestimate (worst observed underestimate ≈ 0%),
+# so the bar errs toward finishing early — it snaps to 100% rather than sitting at 99%.
+# Recalibrate from more sample _avspex_processing.log timings if the bias drifts.
+MKVALIDATOR_EST_COEFF = 2.3
+MKVALIDATOR_EST_EXP = 1.2
 _GIB = 1024 ** 3
 
 def run_command(command, input_path, output_type, output_path):
@@ -108,15 +114,15 @@ def _estimate_mkvalidator_seconds(video_path):
     '''
     Estimate mkvalidator runtime (seconds) from the input file size.
 
-    mkvalidator runtime scales with file size at ~MKVALIDATOR_SECONDS_PER_GIB.
-    Returns a floor of 1.0 s so the progress math never divides by ~0 on a tiny
-    or unstattable file.
+    Uses the super-linear power-law model (see the MKVALIDATOR_EST_* constants):
+    estimated = COEFF * size_in_GiB ** EXP. Returns a floor of 1.0 s so the progress
+    math never divides by ~0 on a tiny or unstattable file.
     '''
     try:
         size_gib = os.path.getsize(video_path) / _GIB
     except OSError:
         size_gib = 0
-    return max(size_gib * MKVALIDATOR_SECONDS_PER_GIB, 1.0)
+    return max(MKVALIDATOR_EST_COEFF * size_gib ** MKVALIDATOR_EST_EXP, 1.0)
 
 
 def run_mkvalidator_command(video_path, output_path, signals=None):

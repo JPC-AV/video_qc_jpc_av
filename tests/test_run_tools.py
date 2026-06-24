@@ -176,20 +176,31 @@ def test_run_tool_command_mkvalidator_skips_on_non_mkv(tmp_path, monkeypatch):
     mk_mock.assert_not_called()
 
 
-@pytest.mark.parametrize("size_gib,expected", [
-    (2, 6.0),      # 2 GiB * 3 s/GiB
-    (10, 30.0),    # 10 GiB * 3 s/GiB
-    (0.1, 1.0),    # below the 1.0 s floor
-])
-def test_estimate_mkvalidator_seconds_scales_with_size(size_gib, expected, monkeypatch):
+@pytest.mark.parametrize("size_gib", [2, 5, 10, 37])
+def test_estimate_mkvalidator_seconds_uses_power_law(size_gib, monkeypatch):
     monkeypatch.setattr(rt.os.path, "getsize", lambda p: int(size_gib * rt._GIB))
-    assert rt._estimate_mkvalidator_seconds("/v/in.mkv") == pytest.approx(expected)
+    expected = rt.MKVALIDATOR_EST_COEFF * size_gib ** rt.MKVALIDATOR_EST_EXP
+    assert rt._estimate_mkvalidator_seconds("/v/in.mkv") == pytest.approx(expected, rel=1e-3)
+
+
+def test_estimate_mkvalidator_seconds_grows_superlinearly(monkeypatch):
+    """Per-GiB cost must increase with size (exponent > 1) so large files aren't
+    underestimated — that was the cause of the bar pinning at 99%."""
+    def est_for(gib):
+        monkeypatch.setattr(rt.os.path, "getsize", lambda p: int(gib * rt._GIB))
+        return rt._estimate_mkvalidator_seconds("/v/in.mkv")
+    assert est_for(40) / 40 > est_for(4) / 4
 
 
 def test_estimate_mkvalidator_seconds_floor_on_oserror(monkeypatch):
     def boom(_p):
         raise OSError("cannot stat")
     monkeypatch.setattr(rt.os.path, "getsize", boom)
+    assert rt._estimate_mkvalidator_seconds("/v/in.mkv") == 1.0
+
+
+def test_estimate_mkvalidator_seconds_floor_on_tiny_file(monkeypatch):
+    monkeypatch.setattr(rt.os.path, "getsize", lambda p: int(0.05 * rt._GIB))
     assert rt._estimate_mkvalidator_seconds("/v/in.mkv") == 1.0
 
 
@@ -202,7 +213,8 @@ def test_run_mkvalidator_emits_progress_and_snaps_to_100(tmp_path, monkeypatch):
     fake_proc.poll.side_effect = [None, None, 0]
     monkeypatch.setattr(rt.subprocess, "Popen", lambda *a, **kw: fake_proc)
     monkeypatch.setattr(rt.time, "sleep", lambda *a, **kw: None)
-    monkeypatch.setattr(rt.os.path, "getsize", lambda p: 10 * rt._GIB)  # est 30 s
+    # Fix the estimate so the progress math is independent of the size model.
+    monkeypatch.setattr(rt, "_estimate_mkvalidator_seconds", lambda p: 30.0)
 
     # Deterministic clock: each call advances 3 s.
     clock = {"t": 0.0}
