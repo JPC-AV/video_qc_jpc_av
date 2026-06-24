@@ -200,7 +200,7 @@ class AVSpexProcessor:
         tools_config = self.checks_config.tools
         
         # Check if any metadata tools are enabled (now using booleans)
-        tools_to_check = ['mediainfo', 'mediatrace', 'exiftool', 'ffprobe']
+        tools_to_check = ['mediainfo', 'mediatrace', 'exiftool', 'ffprobe', 'mkvalidator']
         metadata_tools_enabled = False
 
         for tool_name in tools_to_check:
@@ -226,9 +226,10 @@ class AVSpexProcessor:
                 # Emit signals for each completed metadata tool
                 tools_to_signal = [
                     ('mediainfo', 'Mediainfo'),
-                    ('mediatrace', 'Mediatrace'), 
+                    ('mediatrace', 'Mediatrace'),
                     ('exiftool', 'Exiftool'),
-                    ('ffprobe', 'FFprobe')
+                    ('ffprobe', 'FFprobe'),
+                    ('mkvalidator', 'mkvalidator')
                 ]
                 
                 for tool_name, display_name in tools_to_signal:

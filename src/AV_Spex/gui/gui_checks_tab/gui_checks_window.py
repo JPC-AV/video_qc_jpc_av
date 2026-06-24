@@ -391,7 +391,7 @@ class ChecksWindow(QWidget, ThemeableMixin):
         self.tool_group_boxes = {}
         
         # Setup basic tools
-        basic_tools = ['exiftool', 'ffprobe', 'mediainfo', 'mediatrace']
+        basic_tools = ['exiftool', 'ffprobe', 'mediainfo', 'mediatrace', 'mkvalidator']
         self.tool_widgets = {}
         
         # Individual tool group boxes with left-aligned titles
@@ -407,7 +407,10 @@ class ChecksWindow(QWidget, ThemeableMixin):
             
             check_cb = QCheckBox("Check Tool")
             check_cb.setStyleSheet("font-weight: bold;")
-            check_desc = QLabel("Check the output of the tool against expected Spex")
+            if tool == 'mkvalidator':
+                check_desc = QLabel("Parse the validator output and flag any errors")
+            else:
+                check_desc = QLabel("Check the output of the tool against expected Spex")
             check_desc.setIndent(20)
             
             run_cb = QCheckBox("Run Tool")

@@ -60,6 +60,10 @@
       "check_tool": true,
       "run_tool": true
     },
+    "mkvalidator": {
+      "check_tool": false,
+      "run_tool": false
+    },
     "qctools": {
       "run_tool": false
     },

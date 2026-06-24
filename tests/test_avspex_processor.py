@@ -65,7 +65,7 @@ def _make_checks_config(
     # mediaconch
     cfg.tools.mediaconch.run_mediaconch = mediaconch
     # metadata tools
-    for tool in ("mediainfo", "mediatrace", "exiftool", "ffprobe"):
+    for tool in ("mediainfo", "mediatrace", "exiftool", "ffprobe", "mkvalidator"):
         getattr(cfg.tools, tool).check_tool = metadata_tools.get(tool, False)
         getattr(cfg.tools, tool).run_tool = metadata_tools.get(tool, False)
     # outputs
@@ -337,7 +337,7 @@ def test_mediaconch_enabled_runs_validate_and_emits_step_completed(monkeypatch):
 
 # ----- Metadata-tools branch -----
 
-@pytest.mark.parametrize("tool", ["mediainfo", "mediatrace", "exiftool", "ffprobe"])
+@pytest.mark.parametrize("tool", ["mediainfo", "mediatrace", "exiftool", "ffprobe", "mkvalidator"])
 def test_any_metadata_tool_triggers_process_video_metadata(monkeypatch, tool):
     cfg = _make_checks_config(metadata_tools={tool: True})
     _, mgr = _run_contents(monkeypatch, cfg)
@@ -361,6 +361,16 @@ def test_metadata_tools_emit_step_completed_for_each_enabled_tool(monkeypatch):
     assert "FFprobe" in completed
     assert "Exiftool" not in completed
     assert "Mediatrace" not in completed
+    assert "mkvalidator" not in completed
+
+
+def test_mkvalidator_emits_step_completed_when_enabled(monkeypatch):
+    cfg = _make_checks_config(metadata_tools={"mkvalidator": True})
+    signals = MagicMock()
+    _run_contents(monkeypatch, cfg, signals=signals)
+
+    completed = [c.args[0] for c in signals.step_completed.emit.call_args_list]
+    assert "mkvalidator" in completed
 
 
 # ----- Outputs branch (each trigger) -----
