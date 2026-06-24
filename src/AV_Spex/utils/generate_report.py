@@ -4866,6 +4866,40 @@ def _read_mkvalidator_summary(summary_path):
     return (verdict, is_valid, error_count)
 
 
+# Collapsible "What is mkvalidator?" explainer, styled to match the frame-analysis
+# methodology blocks (e.g. duplicate frame detection). Static — no per-file values.
+_MKVALIDATOR_METHODOLOGY_HTML = """
+    <a id="link_mkvalidator_methodology" href="javascript:void(0);"
+       onclick="toggleContent('mkvalidator_methodology', 'What is mkvalidator? &#x25BC;', 'What is mkvalidator? &#x25B2;')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is mkvalidator? &#x25BC;</a>
+    <div id="mkvalidator_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>mkvalidator</strong> (from the Matroska project) parses the file's Matroska/EBML
+            structure and reports whether it is well-formed. AV Spex surfaces that verdict as the
+            <strong>Result</strong> below: <strong>Valid</strong> means the container conforms;
+            <strong>Invalid</strong> means a hard structural error (an <code>ERR</code> code) was found.
+            Warnings on their own do not make a file invalid.
+        </p>
+        <p style="margin: 0 0 10px 0;">
+            <strong>WRN0C2 timecode warnings</strong> &mdash; mkvalidator emits a <code>WRN0C2</code> for
+            each Matroska <em>Cluster</em> whose stored timecode does not increase relative to the previous
+            cluster. It does not indicate file damage and does not fail validation. These are
+            common in losslessly-encoded preservation MKVs.
+        </p>
+        <p style="margin: 0;">
+            <strong>Byte offset &rarr; timecode</strong> &mdash; each warning reports the cluster's
+            <em>byte offset</em> (its position within the file), not a media time. The
+            <strong>Approx. timecode</strong> column estimates where that offset falls on the timeline by
+            linear interpolation (offset &divide; file size &times; duration) and formats it as the file's
+            own NDF/DF timecode. Because Matroska is variable-rate this is an
+            estimate, shown with a leading &ldquo;&asymp;&rdquo;.
+        </p>
+    </div>
+"""
+
+
 def _mkvalidator_timecode_mapper(video_path):
     """
     Return a function mapping a WRN0C2 byte offset -> approximate file timecode str,
@@ -4980,6 +5014,7 @@ def make_mkvalidator_html(summary_path, clusters_csv_path, video_path=None):
         </div>"""
 
     return f"""
+    {_MKVALIDATOR_METHODOLOGY_HTML}
     <div style="background-color: #f5e9e3; padding: 20px 30px; margin-top: 10px; border-radius: 6px;">
         {status_html}
         <div style="margin-top: 16px;">

@@ -203,9 +203,10 @@ def test_make_mkvalidator_html_no_video_path_omits_timecode_column(tmp_path):
     csv_path = tmp_path / "JPC_AV_TEST_mkvalidator_clusters.csv"
     _write_csv(csv_path, [["cluster_index", "byte_offset"], ["1", "500"]])
 
-    # No video_path -> no timecode column, narrow table.
+    # No video_path -> no timecode column header (the methodology blurb still
+    # mentions the column by name, so check for the <th> specifically), narrow table.
     html = gr.make_mkvalidator_html(str(summary), str(csv_path), None)
-    assert "Approx. timecode" not in html
+    assert ">Approx. timecode</th>" not in html
     assert "max-width: 320px" in html
 
 
@@ -225,6 +226,19 @@ def test_make_mkvalidator_html_invalid(tmp_path):
     html = gr.make_mkvalidator_html(str(summary), None)
     assert html is not None
     assert "Invalid" in html and "#b3261e" in html
+
+
+def test_make_mkvalidator_html_includes_methodology_explainer(tmp_path):
+    summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
+    _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file appears to be valid")
+    html = gr.make_mkvalidator_html(str(summary), None)
+    # Collapsible explainer present and wired to the shared toggleContent() helper.
+    assert "What is mkvalidator?" in html
+    assert "toggleContent('mkvalidator_methodology'" in html
+    assert 'id="mkvalidator_methodology"' in html
+    # Touches the three topics it should explain.
+    assert "WRN0C2" in html
+    assert "Byte offset" in html and "timecode" in html
 
 
 def test_make_mkvalidator_html_missing_summary_returns_none():
