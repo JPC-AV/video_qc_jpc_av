@@ -47,15 +47,33 @@ def run_tool_command(tool_name, video_path, destination_directory, video_id):
         'ffprobe': 'ffprobe -v error -hide_banner -show_format -show_streams -print_format json'
     }
 
+    # Construct output path
+    output_path = os.path.join(destination_directory, f'{video_id}_{tool_name}_output.{_get_file_extension(tool_name)}')
+
+    # mkvalidator is a Matroska conformance validator (not a metadata extractor), so
+    # it is not in tool_commands. It writes its WRN/ERR diagnostics to stderr, so the
+    # generic '>' redirect used by run_command() would drop them. Handle it separately
+    # (before the tool_commands lookup) to capture stdout+stderr, and skip non-MKV
+    # input (it only applies to Matroska).
+    if tool_name == 'mkvalidator':
+        tool = getattr(checks_config.tools, tool_name)
+        if tool.run_tool:
+            ext = getattr(checks_config, 'video_file_extension', 'mkv')
+            if not is_mkv_extension(ext):
+                logger.warning(
+                    f"Input extension '{ext}' is not MKV; mkvalidator only applies to "
+                    "Matroska. Skipping mkvalidator.\n"
+                )
+                return None
+            run_mkvalidator_command(video_path, output_path)
+        return output_path
+
     # Check if the tool is configured
     command = tool_commands.get(tool_name)
     if not command:
         logger.error(f"tool command is not configured correctly: {tool_name}")
         return None
 
-    # Construct output path
-    output_path = os.path.join(destination_directory, f'{video_id}_{tool_name}_output.{_get_file_extension(tool_name)}')
-    
     if tool_name != "mediaconch":
         # Check if tool should be run based on configuration
         tool = getattr(checks_config.tools, tool_name)
@@ -77,6 +95,24 @@ def run_tool_command(tool_name, video_path, destination_directory, video_id):
     return output_path
 
 
+def run_mkvalidator_command(video_path, output_path):
+    '''
+    Run mkvalidator on an MKV file, capturing both stdout and stderr to the
+    sidecar (mkvalidator emits its WRN/ERR diagnostics on stderr).
+    '''
+    env = os.environ.copy()
+    env['PATH'] = '/opt/homebrew/bin:/usr/local/bin:' + env.get('PATH', '')
+
+    full_command = f'mkvalidator "{video_path}"'
+    logger.debug(f'Running command: {full_command} > "{output_path}" 2>&1\n')
+    try:
+        with open(output_path, 'w') as out:
+            subprocess.run(full_command, shell=True, env=env,
+                           stdout=out, stderr=subprocess.STDOUT)
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.error(f"Failed to run mkvalidator: {e}")
+
+
 def _get_file_extension(tool_name):
     """
     Get the appropriate file extension for each tool's output.
@@ -91,7 +127,8 @@ def _get_file_extension(tool_name):
         'exiftool': 'json',
         'mediainfo': 'json',
         'mediatrace': 'xml',
-        'ffprobe': 'txt'
+        'ffprobe': 'txt',
+        'mkvalidator': 'txt'
     }
     return extension_map.get(tool_name, 'txt')
 

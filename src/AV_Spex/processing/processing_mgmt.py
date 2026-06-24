@@ -17,6 +17,7 @@ from AV_Spex.checks.mediainfo_check import parse_mediainfo
 from AV_Spex.checks.mediatrace_check import parse_mediatrace, create_metadata_difference_report
 from AV_Spex.checks.exiftool_check import parse_exiftool
 from AV_Spex.checks.ffprobe_check import parse_ffprobe
+from AV_Spex.checks.mkvalidator_check import parse_mkvalidator
 from AV_Spex.checks.embed_fixity import validate_embedded_md5, process_embedded_fixity
 from AV_Spex.checks.make_access import process_access_file, determine_excluded_audio_channels
 from AV_Spex.checks.qct_parse import run_qctparse
@@ -192,7 +193,7 @@ class ProcessingManager:
         if self.check_cancelled():
             return None
         
-        tools = ['exiftool', 'mediainfo', 'mediatrace', 'ffprobe']
+        tools = ['exiftool', 'mediainfo', 'mediatrace', 'ffprobe', 'mkvalidator']
         
         # Store differences for each tool
         metadata_differences = {}
@@ -1067,7 +1068,8 @@ def check_tool_metadata(tool_name, output_path):
         'exiftool': parse_exiftool,
         'mediainfo': parse_mediainfo,
         'mediatrace': parse_mediatrace,
-        'ffprobe': parse_ffprobe
+        'ffprobe': parse_ffprobe,
+        'mkvalidator': parse_mkvalidator
     }
 
     # Check if tool metadata checking is enabled

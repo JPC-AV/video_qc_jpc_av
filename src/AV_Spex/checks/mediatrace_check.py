@@ -178,7 +178,7 @@ def create_metadata_difference_report(metadata_differences, report_directory, vi
             writer.writeheader()
 
             # Write differences for each tool
-            tools_to_check = ['exiftool', 'mediainfo', 'mediatrace', 'ffprobe']
+            tools_to_check = ['exiftool', 'mediainfo', 'mediatrace', 'ffprobe', 'mkvalidator']
             for tool in tools_to_check:
                 if tool in metadata_differences and metadata_differences[tool]:
                     write_to_csv(metadata_differences[tool], tool, writer)

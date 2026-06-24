@@ -115,6 +115,37 @@ def test_csv_to_html_table_missing_file_returns_error_paragraph():
 
 
 # ===========================================================================
+# Section 1b — make_mkvalidator_clusters_html
+# ===========================================================================
+
+def test_make_mkvalidator_clusters_html_renders_summary_and_rows(tmp_path):
+    csv_path = tmp_path / "JPC_AV_TEST_mkvalidator_clusters.csv"
+    _write_csv(csv_path, [
+        ["cluster_index", "byte_offset"],
+        ["1", "710818"],
+        ["2", "74886584"],
+    ])
+    html = gr.make_mkvalidator_clusters_html(str(csv_path))
+    assert html is not None
+    # Summary reports the cluster count and references the WRN0C2 warning code.
+    assert "<strong>2</strong>" in html
+    assert "WRN0C2" in html
+    # Both byte offsets appear as table cells.
+    assert "710818" in html and "74886584" in html
+
+
+def test_make_mkvalidator_clusters_html_header_only_returns_none(tmp_path):
+    csv_path = tmp_path / "JPC_AV_TEST_mkvalidator_clusters.csv"
+    _write_csv(csv_path, [["cluster_index", "byte_offset"]])
+    assert gr.make_mkvalidator_clusters_html(str(csv_path)) is None
+
+
+def test_make_mkvalidator_clusters_html_missing_file_returns_none():
+    assert gr.make_mkvalidator_clusters_html("/no/such/file.csv") is None
+    assert gr.make_mkvalidator_clusters_html(None) is None
+
+
+# ===========================================================================
 # Section 2 — read_text_file / prepare_file_section / image_to_data_uri
 # ===========================================================================
 

@@ -4834,7 +4834,62 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
 
     return content_summary_html
 
-def generate_final_report(video_id, source_directory, report_directory, destination_directory, 
+
+def make_mkvalidator_clusters_html(clusters_csv_path):
+    """
+    Render the mkvalidator WRN0C2 cluster warnings section.
+
+    mkvalidator reports a WRN0C2 for each Matroska Cluster whose timecode does not
+    increment relative to the previous one ("may be intentional"). The CSV lists the
+    file byte offset of each such cluster. These are informational (they never fail
+    the check), so the section is a summary plus a scrollable table of byte offsets.
+
+    The "at <N>" values are byte offsets into the file, not media timecodes, so no
+    NDF/DF timecode conversion applies here.
+
+    Returns an HTML string, or None if the CSV is missing/empty.
+    """
+    if not clusters_csv_path or not os.path.isfile(clusters_csv_path):
+        return None
+
+    try:
+        with open(clusters_csv_path, newline='', encoding='utf-8') as f:
+            rows = list(csv.reader(f))
+    except Exception as e:
+        logger.error(f"Error processing mkvalidator clusters CSV {clusters_csv_path}: {e}")
+        return None
+
+    # rows[0] is the header (cluster_index, byte_offset); the rest are data rows.
+    data_rows = rows[1:] if rows else []
+    if not data_rows:
+        return None
+
+    table_rows = ''.join(
+        f'<tr><td style="padding: 4px 12px; border: 1px solid #4d2b12;">{cells[0]}</td>'
+        f'<td style="padding: 4px 12px; border: 1px solid #4d2b12;">{cells[1]}</td></tr>'
+        for cells in data_rows if len(cells) >= 2
+    )
+
+    return f"""
+    <div style="background-color: #f5e9e3; padding: 20px 30px; margin-top: 10px; border-radius: 6px;">
+        <p style="margin-top: 0;">mkvalidator reported
+        <strong>{len(data_rows)}</strong> cluster(s) with a non-incrementing timecode
+        (warning <code>WRN0C2</code>). This is informational and may be intentional &mdash;
+        it does not fail the validation. Each value is the cluster's byte offset within the file.</p>
+        <div style="max-height: 400px; overflow-y: auto; border: 1px solid #4d2b12;">
+            <table style="border-collapse: collapse; width: 100%; background-color: #ffffff;">
+                <tr>
+                    <th style="padding: 6px 12px; border: 1px solid #4d2b12; background-color: #fbe4eb; position: sticky; top: 0;">Cluster #</th>
+                    <th style="padding: 6px 12px; border: 1px solid #4d2b12; background-color: #fbe4eb; position: sticky; top: 0;">Byte offset</th>
+                </tr>
+                {table_rows}
+            </table>
+        </div>
+    </div>
+    """
+
+
+def generate_final_report(video_id, source_directory, report_directory, destination_directory,
                          video_path=None, check_cancelled=None, signals=None):
     """
     Generate final HTML report if configured.
@@ -4894,6 +4949,15 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     clams_tone_durations_csv = os.path.join(report_directory, "clams_tone_detection_durations.csv")
     if not os.path.isfile(clams_tone_durations_csv):
         clams_tone_durations_csv = None
+
+    # mkvalidator WRN0C2 cluster offsets CSV (filename matches the writer in
+    # checks/mkvalidator_check.py). Unlike the qct-parse/CLAMS sidecars this lives in
+    # the _qc_metadata directory (destination_directory), not the report dir, because
+    # the mkvalidator check runs before the report dir exists. Present only when the
+    # check ran and at least one WRN0C2 was found.
+    mkvalidator_clusters_csv = os.path.join(destination_directory, f"{video_id}_mkvalidator_clusters.csv")
+    if not os.path.isfile(mkvalidator_clusters_csv):
+        mkvalidator_clusters_csv = None
 
     if check_cancelled():
         return
@@ -5107,6 +5171,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # CLAMS tone detection results.
     tone_detection_html = make_tone_detection_html(clams_tone_durations_csv)
+    mkvalidator_clusters_html = make_mkvalidator_clusters_html(mkvalidator_clusters_csv)
 
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
@@ -5226,6 +5291,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-mediaconch-csv', 'MediaConch CSV'))
     if mediaconch_policy_content and mediaconch_policy_name:
         toc_entries.append(('section-mediaconch-policy', 'MediaConch Policy'))
+    if mkvalidator_clusters_html:
+        toc_entries.append(('section-mkvalidator-clusters', 'mkvalidator Cluster Warnings'))
     if frame_analysis_html:
         toc_entries.append(('section-frame-analysis', 'Frame Analysis Results'))
     if bitplane_html:
@@ -5462,6 +5529,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h3 id="section-mediaconch-policy">MediaConch Policy File: {mediaconch_policy_name}</h3>
         <a id="link_mediaconch_policy" href="javascript:void(0);" onclick="toggleContent('mediaconch_policy', 'Show policy content ▼', 'Hide policy content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show policy content ▼</a>
         <div id="mediaconch_policy" class="xml-content" style="display: none;">{mediaconch_policy_content}</div>
+        """
+
+    if mkvalidator_clusters_html:
+        html_template += f"""
+        <h3 id="section-mkvalidator-clusters">mkvalidator Cluster Timecode Warnings</h3>
+        {mkvalidator_clusters_html}
         """
 
     if frame_analysis_html:
