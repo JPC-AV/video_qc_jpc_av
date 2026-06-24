@@ -1,10 +1,18 @@
 import os
+import time
 import subprocess
 from AV_Spex.utils.log_setup import logger
 from AV_Spex.utils.config_setup import ChecksConfig, is_mkv_extension
 from AV_Spex.utils.config_manager import ConfigManager
 
 config_mgr = ConfigManager()
+
+# mkvalidator emits no parseable progress (just a run of dots), so its progress bar
+# is a time estimate. Runtime scales with file size at ~3 s/GiB, measured across the
+# JPC_AV sample files (3.3 GB→8 s, 5.4 GB→14 s, 21 GB→71 s). estimated_total =
+# size_in_GiB * this constant; the bar ticks toward 99% and snaps to 100% on exit.
+MKVALIDATOR_SECONDS_PER_GIB = 3.0
+_GIB = 1024 ** 3
 
 def run_command(command, input_path, output_type, output_path):
     '''
@@ -23,16 +31,17 @@ def run_command(command, input_path, output_type, output_path):
     subprocess.run(full_command, shell=True, env=env)
 
 
-def run_tool_command(tool_name, video_path, destination_directory, video_id):
+def run_tool_command(tool_name, video_path, destination_directory, video_id, signals=None):
     """
     Run a specific metadata extraction tool and generate its output file.
-    
+
     Args:
         tool_name (str): Name of the tool to run (e.g., 'exiftool', 'mediainfo')
         video_path (str): Path to the input video file
         destination_directory (str): Directory to store output files
         video_id (str): Unique identifier for the video
-        
+        signals: Optional ProcessingSignals; used by mkvalidator to emit progress.
+
     Returns:
         str or None: Path to the output file, or None if tool is not run
     """
@@ -65,7 +74,7 @@ def run_tool_command(tool_name, video_path, destination_directory, video_id):
                     "Matroska. Skipping mkvalidator.\n"
                 )
                 return None
-            run_mkvalidator_command(video_path, output_path)
+            run_mkvalidator_command(video_path, output_path, signals=signals)
         return output_path
 
     # Check if the tool is configured
@@ -95,20 +104,52 @@ def run_tool_command(tool_name, video_path, destination_directory, video_id):
     return output_path
 
 
-def run_mkvalidator_command(video_path, output_path):
+def _estimate_mkvalidator_seconds(video_path):
+    '''
+    Estimate mkvalidator runtime (seconds) from the input file size.
+
+    mkvalidator runtime scales with file size at ~MKVALIDATOR_SECONDS_PER_GIB.
+    Returns a floor of 1.0 s so the progress math never divides by ~0 on a tiny
+    or unstattable file.
+    '''
+    try:
+        size_gib = os.path.getsize(video_path) / _GIB
+    except OSError:
+        size_gib = 0
+    return max(size_gib * MKVALIDATOR_SECONDS_PER_GIB, 1.0)
+
+
+def run_mkvalidator_command(video_path, output_path, signals=None):
     '''
     Run mkvalidator on an MKV file, capturing both stdout and stderr to the
     sidecar (mkvalidator emits its WRN/ERR diagnostics on stderr).
+
+    mkvalidator prints only a run of dots (no parseable percentage), so progress is
+    a time estimate: while the process runs we tick toward 99% based on elapsed time
+    vs. a size-derived estimate, then snap to 100% on exit.
     '''
     env = os.environ.copy()
     env['PATH'] = '/opt/homebrew/bin:/usr/local/bin:' + env.get('PATH', '')
 
     full_command = f'mkvalidator "{video_path}"'
     logger.debug(f'Running command: {full_command} > "{output_path}" 2>&1\n')
+
+    estimated_total = _estimate_mkvalidator_seconds(video_path)
+    if signals:
+        signals.mkvalidator_progress.emit(0)
+
     try:
         with open(output_path, 'w') as out:
-            subprocess.run(full_command, shell=True, env=env,
-                           stdout=out, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(full_command, shell=True, env=env,
+                                       stdout=out, stderr=subprocess.STDOUT)
+            start = time.monotonic()
+            while process.poll() is None:
+                if signals:
+                    pct = int((time.monotonic() - start) / estimated_total * 100)
+                    signals.mkvalidator_progress.emit(min(99, max(0, pct)))
+                time.sleep(0.5)
+        if signals:
+            signals.mkvalidator_progress.emit(100)
     except (OSError, subprocess.SubprocessError) as e:
         logger.error(f"Failed to run mkvalidator: {e}")
 

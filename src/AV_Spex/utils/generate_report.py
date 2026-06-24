@@ -4835,48 +4835,85 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
     return content_summary_html
 
 
-def make_mkvalidator_clusters_html(clusters_csv_path):
+def _read_mkvalidator_summary(summary_path):
     """
-    Render the mkvalidator WRN0C2 cluster warnings section.
+    Parse the mkvalidator summary sidecar for the report.
 
-    mkvalidator reports a WRN0C2 for each Matroska Cluster whose timecode does not
-    increment relative to the previous one ("may be intentional"). The CSV lists the
-    file byte offset of each such cluster. These are informational (they never fail
-    the check), so the section is a summary plus a scrollable table of byte offsets.
-
-    The "at <N>" values are byte offsets into the file, not media timecodes, so no
-    NDF/DF timecode conversion applies here.
-
-    Returns an HTML string, or None if the CSV is missing/empty.
+    Returns (verdict_text, is_valid, error_count). is_valid is True only when the
+    verdict reads valid AND no ERR errors were reported; a missing/garbled verdict
+    is treated as not-valid (conservative).
     """
-    if not clusters_csv_path or not os.path.isfile(clusters_csv_path):
-        return None
-
     try:
-        with open(clusters_csv_path, newline='', encoding='utf-8') as f:
-            rows = list(csv.reader(f))
+        with open(summary_path, encoding='utf-8') as f:
+            lines = [ln.rstrip('\n') for ln in f]
     except Exception as e:
-        logger.error(f"Error processing mkvalidator clusters CSV {clusters_csv_path}: {e}")
+        logger.error(f"Error reading mkvalidator summary {summary_path}: {e}")
+        return ('mkvalidator summary unavailable', False, 0)
+
+    verdict = lines[0].strip() if lines else ''
+    error_count = 0
+    for ln in lines:
+        m = re.match(r'\s*Errors \(ERR\):\s*(\d+)', ln)
+        if m:
+            error_count = int(m.group(1))
+            break
+
+    v = verdict.lower()
+    is_valid = (
+        'valid' in v and 'invalid' not in v and 'not valid' not in v
+        and error_count == 0
+    )
+    return (verdict, is_valid, error_count)
+
+
+def make_mkvalidator_html(summary_path, clusters_csv_path):
+    """
+    Render the mkvalidator report section.
+
+    The focus is the validity verdict (Valid / Invalid). If the file has WRN0C2
+    non-incrementing cluster timecode warnings, a compact table of their byte
+    offsets follows. The section renders whenever mkvalidator's check ran (i.e. the
+    summary sidecar exists), including for a clean valid file with no warnings.
+
+    The WRN0C2 "at <N>" values are byte offsets into the file, not media timecodes,
+    so no NDF/DF timecode conversion applies here.
+
+    Returns an HTML string, or None if the summary sidecar is missing.
+    """
+    if not summary_path or not os.path.isfile(summary_path):
         return None
 
-    # rows[0] is the header (cluster_index, byte_offset); the rest are data rows.
-    data_rows = rows[1:] if rows else []
-    if not data_rows:
-        return None
+    verdict, is_valid, error_count = _read_mkvalidator_summary(summary_path)
 
-    table_rows = ''.join(
-        f'<tr><td style="padding: 4px 12px; border: 1px solid #4d2b12;">{cells[0]}</td>'
-        f'<td style="padding: 4px 12px; border: 1px solid #4d2b12;">{cells[1]}</td></tr>'
-        for cells in data_rows if len(cells) >= 2
+    status_color = '#1f7a4d' if is_valid else '#b3261e'   # green / red
+    status_text = 'Valid' if is_valid else 'Invalid'
+    status_html = (
+        f'<p style="margin-top: 0; font-size: 1.15em;">Result: '
+        f'<strong style="color: {status_color};">{status_text}</strong></p>'
+        f'<p style="margin: 0; color: #4d2b12;">{verdict}</p>'
     )
 
-    return f"""
-    <div style="background-color: #f5e9e3; padding: 20px 30px; margin-top: 10px; border-radius: 6px;">
-        <p style="margin-top: 0;">mkvalidator reported
-        <strong>{len(data_rows)}</strong> cluster(s) with a non-incrementing timecode
-        (warning <code>WRN0C2</code>). This is informational and may be intentional &mdash;
-        it does not fail the validation. Each value is the cluster's byte offset within the file.</p>
-        <div style="max-height: 400px; overflow-y: auto; border: 1px solid #4d2b12;">
+    # Optional WRN0C2 timecode-warnings table (only when the clusters CSV has rows).
+    # Kept deliberately narrow — it is just two columns of short numbers.
+    clusters_html = '<p style="margin-bottom: 0;">No timecode warnings.</p>'
+    if clusters_csv_path and os.path.isfile(clusters_csv_path):
+        try:
+            with open(clusters_csv_path, newline='', encoding='utf-8') as f:
+                rows = list(csv.reader(f))
+        except Exception as e:
+            logger.error(f"Error processing mkvalidator clusters CSV {clusters_csv_path}: {e}")
+            rows = []
+        data_rows = [r for r in rows[1:] if len(r) >= 2]
+        if data_rows:
+            table_rows = ''.join(
+                f'<tr><td style="padding: 4px 12px; border: 1px solid #4d2b12;">{cells[0]}</td>'
+                f'<td style="padding: 4px 12px; border: 1px solid #4d2b12;">{cells[1]}</td></tr>'
+                for cells in data_rows
+            )
+            clusters_html = f"""
+        <p style="margin-bottom: 6px;"><strong>{len(data_rows)}</strong> non-incrementing
+        cluster timecode warning(s) (<code>WRN0C2</code>, informational &mdash; may be intentional).</p>
+        <div style="max-width: 320px; max-height: 360px; overflow-y: auto; border: 1px solid #4d2b12;">
             <table style="border-collapse: collapse; width: 100%; background-color: #ffffff;">
                 <tr>
                     <th style="padding: 6px 12px; border: 1px solid #4d2b12; background-color: #fbe4eb; position: sticky; top: 0;">Cluster #</th>
@@ -4884,6 +4921,13 @@ def make_mkvalidator_clusters_html(clusters_csv_path):
                 </tr>
                 {table_rows}
             </table>
+        </div>"""
+
+    return f"""
+    <div style="background-color: #f5e9e3; padding: 20px 30px; margin-top: 10px; border-radius: 6px;">
+        {status_html}
+        <div style="margin-top: 16px;">
+        {clusters_html}
         </div>
     </div>
     """
@@ -4950,11 +4994,16 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     if not os.path.isfile(clams_tone_durations_csv):
         clams_tone_durations_csv = None
 
-    # mkvalidator WRN0C2 cluster offsets CSV (filename matches the writer in
-    # checks/mkvalidator_check.py). Unlike the qct-parse/CLAMS sidecars this lives in
-    # the _qc_metadata directory (destination_directory), not the report dir, because
-    # the mkvalidator check runs before the report dir exists. Present only when the
-    # check ran and at least one WRN0C2 was found.
+    # mkvalidator sidecars (filenames match the writers in checks/mkvalidator_check.py).
+    # Unlike the qct-parse/CLAMS sidecars these live in the _qc_metadata directory
+    # (destination_directory), not the report dir, because the mkvalidator check runs
+    # before the report dir exists. The summary sidecar holds the validity verdict and
+    # is written whenever the check ran; the clusters CSV holds the WRN0C2 byte offsets
+    # and is present only when at least one WRN0C2 was found.
+    mkvalidator_summary_path = os.path.join(destination_directory, f"{video_id}_mkvalidator_summary.txt")
+    if not os.path.isfile(mkvalidator_summary_path):
+        mkvalidator_summary_path = None
+
     mkvalidator_clusters_csv = os.path.join(destination_directory, f"{video_id}_mkvalidator_clusters.csv")
     if not os.path.isfile(mkvalidator_clusters_csv):
         mkvalidator_clusters_csv = None
@@ -5171,7 +5220,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # CLAMS tone detection results.
     tone_detection_html = make_tone_detection_html(clams_tone_durations_csv)
-    mkvalidator_clusters_html = make_mkvalidator_clusters_html(mkvalidator_clusters_csv)
+    mkvalidator_html = make_mkvalidator_html(mkvalidator_summary_path, mkvalidator_clusters_csv)
 
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
@@ -5291,8 +5340,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-mediaconch-csv', 'MediaConch CSV'))
     if mediaconch_policy_content and mediaconch_policy_name:
         toc_entries.append(('section-mediaconch-policy', 'MediaConch Policy'))
-    if mkvalidator_clusters_html:
-        toc_entries.append(('section-mkvalidator-clusters', 'mkvalidator Cluster Warnings'))
+    if mkvalidator_html:
+        toc_entries.append(('section-mkvalidator', 'mkvalidator'))
     if frame_analysis_html:
         toc_entries.append(('section-frame-analysis', 'Frame Analysis Results'))
     if bitplane_html:
@@ -5531,10 +5580,10 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <div id="mediaconch_policy" class="xml-content" style="display: none;">{mediaconch_policy_content}</div>
         """
 
-    if mkvalidator_clusters_html:
+    if mkvalidator_html:
         html_template += f"""
-        <h3 id="section-mkvalidator-clusters">mkvalidator Cluster Timecode Warnings</h3>
-        {mkvalidator_clusters_html}
+        <h3 id="section-mkvalidator">mkvalidator</h3>
+        {mkvalidator_html}
         """
 
     if frame_analysis_html:

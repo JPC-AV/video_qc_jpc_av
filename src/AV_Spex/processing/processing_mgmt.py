@@ -206,8 +206,8 @@ class ProcessingManager:
             if self.check_cancelled():
                 return None
                 
-            # Run tool and get output path
-            output_path = run_tools.run_tool_command(tool, video_path, destination_directory, video_id)
+            # Run tool and get output path (signals lets mkvalidator emit progress)
+            output_path = run_tools.run_tool_command(tool, video_path, destination_directory, video_id, signals=self.signals)
             
             # Check metadata and store differences
             differences = check_tool_metadata(tool, output_path)
