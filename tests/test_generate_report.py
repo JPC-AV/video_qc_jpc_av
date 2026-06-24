@@ -169,6 +169,46 @@ def test_make_mkvalidator_html_valid_with_warnings(tmp_path):
     assert "max-width: 320px" in html
 
 
+def test_make_mkvalidator_html_adds_approx_timecode_column(tmp_path, monkeypatch):
+    summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
+    _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file appears to be valid", wrn0c2=2)
+    csv_path = tmp_path / "JPC_AV_TEST_mkvalidator_clusters.csv"
+    _write_csv(csv_path, [
+        ["cluster_index", "byte_offset"],
+        ["1", "500"],
+        ["2", "1000"],
+    ])
+    video = tmp_path / "v.mkv"
+    video.write_bytes(b"x")  # must exist for the mapper's isfile check
+
+    # file_size=1000, duration=100s -> offset 500 = 50.0s, offset 1000 = 100.0s.
+    monkeypatch.setattr(gr.os.path, "getsize", lambda p: 1000)
+    monkeypatch.setattr(gr, "_get_video_duration", lambda p: 100.0)
+    from AV_Spex.checks import qct_parse as qp
+    monkeypatch.setattr(qp, "_get_video_frame_rate", lambda p: 30.0)
+    monkeypatch.setattr(qp, "_get_video_start_timecode", lambda p: None)
+
+    html = gr.make_mkvalidator_html(str(summary), str(csv_path), str(video))
+    assert "Approx. timecode" in html
+    # 50.0s @ 30fps NDF, no start offset -> 00:00:50:00 ; 100.0s -> 00:01:40:00
+    assert "00:00:50:00" in html
+    assert "00:01:40:00" in html
+    # Wider table to fit the third column.
+    assert "max-width: 460px" in html
+
+
+def test_make_mkvalidator_html_no_video_path_omits_timecode_column(tmp_path):
+    summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
+    _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file appears to be valid", wrn0c2=1)
+    csv_path = tmp_path / "JPC_AV_TEST_mkvalidator_clusters.csv"
+    _write_csv(csv_path, [["cluster_index", "byte_offset"], ["1", "500"]])
+
+    # No video_path -> no timecode column, narrow table.
+    html = gr.make_mkvalidator_html(str(summary), str(csv_path), None)
+    assert "Approx. timecode" not in html
+    assert "max-width: 320px" in html
+
+
 def test_make_mkvalidator_html_valid_no_warnings(tmp_path):
     summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
     _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file appears to be valid")

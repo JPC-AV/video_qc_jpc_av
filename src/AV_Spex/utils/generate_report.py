@@ -4866,7 +4866,47 @@ def _read_mkvalidator_summary(summary_path):
     return (verdict, is_valid, error_count)
 
 
-def make_mkvalidator_html(summary_path, clusters_csv_path):
+def _mkvalidator_timecode_mapper(video_path):
+    """
+    Return a function mapping a WRN0C2 byte offset -> approximate file timecode str,
+    or None if the inputs needed for the estimate are unavailable.
+
+    A byte offset has no exact time (Matroska is variable-rate), so it is mapped to
+    elapsed seconds by linear interpolation (offset / file_size * duration) and then
+    formatted as the file's own NDF/DF timecode (with start-TC offset) so the value
+    lines up with what the user would scrub to in their NLE. The estimate is
+    approximate — callers should label it as such.
+    """
+    if not video_path or not os.path.isfile(video_path):
+        return None
+    try:
+        file_size = os.path.getsize(video_path)
+    except OSError:
+        return None
+    duration = _get_video_duration(video_path)
+    if not file_size or not duration or duration <= 0:
+        return None
+
+    # Local import: qct_parse is heavy (numpy/scipy) and only needed when this
+    # section actually renders a warnings table.
+    from AV_Spex.checks.qct_parse import (
+        _tc_format_timecode, _tc_parse_start_timecode,
+        _get_video_frame_rate, _get_video_start_timecode,
+    )
+    fps = _get_video_frame_rate(video_path)
+    nominal = max(1, int(round(fps))) if fps else 30
+    start_frames, drop_frame = _tc_parse_start_timecode(
+        _get_video_start_timecode(video_path), nominal
+    )
+
+    def to_timecode(byte_offset):
+        seconds = byte_offset / file_size * duration
+        return _tc_format_timecode(seconds, fps, start_frames, drop_frame)
+
+    return to_timecode
+
+
+def make_mkvalidator_html(summary_path, clusters_csv_path, video_path=None):
     """
     Render the mkvalidator report section.
 
@@ -4875,8 +4915,9 @@ def make_mkvalidator_html(summary_path, clusters_csv_path):
     offsets follows. The section renders whenever mkvalidator's check ran (i.e. the
     summary sidecar exists), including for a clean valid file with no warnings.
 
-    The WRN0C2 "at <N>" values are byte offsets into the file, not media timecodes,
-    so no NDF/DF timecode conversion applies here.
+    Each WRN0C2 "at <N>" value is a byte offset into the file. When video_path is
+    given, an approximate file timecode (linear offset->time interpolation, formatted
+    as NDF/DF to match the NLE) is shown alongside each offset.
 
     Returns an HTML string, or None if the summary sidecar is missing.
     """
@@ -4905,19 +4946,34 @@ def make_mkvalidator_html(summary_path, clusters_csv_path):
             rows = []
         data_rows = [r for r in rows[1:] if len(r) >= 2]
         if data_rows:
-            table_rows = ''.join(
-                f'<tr><td style="padding: 4px 12px; border: 1px solid #4d2b12;">{cells[0]}</td>'
-                f'<td style="padding: 4px 12px; border: 1px solid #4d2b12;">{cells[1]}</td></tr>'
-                for cells in data_rows
-            )
+            # Optional approximate file-timecode column (only when we can derive it).
+            to_timecode = _mkvalidator_timecode_mapper(video_path)
+            td = 'padding: 4px 12px; border: 1px solid #4d2b12;'
+            th = ('padding: 6px 12px; border: 1px solid #4d2b12; '
+                  'background-color: #fbe4eb; position: sticky; top: 0;')
+
+            def _row(cells):
+                tc_cell = ''
+                if to_timecode:
+                    try:
+                        tc_cell = f'<td style="{td}">&asymp; {to_timecode(int(cells[1]))}</td>'
+                    except (ValueError, TypeError):
+                        tc_cell = f'<td style="{td}">&mdash;</td>'
+                return (f'<tr><td style="{td}">{cells[0]}</td>'
+                        f'<td style="{td}">{cells[1]}</td>{tc_cell}</tr>')
+
+            table_rows = ''.join(_row(cells) for cells in data_rows)
+            tc_header = f'<th style="{th}">Approx. timecode</th>' if to_timecode else ''
+            table_width = '460px' if to_timecode else '320px'
             clusters_html = f"""
         <p style="margin-bottom: 6px;"><strong>{len(data_rows)}</strong> non-incrementing
         cluster timecode warning(s) (<code>WRN0C2</code>, informational &mdash; may be intentional).</p>
-        <div style="max-width: 320px; max-height: 360px; overflow-y: auto; border: 1px solid #4d2b12;">
+        <div style="max-width: {table_width}; max-height: 360px; overflow-y: auto; border: 1px solid #4d2b12;">
             <table style="border-collapse: collapse; width: 100%; background-color: #ffffff;">
                 <tr>
-                    <th style="padding: 6px 12px; border: 1px solid #4d2b12; background-color: #fbe4eb; position: sticky; top: 0;">Cluster #</th>
-                    <th style="padding: 6px 12px; border: 1px solid #4d2b12; background-color: #fbe4eb; position: sticky; top: 0;">Byte offset</th>
+                    <th style="{th}">Cluster #</th>
+                    <th style="{th}">Byte offset</th>
+                    {tc_header}
                 </tr>
                 {table_rows}
             </table>
@@ -5220,7 +5276,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # CLAMS tone detection results.
     tone_detection_html = make_tone_detection_html(clams_tone_durations_csv)
-    mkvalidator_html = make_mkvalidator_html(mkvalidator_summary_path, mkvalidator_clusters_csv)
+    mkvalidator_html = make_mkvalidator_html(mkvalidator_summary_path, mkvalidator_clusters_csv, video_path)
 
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
