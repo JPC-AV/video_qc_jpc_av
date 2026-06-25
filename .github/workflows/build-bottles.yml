@@ -161,21 +161,6 @@ jobs:
           done
           [ "$found" -eq 1 ] || echo "No per-formula logs found (failure likely occurred at formula load time, before any build step ran)."
 
-      - name: Test the built bottle
-        run: |
-          echo "Testing bottle installation..."
-          brew uninstall --force JPC-AV/AV-Spex/av-spex || true
-
-          # Install the freshly built bottle directly from the local file. This
-          # actually POURS the bottle (the real artifact), instead of silently
-          # rebuilding from source as a name-based install would when the
-          # formula has no bottle block yet.
-          brew install ./av-spex--*.bottle.tar.gz
-
-          echo "Testing av-spex commands..."
-          av-spex --version
-          av-spex --help
-
       - name: Publish bottle to release and write block back to formula
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}             # release lives in this repo
@@ -225,6 +210,28 @@ jobs:
             git push origin HEAD:main
             echo "✅ Formula updated with bottle block"
           fi
+
+      - name: Test the published bottle
+        run: |
+          set -euo pipefail
+          # Homebrew 6.x no longer allows `brew install ./file.bottle.tar.gz`
+          # from a path (Homebrew/brew#20414), so test the real user path:
+          # the formula now carries the bottle block and the asset is live on
+          # the release, so a by-name install POURS the bottle from the release.
+          #
+          # Uninstall the source build first, but keep its dependencies
+          # (mkvtoolnix, qtbase, ...) so the pour test stays fast and doesn't
+          # trip autoremove.
+          HOMEBREW_NO_AUTOREMOVE=1 brew uninstall --ignore-dependencies \
+            JPC-AV/AV-Spex/av-spex || true
+
+          # --force-bottle makes this fail loudly if the bottle can't be poured,
+          # rather than silently falling back to a source rebuild.
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install --force-bottle JPC-AV/AV-Spex/av-spex
+
+          echo "Testing av-spex commands..."
+          av-spex --version
+          av-spex --help
 
       - name: Upload bottle artifact
         if: always()
