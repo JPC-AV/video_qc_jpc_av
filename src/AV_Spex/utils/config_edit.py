@@ -1308,6 +1308,10 @@ profile_step1 = {
             "check_tool": True,
             "run_tool": True
         },
+        "mkvalidator": {
+            "check_tool": False,
+            "run_tool": False
+        },
         "qctools": {
             "run_tool": False
         },
@@ -1375,6 +1379,10 @@ profile_step2 = {
         },
         "mediatrace": {
             "check_tool": True,
+            "run_tool": False
+        },
+        "mkvalidator": {
+            "check_tool": False,
             "run_tool": False
         },
         "qctools": {
@@ -1447,6 +1455,10 @@ profile_allOff = {
             "check_tool": False,
             "run_tool": False
         },
+        "mkvalidator": {
+            "check_tool": False,
+            "run_tool": False
+        },
         "qctools": {
             "run_tool": False
         },
@@ -1507,13 +1519,17 @@ profile_vendor = {
         },
         "mediaconch": {
             "mediaconch_policy": "JPC_FFV1-MKV_Preservation_Policy_20260112.xml",
-            "run_mediaconch": False
+            "run_mediaconch": True
         },
         "mediainfo": {
             "check_tool": False,
             "run_tool": True
         },
         "mediatrace": {
+            "check_tool": False,
+            "run_tool": True
+        },
+        "mkvalidator": {
             "check_tool": False,
             "run_tool": False
         },
