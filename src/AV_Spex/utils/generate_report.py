@@ -4834,7 +4834,197 @@ def make_content_summary_html(qctools_content_check_output, sorted_thumbs_dict, 
 
     return content_summary_html
 
-def generate_final_report(video_id, source_directory, report_directory, destination_directory, 
+
+def _read_mkvalidator_summary(summary_path):
+    """
+    Parse the mkvalidator summary sidecar for the report.
+
+    Returns (verdict_text, is_valid, error_count). is_valid is True only when the
+    verdict reads valid AND no ERR errors were reported; a missing/garbled verdict
+    is treated as not-valid (conservative).
+    """
+    try:
+        with open(summary_path, encoding='utf-8') as f:
+            lines = [ln.rstrip('\n') for ln in f]
+    except Exception as e:
+        logger.error(f"Error reading mkvalidator summary {summary_path}: {e}")
+        return ('mkvalidator summary unavailable', False, 0)
+
+    verdict = lines[0].strip() if lines else ''
+    error_count = 0
+    for ln in lines:
+        m = re.match(r'\s*Errors \(ERR\):\s*(\d+)', ln)
+        if m:
+            error_count = int(m.group(1))
+            break
+
+    v = verdict.lower()
+    is_valid = (
+        'valid' in v and 'invalid' not in v and 'not valid' not in v
+        and error_count == 0
+    )
+    return (verdict, is_valid, error_count)
+
+
+# Collapsible "What is mkvalidator?" explainer, styled to match the frame-analysis
+# methodology blocks (e.g. duplicate frame detection). Static — no per-file values.
+_MKVALIDATOR_METHODOLOGY_HTML = """
+    <a id="link_mkvalidator_methodology" href="javascript:void(0);"
+       onclick="toggleContent('mkvalidator_methodology', 'What is mkvalidator? &#x25BC;', 'What is mkvalidator? &#x25B2;')"
+       style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block; font-size: 13px;">
+       What is mkvalidator? &#x25BC;</a>
+    <div id="mkvalidator_methodology" style="display: none; background-color: #f8f6f3; padding: 14px 16px;
+         margin: 0 0 16px 0; border: 1px solid #e0d0c0; border-radius: 4px; font-size: 13px; line-height: 1.5;">
+        <p style="margin: 0 0 10px 0;">
+            <strong>mkvalidator</strong> (from the Matroska project) parses the file's Matroska/EBML
+            structure and reports whether it is well-formed. AV Spex surfaces that verdict as the
+            <strong>Result</strong> below: <strong>Valid</strong> means the container conforms;
+            <strong>Invalid</strong> means a hard structural error (an <code>ERR</code> code) was found.
+            Warnings on their own do not make a file invalid.
+        </p>
+        <p style="margin: 0 0 10px 0;">
+            <strong>WRN0C2 timecode warnings</strong> &mdash; mkvalidator emits a <code>WRN0C2</code> for
+            each Matroska <em>Cluster</em> whose stored timecode does not increase relative to the previous
+            cluster. It does not indicate file damage and does not fail validation. These are
+            common in losslessly-encoded preservation MKVs.
+        </p>
+        <p style="margin: 0;">
+            <strong>Byte offset &rarr; timecode</strong> &mdash; each warning reports the cluster's
+            <em>byte offset</em> (its position within the file), not a media time. The
+            <strong>Approx. timecode</strong> column estimates where that offset falls on the timeline by
+            linear interpolation (offset &divide; file size &times; duration) and formats it as the file's
+            own NDF/DF timecode. Because Matroska is variable-rate this is an
+            estimate, shown with a leading &ldquo;&asymp;&rdquo;.
+        </p>
+    </div>
+"""
+
+
+def _mkvalidator_timecode_mapper(video_path):
+    """
+    Return a function mapping a WRN0C2 byte offset -> approximate file timecode str,
+    or None if the inputs needed for the estimate are unavailable.
+
+    A byte offset has no exact time (Matroska is variable-rate), so it is mapped to
+    elapsed seconds by linear interpolation (offset / file_size * duration) and then
+    formatted as the file's own NDF/DF timecode (with start-TC offset) so the value
+    lines up with what the user would scrub to in their NLE. The estimate is
+    approximate — callers should label it as such.
+    """
+    if not video_path or not os.path.isfile(video_path):
+        return None
+    try:
+        file_size = os.path.getsize(video_path)
+    except OSError:
+        return None
+    duration = _get_video_duration(video_path)
+    if not file_size or not duration or duration <= 0:
+        return None
+
+    # Local import: qct_parse is heavy (numpy/scipy) and only needed when this
+    # section actually renders a warnings table.
+    from AV_Spex.checks.qct_parse import (
+        _tc_format_timecode, _tc_parse_start_timecode,
+        _get_video_frame_rate, _get_video_start_timecode,
+    )
+    fps = _get_video_frame_rate(video_path)
+    nominal = max(1, int(round(fps))) if fps else 30
+    start_frames, drop_frame = _tc_parse_start_timecode(
+        _get_video_start_timecode(video_path), nominal
+    )
+
+    def to_timecode(byte_offset):
+        seconds = byte_offset / file_size * duration
+        return _tc_format_timecode(seconds, fps, start_frames, drop_frame)
+
+    return to_timecode
+
+
+def make_mkvalidator_html(summary_path, clusters_csv_path, video_path=None):
+    """
+    Render the mkvalidator report section.
+
+    The focus is the validity verdict (Valid / Invalid). If the file has WRN0C2
+    non-incrementing cluster timecode warnings, a compact table of their byte
+    offsets follows. The section renders whenever mkvalidator's check ran (i.e. the
+    summary sidecar exists), including for a clean valid file with no warnings.
+
+    Each WRN0C2 "at <N>" value is a byte offset into the file. When video_path is
+    given, an approximate file timecode (linear offset->time interpolation, formatted
+    as NDF/DF to match the NLE) is shown alongside each offset.
+
+    Returns an HTML string, or None if the summary sidecar is missing.
+    """
+    if not summary_path or not os.path.isfile(summary_path):
+        return None
+
+    verdict, is_valid, error_count = _read_mkvalidator_summary(summary_path)
+
+    status_color = '#1f7a4d' if is_valid else '#b3261e'   # green / red
+    status_text = 'Valid' if is_valid else 'Invalid'
+    status_html = (
+        f'<p style="margin-top: 0; font-size: 1.15em;">Result: '
+        f'<strong style="color: {status_color};">{status_text}</strong></p>'
+        f'<p style="margin: 0; color: #4d2b12;">{verdict}</p>'
+    )
+
+    # Optional WRN0C2 timecode-warnings table (only when the clusters CSV has rows).
+    # Kept deliberately narrow — it is just two columns of short numbers.
+    clusters_html = '<p style="margin-bottom: 0;">No timecode warnings.</p>'
+    if clusters_csv_path and os.path.isfile(clusters_csv_path):
+        try:
+            with open(clusters_csv_path, newline='', encoding='utf-8') as f:
+                rows = list(csv.reader(f))
+        except Exception as e:
+            logger.error(f"Error processing mkvalidator clusters CSV {clusters_csv_path}: {e}")
+            rows = []
+        data_rows = [r for r in rows[1:] if len(r) >= 2]
+        if data_rows:
+            # Optional approximate file-timecode column (only when we can derive it).
+            to_timecode = _mkvalidator_timecode_mapper(video_path)
+            td = 'padding: 4px 12px; border: 1px solid #4d2b12;'
+            th = ('padding: 6px 12px; border: 1px solid #4d2b12; '
+                  'background-color: #fbe4eb; position: sticky; top: 0;')
+
+            def _row(cells):
+                tc_cell = ''
+                if to_timecode:
+                    try:
+                        tc_cell = f'<td style="{td}">&asymp; {to_timecode(int(cells[1]))}</td>'
+                    except (ValueError, TypeError):
+                        tc_cell = f'<td style="{td}">&mdash;</td>'
+                return (f'<tr><td style="{td}">{cells[0]}</td>'
+                        f'<td style="{td}">{cells[1]}</td>{tc_cell}</tr>')
+
+            table_rows = ''.join(_row(cells) for cells in data_rows)
+            tc_header = f'<th style="{th}">Approx. timecode</th>' if to_timecode else ''
+            table_width = '460px' if to_timecode else '320px'
+            clusters_html = f"""
+        <p style="margin-bottom: 6px;"><strong>{len(data_rows)}</strong> non-incrementing
+        cluster timecode warning(s) (<code>WRN0C2</code>, informational &mdash; may be intentional).</p>
+        <div style="max-width: {table_width}; max-height: 360px; overflow-y: auto; border: 1px solid #4d2b12;">
+            <table style="border-collapse: collapse; width: 100%; background-color: #ffffff;">
+                <tr>
+                    <th style="{th}">Cluster #</th>
+                    <th style="{th}">Byte offset</th>
+                    {tc_header}
+                </tr>
+                {table_rows}
+            </table>
+        </div>"""
+
+    return f"""
+    {_MKVALIDATOR_METHODOLOGY_HTML}
+    <div style="background-color: #f5e9e3; padding: 20px 30px; margin-top: 10px; border-radius: 6px;">
+        {status_html}
+        <div style="margin-top: 16px;">
+        {clusters_html}
+        </div>
+    </div>
+    """
+
+
+def generate_final_report(video_id, source_directory, report_directory, destination_directory,
                          video_path=None, check_cancelled=None, signals=None):
     """
     Generate final HTML report if configured.
@@ -4894,6 +5084,20 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
     clams_tone_durations_csv = os.path.join(report_directory, "clams_tone_detection_durations.csv")
     if not os.path.isfile(clams_tone_durations_csv):
         clams_tone_durations_csv = None
+
+    # mkvalidator sidecars (filenames match the writers in checks/mkvalidator_check.py).
+    # Unlike the qct-parse/CLAMS sidecars these live in the _qc_metadata directory
+    # (destination_directory), not the report dir, because the mkvalidator check runs
+    # before the report dir exists. The summary sidecar holds the validity verdict and
+    # is written whenever the check ran; the clusters CSV holds the WRN0C2 byte offsets
+    # and is present only when at least one WRN0C2 was found.
+    mkvalidator_summary_path = os.path.join(destination_directory, f"{video_id}_mkvalidator_summary.txt")
+    if not os.path.isfile(mkvalidator_summary_path):
+        mkvalidator_summary_path = None
+
+    mkvalidator_clusters_csv = os.path.join(destination_directory, f"{video_id}_mkvalidator_clusters.csv")
+    if not os.path.isfile(mkvalidator_clusters_csv):
+        mkvalidator_clusters_csv = None
 
     if check_cancelled():
         return
@@ -5107,6 +5311,7 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
 
     # CLAMS tone detection results.
     tone_detection_html = make_tone_detection_html(clams_tone_durations_csv)
+    mkvalidator_html = make_mkvalidator_html(mkvalidator_summary_path, mkvalidator_clusters_csv, video_path)
 
     audio_clipping_html = make_audio_clipping_html(audio_clipping_csv) if audio_clipping_csv else None
     channel_imbalance_html = make_channel_imbalance_html(channel_imbalance_csv) if channel_imbalance_csv else None
@@ -5226,6 +5431,8 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         toc_entries.append(('section-mediaconch-csv', 'MediaConch CSV'))
     if mediaconch_policy_content and mediaconch_policy_name:
         toc_entries.append(('section-mediaconch-policy', 'MediaConch Policy'))
+    if mkvalidator_html:
+        toc_entries.append(('section-mkvalidator', 'mkvalidator'))
     if frame_analysis_html:
         toc_entries.append(('section-frame-analysis', 'Frame Analysis Results'))
     if bitplane_html:
@@ -5462,6 +5669,12 @@ def write_html_report(video_id, report_directory, destination_directory, html_re
         <h3 id="section-mediaconch-policy">MediaConch Policy File: {mediaconch_policy_name}</h3>
         <a id="link_mediaconch_policy" href="javascript:void(0);" onclick="toggleContent('mediaconch_policy', 'Show policy content ▼', 'Hide policy content ▲')" style="color: #378d6a; text-decoration: underline; margin-bottom: 10px; display: block;">Show policy content ▼</a>
         <div id="mediaconch_policy" class="xml-content" style="display: none;">{mediaconch_policy_content}</div>
+        """
+
+    if mkvalidator_html:
+        html_template += f"""
+        <h3 id="section-mkvalidator">mkvalidator</h3>
+        {mkvalidator_html}
         """
 
     if frame_analysis_html:

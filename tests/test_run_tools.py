@@ -23,6 +23,7 @@ from AV_Spex.processing import run_tools as rt
     ("mediainfo", "json"),
     ("mediatrace", "xml"),
     ("ffprobe", "txt"),
+    ("mkvalidator", "txt"),
 ])
 def test_get_file_extension_known_tools(tool, expected):
     assert rt._get_file_extension(tool) == expected
@@ -141,3 +142,107 @@ def test_run_tool_command_unknown_tool_returns_none(monkeypatch):
 
     assert out is None
     run_cmd_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# mkvalidator branch + progress estimate
+# ---------------------------------------------------------------------------
+
+def test_run_tool_command_mkvalidator_runs_and_forwards_signals(tmp_path, monkeypatch):
+    fake_cfg = _make_fake_checks_config({"mkvalidator": True})
+    monkeypatch.setattr(rt.config_mgr, "get_config", lambda *a, **kw: fake_cfg)
+    signals = MagicMock()
+
+    # mkvalidator does not go through run_command (it needs stderr capture); it is
+    # dispatched to run_mkvalidator_command, which must receive the signals object.
+    with patch.object(rt, "run_mkvalidator_command") as mk_mock:
+        out = rt.run_tool_command(
+            "mkvalidator", "/v/in.mkv", str(tmp_path), "JPC_AV_05000", signals=signals
+        )
+
+    expected = os.path.join(str(tmp_path), "JPC_AV_05000_mkvalidator_output.txt")
+    assert out == expected
+    mk_mock.assert_called_once_with("/v/in.mkv", expected, signals=signals)
+
+
+def test_run_tool_command_mkvalidator_skips_on_non_mkv(tmp_path, monkeypatch):
+    fake_cfg = _make_fake_checks_config({"mkvalidator": True}, video_file_extension="mxf")
+    monkeypatch.setattr(rt.config_mgr, "get_config", lambda *a, **kw: fake_cfg)
+
+    with patch.object(rt, "run_mkvalidator_command") as mk_mock:
+        out = rt.run_tool_command("mkvalidator", "/v/in.mxf", str(tmp_path), "JPC_AV_05000")
+
+    assert out is None
+    mk_mock.assert_not_called()
+
+
+@pytest.mark.parametrize("size_gib", [2, 5, 10, 37])
+def test_estimate_mkvalidator_seconds_uses_power_law(size_gib, monkeypatch):
+    monkeypatch.setattr(rt.os.path, "getsize", lambda p: int(size_gib * rt._GIB))
+    expected = rt.MKVALIDATOR_EST_COEFF * size_gib ** rt.MKVALIDATOR_EST_EXP
+    assert rt._estimate_mkvalidator_seconds("/v/in.mkv") == pytest.approx(expected, rel=1e-3)
+
+
+def test_estimate_mkvalidator_seconds_grows_superlinearly(monkeypatch):
+    """Per-GiB cost must increase with size (exponent > 1) so large files aren't
+    underestimated — that was the cause of the bar pinning at 99%."""
+    def est_for(gib):
+        monkeypatch.setattr(rt.os.path, "getsize", lambda p: int(gib * rt._GIB))
+        return rt._estimate_mkvalidator_seconds("/v/in.mkv")
+    assert est_for(40) / 40 > est_for(4) / 4
+
+
+def test_estimate_mkvalidator_seconds_floor_on_oserror(monkeypatch):
+    def boom(_p):
+        raise OSError("cannot stat")
+    monkeypatch.setattr(rt.os.path, "getsize", boom)
+    assert rt._estimate_mkvalidator_seconds("/v/in.mkv") == 1.0
+
+
+def test_estimate_mkvalidator_seconds_floor_on_tiny_file(monkeypatch):
+    monkeypatch.setattr(rt.os.path, "getsize", lambda p: int(0.05 * rt._GIB))
+    assert rt._estimate_mkvalidator_seconds("/v/in.mkv") == 1.0
+
+
+def test_run_mkvalidator_emits_progress_and_snaps_to_100(tmp_path, monkeypatch):
+    signals = MagicMock()
+    out_path = str(tmp_path / "out.txt")
+
+    fake_proc = MagicMock()
+    # Running for two poll cycles, then exited.
+    fake_proc.poll.side_effect = [None, None, 0]
+    monkeypatch.setattr(rt.subprocess, "Popen", lambda *a, **kw: fake_proc)
+    monkeypatch.setattr(rt.time, "sleep", lambda *a, **kw: None)
+    # Fix the estimate so the progress math is independent of the size model.
+    monkeypatch.setattr(rt, "_estimate_mkvalidator_seconds", lambda p: 30.0)
+
+    # Deterministic clock: each call advances 3 s.
+    clock = {"t": 0.0}
+    def fake_monotonic():
+        now = clock["t"]
+        clock["t"] += 3.0
+        return now
+    monkeypatch.setattr(rt.time, "monotonic", fake_monotonic)
+
+    rt.run_mkvalidator_command("/v/in.mkv", out_path, signals=signals)
+
+    emitted = [c.args[0] for c in signals.mkvalidator_progress.emit.call_args_list]
+    assert emitted[0] == 0            # reset the bar at start
+    assert emitted[-1] == 100         # snap to 100 on exit
+    assert all(0 <= p <= 100 for p in emitted)
+    # The mid-run ticks are the time-based estimate (3s/30s=10%, 6s/30s=20%).
+    assert 10 in emitted and 20 in emitted
+
+
+def test_run_mkvalidator_no_signals_still_runs(tmp_path, monkeypatch):
+    out_path = str(tmp_path / "out.txt")
+    fake_proc = MagicMock()
+    fake_proc.poll.side_effect = [None, 0]
+    popen_mock = MagicMock(return_value=fake_proc)
+    monkeypatch.setattr(rt.subprocess, "Popen", popen_mock)
+    monkeypatch.setattr(rt.time, "sleep", lambda *a, **kw: None)
+    monkeypatch.setattr(rt.os.path, "getsize", lambda p: rt._GIB)
+
+    # Should not raise without a signals object.
+    rt.run_mkvalidator_command("/v/in.mkv", out_path, signals=None)
+    popen_mock.assert_called_once()

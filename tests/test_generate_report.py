@@ -115,6 +115,138 @@ def test_csv_to_html_table_missing_file_returns_error_paragraph():
 
 
 # ===========================================================================
+# Section 1b — make_mkvalidator_html / _read_mkvalidator_summary
+# ===========================================================================
+
+def _write_mkvalidator_summary(path, verdict, error_count=0, wrn0c2=0):
+    path.write_text(
+        f"{verdict}\n\n"
+        f"Errors (ERR): {error_count}\n"
+        f"WRN0C2 non-incrementing cluster timecode warnings: {wrn0c2}\n"
+        f"Other warnings: 0\n"
+    )
+
+
+def test_read_mkvalidator_summary_valid(tmp_path):
+    p = tmp_path / "s.txt"
+    _write_mkvalidator_summary(p, "mkvalidator 0.6.0: the file appears to be valid")
+    verdict, is_valid, errors = gr._read_mkvalidator_summary(str(p))
+    assert is_valid is True and errors == 0
+    assert "appears to be valid" in verdict
+
+
+def test_read_mkvalidator_summary_invalid_by_verdict(tmp_path):
+    p = tmp_path / "s.txt"
+    _write_mkvalidator_summary(p, "mkvalidator 0.6.0: the file is not valid")
+    _, is_valid, _ = gr._read_mkvalidator_summary(str(p))
+    assert is_valid is False
+
+
+def test_read_mkvalidator_summary_invalid_by_error_count(tmp_path):
+    p = tmp_path / "s.txt"
+    # Verdict reads valid but ERR errors were reported -> not valid.
+    _write_mkvalidator_summary(p, "mkvalidator 0.6.0: the file appears to be valid", error_count=2)
+    _, is_valid, errors = gr._read_mkvalidator_summary(str(p))
+    assert is_valid is False and errors == 2
+
+
+def test_make_mkvalidator_html_valid_with_warnings(tmp_path):
+    summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
+    _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file appears to be valid", wrn0c2=2)
+    csv_path = tmp_path / "JPC_AV_TEST_mkvalidator_clusters.csv"
+    _write_csv(csv_path, [
+        ["cluster_index", "byte_offset"],
+        ["1", "710818"],
+        ["2", "74886584"],
+    ])
+    html = gr.make_mkvalidator_html(str(summary), str(csv_path))
+    assert html is not None
+    # Verdict is the focus: a green "Valid" status.
+    assert "Valid" in html and "#1f7a4d" in html
+    # WRN0C2 warnings table follows, with the byte offsets and a narrow wrapper.
+    assert "<strong>2</strong>" in html and "WRN0C2" in html
+    assert "710818" in html and "74886584" in html
+    assert "max-width: 320px" in html
+
+
+def test_make_mkvalidator_html_adds_approx_timecode_column(tmp_path, monkeypatch):
+    summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
+    _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file appears to be valid", wrn0c2=2)
+    csv_path = tmp_path / "JPC_AV_TEST_mkvalidator_clusters.csv"
+    _write_csv(csv_path, [
+        ["cluster_index", "byte_offset"],
+        ["1", "500"],
+        ["2", "1000"],
+    ])
+    video = tmp_path / "v.mkv"
+    video.write_bytes(b"x")  # must exist for the mapper's isfile check
+
+    # file_size=1000, duration=100s -> offset 500 = 50.0s, offset 1000 = 100.0s.
+    monkeypatch.setattr(gr.os.path, "getsize", lambda p: 1000)
+    monkeypatch.setattr(gr, "_get_video_duration", lambda p: 100.0)
+    from AV_Spex.checks import qct_parse as qp
+    monkeypatch.setattr(qp, "_get_video_frame_rate", lambda p: 30.0)
+    monkeypatch.setattr(qp, "_get_video_start_timecode", lambda p: None)
+
+    html = gr.make_mkvalidator_html(str(summary), str(csv_path), str(video))
+    assert "Approx. timecode" in html
+    # 50.0s @ 30fps NDF, no start offset -> 00:00:50:00 ; 100.0s -> 00:01:40:00
+    assert "00:00:50:00" in html
+    assert "00:01:40:00" in html
+    # Wider table to fit the third column.
+    assert "max-width: 460px" in html
+
+
+def test_make_mkvalidator_html_no_video_path_omits_timecode_column(tmp_path):
+    summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
+    _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file appears to be valid", wrn0c2=1)
+    csv_path = tmp_path / "JPC_AV_TEST_mkvalidator_clusters.csv"
+    _write_csv(csv_path, [["cluster_index", "byte_offset"], ["1", "500"]])
+
+    # No video_path -> no timecode column header (the methodology blurb still
+    # mentions the column by name, so check for the <th> specifically), narrow table.
+    html = gr.make_mkvalidator_html(str(summary), str(csv_path), None)
+    assert ">Approx. timecode</th>" not in html
+    assert "max-width: 320px" in html
+
+
+def test_make_mkvalidator_html_valid_no_warnings(tmp_path):
+    summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
+    _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file appears to be valid")
+    # No clusters CSV -> section still renders, focused on the verdict.
+    html = gr.make_mkvalidator_html(str(summary), None)
+    assert html is not None
+    assert "Valid" in html
+    assert "No timecode warnings." in html
+
+
+def test_make_mkvalidator_html_invalid(tmp_path):
+    summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
+    _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file is not valid", error_count=1)
+    html = gr.make_mkvalidator_html(str(summary), None)
+    assert html is not None
+    assert "Invalid" in html and "#b3261e" in html
+
+
+def test_make_mkvalidator_html_includes_methodology_explainer(tmp_path):
+    summary = tmp_path / "JPC_AV_TEST_mkvalidator_summary.txt"
+    _write_mkvalidator_summary(summary, "mkvalidator 0.6.0: the file appears to be valid")
+    html = gr.make_mkvalidator_html(str(summary), None)
+    # Collapsible explainer present and wired to the shared toggleContent() helper.
+    assert "What is mkvalidator?" in html
+    assert "toggleContent('mkvalidator_methodology'" in html
+    assert 'id="mkvalidator_methodology"' in html
+    # Touches the three topics it should explain.
+    assert "WRN0C2" in html
+    assert "Byte offset" in html and "timecode" in html
+
+
+def test_make_mkvalidator_html_missing_summary_returns_none():
+    assert gr.make_mkvalidator_html("/no/such/summary.txt", None) is None
+    assert gr.make_mkvalidator_html(None, None) is None
+
+
+# ===========================================================================
 # Section 2 — read_text_file / prepare_file_section / image_to_data_uri
 # ===========================================================================
 

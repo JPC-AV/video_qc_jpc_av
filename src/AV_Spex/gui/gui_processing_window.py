@@ -382,8 +382,11 @@ class ProcessingWindow(QMainWindow, ThemeableMixin):
                 self._add_step_item("Mediainfo")
             if checks_config.tools.mediatrace.run_tool or checks_config.tools.mediatrace.check_tool:
                 self._add_step_item("Mediatrace")
-            
-            # Output tools 
+            mkvalidator_cfg = getattr(checks_config.tools, 'mkvalidator', None)
+            if mkvalidator_cfg and (mkvalidator_cfg.run_tool or mkvalidator_cfg.check_tool):
+                self._add_step_item("mkvalidator")
+
+            # Output tools
             if checks_config.tools.qctools.run_tool:
                 self._add_step_item("QCTools")
             if checks_config.tools.qct_parse.run_tool:

@@ -367,6 +367,7 @@ class ToolsConfig:
     mediatrace: BasicToolConfig
     qctools: QCToolsConfig
     qct_parse: QCTParseToolConfig
+    mkvalidator: BasicToolConfig
     clams_detection: ClamsDetectionConfig = field(
         default_factory=ClamsDetectionConfig
     )
@@ -438,6 +439,7 @@ class ChecksProfile:
             audio_analysis=False,
             detect_clamped_levels=False
         ),
+        mkvalidator=BasicToolConfig(check_tool=False, run_tool=False),
         clams_detection=ClamsDetectionConfig()
     ))
     video_file_extension: str = "mkv"
