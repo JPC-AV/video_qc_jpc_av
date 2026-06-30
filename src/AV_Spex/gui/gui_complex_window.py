@@ -32,10 +32,11 @@ class ComplexWindow(QWidget, ThemeableMixin):
         """Create fixed layout structure"""
         main_layout = QVBoxLayout(self)
 
-        self.setup_qctools_section(main_layout)
-        self.setup_qct_parse_section(main_layout)
-        self.setup_clams_detection_section(main_layout)
-        self.setup_frame_analysis_sections(main_layout)
+        self.setup_qctools_section(main_layout)                   # generation — stays on top
+        self.setup_parse_qctools_report_section(main_layout)      # parent: qct-parse + Frame Analysis
+        self.setup_clams_detection_section(main_layout)           # standalone (independent)
+        self.setup_bitplane_check_section(main_layout)            # standalone (video-direct)
+        self.setup_dropped_sample_detection_section(main_layout)  # standalone (video-direct)
         self.connect_signals()
 
     def setup_qctools_section(self, main_layout):
@@ -176,16 +177,47 @@ class ComplexWindow(QWidget, ThemeableMixin):
         self.clams_detection_group.setLayout(clams_layout)
         main_layout.addWidget(self.clams_detection_group)
 
-    # Frame Analysis Sections (restructured)
-    def setup_frame_analysis_sections(self, main_layout):
-        """Set up the individual frame analysis sections"""
-        self.setup_bitplane_check_section(main_layout)
-        self.setup_analysis_periods_section(main_layout)
-        self.setup_border_detection_section(main_layout)
-        self.setup_signalstats_section(main_layout)
-        self.setup_brng_analysis_section(main_layout)
-        self.setup_dropped_sample_detection_section(main_layout)
-        self.setup_duplicate_frame_detection_section(main_layout)
+    # Parse QCTools Report Section (parent grouping every report-informed check)
+    def setup_parse_qctools_report_section(self, main_layout):
+        """Set up the 'Parse QCTools Report' parent section.
+
+        Groups every check informed by the QCTools sidecar report into two
+        subsections: the existing 'qct-parse' box and a new 'Frame Analysis'
+        wrapper. Checks that read the video directly stay standalone outside.
+        """
+        theme_manager = ThemeManager.instance()
+
+        self.parse_qctools_group = QGroupBox("Parse QCTools Report")
+        theme_manager.style_groupbox(self.parse_qctools_group, "top center")
+        self.themed_group_boxes['parse_qctools'] = self.parse_qctools_group
+
+        parse_layout = QVBoxLayout()
+
+        self.setup_qct_parse_section(parse_layout)
+        self.setup_frame_analysis_subsection(parse_layout)
+
+        self.parse_qctools_group.setLayout(parse_layout)
+        main_layout.addWidget(self.parse_qctools_group)
+
+    # Frame Analysis Subsection (report-reading frame analysis tools)
+    def setup_frame_analysis_subsection(self, parent_layout):
+        """Set up the 'Frame Analysis' subsection nested inside Parse QCTools Report"""
+        theme_manager = ThemeManager.instance()
+
+        self.frame_analysis_group = QGroupBox("Frame Analysis")
+        theme_manager.style_groupbox(self.frame_analysis_group, "top center")
+        self.themed_group_boxes['frame_analysis'] = self.frame_analysis_group
+
+        fa_layout = QVBoxLayout()
+
+        self.setup_analysis_periods_section(fa_layout)
+        self.setup_border_detection_section(fa_layout)
+        self.setup_signalstats_section(fa_layout)
+        self.setup_brng_analysis_section(fa_layout)
+        self.setup_duplicate_frame_detection_section(fa_layout)
+
+        self.frame_analysis_group.setLayout(fa_layout)
+        parent_layout.addWidget(self.frame_analysis_group)
 
     def setup_bitplane_check_section(self, main_layout):
         """Set up the bitplane check section with enable checkbox"""
